@@ -1,0 +1,26 @@
+[package]
+name = "downloader"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+youtube_client = { path = "../youtube_client" }
+youtube_captions = { path = "../youtube_captions" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.37", features = ["full"] }
+dotenvy = "0.15"
+reqwest = { version = "0.12", features = ["json", "cookies"] }
+yt-transcript-rs = "0.1.8"
+
+[[bin]]
+name = "test_captions"
+path = "/home/pronsh/.gemini/antigravity-cli/brain/d9594fd4-3957-4e8d-8874-bd2166963a14/scratch/test_captions.rs"
+
+[[bin]]
+name = "test_yt_transcript"
+path = "/home/pronsh/.gemini/antigravity-cli/brain/d9594fd4-3957-4e8d-8874-bd2166963a14/scratch/test_yt_transcript.rs"
+
+[[bin]]
+name = "test_android_player"
+path = "/home/pronsh/.gemini/antigravity-cli/brain/d9594fd4-3957-4e8d-8874-bd2166963a14/scratch/test_android_player.rs"

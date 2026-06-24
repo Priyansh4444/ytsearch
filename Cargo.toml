@@ -1,0 +1,9 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/common",
+    "crates/youtube_client",
+    "crates/youtube_captions",
+    "crates/youtube_ingest",
+    "crates/downloader",
+]

@@ -1,0 +1,2990 @@
+{
+  "results": [
+    {
+      "facet_counts": [],
+      "found": 679,
+      "found_docs": 37696,
+      "grouped_hits": [
+        {
+          "found": 3786,
+          "group_key": [
+            "Y-5Yq60ascI"
+          ],
+          "hits": [
+            {
+              "document": {
+                "channel": "HealthyGamerGG VODs (Unofficial)",
+                "chapter": "Why Do People Have Adhd",
+                "chapterIndex": 38,
+                "duration": 4319,
+                "id": "Y-5Yq60ascI_5311",
+                "next_text": "is the evil is the price we pay for the",
+                "prev_text": "k's guide",
+                "sequence": 5311,
+                "t_end_ms": 6282639,
+                "t_start_ms": 6278320,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/Y-5Yq60ascI/maxresdefault.jpg",
+                "title": "ADHD and Depression   Lecture Time (3 NOV 2021)",
+                "upload_date": "20211208",
+                "uploader_id": "@HGVODsUnofficial",
+                "video_id": "Y-5Yq60ascI"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "ADHD and <mark>Depression</mark>   Lecture Time (3 NOV 2021)"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "ADHD and <mark>Depression</mark>   Lecture Time (3 NOV 2021)"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG VODs (Unofficial)",
+                "chapter": "Confounding Factor",
+                "chapterIndex": 37,
+                "duration": 3200,
+                "id": "Y-5Yq60ascI_5183",
+                "next_text": "and that's very important clinically so",
+                "prev_text": "adhd even in the case of active",
+                "sequence": 5183,
+                "t_end_ms": 6143040,
+                "t_start_ms": 6139840,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/Y-5Yq60ascI/maxresdefault.jpg",
+                "title": "ADHD and Depression   Lecture Time (3 NOV 2021)",
+                "upload_date": "20211208",
+                "uploader_id": "@HGVODsUnofficial",
+                "video_id": "Y-5Yq60ascI"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "ADHD and <mark>Depression</mark>   Lecture Time (3 NOV 2021)"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "ADHD and <mark>Depression</mark>   Lecture Time (3 NOV 2021)"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG VODs (Unofficial)",
+                "chapter": "Suppression",
+                "chapterIndex": 27,
+                "duration": 2799,
+                "id": "Y-5Yq60ascI_3433",
+                "next_text": "what does it look like in the present to",
+                "prev_text": "you're someone who's had adhd and",
+                "sequence": 3433,
+                "t_end_ms": 4369679,
+                "t_start_ms": 4366880,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/Y-5Yq60ascI/maxresdefault.jpg",
+                "title": "ADHD and Depression   Lecture Time (3 NOV 2021)",
+                "upload_date": "20211208",
+                "uploader_id": "@HGVODsUnofficial",
+                "video_id": "Y-5Yq60ascI"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "ADHD and <mark>Depression</mark>   Lecture Time (3 NOV 2021)"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "ADHD and <mark>Depression</mark>   Lecture Time (3 NOV 2021)"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG VODs (Unofficial)",
+                "chapter": "The Insight Trial",
+                "chapterIndex": 22,
+                "duration": 3040,
+                "id": "Y-5Yq60ascI_2933",
+                "next_text": "and then we're also going to have",
+                "prev_text": "that's going to kind of result in",
+                "sequence": 2933,
+                "t_end_ms": 3845760,
+                "t_start_ms": 3842720,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/Y-5Yq60ascI/maxresdefault.jpg",
+                "title": "ADHD and Depression   Lecture Time (3 NOV 2021)",
+                "upload_date": "20211208",
+                "uploader_id": "@HGVODsUnofficial",
+                "video_id": "Y-5Yq60ascI"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "ADHD and <mark>Depression</mark>   Lecture Time (3 NOV 2021)"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "ADHD and <mark>Depression</mark>   Lecture Time (3 NOV 2021)"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG VODs (Unofficial)",
+                "chapter": "How Does Adhd Early in Life Result in Depression",
+                "chapterIndex": 18,
+                "duration": 3681,
+                "id": "Y-5Yq60ascI_2345",
+                "next_text": "and adhd is connected through discordant",
+                "prev_text": "so now we begin to see that okay if if",
+                "sequence": 2345,
+                "t_end_ms": 3240240,
+                "t_start_ms": 3236559,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/Y-5Yq60ascI/maxresdefault.jpg",
+                "title": "ADHD and Depression   Lecture Time (3 NOV 2021)",
+                "upload_date": "20211208",
+                "uploader_id": "@HGVODsUnofficial",
+                "video_id": "Y-5Yq60ascI"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "ADHD and <mark>Depression</mark>   Lecture Time (3 NOV 2021)"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "ADHD and <mark>Depression</mark>   Lecture Time (3 NOV 2021)"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            }
+          ]
+        },
+        {
+          "found": 4229,
+          "group_key": [
+            "S25FBKSUq4I"
+          ],
+          "hits": [
+            {
+              "document": {
+                "channel": "HealthyGamerGG VODs (Unofficial)",
+                "chapter": "Imposter syndrome",
+                "chapterIndex": 45,
+                "duration": 2800,
+                "id": "S25FBKSUq4I_7637",
+                "next_text": "will also",
+                "prev_text": "some of these novel treatments for",
+                "sequence": 7637,
+                "t_end_ms": 8777680,
+                "t_start_ms": 8774880,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/S25FBKSUq4I/maxresdefault.jpg",
+                "title": "Staring at the wall for an hour, depression, loneliness, and more! (26 JULY 2022)",
+                "upload_date": "20220726",
+                "uploader_id": "@HGVODsUnofficial",
+                "video_id": "S25FBKSUq4I"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "Staring at the wall for an hour, <mark>depression</mark>, loneliness, and more! (26 JULY 2022)"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "Staring at the wall for an hour, <mark>depression</mark>, loneliness, and more! (26 JULY 2022)"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG VODs (Unofficial)",
+                "chapter": "(Reddit Post) Does Depresssin cause pessimistic thoughts, or do pessimistic thoughts cause depression",
+                "chapterIndex": 42,
+                "duration": 2720,
+                "id": "S25FBKSUq4I_7149",
+                "next_text": "we can still lean on it we're going to",
+                "prev_text": "bit beyond the cope of clinical",
+                "sequence": 7149,
+                "t_end_ms": 8214960,
+                "t_start_ms": 8212240,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/S25FBKSUq4I/maxresdefault.jpg",
+                "title": "Staring at the wall for an hour, depression, loneliness, and more! (26 JULY 2022)",
+                "upload_date": "20220726",
+                "uploader_id": "@HGVODsUnofficial",
+                "video_id": "S25FBKSUq4I"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "Staring at the wall for an hour, <mark>depression</mark>, loneliness, and more! (26 JULY 2022)"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "Staring at the wall for an hour, <mark>depression</mark>, loneliness, and more! (26 JULY 2022)"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG VODs (Unofficial)",
+                "chapter": "(Reddit Post) Does Depresssin cause pessimistic thoughts, or do pessimistic thoughts cause depression",
+                "chapterIndex": 42,
+                "duration": 2480,
+                "id": "S25FBKSUq4I_7103",
+                "next_text": "now",
+                "prev_text": "okay this is the case of a clinical",
+                "sequence": 7103,
+                "t_end_ms": 8166400,
+                "t_start_ms": 8163920,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/S25FBKSUq4I/maxresdefault.jpg",
+                "title": "Staring at the wall for an hour, depression, loneliness, and more! (26 JULY 2022)",
+                "upload_date": "20220726",
+                "uploader_id": "@HGVODsUnofficial",
+                "video_id": "S25FBKSUq4I"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "Staring at the wall for an hour, <mark>depression</mark>, loneliness, and more! (26 JULY 2022)"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "Staring at the wall for an hour, <mark>depression</mark>, loneliness, and more! (26 JULY 2022)"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG VODs (Unofficial)",
+                "chapter": "(Reddit Post) Does Depresssin cause pessimistic thoughts, or do pessimistic thoughts cause depression",
+                "chapterIndex": 42,
+                "duration": 2799,
+                "id": "S25FBKSUq4I_6935",
+                "next_text": "because if that's the case that means",
+                "prev_text": "my mind that is being created out of my",
+                "sequence": 6935,
+                "t_end_ms": 7969599,
+                "t_start_ms": 7966800,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/S25FBKSUq4I/maxresdefault.jpg",
+                "title": "Staring at the wall for an hour, depression, loneliness, and more! (26 JULY 2022)",
+                "upload_date": "20220726",
+                "uploader_id": "@HGVODsUnofficial",
+                "video_id": "S25FBKSUq4I"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "Staring at the wall for an hour, <mark>depression</mark>, loneliness, and more! (26 JULY 2022)"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "Staring at the wall for an hour, <mark>depression</mark>, loneliness, and more! (26 JULY 2022)"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG VODs (Unofficial)",
+                "chapter": "(Reddit Post) Does Depresssin cause pessimistic thoughts, or do pessimistic thoughts cause depression",
+                "chapterIndex": 42,
+                "duration": 2879,
+                "id": "S25FBKSUq4I_6867",
+                "next_text": "this sounds a bit like the chicken or",
+                "prev_text": "or do pessimistic thoughts cause",
+                "sequence": 6867,
+                "t_end_ms": 7906159,
+                "t_start_ms": 7903280,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/S25FBKSUq4I/maxresdefault.jpg",
+                "title": "Staring at the wall for an hour, depression, loneliness, and more! (26 JULY 2022)",
+                "upload_date": "20220726",
+                "uploader_id": "@HGVODsUnofficial",
+                "video_id": "S25FBKSUq4I"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "Staring at the wall for an hour, <mark>depression</mark>, loneliness, and more! (26 JULY 2022)"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "Staring at the wall for an hour, <mark>depression</mark>, loneliness, and more! (26 JULY 2022)"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            }
+          ]
+        },
+        {
+          "found": 3478,
+          "group_key": [
+            "aIhbalMyqRA"
+          ],
+          "hits": [
+            {
+              "document": {
+                "channel": "HealthyGamerGG VODs (Unofficial)",
+                "duration": 3600,
+                "id": "aIhbalMyqRA_5159",
+                "next_text": "and if you don't engage in treatment",
+                "prev_text": "what is the role of treatment in",
+                "sequence": 5159,
+                "t_end_ms": 5618239,
+                "t_start_ms": 5614639,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/aIhbalMyqRA/maxresdefault.jpg",
+                "title": "How Depression Ruins Your Life (22 AUG 2022)",
+                "upload_date": "20220823",
+                "uploader_id": "@HGVODsUnofficial",
+                "video_id": "aIhbalMyqRA"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "How <mark>Depression</mark> Ruins Your Life (22 AUG 2022)"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "How <mark>Depression</mark> Ruins Your Life (22 AUG 2022)"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG VODs (Unofficial)",
+                "duration": 3681,
+                "id": "aIhbalMyqRA_5133",
+                "next_text": "and what you want to try to do is",
+                "prev_text": "understand what's your understanding of",
+                "sequence": 5133,
+                "t_end_ms": 5590880,
+                "t_start_ms": 5587199,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/aIhbalMyqRA/maxresdefault.jpg",
+                "title": "How Depression Ruins Your Life (22 AUG 2022)",
+                "upload_date": "20220823",
+                "uploader_id": "@HGVODsUnofficial",
+                "video_id": "aIhbalMyqRA"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "How <mark>Depression</mark> Ruins Your Life (22 AUG 2022)"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "How <mark>Depression</mark> Ruins Your Life (22 AUG 2022)"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG VODs (Unofficial)",
+                "duration": 3761,
+                "id": "aIhbalMyqRA_4763",
+                "next_text": "or like they're just feeling lazy that",
+                "prev_text": "how do i know whether it's",
+                "sequence": 4763,
+                "t_end_ms": 5221440,
+                "t_start_ms": 5217679,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/aIhbalMyqRA/maxresdefault.jpg",
+                "title": "How Depression Ruins Your Life (22 AUG 2022)",
+                "upload_date": "20220823",
+                "uploader_id": "@HGVODsUnofficial",
+                "video_id": "aIhbalMyqRA"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "How <mark>Depression</mark> Ruins Your Life (22 AUG 2022)"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "How <mark>Depression</mark> Ruins Your Life (22 AUG 2022)"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG VODs (Unofficial)",
+                "duration": 2720,
+                "id": "aIhbalMyqRA_4425",
+                "next_text": "because one interesting that thing",
+                "prev_text": "about the correlation between lazy and",
+                "sequence": 4425,
+                "t_end_ms": 4870000,
+                "t_start_ms": 4867280,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/aIhbalMyqRA/maxresdefault.jpg",
+                "title": "How Depression Ruins Your Life (22 AUG 2022)",
+                "upload_date": "20220823",
+                "uploader_id": "@HGVODsUnofficial",
+                "video_id": "aIhbalMyqRA"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "How <mark>Depression</mark> Ruins Your Life (22 AUG 2022)"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "How <mark>Depression</mark> Ruins Your Life (22 AUG 2022)"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG VODs (Unofficial)",
+                "duration": 2480,
+                "id": "aIhbalMyqRA_4353",
+                "next_text": "because you want to be like you want to",
+                "prev_text": "partner dumped me because of my",
+                "sequence": 4353,
+                "t_end_ms": 4799360,
+                "t_start_ms": 4796880,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/aIhbalMyqRA/maxresdefault.jpg",
+                "title": "How Depression Ruins Your Life (22 AUG 2022)",
+                "upload_date": "20220823",
+                "uploader_id": "@HGVODsUnofficial",
+                "video_id": "aIhbalMyqRA"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "How <mark>Depression</mark> Ruins Your Life (22 AUG 2022)"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "How <mark>Depression</mark> Ruins Your Life (22 AUG 2022)"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            }
+          ]
+        },
+        {
+          "found": 1125,
+          "group_key": [
+            "4L-tyBEdtUM"
+          ],
+          "hits": [
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Maladaptive adaptations",
+                "chapterIndex": 5,
+                "duration": 3600,
+                "id": "4L-tyBEdtUM_1109",
+                "next_text": "and if you don't engage in treatment",
+                "prev_text": "what is the role of treatment in",
+                "sequence": 1109,
+                "t_end_ms": 1112000,
+                "t_start_ms": 1108400,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/4L-tyBEdtUM/maxresdefault.webp",
+                "title": "I Can't Handle My Partners Depression",
+                "upload_date": "20220831",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "4L-tyBEdtUM"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "I Can't Handle My Partners <mark>Depression</mark>"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "I Can't Handle My Partners <mark>Depression</mark>"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Maladaptive adaptations",
+                "chapterIndex": 5,
+                "duration": 3680,
+                "id": "4L-tyBEdtUM_1083",
+                "next_text": "and what you want to try to do is",
+                "prev_text": "understand what's your understanding of",
+                "sequence": 1083,
+                "t_end_ms": 1084640,
+                "t_start_ms": 1080960,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/4L-tyBEdtUM/maxresdefault.webp",
+                "title": "I Can't Handle My Partners Depression",
+                "upload_date": "20220831",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "4L-tyBEdtUM"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "I Can't Handle My Partners <mark>Depression</mark>"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "I Can't Handle My Partners <mark>Depression</mark>"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Hypotheses of psychiatric illness",
+                "chapterIndex": 4,
+                "duration": 2719,
+                "id": "4L-tyBEdtUM_869",
+                "next_text": "and what it comes down to is like",
+                "prev_text": "what's your strategy to deal with the",
+                "sequence": 869,
+                "t_end_ms": 873199,
+                "t_start_ms": 870480,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/4L-tyBEdtUM/maxresdefault.webp",
+                "title": "I Can't Handle My Partners Depression",
+                "upload_date": "20220831",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "4L-tyBEdtUM"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "I Can't Handle My Partners <mark>Depression</mark>"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "I Can't Handle My Partners <mark>Depression</mark>"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Hypotheses of psychiatric illness",
+                "chapterIndex": 4,
+                "duration": 3760,
+                "id": "4L-tyBEdtUM_707",
+                "next_text": "or like they're just feeling lazy that",
+                "prev_text": "how do i know whether it's",
+                "sequence": 707,
+                "t_end_ms": 715200,
+                "t_start_ms": 711440,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/4L-tyBEdtUM/maxresdefault.webp",
+                "title": "I Can't Handle My Partners Depression",
+                "upload_date": "20220831",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "4L-tyBEdtUM"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "I Can't Handle My Partners <mark>Depression</mark>"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "I Can't Handle My Partners <mark>Depression</mark>"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "So what's going on here?",
+                "chapterIndex": 3,
+                "duration": 2801,
+                "id": "4L-tyBEdtUM_367",
+                "next_text": "because one interesting that thing",
+                "prev_text": "about the correlation between lazy and",
+                "sequence": 367,
+                "t_end_ms": 363840,
+                "t_start_ms": 361039,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/4L-tyBEdtUM/maxresdefault.webp",
+                "title": "I Can't Handle My Partners Depression",
+                "upload_date": "20220831",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "4L-tyBEdtUM"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "I Can't Handle My Partners <mark>Depression</mark>"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "I Can't Handle My Partners <mark>Depression</mark>"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            }
+          ]
+        },
+        {
+          "found": 454,
+          "group_key": [
+            "bDhqTf5eJH4"
+          ],
+          "hits": [
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Questions to ask yourself",
+                "chapterIndex": 7,
+                "duration": 3681,
+                "id": "bDhqTf5eJH4_811",
+                "next_text": "as we sort of study neurochemistry and",
+                "prev_text": "focusing on the medical definition of",
+                "sequence": 811,
+                "t_end_ms": 758320,
+                "t_start_ms": 754639,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/bDhqTf5eJH4/maxresdefault.webp",
+                "title": "Therapist Answers: \"What is Congruent Depression?\"",
+                "upload_date": "20201116",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "bDhqTf5eJH4"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Therapist Answers: \"What is Congruent <mark>Depression</mark>?\""
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Therapist Answers: \"What is Congruent <mark>Depression</mark>?\""
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Congruent Depression",
+                "chapterIndex": 3,
+                "duration": 5280,
+                "id": "bDhqTf5eJH4_421",
+                "next_text": "absolutely but is it a brain malfunction",
+                "prev_text": "now is that a problem absolutely is it",
+                "sequence": 421,
+                "t_end_ms": 391919,
+                "t_start_ms": 386639,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/bDhqTf5eJH4/maxresdefault.webp",
+                "title": "Therapist Answers: \"What is Congruent Depression?\"",
+                "upload_date": "20201116",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "bDhqTf5eJH4"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Therapist Answers: \"What is Congruent <mark>Depression</mark>?\""
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Therapist Answers: \"What is Congruent <mark>Depression</mark>?\""
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Congruent Depression",
+                "chapterIndex": 3,
+                "duration": 3280,
+                "id": "bDhqTf5eJH4_347",
+                "next_text": "oftentimes have a life that lacks",
+                "prev_text": "there so people who have congruent",
+                "sequence": 347,
+                "t_end_ms": 327440,
+                "t_start_ms": 324160,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/bDhqTf5eJH4/maxresdefault.webp",
+                "title": "Therapist Answers: \"What is Congruent Depression?\"",
+                "upload_date": "20201116",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "bDhqTf5eJH4"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Therapist Answers: \"What is Congruent <mark>Depression</mark>?\""
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Therapist Answers: \"What is Congruent <mark>Depression</mark>?\""
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Congruent Depression",
+                "chapterIndex": 3,
+                "duration": 3201,
+                "id": "bDhqTf5eJH4_259",
+                "next_text": "is kind of like appropriate to your",
+                "prev_text": "so unlike clinical depression congruent",
+                "sequence": 259,
+                "t_end_ms": 248640,
+                "t_start_ms": 245439,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/bDhqTf5eJH4/maxresdefault.webp",
+                "title": "Therapist Answers: \"What is Congruent Depression?\"",
+                "upload_date": "20201116",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "bDhqTf5eJH4"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Therapist Answers: \"What is Congruent <mark>Depression</mark>?\""
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Therapist Answers: \"What is Congruent <mark>Depression</mark>?\""
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Why is Depression getting worse?",
+                "chapterIndex": 1,
+                "duration": 3920,
+                "id": "bDhqTf5eJH4_95",
+                "next_text": "to for you to be depressed but it not be",
+                "prev_text": "illness and is it possible for a",
+                "sequence": 95,
+                "t_end_ms": 92640,
+                "t_start_ms": 88720,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/bDhqTf5eJH4/maxresdefault.webp",
+                "title": "Therapist Answers: \"What is Congruent Depression?\"",
+                "upload_date": "20201116",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "bDhqTf5eJH4"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Therapist Answers: \"What is Congruent <mark>Depression</mark>?\""
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Therapist Answers: \"What is Congruent <mark>Depression</mark>?\""
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            }
+          ]
+        },
+        {
+          "found": 765,
+          "group_key": [
+            "JOJWbV-ufk0"
+          ],
+          "hits": [
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Identity or Ego creates a filter",
+                "chapterIndex": 5,
+                "duration": 5200,
+                "id": "JOJWbV-ufk0_853",
+                "next_text": "inflammatory aspects of depression etc",
+                "prev_text": "depression physiologic aspects of",
+                "sequence": 853,
+                "t_end_ms": 950000,
+                "t_start_ms": 944800,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/JOJWbV-ufk0/maxresdefault.webp",
+                "title": "The Cycle of Depression",
+                "upload_date": "20220805",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "JOJWbV-ufk0"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "The Cycle of <mark>Depression</mark>"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "The Cycle of <mark>Depression</mark>"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Identity or Ego creates a filter",
+                "chapterIndex": 5,
+                "duration": 2800,
+                "id": "JOJWbV-ufk0_789",
+                "next_text": "will also",
+                "prev_text": "some of these novel treatments for",
+                "sequence": 789,
+                "t_end_ms": 889360,
+                "t_start_ms": 886560,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/JOJWbV-ufk0/maxresdefault.webp",
+                "title": "The Cycle of Depression",
+                "upload_date": "20220805",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "JOJWbV-ufk0"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "The Cycle of <mark>Depression</mark>"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "The Cycle of <mark>Depression</mark>"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Circumstances",
+                "chapterIndex": 3,
+                "duration": 2799,
+                "id": "JOJWbV-ufk0_301",
+                "next_text": "we can still lean on it we're going to",
+                "prev_text": "bit beyond the cope of clinical",
+                "sequence": 301,
+                "t_end_ms": 326639,
+                "t_start_ms": 323840,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/JOJWbV-ufk0/maxresdefault.webp",
+                "title": "The Cycle of Depression",
+                "upload_date": "20220805",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "JOJWbV-ufk0"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "The Cycle of <mark>Depression</mark>"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "The Cycle of <mark>Depression</mark>"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Circumstances",
+                "chapterIndex": 3,
+                "duration": 2560,
+                "id": "JOJWbV-ufk0_255",
+                "next_text": "now",
+                "prev_text": "okay this is the case of a clinical",
+                "sequence": 255,
+                "t_end_ms": 278080,
+                "t_start_ms": 275520,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/JOJWbV-ufk0/maxresdefault.webp",
+                "title": "The Cycle of Depression",
+                "upload_date": "20220805",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "JOJWbV-ufk0"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "The Cycle of <mark>Depression</mark>"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "The Cycle of <mark>Depression</mark>"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "What is the relationship between pessimistic thoughts and depression?",
+                "chapterIndex": 2,
+                "duration": 2800,
+                "id": "JOJWbV-ufk0_87",
+                "next_text": "because if that's the case that means",
+                "prev_text": "my mind that is being created out of my",
+                "sequence": 87,
+                "t_end_ms": 81200,
+                "t_start_ms": 78400,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/JOJWbV-ufk0/maxresdefault.webp",
+                "title": "The Cycle of Depression",
+                "upload_date": "20220805",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "JOJWbV-ufk0"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "The Cycle of <mark>Depression</mark>"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "The Cycle of <mark>Depression</mark>"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            }
+          ]
+        },
+        {
+          "found": 4862,
+          "group_key": [
+            "3The1PBDRoc"
+          ],
+          "hits": [
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Depressed People",
+                "chapterIndex": 15,
+                "duration": 3480,
+                "id": "3The1PBDRoc_8101",
+                "next_text": "what does that mean treatment resistant",
+                "prev_text": "someone who has treatment resistant",
+                "sequence": 8101,
+                "t_end_ms": 8833620,
+                "t_start_ms": 8830140,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/3The1PBDRoc/sddefault.jpg?v=65019d9f",
+                "title": "Why do we get Depressed? ft. Dr. Mark Horowitz, Depression Researcher",
+                "upload_date": "20230915",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "3The1PBDRoc"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Why do we get Depressed? ft. Dr. Mark Horowitz, <mark>Depression</mark> Researcher"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Why do we get Depressed? ft. Dr. Mark Horowitz, <mark>Depression</mark> Researcher"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Depressed People",
+                "chapterIndex": 15,
+                "duration": 3960,
+                "id": "3The1PBDRoc_4409",
+                "next_text": "was the most cost effective effective",
+                "prev_text": "problem solving therapy for severe",
+                "sequence": 4409,
+                "t_end_ms": 5032500,
+                "t_start_ms": 5028540,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi/3The1PBDRoc/sddefault.jpg?v=65019d9f",
+                "title": "Why do we get Depressed? ft. Dr. Mark Horowitz, Depression Researcher",
+                "upload_date": "20230915",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "3The1PBDRoc"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Why do we get Depressed? ft. Dr. Mark Horowitz, <mark>Depression</mark> Researcher"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Why do we get Depressed? ft. Dr. Mark Horowitz, <mark>Depression</mark> Researcher"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Depressed People",
+                "chapterIndex": 15,
+                "duration": 3900,
+                "id": "3The1PBDRoc_9065",
+                "next_text": "but it'll maybe make you feel better for",
+                "prev_text": "out",
+                "sequence": 9065,
+                "t_end_ms": 9833460,
+                "t_start_ms": 9829560,
+                "text": "we can see how it won't cure depression",
+                "thumbnail": "https://i.ytimg.com/vi/3The1PBDRoc/sddefault.jpg?v=65019d9f",
+                "title": "Why do we get Depressed? ft. Dr. Mark Horowitz, Depression Researcher",
+                "upload_date": "20230915",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "3The1PBDRoc"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "we can see how it won't cure <mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Why do we get Depressed? ft. Dr. Mark Horowitz, <mark>Depression</mark> Researcher"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "we can see how it won't cure <mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Why do we get Depressed? ft. Dr. Mark Horowitz, <mark>Depression</mark> Researcher"
+                }
+              ],
+              "text_match": 578730123365187700,
+              "text_match_info": {
+                "best_field_score": "1108091338752",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365187706",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Depressed People",
+                "chapterIndex": 15,
+                "duration": 2760,
+                "id": "3The1PBDRoc_8627",
+                "next_text": "stuff but the problem with group",
+                "prev_text": "Group coaching",
+                "sequence": 8627,
+                "t_end_ms": 9392220,
+                "t_start_ms": 9389460,
+                "text": "and I don't mean like depression and",
+                "thumbnail": "https://i.ytimg.com/vi/3The1PBDRoc/sddefault.jpg?v=65019d9f",
+                "title": "Why do we get Depressed? ft. Dr. Mark Horowitz, Depression Researcher",
+                "upload_date": "20230915",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "3The1PBDRoc"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "and I don't mean like <mark>depression</mark> and"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Why do we get Depressed? ft. Dr. Mark Horowitz, <mark>Depression</mark> Researcher"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "and I don't mean like <mark>depression</mark> and"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Why do we get Depressed? ft. Dr. Mark Horowitz, <mark>Depression</mark> Researcher"
+                }
+              ],
+              "text_match": 578730123365187700,
+              "text_match_info": {
+                "best_field_score": "1108091338752",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365187706",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Depressed People",
+                "chapterIndex": 15,
+                "duration": 3900,
+                "id": "3The1PBDRoc_8125",
+                "next_text": "it is not that they are sicker than",
+                "prev_text": "working with people who have treatment",
+                "sequence": 8125,
+                "t_end_ms": 8863500,
+                "t_start_ms": 8859600,
+                "text": "resistant depression",
+                "thumbnail": "https://i.ytimg.com/vi/3The1PBDRoc/sddefault.jpg?v=65019d9f",
+                "title": "Why do we get Depressed? ft. Dr. Mark Horowitz, Depression Researcher",
+                "upload_date": "20230915",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "3The1PBDRoc"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "resistant <mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Why do we get Depressed? ft. Dr. Mark Horowitz, <mark>Depression</mark> Researcher"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "resistant <mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Why do we get Depressed? ft. Dr. Mark Horowitz, <mark>Depression</mark> Researcher"
+                }
+              ],
+              "text_match": 578730123365187700,
+              "text_match_info": {
+                "best_field_score": "1108091338752",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365187706",
+                "tokens_matched": 1
+              }
+            }
+          ]
+        },
+        {
+          "found": 670,
+          "group_key": [
+            "PmGIwRvcIrg"
+          ],
+          "hits": [
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Introduction",
+                "chapterIndex": 0,
+                "duration": 2540,
+                "id": "PmGIwRvcIrg_5",
+                "next_text": "[Music]",
+                "prev_text": "why logic is not effective at treating",
+                "sequence": 5,
+                "t_end_ms": 7100,
+                "t_start_ms": 4560,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/PmGIwRvcIrg/maxresdefault.webp",
+                "title": "You Can't LOGIC Your Way Out of Depression",
+                "upload_date": "20230404",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "PmGIwRvcIrg"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "You Can't LOGIC Your Way Out of <mark>Depression</mark>"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "You Can't LOGIC Your Way Out of <mark>Depression</mark>"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Does this mean I'm screwed?",
+                "chapterIndex": 6,
+                "duration": 4081,
+                "id": "PmGIwRvcIrg_1319",
+                "next_text": "data that supports that and so then the",
+                "prev_text": "actually logic and IQ can make",
+                "sequence": 1319,
+                "t_end_ms": 1351380,
+                "t_start_ms": 1347299,
+                "text": "depression worse in their scientific",
+                "thumbnail": "https://i.ytimg.com/vi_webp/PmGIwRvcIrg/maxresdefault.webp",
+                "title": "You Can't LOGIC Your Way Out of Depression",
+                "upload_date": "20230404",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "PmGIwRvcIrg"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark> worse in their scientific"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "You Can't LOGIC Your Way Out of <mark>Depression</mark>"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark> worse in their scientific"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "You Can't LOGIC Your Way Out of <mark>Depression</mark>"
+                }
+              ],
+              "text_match": 578730123365187700,
+              "text_match_info": {
+                "best_field_score": "1108091338752",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365187706",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Does this mean I'm screwed?",
+                "chapterIndex": 6,
+                "duration": 4560,
+                "id": "PmGIwRvcIrg_1311",
+                "next_text": "so it's not just that it doesn't help us",
+                "prev_text": "powerful logical ability and the",
+                "sequence": 1311,
+                "t_end_ms": 1343940,
+                "t_start_ms": 1339380,
+                "text": "depression actually turns it against us",
+                "thumbnail": "https://i.ytimg.com/vi_webp/PmGIwRvcIrg/maxresdefault.webp",
+                "title": "You Can't LOGIC Your Way Out of Depression",
+                "upload_date": "20230404",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "PmGIwRvcIrg"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark> actually turns it against us"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "You Can't LOGIC Your Way Out of <mark>Depression</mark>"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark> actually turns it against us"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "You Can't LOGIC Your Way Out of <mark>Depression</mark>"
+                }
+              ],
+              "text_match": 578730123365187700,
+              "text_match_info": {
+                "best_field_score": "1108091338752",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365187706",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Does this mean I'm screwed?",
+                "chapterIndex": 6,
+                "duration": 4921,
+                "id": "PmGIwRvcIrg_1305",
+                "next_text": "situation where we are turning our",
+                "prev_text": "solve problems the challenge is that",
+                "sequence": 1305,
+                "t_end_ms": 1337100,
+                "t_start_ms": 1332179,
+                "text": "when it comes to depression this is a",
+                "thumbnail": "https://i.ytimg.com/vi_webp/PmGIwRvcIrg/maxresdefault.webp",
+                "title": "You Can't LOGIC Your Way Out of Depression",
+                "upload_date": "20230404",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "PmGIwRvcIrg"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "when it comes to <mark>depression</mark> this is a"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "You Can't LOGIC Your Way Out of <mark>Depression</mark>"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "when it comes to <mark>depression</mark> this is a"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "You Can't LOGIC Your Way Out of <mark>Depression</mark>"
+                }
+              ],
+              "text_match": 578730123365187700,
+              "text_match_info": {
+                "best_field_score": "1108091338752",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365187706",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Does this mean I'm screwed?",
+                "chapterIndex": 6,
+                "duration": 3960,
+                "id": "PmGIwRvcIrg_1295",
+                "next_text": "really common problem because people who",
+                "prev_text": "it and how can I process it so when it",
+                "sequence": 1295,
+                "t_end_ms": 1325460,
+                "t_start_ms": 1321500,
+                "text": "comes to logic and depression it's a",
+                "thumbnail": "https://i.ytimg.com/vi_webp/PmGIwRvcIrg/maxresdefault.webp",
+                "title": "You Can't LOGIC Your Way Out of Depression",
+                "upload_date": "20230404",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "PmGIwRvcIrg"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "comes to logic and <mark>depression</mark> it's a"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "You Can't LOGIC Your Way Out of <mark>Depression</mark>"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "comes to logic and <mark>depression</mark> it's a"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "You Can't LOGIC Your Way Out of <mark>Depression</mark>"
+                }
+              ],
+              "text_match": 578730123365187700,
+              "text_match_info": {
+                "best_field_score": "1108091338752",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365187706",
+                "tokens_matched": 1
+              }
+            }
+          ]
+        },
+        {
+          "found": 647,
+          "group_key": [
+            "f9xMioSat9E"
+          ],
+          "hits": [
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Non-clinical approach",
+                "chapterIndex": 3,
+                "duration": 4880,
+                "id": "f9xMioSat9E_1153",
+                "next_text": "encompasses the variance of experiences",
+                "prev_text": "they assume that their experience of",
+                "sequence": 1153,
+                "t_end_ms": 1097120,
+                "t_start_ms": 1092240,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/f9xMioSat9E/maxresdefault.webp",
+                "title": "Psychiatrist Reacts to Depression TikToks",
+                "upload_date": "20220425",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "f9xMioSat9E"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to <mark>Depression</mark> TikToks"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to <mark>Depression</mark> TikToks"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Non-clinical approach",
+                "chapterIndex": 3,
+                "duration": 2560,
+                "id": "f9xMioSat9E_1011",
+                "next_text": "right so we've got like",
+                "prev_text": "when it comes to discussions on",
+                "sequence": 1011,
+                "t_end_ms": 960800,
+                "t_start_ms": 958240,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/f9xMioSat9E/maxresdefault.webp",
+                "title": "Psychiatrist Reacts to Depression TikToks",
+                "upload_date": "20220425",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "f9xMioSat9E"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to <mark>Depression</mark> TikToks"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to <mark>Depression</mark> TikToks"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Pete Davidson",
+                "chapterIndex": 1,
+                "duration": 3839,
+                "id": "f9xMioSat9E_107",
+                "next_text": "so depression feels like a war right",
+                "prev_text": "it's like how often do you battle with",
+                "sequence": 107,
+                "t_end_ms": 103119,
+                "t_start_ms": 99280,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/f9xMioSat9E/maxresdefault.webp",
+                "title": "Psychiatrist Reacts to Depression TikToks",
+                "upload_date": "20220425",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "f9xMioSat9E"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to <mark>Depression</mark> TikToks"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to <mark>Depression</mark> TikToks"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Pete Davidson",
+                "chapterIndex": 1,
+                "duration": 2320,
+                "id": "f9xMioSat9E_99",
+                "next_text": "and",
+                "prev_text": "so a lot of people struggle with",
+                "sequence": 99,
+                "t_end_ms": 94880,
+                "t_start_ms": 92560,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/f9xMioSat9E/maxresdefault.webp",
+                "title": "Psychiatrist Reacts to Depression TikToks",
+                "upload_date": "20220425",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "f9xMioSat9E"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to <mark>Depression</mark> TikToks"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to <mark>Depression</mark> TikToks"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Non-clinical approach",
+                "chapterIndex": 3,
+                "duration": 3839,
+                "id": "f9xMioSat9E_1285",
+                "next_text": "applies to other people",
+                "prev_text": "is yours",
+                "sequence": 1285,
+                "t_end_ms": 1223039,
+                "t_start_ms": 1219200,
+                "text": "or that your understanding of depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/f9xMioSat9E/maxresdefault.webp",
+                "title": "Psychiatrist Reacts to Depression TikToks",
+                "upload_date": "20220425",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "f9xMioSat9E"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "or that your understanding of <mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to <mark>Depression</mark> TikToks"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "or that your understanding of <mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to <mark>Depression</mark> TikToks"
+                }
+              ],
+              "text_match": 578730123365187700,
+              "text_match_info": {
+                "best_field_score": "1108091338752",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365187706",
+                "tokens_matched": 1
+              }
+            }
+          ]
+        },
+        {
+          "found": 611,
+          "group_key": [
+            "Q0Wo1h8tOxU"
+          ],
+          "hits": [
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Brain says nobody cares",
+                "chapterIndex": 2,
+                "duration": 3279,
+                "id": "Q0Wo1h8tOxU_1189",
+                "next_text": "is the mind tells you no no i'm 100",
+                "prev_text": "that's actually what happens in",
+                "sequence": 1189,
+                "t_end_ms": 1170559,
+                "t_start_ms": 1167280,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/Q0Wo1h8tOxU/maxresdefault.webp",
+                "title": "Psychiatrist Reacts to MORE Depression TikToks",
+                "upload_date": "20220429",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "Q0Wo1h8tOxU"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to MORE <mark>Depression</mark> TikToks"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to MORE <mark>Depression</mark> TikToks"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Brain says nobody cares",
+                "chapterIndex": 2,
+                "duration": 3759,
+                "id": "Q0Wo1h8tOxU_797",
+                "next_text": "so internally i made this connection i",
+                "prev_text": "one of the biggest problems with",
+                "sequence": 797,
+                "t_end_ms": 783519,
+                "t_start_ms": 779760,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/Q0Wo1h8tOxU/maxresdefault.webp",
+                "title": "Psychiatrist Reacts to MORE Depression TikToks",
+                "upload_date": "20220429",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "Q0Wo1h8tOxU"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to MORE <mark>Depression</mark> TikToks"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to MORE <mark>Depression</mark> TikToks"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Parents and depression",
+                "chapterIndex": 1,
+                "duration": 3600,
+                "id": "Q0Wo1h8tOxU_495",
+                "next_text": "and like i start prescribing a bunch of",
+                "prev_text": "not really doesn't have a neurochemical",
+                "sequence": 495,
+                "t_end_ms": 482639,
+                "t_start_ms": 479039,
+                "text": "depression",
+                "thumbnail": "https://i.ytimg.com/vi_webp/Q0Wo1h8tOxU/maxresdefault.webp",
+                "title": "Psychiatrist Reacts to MORE Depression TikToks",
+                "upload_date": "20220429",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "Q0Wo1h8tOxU"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to MORE <mark>Depression</mark> TikToks"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark>"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to MORE <mark>Depression</mark> TikToks"
+                }
+              ],
+              "text_match": 578730123365712000,
+              "text_match_info": {
+                "best_field_score": "1108091339008",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365711994",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Brain says nobody cares",
+                "chapterIndex": 2,
+                "duration": 4480,
+                "id": "Q0Wo1h8tOxU_1115",
+                "next_text": "be telling you that it's your fault",
+                "prev_text": "that like the whole point is that in",
+                "sequence": 1115,
+                "t_end_ms": 1091039,
+                "t_start_ms": 1086559,
+                "text": "depression your mind is always going to",
+                "thumbnail": "https://i.ytimg.com/vi_webp/Q0Wo1h8tOxU/maxresdefault.webp",
+                "title": "Psychiatrist Reacts to MORE Depression TikToks",
+                "upload_date": "20220429",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "Q0Wo1h8tOxU"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark> your mind is always going to"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to MORE <mark>Depression</mark> TikToks"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "<mark>depression</mark> your mind is always going to"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to MORE <mark>Depression</mark> TikToks"
+                }
+              ],
+              "text_match": 578730123365187700,
+              "text_match_info": {
+                "best_field_score": "1108091338752",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365187706",
+                "tokens_matched": 1
+              }
+            },
+            {
+              "document": {
+                "channel": "HealthyGamerGG",
+                "chapter": "Brain says nobody cares",
+                "chapterIndex": 2,
+                "duration": 5360,
+                "id": "Q0Wo1h8tOxU_1031",
+                "next_text": "brain is well your brain is blaming you",
+                "prev_text": "especially when the depression strikes",
+                "sequence": 1031,
+                "t_end_ms": 1008800,
+                "t_start_ms": 1003440,
+                "text": "because when the depression strikes your",
+                "thumbnail": "https://i.ytimg.com/vi_webp/Q0Wo1h8tOxU/maxresdefault.webp",
+                "title": "Psychiatrist Reacts to MORE Depression TikToks",
+                "upload_date": "20220429",
+                "uploader_id": "@HealthyGamerGG",
+                "video_id": "Q0Wo1h8tOxU"
+              },
+              "highlight": {
+                "text": {
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "because when the <mark>depression</mark> strikes your"
+                },
+                "title": {
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to MORE <mark>Depression</mark> TikToks"
+                }
+              },
+              "highlights": [
+                {
+                  "field": "text",
+                  "matched_tokens": [
+                    "depression"
+                  ],
+                  "snippet": "because when the <mark>depression</mark> strikes your"
+                },
+                {
+                  "field": "title",
+                  "matched_tokens": [
+                    "Depression"
+                  ],
+                  "snippet": "Psychiatrist Reacts to MORE <mark>Depression</mark> TikToks"
+                }
+              ],
+              "text_match": 578730123365187700,
+              "text_match_info": {
+                "best_field_score": "1108091338752",
+                "best_field_weight": 15,
+                "fields_matched": 2,
+                "score": "578730123365187706",
+                "tokens_matched": 1
+              }
+            }
+          ]
+        }
+      ],
+      "out_of": 2296293,
+      "page": 1,
+      "request_params": {
+        "collection_name": "youtube_captions",
+        "per_page": 10,
+        "q": "depression"
+      },
+      "search_cutoff": false,
+      "search_time_ms": 52
+    }
+  ]
+}
