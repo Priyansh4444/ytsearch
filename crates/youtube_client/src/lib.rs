@@ -1,10 +1,11 @@
 use reqwest::{Client as HttpClient, Method, StatusCode};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use std::{collections::BTreeMap, fmt};
+use std::{collections::BTreeMap, fmt, time::Duration};
 use url::Url;
 
 pub const DEFAULT_BASE_URL: &str = "https://www.googleapis.com/youtube/v3/";
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error)]
 pub enum YouTubeError {
@@ -48,7 +49,7 @@ impl YouTubeClient {
     }
 
     pub fn new(auth: Auth) -> Result<Self> {
-        Self::with_http_client(HttpClient::new(), auth)
+        Self::with_http_client(timeout_http_client(), auth)
     }
 
     pub fn with_http_client(http: HttpClient, auth: Auth) -> Result<Self> {
@@ -481,6 +482,13 @@ impl IntoParts for Vec<String> {
     fn into_parts(self) -> String {
         join(self)
     }
+}
+
+fn timeout_http_client() -> HttpClient {
+    HttpClient::builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()
+        .expect("youtube HTTP client configuration should be valid")
 }
 
 fn join<I, S>(values: I) -> String

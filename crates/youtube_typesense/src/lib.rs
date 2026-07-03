@@ -1,11 +1,14 @@
 use async_trait::async_trait;
 use reqwest::{Client as HttpClient, StatusCode, Url, header::CONTENT_TYPE};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::fmt;
+use std::{fmt, time::Duration};
 use thiserror::Error;
 use youtube_ingest::{ChunkSink, IngestError, TranscriptChunk};
 
 pub const DEFAULT_COLLECTION: &str = "youtube_transcript_chunks";
+pub const YOUTUBERS_COLLECTION: &str = "youtube_youtubers";
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct TypesenseAdminConfig {
@@ -82,7 +85,7 @@ pub struct TypesenseAdminClient {
 impl TypesenseAdminClient {
     pub fn new(config: TypesenseAdminConfig) -> Self {
         Self {
-            http: HttpClient::new(),
+            http: timeout_http_client(),
             config,
         }
     }
@@ -116,6 +119,71 @@ impl TypesenseAdminClient {
             }
             Err(error) => Err(error),
         }
+    }
+
+    pub async fn create_youtubers_collection_if_missing(&self) -> Result<CreateCollectionOutcome> {
+        self.create_named_collection_if_missing(youtubers_schema(YOUTUBERS_COLLECTION))
+            .await
+    }
+
+    async fn create_named_collection_if_missing(
+        &self,
+        schema: Value,
+    ) -> Result<CreateCollectionOutcome> {
+        let url = endpoint(&self.config.api_url, "collections")?;
+        let response = self
+            .http
+            .post(url)
+            .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
+            .json(&schema)
+            .send()
+            .await?;
+
+        match json_response(response).await {
+            Ok(response) => Ok(CreateCollectionOutcome::Created(response)),
+            Err(TypesenseError::Api { status, body }) if status == StatusCode::CONFLICT => {
+                Ok(CreateCollectionOutcome::AlreadyExists { body })
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn upsert_youtuber(&self, youtuber: &YoutuberDocument) -> Result<Value> {
+        let path = format!("collections/{YOUTUBERS_COLLECTION}/documents?action=upsert");
+        let url = endpoint(&self.config.api_url, &path)?;
+        let response = self
+            .http
+            .post(url)
+            .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
+            .json(youtuber)
+            .send()
+            .await?;
+
+        json_response(response).await
+    }
+
+    pub async fn delete_chunks_by_youtuber_id(&self, youtuber_id: &str) -> Result<Value> {
+        self.delete_documents_by_filter(&format!("youtuber_id:={youtuber_id}"))
+            .await
+    }
+
+    pub async fn delete_documents_by_filter(&self, filter_by: &str) -> Result<Value> {
+        let path = format!("collections/{}/documents", self.config.collection);
+        let mut url = endpoint(&self.config.api_url, &path)?;
+        {
+            let mut pairs = url.query_pairs_mut();
+            pairs.append_pair("filter_by", filter_by);
+            pairs.append_pair("batch_size", "100");
+        }
+
+        let response = self
+            .http
+            .delete(url)
+            .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
+            .send()
+            .await?;
+
+        json_response(response).await
     }
 
     pub async fn import_chunks(&self, chunks: &[TranscriptChunk]) -> Result<TypesenseImport> {
@@ -168,7 +236,7 @@ pub struct TypesenseSearchClient {
 impl TypesenseSearchClient {
     pub fn new(config: TypesenseSearchConfig) -> Self {
         Self {
-            http: HttpClient::new(),
+            http: timeout_http_client(),
             config,
         }
     }
@@ -217,6 +285,18 @@ impl TypesenseSearchClient {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypesenseImport {
     pub body: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct YoutuberDocument {
+    pub id: String,
+    pub handle: String,
+    pub name: String,
+    pub channel_id: String,
+    pub uploads_playlist: Option<String>,
+    pub public_video_count: u32,
+    pub indexed_video_count: u32,
+    pub indexed_chunk_count: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -325,6 +405,29 @@ pub fn transcript_chunk_schema(collection: &str) -> Value {
         ],
         "default_sorting_field": "t_start_ms"
     })
+}
+
+pub fn youtubers_schema(collection: &str) -> Value {
+    json!({
+        "name": collection,
+        "fields": [
+            { "name": "id", "type": "string" },
+            { "name": "handle", "type": "string", "facet": true },
+            { "name": "name", "type": "string" },
+            { "name": "channel_id", "type": "string", "facet": true },
+            { "name": "uploads_playlist", "type": "string", "optional": true },
+            { "name": "public_video_count", "type": "int32" },
+            { "name": "indexed_video_count", "type": "int32" },
+            { "name": "indexed_chunk_count", "type": "int32" }
+        ]
+    })
+}
+
+fn timeout_http_client() -> HttpClient {
+    HttpClient::builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()
+        .expect("typesense HTTP client configuration should be valid")
 }
 
 fn endpoint(api_url: &str, path: &str) -> Result<Url> {
