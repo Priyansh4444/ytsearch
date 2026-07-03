@@ -328,9 +328,24 @@ pub fn transcript_chunk_schema(collection: &str) -> Value {
 }
 
 fn endpoint(api_url: &str, path: &str) -> Result<Url> {
-    let base = api_url.trim_end_matches('/');
+    let base = normalized_api_url(api_url)?;
     Url::parse(&format!("{base}/{path}"))
         .map_err(|source| TypesenseError::InvalidUrl(source.to_string()))
+}
+
+fn normalized_api_url(api_url: &str) -> Result<String> {
+    let api_url = api_url.trim().trim_end_matches('/');
+    if api_url.is_empty() {
+        return Err(TypesenseError::InvalidUrl(
+            "TYPESENSE_API_URL cannot be empty".to_string(),
+        ));
+    }
+
+    if api_url.starts_with("http://") || api_url.starts_with("https://") {
+        Ok(api_url.to_string())
+    } else {
+        Ok(format!("https://{api_url}"))
+    }
 }
 
 async fn json_response(response: reqwest::Response) -> Result<Value> {
@@ -382,6 +397,13 @@ mod tests {
         assert_eq!(query.query_by, "text,title,youtuber_name,youtuber_handle");
         assert_eq!(query.group_by.as_deref(), Some("video_id"));
         assert_eq!(query.group_limit, Some(5));
+    }
+
+    #[test]
+    fn endpoint_accepts_typesense_cloud_host_without_scheme() {
+        let url = endpoint("example.a1.typesense.net", "collections").unwrap();
+
+        assert_eq!(url.as_str(), "https://example.a1.typesense.net/collections");
     }
 
     #[test]

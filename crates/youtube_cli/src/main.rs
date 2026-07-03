@@ -89,8 +89,9 @@ struct ValidatedYoutuber {
     handle: String,
     channel_id: String,
     title: String,
-    uploads_playlist: String,
+    uploads_playlist: Option<String>,
     recent_uploads: Vec<UploadPreview>,
+    uploads_warning: Option<String>,
 }
 
 #[derive(Debug)]
@@ -192,12 +193,24 @@ async fn validate_youtuber(
     let channel_id = required_string(channel, "/id", "channel id")?;
     let title = required_string(channel, "/snippet/title", "channel title")?;
     let resolved_handle = optional_string(channel, "/snippet/customUrl").unwrap_or(handle);
-    let uploads_playlist = required_string(
-        channel,
-        "/contentDetails/relatedPlaylists/uploads",
-        "uploads playlist",
-    )?;
-    let recent_uploads = fetch_recent_uploads(youtube, &uploads_playlist, max_videos).await?;
+    let uploads_playlist = optional_string(channel, "/contentDetails/relatedPlaylists/uploads");
+    let (recent_uploads, uploads_warning) = match uploads_playlist.as_deref() {
+        Some(uploads_playlist) => {
+            match fetch_recent_uploads(youtube, uploads_playlist, max_videos).await {
+                Ok(recent_uploads) => (recent_uploads, None),
+                Err(error) => (
+                    Vec::new(),
+                    Some(format!(
+                        "could not list recent uploads from playlist {uploads_playlist}: {error}"
+                    )),
+                ),
+            }
+        }
+        None => (
+            Vec::new(),
+            Some("channel did not expose an uploads playlist".to_string()),
+        ),
+    };
 
     Ok(ValidatedYoutuber {
         handle: resolved_handle,
@@ -205,6 +218,7 @@ async fn validate_youtuber(
         title,
         uploads_playlist,
         recent_uploads,
+        uploads_warning,
     })
 }
 
@@ -276,10 +290,17 @@ fn print_validated_youtuber(youtuber: &ValidatedYoutuber) {
     println!("Validated YouTuber: {}", youtuber.handle);
     println!("  title: {}", youtuber.title);
     println!("  channel_id: {}", youtuber.channel_id);
-    println!("  uploads_playlist: {}", youtuber.uploads_playlist);
+    match &youtuber.uploads_playlist {
+        Some(uploads_playlist) => println!("  uploads_playlist: {uploads_playlist}"),
+        None => println!("  uploads_playlist: unavailable"),
+    }
+
+    if let Some(warning) = &youtuber.uploads_warning {
+        println!("  uploads warning: {warning}");
+    }
 
     if youtuber.recent_uploads.is_empty() {
-        println!("  recent uploads: none found");
+        println!("  recent uploads: none found or unavailable");
         return;
     }
 
