@@ -25,6 +25,8 @@ Each chunk belongs to:
 The first version uses 5-second windows. This keeps search results precise enough
 to jump directly into the moment where someone said something.
 
+
+
 Core fields:
 
 ```text
@@ -86,9 +88,32 @@ It defines traits for swappable infrastructure:
 This keeps the pipeline replaceable without making callers learn many small
 types.
 
-### Future `youtube_typesense`
+### `youtube_sources`
 
-Owns Typesense collection creation and document import.
+Owns concrete source adapters for ingestion ports.
+
+Responsibilities:
+
+- Implement `VideoMetadataSource` with YouTube Data API metadata via `youtube_client`.
+- Compose metadata and transcript fallbacks in priority order.
+- Keep provider-specific parsing outside the ingest core.
+
+This crate may later split into provider-specific crates, such as
+`youtube_source_ytdlp` or `youtube_source_whisper`, if the adapters grow large.
+
+### `youtube_jsonl`
+
+Owns stable local JSONL export/import of `TranscriptChunk` documents.
+
+Responsibilities:
+
+- Write newline-delimited `TranscriptChunk` records.
+- Read chunks back for reproducible imports and migrations.
+- Provide a `ChunkSink` implementation for backup-first ingestion.
+
+### `youtube_typesense`
+
+Owns Typesense collection creation, document import, and grouped text queries.
 
 Responsibilities:
 
@@ -96,21 +121,21 @@ Responsibilities:
 - Import chunks in batches.
 - Run grouped text queries.
 
-This can use the `typesense` crate if it stays ergonomic. Plain `reqwest` is an
-acceptable fallback because Typesense import is a simple HTTP boundary.
+This currently uses plain `reqwest` because Typesense import is a simple HTTP
+boundary.
 
-### Future `youtube_semantic`
+### `youtube_semantic`
 
-Owns embedding generation and semantic search.
+Owns embedding helpers and semantic/vector search boundaries.
 
 Responsibilities:
 
-- Generate embeddings for `TranscriptChunk.text`.
+- Provide `EmbeddingSource` implementations.
 - Store vectors.
 - Query vectors.
 - Return chunk ids or full chunks.
 
-This should depend on `youtube_ingest`, not the other way around.
+This depends on `youtube_ingest`, not the other way around.
 
 ## Error Handling
 
@@ -262,7 +287,16 @@ chunk ids and replace the same documents.
 
 ## Current Implementation
 
-The initial `youtube_ingest` crate provides:
+The workspace is split into focused crates:
+
+- `youtube_client`: internal YouTube Data API v3 wrapper.
+- `youtube_ingest`: stable document model, 5-second chunker, ingest orchestration, and ports.
+- `youtube_sources`: concrete metadata source using `youtube_client`, fallback source composition, and in-memory transcript source for tests/dev.
+- `youtube_jsonl`: JSONL writer/reader plus `JsonlSink`.
+- `youtube_typesense`: Typesense schema, document import, grouped text query helper, and `ChunkSink` implementation.
+- `youtube_semantic`: embedding source helpers plus an in-memory vector store boundary.
+
+The `youtube_ingest` crate provides:
 
 - `TranscriptChunk`
 - `VideoMetadata`
@@ -275,9 +309,8 @@ The initial `youtube_ingest` crate provides:
 
 Next implementation step:
 
-Add concrete adapters:
+Add production transcript adapters:
 
-- `YouTubeMetadataSource` using `youtube_client`.
-- A transcript source using the current caption/transcript approach.
-- `JsonlSink`.
-- `TypesenseSink`.
+- YouTube caption/transcript source.
+- `yt-dlp` transcript fallback.
+- Optional local speech-to-text fallback.
