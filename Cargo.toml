@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/youtube_api",
     "crates/youtube_cli",
     "crates/youtube_client",
     "crates/youtube_ingest",

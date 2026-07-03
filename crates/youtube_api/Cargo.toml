@@ -1,0 +1,20 @@
+[package]
+name = "youtube_api"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "youtube-api"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+dotenvy = "0.15"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "signal"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+youtube_typesense = { path = "../youtube_typesense" }

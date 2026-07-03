@@ -7,11 +7,15 @@
     "start": "vite",
     "dev": "vite",
     "build": "vite build",
-    "serve": "vite preview"
+    "serve": "vite preview",
+    "api": "cargo run -p youtube_api"
   },
   "license": "MIT",
   "devDependencies": {
+    "autoprefixer": "^10.4.22",
+    "postcss": "^8.5.6",
     "solid-devtools": "^0.34.5",
+    "tailwindcss": "^3.4.17",
     "typescript": "^6.0.3",
     "vite": "^8.0.16",
     "vite-plugin-solid": "^2.11.12"
