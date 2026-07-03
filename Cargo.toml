@@ -1,9 +1,11 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/common",
+    "crates/youtube_cli",
     "crates/youtube_client",
-    "crates/youtube_captions",
     "crates/youtube_ingest",
-    "crates/downloader",
+    "crates/youtube_jsonl",
+    "crates/youtube_semantic",
+    "crates/youtube_sources",
+    "crates/youtube_typesense",
 ]
