@@ -1,9 +1,11 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::Value;
+use std::path::PathBuf;
 use thiserror::Error;
 use youtube_client::{ListResource, Page, Query, YouTubeClient};
 use youtube_ingest::{Chunker, TranscriptSource, VideoMetadataSource};
 use youtube_sources::{YouTubeMetadataSource, YtDlpTranscriptSource};
+use youtube_transcribe::{TranscriptionConfig, VoxtypeTranscriptSource};
 use youtube_typesense::{
     CreateCollectionOutcome, DEFAULT_COLLECTION, TextSearchQuery, TypesenseAdminClient,
     TypesenseAdminConfig, TypesenseSearchClient, TypesenseSearchConfig, YoutuberDocument,
@@ -72,6 +74,20 @@ struct IndexYoutuberCommand {
     no_wipe: bool,
     #[arg(long, value_enum, default_value_t = ContentKindFilter::All)]
     content_kind: ContentKindFilter,
+    #[arg(
+        long,
+        help = "When captions are missing, extract audio with yt-dlp and transcribe locally with voxtype"
+    )]
+    transcribe_missing: bool,
+    #[arg(long, default_value = "data/transcription-cache")]
+    transcription_cache_dir: PathBuf,
+    #[arg(long, default_value_t = 30)]
+    transcription_chunk_seconds: u32,
+    #[arg(
+        long,
+        help = "Optional voxtype engine override, e.g. whisper or parakeet"
+    )]
+    voxtype_engine: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -242,6 +258,7 @@ struct IndexStats {
     indexed_videos: u32,
     skipped_videos: u32,
     kind_filtered_videos: u32,
+    audio_transcribed_videos: u32,
     indexed_chunks: u32,
 }
 
@@ -339,7 +356,15 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     }
 
     let metadata_source = YouTubeMetadataSource::new(youtube.clone());
-    let transcript_source = YtDlpTranscriptSource::new();
+    let caption_source = YtDlpTranscriptSource::new();
+    let transcribe_source = command.transcribe_missing.then(|| {
+        VoxtypeTranscriptSource::with_config(
+            TranscriptionConfig::default()
+                .with_cache_dir(command.transcription_cache_dir.clone())
+                .with_chunk_seconds(command.transcription_chunk_seconds)
+                .with_voxtype_engine(command.voxtype_engine.clone()),
+        )
+    });
     let chunker = Chunker::five_seconds();
     let mut stats = IndexStats {
         discovered_videos: public_videos.len(),
@@ -385,15 +410,35 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
             continue;
         }
 
-        let transcript = match transcript_source
-            .transcript_for_video(&video.video_id)
-            .await
-        {
+        let transcript = match caption_source.transcript_for_video(&video.video_id).await {
             Ok(transcript) => transcript,
-            Err(error) => {
-                stats.skipped_videos = stats.skipped_videos.saturating_add(1);
-                println!("  skipped transcript: {error}");
-                continue;
+            Err(caption_error) => {
+                let Some(transcribe_source) = &transcribe_source else {
+                    stats.skipped_videos = stats.skipped_videos.saturating_add(1);
+                    println!("  skipped transcript: {caption_error}");
+                    continue;
+                };
+
+                println!(
+                    "  captions unavailable, trying local audio transcription: {caption_error}"
+                );
+                match transcribe_source
+                    .transcript_for_video(&video.video_id)
+                    .await
+                {
+                    Ok(transcript) => {
+                        stats.audio_transcribed_videos =
+                            stats.audio_transcribed_videos.saturating_add(1);
+                        transcript
+                    }
+                    Err(transcribe_error) => {
+                        stats.skipped_videos = stats.skipped_videos.saturating_add(1);
+                        println!(
+                            "  skipped transcript: captions failed and local transcription failed: {transcribe_error}"
+                        );
+                        continue;
+                    }
+                }
             }
         };
 
@@ -427,12 +472,13 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     youtuber_typesense.upsert_youtuber(&youtuber_doc).await?;
     println!("Upserted YouTuber document: {}", youtuber_doc.id);
     println!(
-        "Index summary: discovered={}, attempted={}, indexed={}, skipped={}, kind_filtered={}, chunks={}",
+        "Index summary: discovered={}, attempted={}, indexed={}, skipped={}, kind_filtered={}, audio_transcribed={}, chunks={}",
         stats.discovered_videos,
         stats.attempted_videos,
         stats.indexed_videos,
         stats.skipped_videos,
         stats.kind_filtered_videos,
+        stats.audio_transcribed_videos,
         stats.indexed_chunks
     );
 

@@ -21,6 +21,9 @@ app.config.timestamp_*.js
 *.launch
 .settings/
 
+# generated search/transcription data
+data/
+
 # Temp
 gitignore
 

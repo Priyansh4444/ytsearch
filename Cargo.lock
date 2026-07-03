@@ -1853,6 +1853,7 @@ dependencies = [
  "youtube_client",
  "youtube_ingest",
  "youtube_sources",
+ "youtube_transcribe",
  "youtube_typesense",
 ]
 
@@ -1913,6 +1914,17 @@ dependencies = [
  "serde_json",
  "tokio",
  "youtube_client",
+ "youtube_ingest",
+]
+
+[[package]]
+name = "youtube_transcribe"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tokio",
  "youtube_ingest",
 ]
 
