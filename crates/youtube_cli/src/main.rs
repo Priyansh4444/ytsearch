@@ -3,7 +3,8 @@ use serde_json::Value;
 use thiserror::Error;
 use youtube_client::{ListResource, Page, Query, YouTubeClient};
 use youtube_typesense::{
-    CreateCollectionOutcome, DEFAULT_COLLECTION, TypesenseClient, TypesenseConfig,
+    CreateCollectionOutcome, DEFAULT_COLLECTION, TextSearchQuery, TypesenseAdminClient,
+    TypesenseAdminConfig, TypesenseSearchClient, TypesenseSearchConfig,
 };
 
 #[derive(Debug, Parser)]
@@ -35,14 +36,41 @@ enum Command {
         youtube_api_key: String,
         #[arg(
             long,
-            env = "TYPESENSE_URL",
-            help = "Typesense Cloud URL, e.g. https://xxx.a1.typesense.net"
+            env = "TYPESENSE_API_URL",
+            help = "Typesense node/API URL, e.g. https://xxx.a1.typesense.net"
         )]
-        typesense_url: String,
-        #[arg(long, env = "TYPESENSE_API_KEY", help = "Typesense Admin API key")]
-        typesense_api_key: String,
+        typesense_api_url: String,
+        #[arg(
+            long,
+            env = "TYPESENSE_ADMIN_API_KEY",
+            help = "Typesense Admin API key; used only for schema/import operations"
+        )]
+        typesense_admin_api_key: String,
         #[arg(long, env = "TYPESENSE_COLLECTION", default_value = DEFAULT_COLLECTION)]
         collection: String,
+    },
+    #[command(about = "Search transcript chunks using the Typesense search-only API key")]
+    Search {
+        #[arg(value_name = "QUERY")]
+        query: String,
+        #[arg(long, help = "Optional YouTube handle filter, e.g. @t3dotgg")]
+        youtuber: Option<String>,
+        #[arg(
+            long,
+            env = "TYPESENSE_API_URL",
+            help = "Typesense node/API URL, e.g. https://xxx.a1.typesense.net"
+        )]
+        typesense_api_url: String,
+        #[arg(
+            long,
+            env = "TYPESENSE_SEARCH_API_KEY",
+            help = "Typesense search-only API key"
+        )]
+        typesense_search_api_key: String,
+        #[arg(long, env = "TYPESENSE_COLLECTION", default_value = DEFAULT_COLLECTION)]
+        collection: String,
+        #[arg(long, default_value_t = 10)]
+        per_page: u8,
     },
 }
 
@@ -89,17 +117,17 @@ async fn main() -> Result<(), CliError> {
             youtuber,
             max_videos,
             youtube_api_key,
-            typesense_url,
-            typesense_api_key,
+            typesense_api_url,
+            typesense_admin_api_key,
             collection,
         } => {
             let youtube = YouTubeClient::with_api_key(youtube_api_key)?;
             let youtuber = validate_youtuber(&youtube, &youtuber, max_videos).await?;
             print_validated_youtuber(&youtuber);
 
-            let config = TypesenseConfig::new(typesense_url, typesense_api_key)
+            let config = TypesenseAdminConfig::new(typesense_api_url, typesense_admin_api_key)
                 .with_collection(collection.clone());
-            let typesense = TypesenseClient::new(config);
+            let typesense = TypesenseAdminClient::new(config);
             match typesense.create_collection_if_missing().await? {
                 CreateCollectionOutcome::Created(_) => {
                     println!("Created Typesense collection: {collection}");
@@ -110,6 +138,29 @@ async fn main() -> Result<(), CliError> {
             }
 
             println!("Ready to import transcript chunks for {}.", youtuber.handle);
+        }
+        Command::Search {
+            query,
+            youtuber,
+            typesense_api_url,
+            typesense_search_api_key,
+            collection,
+            per_page,
+        } => {
+            let config = TypesenseSearchConfig::new(typesense_api_url, typesense_search_api_key)
+                .with_collection(collection);
+            let typesense = TypesenseSearchClient::new(config);
+            let mut search = TextSearchQuery::new(query).per_page(per_page);
+
+            if let Some(youtuber) = youtuber {
+                search = search.youtuber_handle(normalize_handle(&youtuber)?);
+            }
+
+            let response = typesense.search(&search).await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&response).unwrap_or(response.to_string())
+            );
         }
     }
 

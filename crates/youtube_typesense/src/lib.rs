@@ -8,17 +8,17 @@ use youtube_ingest::{ChunkSink, IngestError, TranscriptChunk};
 pub const DEFAULT_COLLECTION: &str = "youtube_transcript_chunks";
 
 #[derive(Clone, Eq, PartialEq)]
-pub struct TypesenseConfig {
-    pub base_url: String,
-    pub api_key: String,
+pub struct TypesenseAdminConfig {
+    pub api_url: String,
+    pub admin_api_key: String,
     pub collection: String,
 }
 
-impl TypesenseConfig {
-    pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
+impl TypesenseAdminConfig {
+    pub fn new(api_url: impl Into<String>, admin_api_key: impl Into<String>) -> Self {
         Self {
-            base_url: base_url.into(),
-            api_key: api_key.into(),
+            api_url: api_url.into(),
+            admin_api_key: admin_api_key.into(),
             collection: DEFAULT_COLLECTION.to_string(),
         }
     }
@@ -29,45 +29,78 @@ impl TypesenseConfig {
     }
 }
 
-impl fmt::Debug for TypesenseConfig {
+impl fmt::Debug for TypesenseAdminConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("TypesenseConfig")
-            .field("base_url", &self.base_url)
-            .field("api_key", &"<redacted>")
+            .debug_struct("TypesenseAdminConfig")
+            .field("api_url", &self.api_url)
+            .field("admin_api_key", &"<redacted>")
+            .field("collection", &self.collection)
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct TypesenseSearchConfig {
+    pub api_url: String,
+    pub search_api_key: String,
+    pub collection: String,
+}
+
+impl TypesenseSearchConfig {
+    pub fn new(api_url: impl Into<String>, search_api_key: impl Into<String>) -> Self {
+        Self {
+            api_url: api_url.into(),
+            search_api_key: search_api_key.into(),
+            collection: DEFAULT_COLLECTION.to_string(),
+        }
+    }
+
+    pub fn with_collection(mut self, collection: impl Into<String>) -> Self {
+        self.collection = collection.into();
+        self
+    }
+}
+
+impl fmt::Debug for TypesenseSearchConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TypesenseSearchConfig")
+            .field("api_url", &self.api_url)
+            .field("search_api_key", &"<redacted>")
             .field("collection", &self.collection)
             .finish()
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct TypesenseClient {
+pub struct TypesenseAdminClient {
     http: HttpClient,
-    config: TypesenseConfig,
+    config: TypesenseAdminConfig,
 }
 
-impl TypesenseClient {
-    pub fn new(config: TypesenseConfig) -> Self {
+impl TypesenseAdminClient {
+    pub fn new(config: TypesenseAdminConfig) -> Self {
         Self {
             http: HttpClient::new(),
             config,
         }
     }
 
-    pub fn with_http_client(http: HttpClient, config: TypesenseConfig) -> Self {
+    pub fn with_http_client(http: HttpClient, config: TypesenseAdminConfig) -> Self {
         Self { http, config }
     }
 
-    pub fn config(&self) -> &TypesenseConfig {
+    pub fn config(&self) -> &TypesenseAdminConfig {
         &self.config
     }
 
     pub async fn create_collection(&self) -> Result<Value> {
-        let url = self.endpoint("collections")?;
+        let url = endpoint(&self.config.api_url, "collections")?;
         let response = self
             .http
             .post(url)
-            .header("X-TYPESENSE-API-KEY", &self.config.api_key)
+            .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
             .json(&transcript_chunk_schema(&self.config.collection))
             .send()
             .await?;
@@ -96,11 +129,11 @@ impl TypesenseClient {
             "collections/{}/documents/import?action=upsert",
             self.config.collection
         );
-        let url = self.endpoint(&path)?;
+        let url = endpoint(&self.config.api_url, &path)?;
         let response = self
             .http
             .post(url)
-            .header("X-TYPESENSE-API-KEY", &self.config.api_key)
+            .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
             .header(CONTENT_TYPE, "text/plain")
             .body(body)
             .send()
@@ -114,10 +147,43 @@ impl TypesenseClient {
 
         Ok(TypesenseImport { body })
     }
+}
+
+#[async_trait]
+impl ChunkSink for TypesenseAdminClient {
+    async fn upsert_chunks(&self, chunks: &[TranscriptChunk]) -> youtube_ingest::Result<()> {
+        self.import_chunks(chunks)
+            .await
+            .map(|_| ())
+            .map_err(|error| IngestError::Sink(error.to_string()))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TypesenseSearchClient {
+    http: HttpClient,
+    config: TypesenseSearchConfig,
+}
+
+impl TypesenseSearchClient {
+    pub fn new(config: TypesenseSearchConfig) -> Self {
+        Self {
+            http: HttpClient::new(),
+            config,
+        }
+    }
+
+    pub fn with_http_client(http: HttpClient, config: TypesenseSearchConfig) -> Self {
+        Self { http, config }
+    }
+
+    pub fn config(&self) -> &TypesenseSearchConfig {
+        &self.config
+    }
 
     pub async fn search(&self, query: &TextSearchQuery) -> Result<Value> {
         let path = format!("collections/{}/documents/search", self.config.collection);
-        let mut url = self.endpoint(&path)?;
+        let mut url = endpoint(&self.config.api_url, &path)?;
         {
             let mut pairs = url.query_pairs_mut();
             pairs.append_pair("q", &query.q);
@@ -140,27 +206,11 @@ impl TypesenseClient {
         let response = self
             .http
             .get(url)
-            .header("X-TYPESENSE-API-KEY", &self.config.api_key)
+            .header("X-TYPESENSE-API-KEY", &self.config.search_api_key)
             .send()
             .await?;
 
         json_response(response).await
-    }
-
-    fn endpoint(&self, path: &str) -> Result<Url> {
-        let base = self.config.base_url.trim_end_matches('/');
-        Url::parse(&format!("{base}/{path}"))
-            .map_err(|source| TypesenseError::InvalidUrl(source.to_string()))
-    }
-}
-
-#[async_trait]
-impl ChunkSink for TypesenseClient {
-    async fn upsert_chunks(&self, chunks: &[TranscriptChunk]) -> youtube_ingest::Result<()> {
-        self.import_chunks(chunks)
-            .await
-            .map(|_| ())
-            .map_err(|error| IngestError::Sink(error.to_string()))
     }
 }
 
@@ -204,6 +254,11 @@ impl TextSearchQuery {
 
     pub fn filter_by(mut self, filter_by: impl Into<String>) -> Self {
         self.filter_by = Some(filter_by.into());
+        self
+    }
+
+    pub fn youtuber_handle(mut self, handle: impl AsRef<str>) -> Self {
+        self.filter_by = Some(format!("youtuber_handle:={}", handle.as_ref()));
         self
     }
 
@@ -272,6 +327,12 @@ pub fn transcript_chunk_schema(collection: &str) -> Value {
     })
 }
 
+fn endpoint(api_url: &str, path: &str) -> Result<Url> {
+    let base = api_url.trim_end_matches('/');
+    Url::parse(&format!("{base}/{path}"))
+        .map_err(|source| TypesenseError::InvalidUrl(source.to_string()))
+}
+
 async fn json_response(response: reqwest::Response) -> Result<Value> {
     let status = response.status();
     let body = response.text().await?;
@@ -287,12 +348,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn config_debug_redacts_api_key() {
-        let config = TypesenseConfig::new("http://localhost:8108", "secret-key");
+    fn admin_config_debug_redacts_api_key() {
+        let config = TypesenseAdminConfig::new("http://localhost:8108", "admin-secret");
         let debug = format!("{config:?}");
 
         assert!(debug.contains("<redacted>"));
-        assert!(!debug.contains("secret-key"));
+        assert!(!debug.contains("admin-secret"));
+    }
+
+    #[test]
+    fn search_config_debug_redacts_api_key() {
+        let config = TypesenseSearchConfig::new("http://localhost:8108", "search-secret");
+        let debug = format!("{config:?}");
+
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("search-secret"));
     }
 
     #[test]
@@ -312,5 +382,15 @@ mod tests {
         assert_eq!(query.query_by, "text,title,youtuber_name,youtuber_handle");
         assert_eq!(query.group_by.as_deref(), Some("video_id"));
         assert_eq!(query.group_limit, Some(5));
+    }
+
+    #[test]
+    fn youtuber_filter_uses_handle_facet() {
+        let query = TextSearchQuery::new("rust").youtuber_handle("@t3dotgg");
+
+        assert_eq!(
+            query.filter_by.as_deref(),
+            Some("youtuber_handle:=@t3dotgg")
+        );
     }
 }
