@@ -8,6 +8,10 @@ type SearchHit = {
   text: string;
   prev_text?: string;
   next_text?: string;
+  text_highlight?: string;
+  prev_text_highlight?: string;
+  next_text_highlight?: string;
+  title_highlight?: string;
   youtuber_handle: string;
   youtuber_name: string;
   thumbnail?: string;
@@ -189,7 +193,7 @@ const App: Component = () => {
                 >
                   <div class="grid gap-4">
                     <For each={response().hits}>
-                      {(hit) => <HitCard hit={hit} />}
+                      {(hit) => <HitCard hit={hit} query={response().query} />}
                     </For>
                   </div>
                 </Show>
@@ -228,40 +232,31 @@ async function searchTranscripts(
   return response.json();
 }
 
-const HitCard: Component<{ hit: SearchHit }> = (props) => {
+const HitCard: Component<{ hit: SearchHit; query: string }> = (props) => {
   const duration = () =>
     `${props.hit.timestamp}–${formatTimestamp(props.hit.t_end_ms)}`;
+  const embedUrl = () =>
+    `https://www.youtube-nocookie.com/embed/${props.hit.video_id}?start=${Math.floor(
+      props.hit.t_start_ms / 1000,
+    )}&rel=0`;
 
   return (
     <article class="group overflow-hidden rounded-[1.75rem] border border-vesper-border bg-vesper-panel/90 shadow-vesper transition hover:-translate-y-0.5 hover:border-vesper-yellow/60">
-      <div class="grid gap-0 md:grid-cols-[14rem_1fr]">
-        <a
-          href={props.hit.youtube_url}
-          target="_blank"
-          rel="noreferrer"
-          class="relative block min-h-44 bg-vesper-panel2 md:min-h-full"
-        >
-          <Show
-            when={props.hit.thumbnail}
-            fallback={
-              <div class="flex h-full min-h-44 items-center justify-center text-vesper-dim">
-                No thumbnail
-              </div>
-            }
-          >
-            {(thumbnail) => (
-              <img
-                src={thumbnail()}
-                alt=""
-                class="h-full min-h-44 w-full object-cover"
-                loading="lazy"
-              />
-            )}
-          </Show>
+      <div class="grid gap-0 lg:grid-cols-[24rem_1fr]">
+        <div class="relative min-h-64 bg-vesper-panel2">
+          <iframe
+            class="aspect-video h-full min-h-64 w-full"
+            src={embedUrl()}
+            title={`YouTube player for ${props.hit.title} at ${props.hit.timestamp}`}
+            loading="lazy"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerpolicy="strict-origin-when-cross-origin"
+            allowfullscreen
+          />
           <span class="absolute bottom-3 left-3 rounded-full bg-vesper-bg/90 px-3 py-1 text-sm font-semibold text-vesper-yellow ring-1 ring-vesper-border">
             {duration()}
           </span>
-        </a>
+        </div>
 
         <div class="flex flex-col gap-4 p-5">
           <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -272,7 +267,11 @@ const HitCard: Component<{ hit: SearchHit }> = (props) => {
                 rel="noreferrer"
                 class="text-xl font-semibold leading-snug text-white transition hover:text-vesper-yellow"
               >
-                {props.hit.title}
+                <HighlightedText
+                  text={props.hit.title}
+                  highlight={props.hit.title_highlight}
+                  query={props.query}
+                />
               </a>
               <p class="mt-1 text-sm text-vesper-muted">
                 {props.hit.youtuber_name} <span class="text-vesper-dim">·</span>{" "}
@@ -290,15 +289,33 @@ const HitCard: Component<{ hit: SearchHit }> = (props) => {
           </div>
 
           <blockquote class="rounded-2xl border border-vesper-border bg-vesper-bg p-4 text-base leading-7 text-white">
-            {props.hit.text}
+            <HighlightedText
+              text={props.hit.text}
+              highlight={props.hit.text_highlight}
+              query={props.query}
+            />
           </blockquote>
 
           <div class="grid gap-3 text-sm text-vesper-muted lg:grid-cols-2">
             <Show when={props.hit.prev_text}>
-              {(text) => <ContextPill label="Before" text={text()} />}
+              {(text) => (
+                <ContextPill
+                  label="Before"
+                  text={text()}
+                  highlight={props.hit.prev_text_highlight}
+                  query={props.query}
+                />
+              )}
             </Show>
             <Show when={props.hit.next_text}>
-              {(text) => <ContextPill label="After" text={text()} />}
+              {(text) => (
+                <ContextPill
+                  label="After"
+                  text={text()}
+                  highlight={props.hit.next_text_highlight}
+                  query={props.query}
+                />
+              )}
             </Show>
           </div>
         </div>
@@ -307,14 +324,119 @@ const HitCard: Component<{ hit: SearchHit }> = (props) => {
   );
 };
 
-const ContextPill: Component<{ label: string; text: string }> = (props) => (
+const ContextPill: Component<{
+  label: string;
+  text: string;
+  highlight?: string;
+  query: string;
+}> = (props) => (
   <div class="rounded-2xl border border-vesper-border bg-vesper-panel2 p-3">
     <p class="mb-1 text-xs font-semibold uppercase tracking-[0.16em] text-vesper-dim">
       {props.label}
     </p>
-    <p class="line-clamp-2 leading-6">{props.text}</p>
+    <p class="line-clamp-3 leading-6">
+      <HighlightedText
+        text={props.text}
+        highlight={props.highlight}
+        query={props.query}
+      />
+    </p>
   </div>
 );
+
+const HighlightedText: Component<{
+  text: string;
+  highlight?: string;
+  query: string;
+}> = (props) => {
+  const parts = () =>
+    highlightedParts(props.text, props.highlight, props.query);
+
+  return (
+    <>
+      <For each={parts()}>
+        {(part) => (
+          <Show when={part.highlighted} fallback={<>{part.text}</>}>
+            <mark class="rounded-md bg-vesper-yellow/20 px-1 py-0.5 font-semibold text-vesper-yellow ring-1 ring-vesper-yellow/20">
+              {part.text}
+            </mark>
+          </Show>
+        )}
+      </For>
+    </>
+  );
+};
+
+type HighlightPart = {
+  text: string;
+  highlighted: boolean;
+};
+
+function highlightedParts(
+  text: string,
+  highlight: string | undefined,
+  query: string,
+): HighlightPart[] {
+  if (highlight) return partsFromTypesenseSnippet(highlight);
+  return partsFromQuery(text, query);
+}
+
+function partsFromTypesenseSnippet(snippet: string): HighlightPart[] {
+  const parts: HighlightPart[] = [];
+  const regex = /<mark>(.*?)<\/mark>/gis;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(snippet))) {
+    if (match.index > lastIndex) {
+      parts.push({
+        text: decodeEntities(snippet.slice(lastIndex, match.index)),
+        highlighted: false,
+      });
+    }
+    parts.push({ text: decodeEntities(match[1] ?? ""), highlighted: true });
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < snippet.length) {
+    parts.push({
+      text: decodeEntities(snippet.slice(lastIndex)),
+      highlighted: false,
+    });
+  }
+
+  return parts.length > 0
+    ? parts
+    : [{ text: decodeEntities(snippet), highlighted: false }];
+}
+
+function partsFromQuery(text: string, query: string): HighlightPart[] {
+  const terms = query
+    .toLowerCase()
+    .split(/\s+/)
+    .map((term) => term.replace(/[^a-z0-9']/gi, ""))
+    .filter((term) => term.length >= 2);
+  if (terms.length === 0) return [{ text, highlighted: false }];
+
+  const pattern = new RegExp(`(${terms.map(escapeRegex).join("|")})`, "gi");
+  return text
+    .split(pattern)
+    .filter(Boolean)
+    .map((part) => ({
+      text: part,
+      highlighted: terms.includes(part.toLowerCase()),
+    }));
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function decodeEntities(value: string): string {
+  const element = document.createElement("textarea");
+  element.innerHTML = value;
+  return element.value;
+}
 
 const LoadingState: Component = () => (
   <div class="grid gap-4">
