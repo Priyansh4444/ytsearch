@@ -166,6 +166,43 @@ impl TypesenseAdminClient {
         json_response(response).await
     }
 
+    pub async fn delete_youtuber(&self, id: &str) -> Result<Option<Value>> {
+        let path = format!("collections/{YOUTUBERS_COLLECTION}/documents/{id}");
+        let url = endpoint(&self.config.api_url, &path)?;
+        let response = self
+            .http
+            .delete(url)
+            .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
+            .send()
+            .await?;
+
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        json_response(response).await.map(Some)
+    }
+
+    pub async fn get_youtuber(&self, id: &str) -> Result<Option<YoutuberDocument>> {
+        let path = format!("collections/{YOUTUBERS_COLLECTION}/documents/{id}");
+        let url = endpoint(&self.config.api_url, &path)?;
+        let response = self
+            .http
+            .get(url)
+            .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
+            .send()
+            .await?;
+
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        json_response(response)
+            .await
+            .and_then(|body| serde_json::from_value(body).map_err(TypesenseError::Json))
+            .map(Some)
+    }
+
     pub async fn delete_chunks_by_youtuber_id(&self, youtuber_id: &str) -> Result<Value> {
         self.delete_documents_by_filter(&format!("youtuber_id:={youtuber_id}"))
             .await

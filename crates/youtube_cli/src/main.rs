@@ -29,6 +29,10 @@ enum Command {
     InitTypesense(InitTypesenseCommand),
     #[command(about = "Create/update the YouTuber document and report discoverable public videos")]
     IndexYoutuber(IndexYoutuberCommand),
+    #[command(about = "Refresh the indexed YouTuber profile document without reindexing videos")]
+    RefreshYoutuber(RefreshYoutuberCommand),
+    #[command(about = "Remove a YouTuber document and transcript chunks from Typesense")]
+    RemoveYoutuber(RemoveYoutuberCommand),
     #[command(about = "Index one video by ID or URL")]
     IndexVideo(IndexVideoCommand),
     #[command(about = "Search transcript chunks using the Typesense search-only API key")]
@@ -53,6 +57,26 @@ struct InitTypesenseCommand {
     max_videos: u8,
     #[command(flatten)]
     youtube: YouTubeAuthArgs,
+    #[command(flatten)]
+    typesense: TypesenseAdminArgs,
+    #[command(flatten)]
+    collection: TranscriptCollectionArg,
+}
+
+#[derive(Debug, Args)]
+struct RefreshYoutuberCommand {
+    #[command(flatten)]
+    youtuber: YoutuberArg,
+    #[command(flatten)]
+    youtube: YouTubeAuthArgs,
+    #[command(flatten)]
+    typesense: TypesenseAdminArgs,
+}
+
+#[derive(Debug, Args)]
+struct RemoveYoutuberCommand {
+    #[command(flatten)]
+    youtuber: YoutuberArg,
     #[command(flatten)]
     typesense: TypesenseAdminArgs,
     #[command(flatten)]
@@ -272,6 +296,7 @@ struct ValidatedYoutuber {
     channel_id: String,
     title: String,
     uploads_playlist: Option<String>,
+    avatar_url: Option<String>,
     recent_uploads: Vec<UploadPreview>,
     uploads_warning: Option<String>,
 }
@@ -310,6 +335,7 @@ struct IndexStats {
     skipped_videos: u32,
     kind_filtered_videos: u32,
     existing_videos: u32,
+    existing_chunks: u32,
     audio_transcribed_videos: u32,
     indexed_chunks: u32,
 }
@@ -317,20 +343,28 @@ struct IndexStats {
 #[tokio::main]
 async fn main() -> Result<(), CliError> {
     let _ = dotenvy::dotenv();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "youtube_cli=info,youtube_sources=info,youtube_transcribe=info".into()
-            }),
-        )
-        .init();
+    init_tracing();
 
     match Cli::parse().command {
         Command::Validate(command) => validate_command(command).await,
         Command::InitTypesense(command) => init_typesense_command(command).await,
         Command::IndexYoutuber(command) => index_youtuber_command(command).await,
+        Command::RefreshYoutuber(command) => refresh_youtuber_command(command).await,
+        Command::RemoveYoutuber(command) => remove_youtuber_command(command).await,
         Command::IndexVideo(command) => index_video_command(command).await,
         Command::Search(command) => search_command(command).await,
+    }
+}
+
+fn init_tracing() {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "youtube_cli=info,youtube_sources=info,youtube_transcribe=info".into());
+    let subscriber = tracing_subscriber::fmt().with_env_filter(env_filter);
+
+    if std::env::var("LOG_FORMAT").is_ok_and(|value| value.eq_ignore_ascii_case("json")) {
+        subscriber.json().init();
+    } else {
+        subscriber.init();
     }
 }
 
@@ -360,6 +394,64 @@ async fn init_typesense_command(command: InitTypesenseCommand) -> Result<(), Cli
     }
 
     println!("Ready to import transcript chunks for {}.", youtuber.handle);
+    Ok(())
+}
+
+async fn refresh_youtuber_command(command: RefreshYoutuberCommand) -> Result<(), CliError> {
+    let youtube = command.youtube.client()?;
+    let youtuber = validate_youtuber(&youtube, &command.youtuber.handle, 5).await?;
+    print_validated_youtuber(&youtuber);
+
+    let typesense = command.typesense.youtuber_client();
+    match typesense.create_youtubers_collection_if_missing().await? {
+        CreateCollectionOutcome::Created(_) => {
+            println!("Created Typesense collection: youtube_youtubers")
+        }
+        CreateCollectionOutcome::AlreadyExists { .. } => {
+            println!("Typesense collection already exists: youtube_youtubers")
+        }
+    }
+
+    let youtuber_id = youtuber_id_from_handle(&youtuber.handle, &youtuber.channel_id);
+    let existing = typesense.get_youtuber(&youtuber_id).await?;
+    let youtuber_doc = YoutuberDocument {
+        id: youtuber_id,
+        handle: youtuber.handle.clone(),
+        name: youtuber.title.clone(),
+        channel_id: youtuber.channel_id.clone(),
+        uploads_playlist: youtuber.uploads_playlist.clone(),
+        public_video_count: existing.as_ref().map_or(0, |doc| doc.public_video_count),
+        indexed_video_count: existing.as_ref().map_or(0, |doc| doc.indexed_video_count),
+        indexed_chunk_count: existing.as_ref().map_or(0, |doc| doc.indexed_chunk_count),
+        avatar_url: youtuber.avatar_url.clone(),
+    };
+    typesense.upsert_youtuber(&youtuber_doc).await?;
+    println!("Refreshed YouTuber document: {}", youtuber_doc.id);
+    Ok(())
+}
+
+async fn remove_youtuber_command(command: RemoveYoutuberCommand) -> Result<(), CliError> {
+    let handle = normalize_handle(&command.youtuber.handle)?;
+    let youtuber_id = youtuber_id_from_handle(&handle, "");
+    let transcript_typesense = command.typesense.client(command.collection.collection);
+    let youtuber_typesense = command.typesense.youtuber_client();
+
+    let delete_response = transcript_typesense
+        .delete_chunks_by_youtuber_id(&youtuber_id)
+        .await?;
+    println!(
+        "Deleted transcript chunks for {handle}: {}",
+        serde_json::to_string(&delete_response).unwrap_or_else(|_| delete_response.to_string())
+    );
+
+    match youtuber_typesense.delete_youtuber(&youtuber_id).await? {
+        Some(response) => println!(
+            "Deleted YouTuber document for {handle}: {}",
+            serde_json::to_string(&response).unwrap_or_else(|_| response.to_string())
+        ),
+        None => println!("No YouTuber document found for {handle}"),
+    }
+
     Ok(())
 }
 
@@ -494,6 +586,25 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         apply_index_outcome(&mut stats, outcome, completed_videos, attempted_videos);
     }
 
+    let total_indexed_videos = stats.indexed_videos.saturating_add(stats.existing_videos);
+    let total_indexed_chunks = stats.indexed_chunks.saturating_add(stats.existing_chunks);
+    print_index_summary(&stats);
+
+    if stats.attempted_videos > 0 && (total_indexed_videos == 0 || total_indexed_chunks == 0) {
+        if let Err(error) = youtuber_typesense.delete_youtuber(&youtuber_id).await {
+            tracing::warn!(handle = %youtuber.handle, %error, "failed to remove unsearchable YouTuber document");
+        } else {
+            println!("Removed unsearchable YouTuber document: {youtuber_id}");
+        }
+        return Err(CliError::Message(format!(
+            "No searchable transcript chunks were imported for {}. attempted={}, skipped={}, kind_filtered={}. Check yt-dlp/caption errors above.",
+            youtuber.handle,
+            stats.attempted_videos,
+            stats.skipped_videos,
+            stats.kind_filtered_videos
+        )));
+    }
+
     let youtuber_doc = YoutuberDocument {
         id: youtuber_id,
         handle: youtuber.handle.clone(),
@@ -501,23 +612,12 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         channel_id: youtuber.channel_id.clone(),
         uploads_playlist: youtuber.uploads_playlist.clone(),
         public_video_count: saturating_u32(stats.discovered_videos),
-        indexed_video_count: stats.indexed_videos.saturating_add(stats.existing_videos),
-        indexed_chunk_count: stats.indexed_chunks,
-        avatar_url: None,
+        indexed_video_count: total_indexed_videos,
+        indexed_chunk_count: total_indexed_chunks,
+        avatar_url: youtuber.avatar_url.clone(),
     };
     youtuber_typesense.upsert_youtuber(&youtuber_doc).await?;
     println!("Upserted YouTuber document: {}", youtuber_doc.id);
-    println!(
-        "Index summary: discovered={}, attempted={}, indexed={}, existing={}, skipped={}, kind_filtered={}, audio_transcribed={}, chunks={}",
-        stats.discovered_videos,
-        stats.attempted_videos,
-        stats.indexed_videos,
-        stats.existing_videos,
-        stats.skipped_videos,
-        stats.kind_filtered_videos,
-        stats.audio_transcribed_videos,
-        stats.indexed_chunks
-    );
 
     Ok(())
 }
@@ -673,6 +773,7 @@ fn apply_index_outcome(
             chunks,
         } => {
             stats.existing_videos = stats.existing_videos.saturating_add(1);
+            stats.existing_chunks = stats.existing_chunks.saturating_add(saturating_u32(chunks));
             println!(
                 "Done {completed}/{total}: {video_id} {title} — already indexed ({chunks} chunks)"
             );
@@ -792,7 +893,7 @@ async fn validate_youtuber(
                 .part(["id", "snippet", "contentDetails"])
                 .set("forHandle", &handle)
                 .fields(
-                    "items(id,snippet(title,customUrl),contentDetails/relatedPlaylists/uploads)",
+                    "items(id,snippet(title,customUrl,thumbnails),contentDetails/relatedPlaylists/uploads)",
                 ),
         )
         .page()
@@ -805,6 +906,7 @@ async fn validate_youtuber(
     let title = required_string(channel, "/snippet/title", "channel title")?;
     let resolved_handle = optional_string(channel, "/snippet/customUrl").unwrap_or(handle);
     let uploads_playlist = optional_string(channel, "/contentDetails/relatedPlaylists/uploads");
+    let avatar_url = best_thumbnail(channel.pointer("/snippet/thumbnails"));
     let (recent_uploads, uploads_warning) = match uploads_playlist.as_deref() {
         Some(uploads_playlist) => {
             match fetch_recent_uploads(youtube, uploads_playlist, max_videos).await {
@@ -828,6 +930,7 @@ async fn validate_youtuber(
         channel_id,
         title,
         uploads_playlist,
+        avatar_url,
         recent_uploads,
         uploads_warning,
     })
@@ -1086,8 +1189,23 @@ fn content_kind_for_duration(duration_ms: Option<youtube_ingest::DurationMs>) ->
     }
 }
 
-fn saturating_u32(value: usize) -> u32 {
-    u32::try_from(value).unwrap_or(u32::MAX)
+fn saturating_u32(value: impl TryInto<u32>) -> u32 {
+    value.try_into().unwrap_or(u32::MAX)
+}
+
+fn print_index_summary(stats: &IndexStats) {
+    println!(
+        "Index summary: discovered={}, attempted={}, indexed={}, existing={}, skipped={}, kind_filtered={}, audio_transcribed={}, chunks={}, existing_chunks={}",
+        stats.discovered_videos,
+        stats.attempted_videos,
+        stats.indexed_videos,
+        stats.existing_videos,
+        stats.skipped_videos,
+        stats.kind_filtered_videos,
+        stats.audio_transcribed_videos,
+        stats.indexed_chunks,
+        stats.existing_chunks
+    );
 }
 
 fn youtuber_id_from_handle(handle: &str, channel_id: &str) -> String {
@@ -1151,10 +1269,21 @@ fn optional_string(value: &Value, pointer: &str) -> Option<String> {
     value.pointer(pointer)?.as_str().map(ToOwned::to_owned)
 }
 
+fn best_thumbnail(thumbnails: Option<&Value>) -> Option<String> {
+    let thumbnails = thumbnails?.as_object()?;
+    ["high", "medium", "default"]
+        .iter()
+        .find_map(|quality| thumbnails.get(*quality)?.get("url")?.as_str())
+        .map(ToOwned::to_owned)
+}
+
 fn print_validated_youtuber(youtuber: &ValidatedYoutuber) {
     println!("Validated YouTuber: {}", youtuber.handle);
     println!("  title: {}", youtuber.title);
     println!("  channel_id: {}", youtuber.channel_id);
+    if youtuber.avatar_url.is_some() {
+        println!("  avatar: available");
+    }
     match &youtuber.uploads_playlist {
         Some(uploads_playlist) => println!("  uploads_playlist: {uploads_playlist}"),
         None => println!("  uploads_playlist: unavailable"),

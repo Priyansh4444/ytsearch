@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use reqwest::Client as HttpClient;
 use serde::Deserialize;
 use serde_json::Value;
-use std::process::Stdio;
+use std::{env, process::Stdio};
 use tokio::{
     process::Command,
     time::{Duration, sleep, timeout},
@@ -18,6 +18,10 @@ use youtube_ingest::{DurationMs, IngestError, TimestampMs, TranscriptSegment, Tr
 
 const YOUTUBE_WATCH_URL_PREFIX: &str = "https://www.youtube.com/watch?v=";
 const DEFAULT_YT_DLP_BINARY: &str = "yt-dlp";
+const YT_DLP_BINARY_ENV: &str = "YT_DLP_BINARY";
+const YT_DLP_COOKIES_FILE_ENV: &str = "YT_DLP_COOKIES_FILE";
+const YT_DLP_EXTRACTOR_ARGS_ENV: &str = "YT_DLP_EXTRACTOR_ARGS";
+const YT_DLP_USER_AGENT_ENV: &str = "YT_DLP_USER_AGENT";
 const CAPTION_LANGUAGES: [&str; 4] = ["en", "en-orig", "a.en", "en-US"];
 const CAPTION_EXTENSIONS: [&str; 2] = ["json3", "vtt"];
 const CAPTION_FETCH_ATTEMPTS: u8 = 3;
@@ -33,7 +37,9 @@ pub struct YtDlpTranscriptSource {
 
 impl YtDlpTranscriptSource {
     pub fn new() -> Self {
-        Self::with_binary(DEFAULT_YT_DLP_BINARY)
+        Self::with_binary(
+            env::var(YT_DLP_BINARY_ENV).unwrap_or_else(|_| DEFAULT_YT_DLP_BINARY.to_string()),
+        )
     }
 
     pub fn with_binary(binary: impl Into<String>) -> Self {
@@ -52,12 +58,31 @@ impl YtDlpTranscriptSource {
 
     async fn video_json(&self, video_id: &str) -> youtube_ingest::Result<Value> {
         let url = video_url(video_id);
+        let mut command = Command::new(&self.binary);
+        command
+            .arg("--skip-download")
+            .arg("--dump-json")
+            .arg("--no-warnings");
+
+        if let Ok(cookies_file) = env::var(YT_DLP_COOKIES_FILE_ENV) {
+            if !cookies_file.trim().is_empty() {
+                command.arg("--cookies").arg(cookies_file);
+            }
+        }
+        if let Ok(extractor_args) = env::var(YT_DLP_EXTRACTOR_ARGS_ENV) {
+            if !extractor_args.trim().is_empty() {
+                command.arg("--extractor-args").arg(extractor_args);
+            }
+        }
+        if let Ok(user_agent) = env::var(YT_DLP_USER_AGENT_ENV) {
+            if !user_agent.trim().is_empty() {
+                command.arg("--user-agent").arg(user_agent);
+            }
+        }
+
         let output = timeout(
             YT_DLP_TIMEOUT,
-            Command::new(&self.binary)
-                .arg("--skip-download")
-                .arg("--dump-json")
-                .arg("--no-warnings")
+            command
                 .arg(url)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())

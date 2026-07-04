@@ -146,6 +146,12 @@ cargo run -p youtube_cli -- index-youtuber @t3dotgg \
   --voxtype-engine whisper
 ```
 
+Remove a creator locally from Typesense:
+
+```bash
+cargo run -p youtube_cli -- remove-youtuber @oldhandle
+```
+
 ## Search from CLI
 
 ```bash
