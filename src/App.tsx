@@ -288,59 +288,43 @@ const HitCard: Component<{ hit: SearchHit; query: string }> = (props) => {
             </a>
           </div>
 
-          <blockquote class="rounded-2xl border border-vesper-border bg-vesper-bg p-4 text-base leading-7 text-white">
-            <HighlightedText
-              text={props.hit.text}
-              highlight={props.hit.text_highlight}
-              query={props.query}
-            />
-          </blockquote>
-
-          <div class="grid gap-3 text-sm text-vesper-muted lg:grid-cols-2">
-            <Show when={props.hit.prev_text}>
-              {(text) => (
-                <ContextPill
-                  label="Before"
-                  text={text()}
-                  highlight={props.hit.prev_text_highlight}
-                  query={props.query}
-                />
-              )}
-            </Show>
-            <Show when={props.hit.next_text}>
-              {(text) => (
-                <ContextPill
-                  label="After"
-                  text={text()}
-                  highlight={props.hit.next_text_highlight}
-                  query={props.query}
-                />
-              )}
-            </Show>
-          </div>
+          <TranscriptExcerpt hit={props.hit} query={props.query} />
         </div>
       </div>
     </article>
   );
 };
 
-const ContextPill: Component<{
-  label: string;
-  text: string;
-  highlight?: string;
-  query: string;
-}> = (props) => (
-  <div class="rounded-2xl border border-vesper-border bg-vesper-panel2 p-3">
-    <p class="mb-1 text-xs font-semibold uppercase tracking-[0.16em] text-vesper-dim">
-      {props.label}
-    </p>
-    <p class="line-clamp-3 leading-6">
+const TranscriptExcerpt: Component<{ hit: SearchHit; query: string }> = (
+  props,
+) => (
+  <div class="rounded-2xl border border-vesper-border bg-vesper-bg p-4 text-base leading-7 text-white">
+    <Show when={props.hit.prev_text}>
+      <span class="text-vesper-muted">
+        <HighlightedText
+          text={props.hit.prev_text ?? ""}
+          highlight={props.hit.prev_text_highlight}
+          query={props.query}
+        />{" "}
+      </span>
+    </Show>
+    <span class="font-medium text-white">
       <HighlightedText
-        text={props.text}
-        highlight={props.highlight}
+        text={props.hit.text}
+        highlight={props.hit.text_highlight}
         query={props.query}
       />
-    </p>
+    </span>
+    <Show when={props.hit.next_text}>
+      <span class="text-vesper-muted">
+        {" "}
+        <HighlightedText
+          text={props.hit.next_text ?? ""}
+          highlight={props.hit.next_text_highlight}
+          query={props.query}
+        />
+      </span>
+    </Show>
   </div>
 );
 

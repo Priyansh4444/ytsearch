@@ -76,6 +76,12 @@ struct IndexYoutuberCommand {
     content_kind: ContentKindFilter,
     #[arg(
         long,
+        default_value_t = 30,
+        help = "Transcript chunk window in seconds"
+    )]
+    chunk_seconds: u32,
+    #[arg(
+        long,
         help = "When captions are missing, extract audio with yt-dlp and transcribe locally with voxtype"
     )]
     transcribe_missing: bool,
@@ -378,7 +384,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
                 .with_voxtype_engine(command.voxtype_engine.clone()),
         )
     });
-    let chunker = Chunker::five_seconds();
+    let chunker = Chunker::new(command.chunk_seconds);
     let mut stats = IndexStats {
         discovered_videos: public_videos.len(),
         attempted_videos: command

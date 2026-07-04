@@ -9,9 +9,10 @@ use youtube_ingest::{ChunkSink, IngestError, TranscriptChunk};
 
 pub const DEFAULT_COLLECTION: &str = "youtube_transcript_chunks";
 pub const YOUTUBERS_COLLECTION: &str = "youtube_youtubers";
-const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+const HTTP_TIMEOUT: Duration = Duration::from_secs(180);
 const IMPORT_BATCH_SIZE: usize = 64;
 const IMPORT_ATTEMPTS: u8 = 3;
+const DELETE_ATTEMPTS: u8 = 3;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct TypesenseAdminConfig {
@@ -179,14 +180,28 @@ impl TypesenseAdminClient {
             pairs.append_pair("batch_size", "100");
         }
 
-        let response = self
-            .http
-            .delete(url)
-            .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
-            .send()
-            .await?;
+        let mut last_error = None;
+        for attempt in 1..=DELETE_ATTEMPTS {
+            let response = self
+                .http
+                .delete(url.clone())
+                .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
+                .send()
+                .await;
 
-        json_response(response).await
+            match response {
+                Ok(response) => return json_response(response).await,
+                Err(error) if attempt < DELETE_ATTEMPTS && error.is_timeout() => {
+                    last_error = Some(error);
+                    sleep(Duration::from_millis(u64::from(attempt) * 1000)).await;
+                }
+                Err(error) => return Err(TypesenseError::Http(error)),
+            }
+        }
+
+        Err(TypesenseError::Http(
+            last_error.expect("delete retry loop should capture an error"),
+        ))
     }
 
     pub async fn import_chunks(&self, chunks: &[TranscriptChunk]) -> Result<TypesenseImport> {
