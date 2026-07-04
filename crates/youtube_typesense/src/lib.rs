@@ -116,24 +116,30 @@ impl TypesenseAdminClient {
     }
 
     pub async fn create_collection_if_missing(&self) -> Result<CreateCollectionOutcome> {
-        match self.create_collection().await {
-            Ok(response) => Ok(CreateCollectionOutcome::Created(response)),
-            Err(TypesenseError::Api { status, body }) if status == StatusCode::CONFLICT => {
-                Ok(CreateCollectionOutcome::AlreadyExists { body })
-            }
-            Err(error) => Err(error),
-        }
+        self.create_named_collection_if_missing(
+            &self.config.collection,
+            transcript_chunk_schema(&self.config.collection),
+        )
+        .await
     }
 
     pub async fn create_youtubers_collection_if_missing(&self) -> Result<CreateCollectionOutcome> {
-        self.create_named_collection_if_missing(youtubers_schema(YOUTUBERS_COLLECTION))
-            .await
+        self.create_named_collection_if_missing(
+            YOUTUBERS_COLLECTION,
+            youtubers_schema(YOUTUBERS_COLLECTION),
+        )
+        .await
     }
 
     async fn create_named_collection_if_missing(
         &self,
+        name: &str,
         schema: Value,
     ) -> Result<CreateCollectionOutcome> {
+        if let Some(body) = self.get_collection(name).await? {
+            return Ok(CreateCollectionOutcome::AlreadyExists { body });
+        }
+
         let url = endpoint(&self.config.api_url, "collections")?;
         let response = self
             .http
@@ -150,6 +156,25 @@ impl TypesenseAdminClient {
             }
             Err(error) => Err(error),
         }
+    }
+
+    pub async fn get_collection(&self, name: &str) -> Result<Option<String>> {
+        let path = format!("collections/{name}");
+        let url = endpoint(&self.config.api_url, &path)?;
+        let response = self
+            .http
+            .get(url)
+            .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
+            .send()
+            .await?;
+
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        json_response(response)
+            .await
+            .map(|body| Some(body.to_string()))
     }
 
     pub async fn upsert_youtuber(&self, youtuber: &YoutuberDocument) -> Result<Value> {
