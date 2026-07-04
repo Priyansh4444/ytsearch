@@ -10,4 +10,5 @@ members = [
     "crates/youtube_sources",
     "crates/youtube_transcribe",
     "crates/youtube_typesense",
+    "crates/youtube_ytdlp",
 ]

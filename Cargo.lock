@@ -1857,6 +1857,7 @@ dependencies = [
  "youtube_sources",
  "youtube_transcribe",
  "youtube_typesense",
+ "youtube_ytdlp",
 ]
 
 [[package]]
@@ -1911,11 +1912,8 @@ name = "youtube_sources"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "reqwest",
- "serde",
  "serde_json",
  "tokio",
- "tracing",
  "youtube_client",
  "youtube_ingest",
 ]
@@ -1942,6 +1940,19 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "youtube_ingest",
+]
+
+[[package]]
+name = "youtube_ytdlp"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
  "youtube_ingest",
 ]
 

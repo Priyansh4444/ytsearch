@@ -5,12 +5,13 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 use youtube_client::{ListResource, Page, Query, YouTubeClient};
 use youtube_ingest::{Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource};
-use youtube_sources::{YouTubeMetadataSource, YtDlpTranscriptSource};
+use youtube_sources::YouTubeMetadataSource;
 use youtube_transcribe::{TranscriptionConfig, VoxtypeTranscriptSource};
 use youtube_typesense::{
     CreateCollectionOutcome, DEFAULT_COLLECTION, TextSearchQuery, TypesenseAdminClient,
     TypesenseAdminConfig, TypesenseSearchClient, TypesenseSearchConfig, YoutuberDocument,
 };
+use youtube_ytdlp::YtDlpTranscriptSource;
 
 #[derive(Debug, Parser)]
 #[command(name = "ytsearch")]
@@ -502,6 +503,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         public_video_count: saturating_u32(stats.discovered_videos),
         indexed_video_count: stats.indexed_videos.saturating_add(stats.existing_videos),
         indexed_chunk_count: stats.indexed_chunks,
+        avatar_url: None,
     };
     youtuber_typesense.upsert_youtuber(&youtuber_doc).await?;
     println!("Upserted YouTuber document: {}", youtuber_doc.id);
