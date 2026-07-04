@@ -4,11 +4,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{fmt, time::Duration};
 use thiserror::Error;
+use tokio::time::sleep;
 use youtube_ingest::{ChunkSink, IngestError, TranscriptChunk};
 
 pub const DEFAULT_COLLECTION: &str = "youtube_transcript_chunks";
 pub const YOUTUBERS_COLLECTION: &str = "youtube_youtubers";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+const IMPORT_BATCH_SIZE: usize = 64;
+const IMPORT_ATTEMPTS: u8 = 3;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct TypesenseAdminConfig {
@@ -187,6 +190,46 @@ impl TypesenseAdminClient {
     }
 
     pub async fn import_chunks(&self, chunks: &[TranscriptChunk]) -> Result<TypesenseImport> {
+        self.import_chunk_batch_with_retries(chunks).await
+    }
+
+    pub async fn import_chunks_batched(
+        &self,
+        chunks: &[TranscriptChunk],
+    ) -> Result<TypesenseImport> {
+        let mut body = String::new();
+        for batch in chunks.chunks(IMPORT_BATCH_SIZE) {
+            let result = self.import_chunk_batch_with_retries(batch).await?;
+            body.push_str(&result.body);
+            if !body.ends_with('\n') {
+                body.push('\n');
+            }
+        }
+
+        Ok(TypesenseImport { body })
+    }
+
+    async fn import_chunk_batch_with_retries(
+        &self,
+        chunks: &[TranscriptChunk],
+    ) -> Result<TypesenseImport> {
+        let mut last_error = None;
+
+        for attempt in 1..=IMPORT_ATTEMPTS {
+            match self.import_chunk_batch(chunks).await {
+                Ok(result) => return Ok(result),
+                Err(error) if attempt < IMPORT_ATTEMPTS && error.is_transient() => {
+                    last_error = Some(error);
+                    sleep(Duration::from_millis(u64::from(attempt) * 500)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        Err(last_error.unwrap_or(TypesenseError::RetryExhausted))
+    }
+
+    async fn import_chunk_batch(&self, chunks: &[TranscriptChunk]) -> Result<TypesenseImport> {
         let mut body = Vec::with_capacity(chunks.len().saturating_mul(512));
         for chunk in chunks {
             serde_json::to_writer(&mut body, chunk)?;
@@ -384,6 +427,20 @@ pub enum TypesenseError {
     Json(#[from] serde_json::Error),
     #[error("typesense returned {status}: {body}")]
     Api { status: StatusCode, body: String },
+    #[error("typesense import retry attempts exhausted")]
+    RetryExhausted,
+}
+
+impl TypesenseError {
+    fn is_transient(&self) -> bool {
+        match self {
+            Self::Http(error) => error.is_timeout() || error.is_connect() || error.is_request(),
+            Self::Api { status, .. } => {
+                status.is_server_error() || *status == StatusCode::TOO_MANY_REQUESTS
+            }
+            Self::InvalidUrl(_) | Self::Json(_) | Self::RetryExhausted => false,
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, TypesenseError>;

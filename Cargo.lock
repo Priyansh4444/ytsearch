@@ -1941,6 +1941,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
  "youtube_ingest",
 ]
 

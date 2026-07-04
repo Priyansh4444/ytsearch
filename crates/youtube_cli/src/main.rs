@@ -470,7 +470,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         match chunker.chunks(&metadata, &transcript) {
             Ok(chunks) => {
                 let chunk_count = chunks.len();
-                transcript_typesense.import_chunks(&chunks).await?;
+                transcript_typesense.import_chunks_batched(&chunks).await?;
                 stats.indexed_videos = stats.indexed_videos.saturating_add(1);
                 stats.indexed_chunks = stats
                     .indexed_chunks
