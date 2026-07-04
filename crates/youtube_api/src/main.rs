@@ -8,6 +8,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    collections::HashMap,
     env,
     net::{AddrParseError, SocketAddr},
     sync::Arc,
@@ -22,7 +23,7 @@ const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8787";
 const DEFAULT_PER_PAGE: u8 = 20;
 const MAX_PER_PAGE: u8 = 100;
 const MERGE_TRANSCRIPT_HIT_WINDOW_MS: u32 = 20_000;
-const MAX_SEARCH_PAGE_FETCHES: u32 = 5;
+const MAX_SEARCH_PAGE_FETCHES: u32 = 10;
 
 #[derive(Clone)]
 struct AppState {
@@ -35,6 +36,7 @@ struct SearchParams {
     youtuber: Option<String>,
     per_page: Option<u8>,
     page: Option<u32>,
+    sort: Option<SearchSort>,
 }
 
 #[derive(Debug, Serialize)]
@@ -44,10 +46,21 @@ struct SearchResponse {
     out_of: u64,
     page: u32,
     per_page: u8,
+    sort: SearchSort,
     hits: Vec<SearchHit>,
+    videos: Vec<SearchVideoResult>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SearchSort {
+    #[default]
+    Relevance,
+    PublishedDesc,
+    PublishedAsc,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct SearchHit {
     id: String,
     video_id: String,
@@ -67,6 +80,21 @@ struct SearchHit {
     timestamp: Option<String>,
     youtube_url: String,
     embed_url: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct SearchVideoResult {
+    video_id: String,
+    title: String,
+    youtuber_handle: String,
+    youtuber_name: String,
+    thumbnail: Option<String>,
+    published_at: Option<String>,
+    match_count: usize,
+    youtube_url: String,
+    embed_url: String,
+    best_timestamp: Option<String>,
+    hits: Vec<SearchHit>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -151,7 +179,8 @@ async fn search_handler(
         .unwrap_or(DEFAULT_PER_PAGE)
         .clamp(1, MAX_PER_PAGE);
     let page = params.page.unwrap_or(1).max(1);
-    let search_page_size = per_page.saturating_mul(4).min(MAX_PER_PAGE);
+    let sort = params.sort.unwrap_or_default();
+    let search_page_size = per_page.saturating_mul(8).min(MAX_PER_PAGE);
     let requested_offset = (page - 1).saturating_mul(u32::from(per_page));
     let typesense_page = 1;
     let local_offset = requested_offset as usize;
@@ -165,6 +194,7 @@ async fn search_handler(
         query,
         per_page,
         page,
+        ?sort,
         typesense_page,
         search_page_size,
         youtuber = params.youtuber.as_deref().unwrap_or(""),
@@ -189,7 +219,7 @@ async fn search_handler(
         .get("out_of")
         .and_then(Value::as_u64)
         .unwrap_or_default();
-    let hits = collect_visible_hits(
+    let videos = collect_visible_videos(
         &state.search,
         &typesense_query,
         first_raw,
@@ -197,9 +227,20 @@ async fn search_handler(
         local_offset,
         per_page,
         search_page_size,
+        sort,
     )
     .await?;
-    tracing::info!(query, found, returned_hits = hits.len(), "search response");
+    let hits = videos
+        .iter()
+        .flat_map(|video| video.hits.iter().cloned())
+        .collect::<Vec<_>>();
+    tracing::info!(
+        query,
+        found,
+        returned_videos = videos.len(),
+        returned_hits = hits.len(),
+        "search response"
+    );
 
     Ok(Json(SearchResponse {
         query: query.to_string(),
@@ -207,11 +248,14 @@ async fn search_handler(
         out_of,
         page,
         per_page,
+        sort,
         hits,
+        videos,
     }))
 }
 
-async fn collect_visible_hits(
+#[allow(clippy::too_many_arguments)]
+async fn collect_visible_videos(
     search: &TypesenseSearchClient,
     base_query: &TextSearchQuery,
     first_raw: Value,
@@ -219,8 +263,9 @@ async fn collect_visible_hits(
     local_offset: usize,
     per_page: u8,
     search_page_size: u8,
-) -> Result<Vec<SearchHit>, ApiError> {
-    let required_hits = local_offset.saturating_add(usize::from(per_page));
+    sort: SearchSort,
+) -> Result<Vec<SearchVideoResult>, ApiError> {
+    let required_videos = local_offset.saturating_add(usize::from(per_page));
     let mut combined = Vec::new();
     let mut current_page = first_typesense_page;
     let mut raw = first_raw;
@@ -230,9 +275,14 @@ async fn collect_visible_hits(
         let is_empty = page_hits.is_empty();
         combined.extend(page_hits);
         combined = merge_nearby_transcript_hits(dedupe_title_only_hits(combined));
+        let videos = video_results_from_hits(&combined, sort);
 
-        if combined.len() >= required_hits || is_empty {
-            break;
+        if videos.len() >= required_videos || is_empty {
+            return Ok(videos
+                .into_iter()
+                .skip(local_offset)
+                .take(usize::from(per_page))
+                .collect());
         }
 
         let fetched_raw_hits = raw
@@ -253,11 +303,79 @@ async fn collect_visible_hits(
             .await?;
     }
 
-    Ok(combined
+    Ok(video_results_from_hits(&combined, sort)
         .into_iter()
         .skip(local_offset)
         .take(usize::from(per_page))
         .collect())
+}
+
+fn video_results_from_hits(hits: &[SearchHit], sort: SearchSort) -> Vec<SearchVideoResult> {
+    let mut order = Vec::new();
+    let mut by_video: HashMap<String, SearchVideoResult> = HashMap::new();
+
+    for hit in hits {
+        let entry = by_video.entry(hit.video_id.clone()).or_insert_with(|| {
+            order.push(hit.video_id.clone());
+            SearchVideoResult::from_hit(hit)
+        });
+        entry.hits.push(hit.clone());
+    }
+
+    let mut videos = order
+        .into_iter()
+        .filter_map(|video_id| by_video.remove(&video_id))
+        .map(|mut video| {
+            video.hits.sort_by_key(|hit| hit.t_start_ms);
+            video.match_count = video.hits.len();
+            if let Some(best_hit) = video
+                .hits
+                .iter()
+                .find(|hit| hit.match_kind == MatchKind::Transcript)
+                .or_else(|| video.hits.first())
+            {
+                video.youtube_url = best_hit.youtube_url.clone();
+                video.embed_url = best_hit.embed_url.clone();
+                video.best_timestamp = best_hit.timestamp.clone();
+            }
+            video
+        })
+        .collect::<Vec<_>>();
+
+    match sort {
+        SearchSort::Relevance => {}
+        SearchSort::PublishedDesc => videos.sort_by(|left, right| {
+            right
+                .published_at
+                .cmp(&left.published_at)
+                .then_with(|| left.title.cmp(&right.title))
+        }),
+        SearchSort::PublishedAsc => videos.sort_by(|left, right| {
+            left.published_at
+                .cmp(&right.published_at)
+                .then_with(|| left.title.cmp(&right.title))
+        }),
+    }
+
+    videos
+}
+
+impl SearchVideoResult {
+    fn from_hit(hit: &SearchHit) -> Self {
+        Self {
+            video_id: hit.video_id.clone(),
+            title: hit.title.clone(),
+            youtuber_handle: hit.youtuber_handle.clone(),
+            youtuber_name: hit.youtuber_name.clone(),
+            thumbnail: hit.thumbnail.clone(),
+            published_at: hit.published_at.clone(),
+            match_count: 0,
+            youtube_url: hit.youtube_url.clone(),
+            embed_url: hit.embed_url.clone(),
+            best_timestamp: hit.timestamp.clone(),
+            hits: Vec::new(),
+        }
+    }
 }
 
 fn parse_hits(raw: &Value) -> Result<Vec<SearchHit>, ApiError> {

@@ -21,13 +21,31 @@ type SearchHit = {
   embed_url: string;
 };
 
+type SearchVideoResult = {
+  video_id: string;
+  title: string;
+  youtuber_handle: string;
+  youtuber_name: string;
+  thumbnail?: string;
+  published_at?: string;
+  match_count: number;
+  youtube_url: string;
+  embed_url: string;
+  best_timestamp?: string;
+  hits: SearchHit[];
+};
+
+type SearchSort = "relevance" | "published_desc" | "published_asc";
+
 type SearchResponse = {
   query: string;
   total_found: number;
   out_of: number;
   page: number;
   per_page: number;
+  sort: SearchSort;
   hits: SearchHit[];
+  videos: SearchVideoResult[];
 };
 
 type SearchRequest = {
@@ -35,6 +53,7 @@ type SearchRequest = {
   youtuber: string;
   limit: number;
   page: number;
+  sort: SearchSort;
 };
 
 const examples = ["battery", "water", "react", "typescript", "valorant"];
@@ -43,8 +62,9 @@ const App: Component = () => {
   const routeHandle = creatorFromPath();
   const [query, setQuery] = createSignal("");
   const [youtuber, setYoutuber] = createSignal(routeHandle ?? "@t3dotgg");
-  const [limit, setLimit] = createSignal(25);
+  const [limit, setLimit] = createSignal(12);
   const [page, setPage] = createSignal(1);
+  const [sort, setSort] = createSignal<SearchSort>("relevance");
   const [submitted, setSubmitted] = createSignal<SearchRequest>();
   const [result] = createResource(submitted, searchTranscripts);
 
@@ -63,6 +83,7 @@ const App: Component = () => {
       youtuber: youtuber().trim(),
       limit: limit(),
       page: nextPage,
+      sort: sort(),
     });
   };
 
@@ -95,7 +116,7 @@ const App: Component = () => {
 
         <section class="border border-vesper-border bg-vesper-panel p-4">
           <form
-            class="grid gap-3 lg:grid-cols-[1fr_13rem_7rem_auto]"
+            class="grid gap-3 lg:grid-cols-[1fr_13rem_7rem_10rem_auto]"
             onSubmit={(event) => {
               event.preventDefault();
               runSearch(query(), 1);
@@ -119,15 +140,27 @@ const App: Component = () => {
               />
             </Field>
 
-            <Field label="Hits">
+            <Field label="Videos">
               <input
                 type="number"
                 min="1"
-                max="100"
+                max="50"
                 value={limit()}
                 onInput={(event) => setLimit(Number(event.currentTarget.value))}
                 class="h-12 w-full border border-vesper-border bg-vesper-bg px-3 text-base text-white outline-none focus:border-vesper-yellow"
               />
+            </Field>
+
+            <Field label="Sort">
+              <select
+                value={sort()}
+                onChange={(event) => setSort(event.currentTarget.value as SearchSort)}
+                class="h-12 w-full border border-vesper-border bg-vesper-bg px-3 text-base text-white outline-none focus:border-vesper-yellow"
+              >
+                <option value="relevance">Relevant</option>
+                <option value="published_desc">Newest</option>
+                <option value="published_asc">Oldest</option>
+              </select>
             </Field>
 
             <button
@@ -169,18 +202,18 @@ const App: Component = () => {
                     <h2 class="text-xl font-semibold text-white">{response().query}</h2>
                   </div>
                   <p class="border border-vesper-border bg-vesper-bg px-3 py-2 text-sm text-vesper-muted">
-                    <span class="text-white">{response().hits.length}</span> shown /{" "}
-                    <span class="text-white">{response().total_found}</span> found
+                    <span class="text-white">{response().videos.length}</span> videos /{" "}
+                    <span class="text-white">{response().hits.length}</span> moments
                   </p>
                 </div>
 
                 <Show
-                  when={response().hits.length > 0}
+                  when={response().videos.length > 0}
                   fallback={<EmptyState query={response().query} />}
                 >
                   <div class="grid gap-2">
-                    <For each={response().hits}>
-                      {(hit) => <HitRow hit={hit} query={response().query} />}
+                    <For each={response().videos}>
+                      {(video) => <VideoRow video={video} query={response().query} />}
                     </For>
                   </div>
 
@@ -217,6 +250,7 @@ async function searchTranscripts(request: SearchRequest): Promise<SearchResponse
     q: request.query,
     per_page: String(request.limit),
     page: String(request.page),
+    sort: request.sort,
   });
   if (request.youtuber) params.set("youtuber", request.youtuber);
 
@@ -291,21 +325,21 @@ function pageNumbers(currentPage: number, totalPages: number): number[] {
   return Array.from({ length: end - start + 1 }, (_, index) => start + index);
 }
 
-const HitRow: Component<{ hit: SearchHit; query: string }> = (props) => (
+const VideoRow: Component<{ video: SearchVideoResult; query: string }> = (props) => (
   <article class="border border-vesper-border bg-vesper-panel">
     <div class="grid gap-0 md:grid-cols-[18rem_1fr]">
       <div class="relative min-h-40 bg-vesper-bg">
         <iframe
           class="aspect-video h-full min-h-40 w-full"
-          src={props.hit.embed_url}
-          title={`YouTube player for ${props.hit.title}`}
+          src={props.video.embed_url}
+          title={`YouTube player for ${props.video.title}`}
           loading="lazy"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
           referrerpolicy="strict-origin-when-cross-origin"
           allowfullscreen
         />
         <span class="absolute bottom-2 left-2 bg-vesper-bg/90 px-2 py-1 text-xs font-semibold text-vesper-yellow ring-1 ring-vesper-border">
-          {props.hit.timestamp ?? "title"}
+          {props.video.best_timestamp ?? "title"}
         </span>
       </div>
 
@@ -313,32 +347,48 @@ const HitRow: Component<{ hit: SearchHit; query: string }> = (props) => (
         <div class="flex items-start justify-between gap-4">
           <div>
             <a
-              href={props.hit.youtube_url}
+              href={props.video.youtube_url}
               target="_blank"
               rel="noreferrer"
               class="text-lg font-semibold leading-snug text-white hover:text-vesper-yellow"
             >
-              <HighlightedText
-                text={props.hit.title}
-                highlight={props.hit.title_highlight}
-                query={props.query}
-              />
+              {props.video.title}
             </a>
             <p class="mt-1 text-sm text-vesper-muted">
-              {props.hit.youtuber_name} · {props.hit.youtuber_handle}
+              {props.video.youtuber_name} · {props.video.youtuber_handle}
+              <Show when={props.video.published_at}> · {formatDate(props.video.published_at)}</Show>
             </p>
           </div>
           <a
-            href={props.hit.youtube_url}
+            href={props.video.youtube_url}
             target="_blank"
             rel="noreferrer"
             class="shrink-0 border border-vesper-border bg-vesper-bg px-3 py-1.5 text-sm font-medium text-vesper-green hover:border-vesper-green"
           >
-            {props.hit.timestamp ? `Open ${props.hit.timestamp}` : "Open"}
+            {props.video.best_timestamp ? `Open ${props.video.best_timestamp}` : "Open"}
           </a>
         </div>
 
-        <TranscriptExcerpt hit={props.hit} query={props.query} />
+        <div class="flex flex-wrap gap-2">
+          <For each={props.video.hits}>
+            {(hit) => (
+              <a
+                href={hit.youtube_url}
+                target="_blank"
+                rel="noreferrer"
+                class="border border-vesper-border bg-vesper-bg px-2 py-1 text-xs text-vesper-muted hover:border-vesper-yellow hover:text-vesper-yellow"
+              >
+                {hit.timestamp ?? "title"}
+              </a>
+            )}
+          </For>
+        </div>
+
+        <div class="grid gap-2">
+          <For each={props.video.hits.slice(0, 3)}>
+            {(hit) => <TranscriptExcerpt hit={hit} query={props.query} />}
+          </For>
+        </div>
       </div>
     </div>
   </article>
@@ -460,6 +510,17 @@ function decodeEntities(value: string): string {
   const element = document.createElement("textarea");
   element.innerHTML = value;
   return element.value;
+}
+
+function formatDate(value: string | undefined): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return value;
+  return date.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function creatorFromPath(): string | null {
