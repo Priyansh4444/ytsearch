@@ -171,6 +171,11 @@ impl TypesenseAdminClient {
             .await
     }
 
+    pub async fn delete_chunks_by_video_id(&self, video_id: &str) -> Result<Value> {
+        self.delete_documents_by_filter(&format!("video_id:={video_id}"))
+            .await
+    }
+
     pub async fn delete_documents_by_filter(&self, filter_by: &str) -> Result<Value> {
         let path = format!("collections/{}/documents", self.config.collection);
         let mut url = endpoint(&self.config.api_url, &path)?;
@@ -327,6 +332,9 @@ impl TypesenseSearchClient {
             if let Some(per_page) = query.per_page {
                 pairs.append_pair("per_page", &per_page.to_string());
             }
+            if let Some(page) = query.page {
+                pairs.append_pair("page", &page.to_string());
+            }
             if let Some(highlight_fields) = &query.highlight_fields {
                 pairs.append_pair("highlight_fields", highlight_fields);
             }
@@ -374,6 +382,7 @@ pub struct TextSearchQuery {
     pub group_by: Option<String>,
     pub group_limit: Option<u8>,
     pub per_page: Option<u8>,
+    pub page: Option<u32>,
     pub highlight_fields: Option<String>,
 }
 
@@ -386,6 +395,7 @@ impl TextSearchQuery {
             group_by: Some("video_id".to_string()),
             group_limit: Some(5),
             per_page: None,
+            page: None,
             highlight_fields: Some("text,title".to_string()),
         }
     }
@@ -423,6 +433,11 @@ impl TextSearchQuery {
 
     pub fn per_page(mut self, per_page: u8) -> Self {
         self.per_page = Some(per_page);
+        self
+    }
+
+    pub fn page(mut self, page: u32) -> Self {
+        self.page = Some(page.max(1));
         self
     }
 

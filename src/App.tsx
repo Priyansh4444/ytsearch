@@ -1,10 +1,4 @@
-import {
-  For,
-  Show,
-  createEffect,
-  createResource,
-  createSignal,
-} from "solid-js";
+import { For, Show, createEffect, createResource, createSignal } from "solid-js";
 import type { Component } from "solid-js";
 
 type SearchHit = {
@@ -31,6 +25,8 @@ type SearchResponse = {
   query: string;
   total_found: number;
   out_of: number;
+  page: number;
+  per_page: number;
   hits: SearchHit[];
 };
 
@@ -38,6 +34,7 @@ type SearchRequest = {
   query: string;
   youtuber: string;
   limit: number;
+  page: number;
 };
 
 const examples = ["battery", "water", "react", "typescript", "valorant"];
@@ -47,6 +44,7 @@ const App: Component = () => {
   const [query, setQuery] = createSignal("");
   const [youtuber, setYoutuber] = createSignal(routeHandle ?? "@t3dotgg");
   const [limit, setLimit] = createSignal(25);
+  const [page, setPage] = createSignal(1);
   const [submitted, setSubmitted] = createSignal<SearchRequest>();
   const [result] = createResource(submitted, searchTranscripts);
 
@@ -55,15 +53,24 @@ const App: Component = () => {
     if (handle) setYoutuber(handle);
   });
 
-  const runSearch = (nextQuery = query()) => {
+  const runSearch = (nextQuery = query(), nextPage = 1) => {
     const normalizedQuery = nextQuery.trim();
     if (!normalizedQuery) return;
     setQuery(normalizedQuery);
+    setPage(nextPage);
     setSubmitted({
       query: normalizedQuery,
       youtuber: youtuber().trim(),
       limit: limit(),
+      page: nextPage,
     });
+  };
+
+  const goToPage = (nextPage: number) => {
+    const current = submitted();
+    if (!current) return;
+    setPage(nextPage);
+    setSubmitted({ ...current, page: nextPage });
   };
 
   return (
@@ -80,9 +87,8 @@ const App: Component = () => {
               </h1>
             </div>
             <p class="max-w-xl text-sm leading-6 text-vesper-muted">
-              Search exact transcript moments. Use URLs like{" "}
-              <code>/t3dotgg</code> or <code>/jo2uke</code> to set the creator
-              filter.
+              Search exact transcript moments. Use URLs like <code>/t3dotgg</code> or{" "}
+              <code>/jo2uke</code> to set the creator filter.
             </p>
           </div>
         </header>
@@ -92,7 +98,7 @@ const App: Component = () => {
             class="grid gap-3 lg:grid-cols-[1fr_13rem_7rem_auto]"
             onSubmit={(event) => {
               event.preventDefault();
-              runSearch();
+              runSearch(query(), 1);
             }}
           >
             <Field label="Search">
@@ -107,9 +113,7 @@ const App: Component = () => {
             <Field label="YouTuber">
               <input
                 value={youtuber()}
-                onInput={(event) =>
-                  setYoutuber(normalizeHandle(event.currentTarget.value))
-                }
+                onInput={(event) => setYoutuber(normalizeHandle(event.currentTarget.value))}
                 placeholder="@handle"
                 class="h-12 w-full border border-vesper-border bg-vesper-bg px-4 text-base text-white outline-none placeholder:text-vesper-dim focus:border-vesper-yellow"
               />
@@ -139,7 +143,7 @@ const App: Component = () => {
               {(example) => (
                 <button
                   type="button"
-                  onClick={() => runSearch(example)}
+                  onClick={() => runSearch(example, 1)}
                   class="border border-vesper-border bg-vesper-panel2 px-3 py-1.5 text-sm text-vesper-muted transition hover:border-vesper-yellow hover:text-vesper-yellow"
                 >
                   {example}
@@ -154,27 +158,19 @@ const App: Component = () => {
             <LoadingState />
           </Show>
 
-          <Show when={result.error}>
-            {(error) => <ErrorState message={String(error())} />}
-          </Show>
+          <Show when={result.error}>{(error) => <ErrorState message={String(error())} />}</Show>
 
           <Show when={!result.loading && !result.error && result()}>
             {(response) => (
               <div class="flex flex-col gap-3">
                 <div class="flex items-center justify-between border border-vesper-border bg-vesper-panel p-4">
                   <div>
-                    <p class="text-xs uppercase tracking-[0.18em] text-vesper-dim">
-                      Results
-                    </p>
-                    <h2 class="text-xl font-semibold text-white">
-                      {response().query}
-                    </h2>
+                    <p class="text-xs uppercase tracking-[0.18em] text-vesper-dim">Results</p>
+                    <h2 class="text-xl font-semibold text-white">{response().query}</h2>
                   </div>
                   <p class="border border-vesper-border bg-vesper-bg px-3 py-2 text-sm text-vesper-muted">
-                    <span class="text-white">{response().hits.length}</span>{" "}
-                    shown /{" "}
-                    <span class="text-white">{response().total_found}</span>{" "}
-                    found
+                    <span class="text-white">{response().hits.length}</span> shown /{" "}
+                    <span class="text-white">{response().total_found}</span> found
                   </p>
                 </div>
 
@@ -187,6 +183,12 @@ const App: Component = () => {
                       {(hit) => <HitRow hit={hit} query={response().query} />}
                     </For>
                   </div>
+
+                  <PaginationControls
+                    response={response()}
+                    currentPage={page()}
+                    onPageChange={goToPage}
+                  />
                 </Show>
               </div>
             )}
@@ -210,12 +212,11 @@ const Field: Component<{ label: string; children: unknown }> = (props) => (
   </label>
 );
 
-async function searchTranscripts(
-  request: SearchRequest,
-): Promise<SearchResponse> {
+async function searchTranscripts(request: SearchRequest): Promise<SearchResponse> {
   const params = new URLSearchParams({
     q: request.query,
     per_page: String(request.limit),
+    page: String(request.page),
   });
   if (request.youtuber) params.set("youtuber", request.youtuber);
 
@@ -224,12 +225,70 @@ async function searchTranscripts(
     const body = (await response.json().catch(() => null)) as {
       error?: string;
     } | null;
-    throw new Error(
-      body?.error ?? `Search failed with HTTP ${response.status}`,
-    );
+    throw new Error(body?.error ?? `Search failed with HTTP ${response.status}`);
   }
 
   return response.json();
+}
+
+const PaginationControls: Component<{
+  response: SearchResponse;
+  currentPage: number;
+  onPageChange: (page: number) => void;
+}> = (props) => {
+  const totalPages = () =>
+    Math.max(1, Math.ceil(props.response.total_found / props.response.per_page));
+  const pages = () => pageNumbers(props.currentPage, totalPages());
+
+  return (
+    <Show when={props.response.total_found > props.response.per_page}>
+      <nav
+        aria-label="Search result pages"
+        class="mt-2 flex flex-wrap items-center justify-center gap-2 border border-vesper-border bg-vesper-panel p-3 text-sm"
+      >
+        <button
+          type="button"
+          disabled={props.currentPage <= 1}
+          onClick={() => props.onPageChange(props.currentPage - 1)}
+          class="border border-vesper-border bg-vesper-bg px-3 py-1.5 text-vesper-muted transition hover:border-vesper-yellow hover:text-vesper-yellow disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-vesper-border disabled:hover:text-vesper-muted"
+        >
+          Previous
+        </button>
+
+        <For each={pages()}>
+          {(pageNumber) => (
+            <button
+              type="button"
+              aria-current={pageNumber === props.currentPage ? "page" : undefined}
+              onClick={() => props.onPageChange(pageNumber)}
+              class={`border px-3 py-1.5 transition ${
+                pageNumber === props.currentPage
+                  ? "border-vesper-yellow bg-vesper-yellow text-vesper-bg"
+                  : "border-vesper-border bg-vesper-bg text-vesper-muted hover:border-vesper-yellow hover:text-vesper-yellow"
+              }`}
+            >
+              {pageNumber}
+            </button>
+          )}
+        </For>
+
+        <button
+          type="button"
+          disabled={props.currentPage >= totalPages()}
+          onClick={() => props.onPageChange(props.currentPage + 1)}
+          class="border border-vesper-border bg-vesper-bg px-3 py-1.5 text-vesper-muted transition hover:border-vesper-yellow hover:text-vesper-yellow disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-vesper-border disabled:hover:text-vesper-muted"
+        >
+          Next
+        </button>
+      </nav>
+    </Show>
+  );
+};
+
+function pageNumbers(currentPage: number, totalPages: number): number[] {
+  const start = Math.max(1, currentPage - 3);
+  const end = Math.min(totalPages, currentPage + 3);
+  return Array.from({ length: end - start + 1 }, (_, index) => start + index);
 }
 
 const HitRow: Component<{ hit: SearchHit; query: string }> = (props) => (
@@ -285,16 +344,13 @@ const HitRow: Component<{ hit: SearchHit; query: string }> = (props) => (
   </article>
 );
 
-const TranscriptExcerpt: Component<{ hit: SearchHit; query: string }> = (
-  props,
-) => (
+const TranscriptExcerpt: Component<{ hit: SearchHit; query: string }> = (props) => (
   <div class="border border-vesper-border bg-vesper-bg p-3 text-sm leading-6 text-white">
     <Show
       when={props.hit.match_kind === "transcript"}
       fallback={
         <p class="text-vesper-muted">
-          Title match. Open the video or search transcript wording for a
-          timestamped moment.
+          Title match. Open the video or search transcript wording for a timestamped moment.
         </p>
       }
     >
@@ -320,8 +376,7 @@ const HighlightedText: Component<{
   highlight?: string;
   query: string;
 }> = (props) => {
-  const parts = () =>
-    highlightedParts(props.text, props.highlight, props.query);
+  const parts = () => highlightedParts(props.text, props.highlight, props.query);
 
   return (
     <>
@@ -376,9 +431,7 @@ function partsFromTypesenseSnippet(snippet: string): HighlightPart[] {
     });
   }
 
-  return parts.length > 0
-    ? parts
-    : [{ text: decodeEntities(snippet), highlighted: false }];
+  return parts.length > 0 ? parts : [{ text: decodeEntities(snippet), highlighted: false }];
 }
 
 function partsFromQuery(text: string, query: string): HighlightPart[] {
@@ -410,10 +463,7 @@ function decodeEntities(value: string): string {
 }
 
 function creatorFromPath(): string | null {
-  const firstSegment = window.location.pathname
-    .split("/")
-    .filter(Boolean)[0]
-    ?.trim();
+  const firstSegment = window.location.pathname.split("/").filter(Boolean)[0]?.trim();
   if (!firstSegment) return null;
   if (firstSegment === "api") return null;
   return normalizeHandle(firstSegment);
@@ -428,9 +478,7 @@ function normalizeHandle(value: string): string {
 const LoadingState: Component = () => (
   <div class="grid gap-2">
     <For each={[0, 1, 2]}>
-      {() => (
-        <div class="h-40 animate-pulse border border-vesper-border bg-vesper-panel" />
-      )}
+      {() => <div class="h-40 animate-pulse border border-vesper-border bg-vesper-panel" />}
     </For>
   </div>
 );
@@ -455,8 +503,8 @@ const WelcomeState: Component = () => (
   <div class="border border-vesper-border bg-vesper-panel p-8 text-center">
     <p class="text-xl font-semibold text-white">Search a creator transcript.</p>
     <p class="mx-auto mt-2 max-w-xl text-vesper-muted">
-      Transcript hits are timestamped. Title-only hits are de-duplicated and
-      open the video without pretending to know a spoken moment.
+      Transcript hits are timestamped. Title-only hits are de-duplicated and open the video without
+      pretending to know a spoken moment.
     </p>
   </div>
 );

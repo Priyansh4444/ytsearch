@@ -1,0 +1,10 @@
+{
+  "env": {
+    "browser": true,
+    "es2024": true
+  },
+  "plugins": ["typescript"],
+  "rules": {
+    "no-console": "warn"
+  }
+}

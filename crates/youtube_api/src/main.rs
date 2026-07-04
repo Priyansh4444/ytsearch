@@ -21,6 +21,8 @@ use youtube_typesense::{
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8787";
 const DEFAULT_PER_PAGE: u8 = 20;
 const MAX_PER_PAGE: u8 = 100;
+const MERGE_TRANSCRIPT_HIT_WINDOW_MS: u32 = 20_000;
+const MAX_SEARCH_PAGE_FETCHES: u32 = 5;
 
 #[derive(Clone)]
 struct AppState {
@@ -32,6 +34,7 @@ struct SearchParams {
     q: String,
     youtuber: Option<String>,
     per_page: Option<u8>,
+    page: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -39,6 +42,8 @@ struct SearchResponse {
     query: String,
     total_found: u64,
     out_of: u64,
+    page: u32,
+    per_page: u8,
     hits: Vec<SearchHit>,
 }
 
@@ -145,15 +150,23 @@ async fn search_handler(
         .per_page
         .unwrap_or(DEFAULT_PER_PAGE)
         .clamp(1, MAX_PER_PAGE);
+    let page = params.page.unwrap_or(1).max(1);
     let search_page_size = per_page.saturating_mul(4).min(MAX_PER_PAGE);
+    let requested_offset = (page - 1).saturating_mul(u32::from(per_page));
+    let typesense_page = 1;
+    let local_offset = requested_offset as usize;
     let mut typesense_query = TextSearchQuery::new(query)
         .query_by("text,title")
         .highlight_fields("text,title")
         .per_page(search_page_size)
+        .page(typesense_page)
         .without_grouping();
     tracing::info!(
         query,
         per_page,
+        page,
+        typesense_page,
+        search_page_size,
         youtuber = params.youtuber.as_deref().unwrap_or(""),
         "search request"
     );
@@ -167,24 +180,84 @@ async fn search_handler(
         typesense_query = typesense_query.youtuber_handle(normalize_handle(youtuber));
     }
 
-    let raw = state.search.search(&typesense_query).await?;
-    let mut hits = parse_hits(&raw)?;
-    hits.truncate(usize::from(per_page));
-    let found = raw.get("found").and_then(Value::as_u64).unwrap_or_default();
+    let first_raw = state.search.search(&typesense_query).await?;
+    let found = first_raw
+        .get("found")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let out_of = first_raw
+        .get("out_of")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let hits = collect_visible_hits(
+        &state.search,
+        &typesense_query,
+        first_raw,
+        typesense_page,
+        local_offset,
+        per_page,
+        search_page_size,
+    )
+    .await?;
     tracing::info!(query, found, returned_hits = hits.len(), "search response");
 
     Ok(Json(SearchResponse {
         query: query.to_string(),
-        total_found: raw
-            .get("found")
-            .and_then(Value::as_u64)
-            .unwrap_or(hits.len() as u64),
-        out_of: raw
-            .get("out_of")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
+        total_found: found.max(hits.len() as u64),
+        out_of,
+        page,
+        per_page,
         hits,
     }))
+}
+
+async fn collect_visible_hits(
+    search: &TypesenseSearchClient,
+    base_query: &TextSearchQuery,
+    first_raw: Value,
+    first_typesense_page: u32,
+    local_offset: usize,
+    per_page: u8,
+    search_page_size: u8,
+) -> Result<Vec<SearchHit>, ApiError> {
+    let required_hits = local_offset.saturating_add(usize::from(per_page));
+    let mut combined = Vec::new();
+    let mut current_page = first_typesense_page;
+    let mut raw = first_raw;
+
+    for fetch_index in 0..MAX_SEARCH_PAGE_FETCHES {
+        let page_hits = parse_hits(&raw)?;
+        let is_empty = page_hits.is_empty();
+        combined.extend(page_hits);
+        combined = merge_nearby_transcript_hits(dedupe_title_only_hits(combined));
+
+        if combined.len() >= required_hits || is_empty {
+            break;
+        }
+
+        let fetched_raw_hits = raw
+            .get("hits")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        if fetched_raw_hits < usize::from(search_page_size) {
+            break;
+        }
+
+        if fetch_index + 1 == MAX_SEARCH_PAGE_FETCHES {
+            break;
+        }
+
+        current_page = current_page.saturating_add(1);
+        raw = search
+            .search(&base_query.clone().page(current_page))
+            .await?;
+    }
+
+    Ok(combined
+        .into_iter()
+        .skip(local_offset)
+        .take(usize::from(per_page))
+        .collect())
 }
 
 fn parse_hits(raw: &Value) -> Result<Vec<SearchHit>, ApiError> {
@@ -198,7 +271,39 @@ fn parse_hits(raw: &Value) -> Result<Vec<SearchHit>, ApiError> {
         parsed.push(SearchHit::from_typesense_hit(document, hit)?);
     }
 
-    Ok(dedupe_title_only_hits(parsed))
+    Ok(parsed)
+}
+
+fn merge_nearby_transcript_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
+    let mut merged: Vec<SearchHit> = Vec::with_capacity(hits.len());
+
+    for hit in hits {
+        if hit.match_kind != MatchKind::Transcript {
+            merged.push(hit);
+            continue;
+        }
+
+        if let Some(existing) = merged
+            .iter_mut()
+            .find(|existing| is_same_transcript_moment(existing, &hit))
+        {
+            if hit.t_start_ms < existing.t_start_ms {
+                *existing = hit;
+            }
+            continue;
+        }
+
+        merged.push(hit);
+    }
+
+    merged
+}
+
+fn is_same_transcript_moment(left: &SearchHit, right: &SearchHit) -> bool {
+    left.match_kind == MatchKind::Transcript
+        && right.match_kind == MatchKind::Transcript
+        && left.video_id == right.video_id
+        && left.t_start_ms.abs_diff(right.t_start_ms) <= MERGE_TRANSCRIPT_HIT_WINDOW_MS
 }
 
 fn dedupe_title_only_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
