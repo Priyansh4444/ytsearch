@@ -325,77 +325,92 @@ function pageNumbers(currentPage: number, totalPages: number): number[] {
   return Array.from({ length: end - start + 1 }, (_, index) => start + index);
 }
 
-const VideoRow: Component<{ video: SearchVideoResult; query: string }> = (props) => (
-  <article class="border border-vesper-border bg-vesper-panel">
-    <div class="grid gap-0 md:grid-cols-[18rem_1fr]">
-      <div class="relative min-h-40 bg-vesper-bg">
-        <iframe
-          class="aspect-video h-full min-h-40 w-full"
-          src={props.video.embed_url}
-          title={`YouTube player for ${props.video.title}`}
-          loading="lazy"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-          referrerpolicy="strict-origin-when-cross-origin"
-          allowfullscreen
-        />
-        <span class="absolute bottom-2 left-2 bg-vesper-bg/90 px-2 py-1 text-xs font-semibold text-vesper-yellow ring-1 ring-vesper-border">
-          {props.video.best_timestamp ?? "title"}
-        </span>
-      </div>
+const VideoRow: Component<{ video: SearchVideoResult; query: string }> = (props) => {
+  const visibleHits = () => props.video.hits.slice(0, 3);
+  const [selectedHitId, setSelectedHitId] = createSignal<string>();
+  const selectedHit = () =>
+    visibleHits().find((hit) => hit.id === selectedHitId()) ??
+    visibleHits()[0] ??
+    props.video.hits[0];
 
-      <div class="flex flex-col gap-3 p-4">
-        <div class="flex items-start justify-between gap-4">
-          <div>
-            <a
-              href={props.video.youtube_url}
-              target="_blank"
-              rel="noreferrer"
-              class="text-lg font-semibold leading-snug text-white hover:text-vesper-yellow"
-            >
-              {props.video.title}
-            </a>
-            <p class="mt-1 text-sm text-vesper-muted">
-              {props.video.youtuber_name} · {props.video.youtuber_handle}
-              <Show when={props.video.published_at}> · {formatDate(props.video.published_at)}</Show>
-            </p>
-          </div>
-          <a
-            href={props.video.youtube_url}
-            target="_blank"
-            rel="noreferrer"
-            class="shrink-0 border border-vesper-border bg-vesper-bg px-3 py-1.5 text-sm font-medium text-vesper-green hover:border-vesper-green"
-          >
-            {props.video.best_timestamp ? `Open ${props.video.best_timestamp}` : "Open"}
-          </a>
+  return (
+    <article class="border border-vesper-border bg-vesper-panel">
+      <div class="grid gap-0 xl:grid-cols-[minmax(32rem,40rem)_1fr]">
+        <div class="relative bg-vesper-bg">
+          <iframe
+            class="aspect-video w-full"
+            src={selectedHit()?.embed_url ?? props.video.embed_url}
+            title={`YouTube player for ${props.video.title}`}
+            loading="lazy"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerpolicy="strict-origin-when-cross-origin"
+            allowfullscreen
+          />
+          <span class="absolute bottom-2 left-2 bg-vesper-bg/90 px-2 py-1 text-xs font-semibold text-vesper-yellow ring-1 ring-vesper-border">
+            {selectedHit()?.timestamp ?? "title"}
+          </span>
         </div>
 
-        <div class="flex flex-wrap gap-2">
-          <For each={props.video.hits}>
-            {(hit) => (
+        <div class="flex flex-col gap-3 p-4">
+          <div class="flex items-start justify-between gap-4">
+            <div>
               <a
-                href={hit.youtube_url}
+                href={props.video.youtube_url}
                 target="_blank"
                 rel="noreferrer"
-                class="border border-vesper-border bg-vesper-bg px-2 py-1 text-xs text-vesper-muted hover:border-vesper-yellow hover:text-vesper-yellow"
+                class="text-lg font-semibold leading-snug text-white hover:text-vesper-yellow"
               >
-                {hit.timestamp ?? "title"}
+                {props.video.title}
               </a>
-            )}
-          </For>
-        </div>
+              <p class="mt-1 text-sm text-vesper-muted">
+                {props.video.youtuber_name} · {props.video.youtuber_handle}
+                <Show when={props.video.published_at}>
+                  {" "}
+                  · {formatDate(props.video.published_at)}
+                </Show>
+              </p>
+            </div>
+            <a
+              href={selectedHit()?.youtube_url ?? props.video.youtube_url}
+              target="_blank"
+              rel="noreferrer"
+              class="shrink-0 border border-vesper-border bg-vesper-bg px-3 py-1.5 text-sm font-medium text-vesper-green hover:border-vesper-green"
+            >
+              Open
+            </a>
+          </div>
 
-        <div class="grid gap-2">
-          <For each={props.video.hits.slice(0, 3)}>
-            {(hit) => <TranscriptExcerpt hit={hit} query={props.query} />}
-          </For>
+          <div class="grid gap-2">
+            <For each={visibleHits()}>
+              {(hit) => (
+                <TranscriptExcerpt
+                  hit={hit}
+                  query={props.query}
+                  selected={hit.id === selectedHit()?.id}
+                  onSelect={() => setSelectedHitId(hit.id)}
+                />
+              )}
+            </For>
+          </div>
         </div>
       </div>
-    </div>
-  </article>
-);
+    </article>
+  );
+};
 
-const TranscriptExcerpt: Component<{ hit: SearchHit; query: string }> = (props) => (
-  <div class="border border-vesper-border bg-vesper-bg p-3 text-sm leading-6 text-white">
+const TranscriptExcerpt: Component<{
+  hit: SearchHit;
+  query: string;
+  selected?: boolean;
+  onSelect?: () => void;
+}> = (props) => (
+  <button
+    type="button"
+    onClick={props.onSelect}
+    class={`border bg-vesper-bg p-3 text-left text-sm leading-6 text-white transition ${
+      props.selected ? "border-vesper-yellow" : "border-vesper-border hover:border-vesper-yellow/70"
+    }`}
+  >
     <Show
       when={props.hit.match_kind === "transcript"}
       fallback={
@@ -418,7 +433,7 @@ const TranscriptExcerpt: Component<{ hit: SearchHit; query: string }> = (props) 
         <span class="text-vesper-muted"> {props.hit.next_text}</span>
       </Show>
     </Show>
-  </div>
+  </button>
 );
 
 const HighlightedText: Component<{
