@@ -29,11 +29,11 @@ required_env() {
 required_env MEILI_HTTP_ADDR
 required_env MEILI_SEARCH_API_KEY
 
-if ! fly apps list --org "$FLY_ORG" | grep -q "$APP_NAME"; then
-  fly apps create "$APP_NAME" --org "$FLY_ORG"
+if ! flyctl apps list --org "$FLY_ORG" | grep -q "$APP_NAME"; then
+  flyctl apps create "$APP_NAME" --org "$FLY_ORG"
 fi
 
-fly secrets set \
+flyctl secrets set \
   MEILI_HTTP_ADDR="$MEILI_HTTP_ADDR" \
   MEILI_SEARCH_API_KEY="$MEILI_SEARCH_API_KEY" \
   --app "$APP_NAME"
@@ -42,12 +42,13 @@ optional_secret() {
   name="$1"
   eval "value=\${$name:-}"
   if [ -n "$value" ]; then
-    fly secrets set "$name=$value" --app "$APP_NAME"
+    flyctl secrets set "$name=$value" --app "$APP_NAME"
   fi
 }
 
 optional_secret MEILI_TRANSCRIPTS_INDEX
 optional_secret YTSEARCH_SEARCH_RATE_LIMIT_PER_MINUTE
 optional_secret AXIOM_TOKEN
+optional_secret AXIOM_API_KEY
 optional_secret AXIOM_DATASET
 optional_secret AXIOM_DOMAIN

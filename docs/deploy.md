@@ -99,6 +99,22 @@ VITE_API_BASE_URL=https://api.example.com
 
 If using the current relative `/api` calls, add a Cloudflare Pages redirect/proxy rule or host frontend and API behind the same domain.
 
+## Commit messages
+
+Use this format for commits moving forward:
+
+```text
+<area of improvement>: <change>
+```
+
+Examples:
+
+```text
+search backend: add Meilisearch staging adapter
+deployment: add Fly staging scripts
+observability: send query events to Axiom
+```
+
 ## Fly.io Meilisearch staging
 
 Meilisearch is a persistent HTTP server backed by local disk. On Fly, run it as a separate app with a volume in the same region as the API. The included `fly.meilisearch.toml` uses the official Meilisearch Docker image, `/meili_data` storage, production mode, and a health check on `/health`.
@@ -115,7 +131,7 @@ After the app is healthy, create a search key in Meilisearch or use a restricted
 export MEILI_HTTP_ADDR=https://ytsearch-meili-staging.fly.dev
 export MEILI_SEARCH_API_KEY='...'
 APP_NAME=ytsearch-api-meili-staging scripts/fly-set-meili-api-secrets.sh
-fly deploy --config fly.staging.toml --app ytsearch-api-meili-staging --primary-region sjc
+flyctl deploy --config fly.staging.toml --app ytsearch-api-meili-staging --primary-region sjc
 ```
 
 Index into staging with:
@@ -154,19 +170,19 @@ Equivalent manual commands:
 
 ```bash
 export FLY_ACCESS_TOKEN="$FLYIO_TOKEN"
-fly apps create ytsearch-api-pronsh-sandbox --org pronsh-sandbox
-fly secrets set \
+flyctl apps create ytsearch-api-pronsh-sandbox --org pronsh-sandbox
+flyctl secrets set \
   MEILI_HTTP_ADDR='...' \
   MEILI_SEARCH_API_KEY='...' \
   --app ytsearch-api-pronsh-sandbox
-fly deploy --app ytsearch-api-pronsh-sandbox --primary-region sjc
+flyctl deploy --app ytsearch-api-pronsh-sandbox --primary-region sjc
 ```
 
 Operational checks:
 
 ```bash
-fly status --app ytsearch-api-pronsh-sandbox
-fly logs --app ytsearch-api-pronsh-sandbox
+flyctl status --app ytsearch-api-pronsh-sandbox
+flyctl logs --app ytsearch-api-pronsh-sandbox
 curl 'https://ytsearch-api-pronsh-sandbox.fly.dev/api/health'
 ```
 
@@ -204,7 +220,7 @@ Manual indexing on Fly with the same deployed image:
 
 ```bash
 export FLYIO_TOKEN='...'
-fly secrets set \
+flyctl secrets set \
   YOUTUBE_API_KEY='...' \
   MEILI_MASTER_KEY='...' \
   MEILI_HTTP_ADDR='...' \
@@ -277,7 +293,9 @@ CLI indexing/search commands use the same `YTSEARCH_SEARCH_BACKEND` selector. Pr
 
 Rust services emit normal pretty logs by default and structured JSON logs when `LOG_FORMAT=json`. The Fly app sets `LOG_FORMAT=json`, which makes stdout suitable for Axiom ingestion. API responses also set cache headers: search/channel list responses are briefly public-cacheable, while health is `no-store`.
 
-Fly sends app stdout/stderr to Fly logs. CLI indexing logs should be captured from the local/private operator environment that runs them. To export Fly API logs to Axiom, run Fly Log Shipper in the same org. The log shipper supports Axiom through the `AXIOM_TOKEN` and `AXIOM_DATASET` secrets.
+Fly sends app stdout/stderr to Fly logs. CLI indexing logs should be captured from the local/private operator environment that runs them. Search query events are sent directly to Axiom when `AXIOM_DATASET` and either `AXIOM_API_KEY` or `AXIOM_TOKEN` are set on the API app.
+
+To export Fly platform logs to Axiom too, run Fly Log Shipper in the same org. The log shipper supports Axiom through the `AXIOM_TOKEN` and `AXIOM_DATASET` secrets.
 
 ```bash
 export FLYIO_TOKEN='...'
@@ -285,13 +303,13 @@ export FLY_ACCESS_TOKEN="$FLYIO_TOKEN"
 
 mkdir -p /tmp/ytsearch-log-shipper
 cd /tmp/ytsearch-log-shipper
-fly launch \
+flyctl launch \
   --image flyio/log-shipper:latest \
   --name ytsearch-axiom-logs-pronsh-sandbox \
   --org pronsh-sandbox \
   --no-public-ips \
   --no-deploy
-fly secrets set \
+flyctl secrets set \
   ORG=pronsh-sandbox \
   ACCESS_TOKEN="$FLYIO_TOKEN" \
   SUBJECT='logs.ytsearch-api-pronsh-sandbox.>' \
@@ -299,13 +317,13 @@ fly secrets set \
   AXIOM_DATASET='ytsearch' \
   --app ytsearch-axiom-logs-pronsh-sandbox \
   --org pronsh-sandbox
-fly deploy --app ytsearch-axiom-logs-pronsh-sandbox
+flyctl deploy --app ytsearch-axiom-logs-pronsh-sandbox
 ```
 
 For YouTube bot-check failures from `yt-dlp`, deploy with a current `yt-dlp` build and configure authorized extraction options as needed:
 
 ```bash
-fly secrets set \
+flyctl secrets set \
   YT_DLP_EXTRACTOR_ARGS='youtube:player_client=default,mweb' \
   --app ytsearch-api-pronsh-sandbox
 ```

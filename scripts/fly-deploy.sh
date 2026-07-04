@@ -19,8 +19,8 @@ elif [ -z "${FLY_ACCESS_TOKEN:-}" ]; then
   exit 1
 fi
 
-if ! fly apps list --org "$FLY_ORG" | grep -q "$APP_NAME"; then
-  fly apps create "$APP_NAME" --org "$FLY_ORG"
+if ! flyctl apps list --org "$FLY_ORG" | grep -q "$APP_NAME"; then
+  flyctl apps create "$APP_NAME" --org "$FLY_ORG"
 fi
 
-fly deploy --app "$APP_NAME" --primary-region "$FLY_REGION"
+flyctl deploy --app "$APP_NAME" --primary-region "$FLY_REGION"

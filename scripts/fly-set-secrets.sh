@@ -34,11 +34,11 @@ if [ "${INDEXING_ENABLED:-false}" = "true" ]; then
   required_env TYPESENSE_ADMIN_API_KEY
 fi
 
-if ! fly apps list --org "$FLY_ORG" | grep -q "$APP_NAME"; then
-  fly apps create "$APP_NAME" --org "$FLY_ORG"
+if ! flyctl apps list --org "$FLY_ORG" | grep -q "$APP_NAME"; then
+  flyctl apps create "$APP_NAME" --org "$FLY_ORG"
 fi
 
-fly secrets set \
+flyctl secrets set \
   TYPESENSE_API_URL="$TYPESENSE_API_URL" \
   TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SEARCH_API_KEY" \
   --app "$APP_NAME"
@@ -47,7 +47,7 @@ optional_secret() {
   name="$1"
   eval "value=\${$name:-}"
   if [ -n "$value" ]; then
-    fly secrets set "$name=$value" --app "$APP_NAME"
+    flyctl secrets set "$name=$value" --app "$APP_NAME"
   fi
 }
 
@@ -60,5 +60,6 @@ optional_secret YTSEARCH_INDEX_JOBS
 optional_secret YTSEARCH_INDEX_RATE_LIMIT_PER_HOUR
 optional_secret YTSEARCH_SEARCH_RATE_LIMIT_PER_MINUTE
 optional_secret AXIOM_TOKEN
+optional_secret AXIOM_API_KEY
 optional_secret AXIOM_DATASET
 optional_secret AXIOM_DOMAIN

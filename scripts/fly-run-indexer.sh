@@ -26,7 +26,7 @@ if [ "${1:-}" = "--" ]; then
   shift
 fi
 
-exec fly ssh console \
+exec flyctl ssh console \
   --app "$APP_NAME" \
   --org "$FLY_ORG" \
   --command "ytsearch $*"

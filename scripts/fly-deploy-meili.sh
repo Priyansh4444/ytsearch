@@ -24,13 +24,13 @@ if [ -z "${MEILI_MASTER_KEY:-}" ]; then
   exit 1
 fi
 
-if ! fly apps list --org "$FLY_ORG" | grep -q "$APP_NAME"; then
-  fly apps create "$APP_NAME" --org "$FLY_ORG"
+if ! flyctl apps list --org "$FLY_ORG" | grep -q "$APP_NAME"; then
+  flyctl apps create "$APP_NAME" --org "$FLY_ORG"
 fi
 
-if ! fly volumes list --app "$APP_NAME" | grep -q 'meili_data'; then
-  fly volumes create meili_data --app "$APP_NAME" --region "$FLY_REGION" --size "${MEILI_VOLUME_SIZE_GB:-3}" --yes
+if ! flyctl volumes list --app "$APP_NAME" | grep -q 'meili_data'; then
+  flyctl volumes create meili_data --app "$APP_NAME" --region "$FLY_REGION" --size "${MEILI_VOLUME_SIZE_GB:-3}" --yes
 fi
 
-fly secrets set MEILI_MASTER_KEY="$MEILI_MASTER_KEY" --app "$APP_NAME"
-fly deploy --config fly.meilisearch.toml --app "$APP_NAME" --primary-region "$FLY_REGION"
+flyctl secrets set MEILI_MASTER_KEY="$MEILI_MASTER_KEY" --app "$APP_NAME"
+flyctl deploy --config fly.meilisearch.toml --app "$APP_NAME" --primary-region "$FLY_REGION"

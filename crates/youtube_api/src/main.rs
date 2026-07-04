@@ -797,7 +797,9 @@ fn required_env(name: &'static str) -> Result<String, ApiError> {
 
 impl AxiomLogger {
     fn from_env() -> Option<Self> {
-        let token = env::var("AXIOM_TOKEN").ok()?;
+        let token = env::var("AXIOM_TOKEN")
+            .or_else(|_| env::var("AXIOM_API_KEY"))
+            .ok()?;
         let dataset = env::var("AXIOM_DATASET").ok()?;
         let domain = env::var("AXIOM_DOMAIN").unwrap_or_else(|_| "api.axiom.co".to_string());
         let endpoint = format!(
