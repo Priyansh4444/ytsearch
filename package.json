@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "serve": "vite preview",
-    "api": "cargo run -p youtube_api"
+    "api": "cargo run --release -p youtube_api"
   },
   "license": "MIT",
   "devDependencies": {

@@ -224,6 +224,11 @@ impl TranscriptSource for YtDlpTranscriptSource {
                 "yt-dlp found no English subtitles or automatic captions",
             )
         })?;
+        tracing::info!(
+            video_id,
+            extension = %track.extension,
+            "selected caption track"
+        );
         let body = self.fetch_caption(video_id, &track).await?;
 
         match track.extension.as_str() {

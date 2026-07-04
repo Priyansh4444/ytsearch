@@ -41,6 +41,7 @@ impl VoxtypeTranscriptSource {
     ) -> youtube_ingest::Result<Vec<TranscriptSegment>> {
         let transcript_path = self.config.transcript_path(video_id);
         if let Ok(bytes) = fs::read(&transcript_path).await {
+            tracing::info!(video_id, path = %transcript_path.display(), "using cached transcript");
             return serde_json::from_slice(&bytes)
                 .map_err(|error| transcript_error(video_id, error));
         }
@@ -48,7 +49,10 @@ impl VoxtypeTranscriptSource {
         self.config.ensure_directories().await?;
         let audio_path = self.config.audio_path(video_id);
         if fs::metadata(&audio_path).await.is_err() {
+            tracing::info!(video_id, path = %audio_path.display(), "extracting audio");
             self.extract_audio(video_id, &audio_path).await?;
+        } else {
+            tracing::info!(video_id, path = %audio_path.display(), "using cached audio");
         }
 
         let duration_ms = self.probe_duration_ms(video_id, &audio_path).await?;
@@ -57,6 +61,7 @@ impl VoxtypeTranscriptSource {
             .await?;
         let bytes = serde_json::to_vec_pretty(&segments)
             .map_err(|error| transcript_error(video_id, error))?;
+        tracing::info!(video_id, segments = segments.len(), path = %transcript_path.display(), "writing transcript cache");
         fs::write(transcript_path, bytes)
             .await
             .map_err(|error| transcript_error(video_id, error))?;
@@ -173,6 +178,7 @@ impl VoxtypeTranscriptSource {
             self.extract_chunk(video_id, audio_path, &chunk_path, start_ms, end_ms)
                 .await?;
 
+            tracing::debug!(video_id, start_ms, end_ms, path = %chunk_path.display(), "transcribing audio chunk");
             match self.transcribe_chunk(video_id, &chunk_path).await {
                 Ok(text) if has_text(&text) => segments.push(TranscriptSegment {
                     start_ms,
@@ -420,7 +426,44 @@ fn has_text(text: &str) -> bool {
 }
 
 fn normalize_transcriber_output(output: &str) -> String {
-    output.split_whitespace().collect::<Vec<_>>().join(" ")
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| is_transcript_line(line))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn is_transcript_line(line: &str) -> bool {
+    if line.is_empty() {
+        return false;
+    }
+
+    const LOG_PREFIXES: [&str; 18] = [
+        "Loading audio file:",
+        "Audio format:",
+        "Processing ",
+        "whisper_",
+        "whisper_model_load:",
+        "whisper_backend_",
+        "ggml_",
+        "system_info:",
+        "main:",
+        "202",
+        "CPU total size",
+        "model size",
+        "n_vocab",
+        "n_audio_",
+        "n_text_",
+        "n_mels",
+        "ftype",
+        "type",
+    ];
+
+    !LOG_PREFIXES.iter().any(|prefix| line.starts_with(prefix))
 }
 
 #[cfg(test)]

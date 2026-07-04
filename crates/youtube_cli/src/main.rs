@@ -265,6 +265,13 @@ struct IndexStats {
 #[tokio::main]
 async fn main() -> Result<(), CliError> {
     let _ = dotenvy::dotenv();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "youtube_cli=info,youtube_sources=info,youtube_transcribe=info".into()
+            }),
+        )
+        .init();
 
     match Cli::parse().command {
         Command::Validate(command) => validate_command(command).await,
@@ -309,6 +316,12 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     print_validated_youtuber(&youtuber);
 
     let public_videos = discover_public_videos(&youtube, &youtuber.channel_id).await?;
+    tracing::info!(
+        handle = %youtuber.handle,
+        channel_id = %youtuber.channel_id,
+        public_videos = public_videos.len(),
+        "discovered public videos"
+    );
     println!("  public videos discovered: {}", public_videos.len());
     for video in public_videos.iter().take(5) {
         println!("    - {} {}", video.video_id, video.title);
@@ -386,6 +399,13 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         .take(stats.attempted_videos)
         .enumerate()
     {
+        tracing::info!(
+            video_id = %video.video_id,
+            title = %video.title,
+            index = index + 1,
+            total = stats.attempted_videos,
+            "indexing video"
+        );
         println!(
             "Indexing video {}/{}: {} {}",
             index + 1,
@@ -398,6 +418,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
             Ok(metadata) => metadata,
             Err(error) => {
                 stats.skipped_videos = stats.skipped_videos.saturating_add(1);
+                tracing::warn!(video_id = %video.video_id, %error, "skipped video metadata");
                 println!("  skipped metadata: {error}");
                 continue;
             }
@@ -406,6 +427,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         let content_kind = content_kind_for_duration(metadata.duration_ms);
         if !command.content_kind.includes(content_kind) {
             stats.kind_filtered_videos = stats.kind_filtered_videos.saturating_add(1);
+            tracing::info!(video_id = %video.video_id, ?content_kind, "skipped by content kind");
             println!("  skipped by content kind: {content_kind:?}");
             continue;
         }
@@ -415,10 +437,12 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
             Err(caption_error) => {
                 let Some(transcribe_source) = &transcribe_source else {
                     stats.skipped_videos = stats.skipped_videos.saturating_add(1);
+                    tracing::warn!(video_id = %video.video_id, error = %caption_error, "skipped transcript");
                     println!("  skipped transcript: {caption_error}");
                     continue;
                 };
 
+                tracing::info!(video_id = %video.video_id, error = %caption_error, "captions unavailable, trying local audio transcription");
                 println!(
                     "  captions unavailable, trying local audio transcription: {caption_error}"
                 );
@@ -433,6 +457,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
                     }
                     Err(transcribe_error) => {
                         stats.skipped_videos = stats.skipped_videos.saturating_add(1);
+                        tracing::warn!(video_id = %video.video_id, error = %transcribe_error, "local transcription failed");
                         println!(
                             "  skipped transcript: captions failed and local transcription failed: {transcribe_error}"
                         );
@@ -450,10 +475,12 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
                 stats.indexed_chunks = stats
                     .indexed_chunks
                     .saturating_add(saturating_u32(chunk_count));
+                tracing::info!(video_id = %video.video_id, chunk_count, "imported transcript chunks");
                 println!("  imported {chunk_count} transcript chunks");
             }
             Err(error) => {
                 stats.skipped_videos = stats.skipped_videos.saturating_add(1);
+                tracing::warn!(video_id = %video.video_id, %error, "skipped chunking");
                 println!("  skipped chunking: {error}");
             }
         }

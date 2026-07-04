@@ -269,6 +269,9 @@ impl TypesenseSearchClient {
             if let Some(per_page) = query.per_page {
                 pairs.append_pair("per_page", &per_page.to_string());
             }
+            if let Some(highlight_fields) = &query.highlight_fields {
+                pairs.append_pair("highlight_fields", highlight_fields);
+            }
         }
 
         let response = self
@@ -313,6 +316,7 @@ pub struct TextSearchQuery {
     pub group_by: Option<String>,
     pub group_limit: Option<u8>,
     pub per_page: Option<u8>,
+    pub highlight_fields: Option<String>,
 }
 
 impl TextSearchQuery {
@@ -324,6 +328,7 @@ impl TextSearchQuery {
             group_by: Some("video_id".to_string()),
             group_limit: Some(5),
             per_page: None,
+            highlight_fields: Some("text,prev_text,next_text,title".to_string()),
         }
     }
 
@@ -360,6 +365,11 @@ impl TextSearchQuery {
 
     pub fn per_page(mut self, per_page: u8) -> Self {
         self.per_page = Some(per_page);
+        self
+    }
+
+    pub fn highlight_fields(mut self, highlight_fields: impl Into<String>) -> Self {
+        self.highlight_fields = Some(highlight_fields.into());
         self
     }
 }

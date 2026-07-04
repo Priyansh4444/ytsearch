@@ -50,6 +50,10 @@ struct SearchHit {
     text: String,
     prev_text: Option<String>,
     next_text: Option<String>,
+    text_highlight: Option<String>,
+    prev_text_highlight: Option<String>,
+    next_text_highlight: Option<String>,
+    title_highlight: Option<String>,
     youtuber_handle: String,
     youtuber_name: String,
     thumbnail: Option<String>,
@@ -135,8 +139,17 @@ async fn search_handler(
         .unwrap_or(DEFAULT_PER_PAGE)
         .clamp(1, MAX_PER_PAGE);
     let mut typesense_query = TextSearchQuery::new(query)
+        .query_by("text,prev_text,next_text,title,youtuber_name,youtuber_handle")
+        .highlight_fields("text,prev_text,next_text,title")
         .per_page(per_page)
         .without_grouping();
+    tracing::info!(
+        query,
+        per_page,
+        youtuber = params.youtuber.as_deref().unwrap_or(""),
+        "search request"
+    );
+
     if let Some(youtuber) = params
         .youtuber
         .as_deref()
@@ -148,6 +161,8 @@ async fn search_handler(
 
     let raw = state.search.search(&typesense_query).await?;
     let hits = parse_hits(&raw)?;
+    let found = raw.get("found").and_then(Value::as_u64).unwrap_or_default();
+    tracing::info!(query, found, returned_hits = hits.len(), "search response");
 
     Ok(Json(SearchResponse {
         query: query.to_string(),
@@ -171,13 +186,13 @@ fn parse_hits(raw: &Value) -> Result<Vec<SearchHit>, ApiError> {
     let mut parsed = Vec::with_capacity(hits.len());
     for hit in hits {
         let document = hit.get("document").ok_or(ApiError::UnexpectedSearchShape)?;
-        parsed.push(SearchHit::from_document(document)?);
+        parsed.push(SearchHit::from_typesense_hit(document, hit)?);
     }
     Ok(parsed)
 }
 
 impl SearchHit {
-    fn from_document(document: &Value) -> Result<Self, ApiError> {
+    fn from_typesense_hit(document: &Value, hit: &Value) -> Result<Self, ApiError> {
         let id = string_field(document, "id")?;
         let video_id = string_field(document, "video_id")?;
         let t_start_ms = u32_field(document, "t_start_ms")?;
@@ -195,6 +210,10 @@ impl SearchHit {
             text: string_field(document, "text")?,
             prev_text: optional_string_field(document, "prev_text"),
             next_text: optional_string_field(document, "next_text"),
+            text_highlight: highlight_for_field(hit, "text"),
+            prev_text_highlight: highlight_for_field(hit, "prev_text"),
+            next_text_highlight: highlight_for_field(hit, "next_text"),
+            title_highlight: highlight_for_field(hit, "title"),
             youtuber_handle: string_field(document, "youtuber_handle")?,
             youtuber_name: string_field(document, "youtuber_name")?,
             thumbnail: optional_string_field(document, "thumbnail"),
@@ -205,6 +224,26 @@ impl SearchHit {
             youtube_url,
         })
     }
+}
+
+fn highlight_for_field(hit: &Value, field: &str) -> Option<String> {
+    hit.get("highlights")
+        .and_then(Value::as_array)
+        .and_then(|highlights| {
+            highlights.iter().find_map(|highlight| {
+                let matches_field = highlight.get("field").and_then(Value::as_str) == Some(field);
+                matches_field
+                    .then(|| highlight.get("snippet").and_then(Value::as_str))
+                    .flatten()
+            })
+        })
+        .or_else(|| {
+            hit.get("highlight")
+                .and_then(|highlight| highlight.get(field))
+                .and_then(|field_highlight| field_highlight.get("snippet"))
+                .and_then(Value::as_str)
+        })
+        .map(ToOwned::to_owned)
 }
 
 fn string_field(document: &Value, field: &'static str) -> Result<String, ApiError> {
