@@ -1,9 +1,9 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::{collections::HashSet, path::PathBuf};
 use thiserror::Error;
 use youtube_client::{ListResource, Page, Query, YouTubeClient};
-use youtube_ingest::{Chunker, TranscriptSource, VideoMetadataSource};
+use youtube_ingest::{Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource};
 use youtube_sources::{YouTubeMetadataSource, YtDlpTranscriptSource};
 use youtube_transcribe::{TranscriptionConfig, VoxtypeTranscriptSource};
 use youtube_typesense::{
@@ -27,6 +27,8 @@ enum Command {
     InitTypesense(InitTypesenseCommand),
     #[command(about = "Create/update the YouTuber document and report discoverable public videos")]
     IndexYoutuber(IndexYoutuberCommand),
+    #[command(about = "Index one video by ID or URL")]
+    IndexVideo(IndexVideoCommand),
     #[command(about = "Search transcript chunks using the Typesense search-only API key")]
     Search(SearchCommand),
 }
@@ -74,6 +76,43 @@ struct IndexYoutuberCommand {
     no_wipe: bool,
     #[arg(long, value_enum, default_value_t = ContentKindFilter::All)]
     content_kind: ContentKindFilter,
+    #[arg(
+        long,
+        default_value_t = 10,
+        help = "Transcript chunk window in seconds"
+    )]
+    chunk_seconds: u32,
+    #[arg(
+        long,
+        help = "When captions are missing, extract audio with yt-dlp and transcribe locally with voxtype"
+    )]
+    transcribe_missing: bool,
+    #[arg(long, default_value = "data/transcription-cache")]
+    transcription_cache_dir: PathBuf,
+    #[arg(long, default_value_t = 30)]
+    transcription_chunk_seconds: u32,
+    #[arg(
+        long,
+        help = "Optional voxtype engine override, e.g. whisper or parakeet"
+    )]
+    voxtype_engine: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct IndexVideoCommand {
+    #[arg(value_name = "VIDEO_ID_OR_URL")]
+    video: String,
+    #[command(flatten)]
+    youtube: YouTubeAuthArgs,
+    #[command(flatten)]
+    typesense: TypesenseAdminArgs,
+    #[command(flatten)]
+    collection: TranscriptCollectionArg,
+    #[arg(
+        long,
+        help = "Keep existing chunks for this video instead of wiping before import"
+    )]
+    no_wipe: bool,
     #[arg(
         long,
         default_value_t = 10,
@@ -283,6 +322,7 @@ async fn main() -> Result<(), CliError> {
         Command::Validate(command) => validate_command(command).await,
         Command::InitTypesense(command) => init_typesense_command(command).await,
         Command::IndexYoutuber(command) => index_youtuber_command(command).await,
+        Command::IndexVideo(command) => index_video_command(command).await,
         Command::Search(command) => search_command(command).await,
     }
 }
@@ -321,7 +361,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     let youtuber = validate_youtuber(&youtube, &command.youtuber.handle, 5).await?;
     print_validated_youtuber(&youtuber);
 
-    let public_videos = discover_public_videos(&youtube, &youtuber.channel_id).await?;
+    let public_videos = discover_videos_for_youtuber(&youtube, &youtuber).await?;
     tracing::info!(
         handle = %youtuber.handle,
         channel_id = %youtuber.channel_id,
@@ -518,6 +558,71 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     Ok(())
 }
 
+async fn index_video_command(command: IndexVideoCommand) -> Result<(), CliError> {
+    let video_id = parse_video_id(&command.video)?;
+    let youtube = command.youtube.client()?;
+    let collection = command.collection.collection;
+    let typesense = command.typesense.client(collection.clone());
+
+    match typesense.create_collection_if_missing().await? {
+        CreateCollectionOutcome::Created(_) => {
+            println!("Created Typesense collection: {collection}")
+        }
+        CreateCollectionOutcome::AlreadyExists { .. } => {
+            println!("Typesense collection already exists: {collection}")
+        }
+    }
+
+    if command.no_wipe {
+        println!("Keeping existing transcript chunks for video {video_id}");
+    } else {
+        println!("Deleting existing transcript chunks for video {video_id} before reindex");
+        let delete_response = typesense.delete_chunks_by_video_id(&video_id).await?;
+        println!(
+            "Deleted existing chunks response: {}",
+            serde_json::to_string(&delete_response).unwrap_or_else(|_| delete_response.to_string())
+        );
+    }
+
+    let metadata_source = YouTubeMetadataSource::new(youtube);
+    let caption_source = YtDlpTranscriptSource::new();
+    let transcribe_source = command.transcribe_missing.then(|| {
+        VoxtypeTranscriptSource::with_config(
+            TranscriptionConfig::default()
+                .with_cache_dir(command.transcription_cache_dir.clone())
+                .with_chunk_seconds(command.transcription_chunk_seconds)
+                .with_voxtype_engine(command.voxtype_engine.clone()),
+        )
+    });
+    let chunker = Chunker::new(command.chunk_seconds);
+
+    println!("Indexing video: {video_id}");
+    let metadata = metadata_source.metadata_for_video(&video_id).await?;
+    println!("  title: {}", metadata.title);
+    println!(
+        "  creator: {} ({})",
+        metadata.youtuber.name, metadata.youtuber.handle
+    );
+
+    let (transcript, audio_transcribed) = fetch_transcript_with_optional_fallback(
+        &video_id,
+        &caption_source,
+        transcribe_source.as_ref(),
+    )
+    .await?;
+    let chunks = chunker.chunks(&metadata, &transcript)?;
+    let chunk_count = chunks.len();
+    typesense.import_chunks_batched(&chunks).await?;
+
+    println!("  imported {chunk_count} transcript chunks");
+    println!(
+        "Index summary: video_id={}, chunks={}, audio_transcribed={}",
+        video_id, chunk_count, audio_transcribed
+    );
+
+    Ok(())
+}
+
 async fn search_command(command: SearchCommand) -> Result<(), CliError> {
     let typesense = command.typesense.client(command.collection.collection);
     let mut search = TextSearchQuery::new(command.query).per_page(command.per_page);
@@ -588,6 +693,72 @@ async fn validate_youtuber(
     })
 }
 
+async fn discover_videos_for_youtuber(
+    youtube: &YouTubeClient,
+    youtuber: &ValidatedYoutuber,
+) -> Result<Vec<DiscoveredVideo>, CliError> {
+    if let Some(uploads_playlist) = youtuber.uploads_playlist.as_deref() {
+        match discover_upload_playlist_videos(youtube, uploads_playlist).await {
+            Ok(videos) => {
+                println!("  discovery source: uploads playlist ({uploads_playlist})");
+                return Ok(videos);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    playlist = uploads_playlist,
+                    %error,
+                    "uploads playlist discovery failed; falling back to search.list"
+                );
+                println!(
+                    "  uploads playlist discovery failed ({error}); falling back to search.list"
+                );
+            }
+        }
+    } else {
+        println!("  uploads playlist unavailable; falling back to search.list");
+    }
+
+    discover_public_videos(youtube, &youtuber.channel_id).await
+}
+
+async fn discover_upload_playlist_videos(
+    youtube: &YouTubeClient,
+    uploads_playlist: &str,
+) -> Result<Vec<DiscoveredVideo>, CliError> {
+    let mut videos = Vec::new();
+    let mut page_token = None;
+
+    loop {
+        let mut query = Query::new()
+            .part(["snippet", "contentDetails"])
+            .set("playlistId", uploads_playlist)
+            .max_results(50)
+            .fields("nextPageToken,items(snippet(title),contentDetails/videoId)");
+
+        if let Some(token) = page_token {
+            query = query.page_token(token);
+        }
+
+        let page = youtube
+            .list(ListResource::PlaylistItems)
+            .query(query)
+            .page()
+            .await?;
+        for item in &page.items {
+            if let Some(video) = discovered_video_from_playlist_item(item) {
+                videos.push(video);
+            }
+        }
+
+        page_token = page.next_page_token;
+        if page_token.is_none() {
+            break;
+        }
+    }
+
+    Ok(dedupe_discovered_videos(videos))
+}
+
 async fn discover_public_videos(
     youtube: &YouTubeClient,
     channel_id: &str,
@@ -625,7 +796,14 @@ async fn discover_public_videos(
         }
     }
 
-    Ok(videos)
+    Ok(dedupe_discovered_videos(videos))
+}
+
+fn discovered_video_from_playlist_item(item: &Value) -> Option<DiscoveredVideo> {
+    Some(DiscoveredVideo {
+        video_id: optional_string(item, "/contentDetails/videoId")?,
+        title: optional_string(item, "/snippet/title")?,
+    })
 }
 
 fn discovered_video_from_search_item(item: &Value) -> Option<DiscoveredVideo> {
@@ -633,6 +811,19 @@ fn discovered_video_from_search_item(item: &Value) -> Option<DiscoveredVideo> {
         video_id: optional_string(item, "/id/videoId")?,
         title: optional_string(item, "/snippet/title")?,
     })
+}
+
+fn dedupe_discovered_videos(videos: Vec<DiscoveredVideo>) -> Vec<DiscoveredVideo> {
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::with_capacity(videos.len());
+
+    for video in videos {
+        if seen.insert(video.video_id.clone()) {
+            deduped.push(video);
+        }
+    }
+
+    deduped
 }
 
 async fn fetch_recent_uploads(
@@ -662,6 +853,79 @@ async fn fetch_recent_uploads(
             })
         })
         .collect())
+}
+
+async fn fetch_transcript_with_optional_fallback(
+    video_id: &str,
+    caption_source: &YtDlpTranscriptSource,
+    transcribe_source: Option<&VoxtypeTranscriptSource>,
+) -> Result<(Vec<TranscriptSegment>, bool), CliError> {
+    match caption_source.transcript_for_video(video_id).await {
+        Ok(transcript) => Ok((transcript, false)),
+        Err(caption_error) => {
+            let Some(transcribe_source) = transcribe_source else {
+                return Err(caption_error.into());
+            };
+
+            tracing::info!(video_id, error = %caption_error, "captions unavailable, trying local audio transcription");
+            println!("  captions unavailable, trying local audio transcription: {caption_error}");
+            let transcript = transcribe_source.transcript_for_video(video_id).await?;
+            Ok((transcript, true))
+        }
+    }
+}
+
+fn parse_video_id(input: &str) -> Result<String, CliError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(CliError::Message(
+            "video ID or URL cannot be empty".to_string(),
+        ));
+    }
+
+    if looks_like_video_id(trimmed) {
+        return Ok(trimmed.to_string());
+    }
+
+    if let Some(video_id) = query_param(trimmed, "v").filter(|value| looks_like_video_id(value)) {
+        return Ok(video_id.to_string());
+    }
+
+    for marker in ["youtu.be/", "/shorts/", "/embed/"] {
+        if let Some(after_marker) = trimmed.split_once(marker).map(|(_, value)| value) {
+            let candidate = after_marker
+                .split(['?', '&', '/', '#'])
+                .next()
+                .unwrap_or_default();
+            if looks_like_video_id(candidate) {
+                return Ok(candidate.to_string());
+            }
+        }
+    }
+
+    Err(CliError::Message(format!(
+        "Could not parse a YouTube video ID from {input}"
+    )))
+}
+
+fn query_param<'a>(input: &'a str, key: &str) -> Option<&'a str> {
+    let query = input
+        .split_once('?')?
+        .1
+        .split('#')
+        .next()
+        .unwrap_or_default();
+    query.split('&').find_map(|pair| {
+        let (pair_key, value) = pair.split_once('=')?;
+        (pair_key == key).then_some(value)
+    })
+}
+
+fn looks_like_video_id(value: &str) -> bool {
+    value.len() == 11
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
 impl ContentKindFilter {
