@@ -27,6 +27,9 @@ required_env() {
 }
 
 required_env MEILI_HTTP_ADDR
+if [ -z "${MEILI_SEARCH_API_KEY:-}" ] && [ -n "${MEILI_MASTER_KEY:-}" ]; then
+  MEILI_SEARCH_API_KEY="$MEILI_MASTER_KEY"
+fi
 required_env MEILI_SEARCH_API_KEY
 
 if ! flyctl apps list --org "$FLY_ORG" | grep -q "$APP_NAME"; then

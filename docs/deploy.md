@@ -125,11 +125,13 @@ export MEILI_MASTER_KEY='...'
 scripts/fly-deploy-meili.sh
 ```
 
-After the app is healthy, create a search key in Meilisearch or use a restricted key from your operator flow, then point the API staging app at it:
+Set `MEILI_MASTER_KEY` in your shell or `.env`; the deploy script reads both through `scripts/load-env.sh` and stores the value as a Fly secret without printing it.
+
+After the app is healthy, create a restricted search key in Meilisearch for production. For staging, `scripts/fly-set-meili-api-secrets.sh` will use `MEILI_SEARCH_API_KEY` when set, or fall back to `MEILI_MASTER_KEY` when `MEILI_SEARCH_API_KEY` is absent. Then point the API staging app at Meilisearch:
 
 ```bash
 export MEILI_HTTP_ADDR=https://ytsearch-meili-staging.fly.dev
-export MEILI_SEARCH_API_KEY='...'
+export MEILI_SEARCH_API_KEY='...' # optional for staging if MEILI_MASTER_KEY is set
 APP_NAME=ytsearch-api-meili-staging scripts/fly-set-meili-api-secrets.sh
 flyctl deploy --config fly.staging.toml --app ytsearch-api-meili-staging --primary-region sjc
 ```
