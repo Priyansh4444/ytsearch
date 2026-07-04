@@ -9,9 +9,36 @@ export const LoadingState: Component = () => (
   </div>
 );
 
-export const ErrorState: Component<{ message: string }> = (props) => (
+export const IndexUnavailableState: Component<{ handle: string }> = (props) => {
+  const tweetText = () =>
+    encodeURIComponent(`Please index ${props.handle} for ytsearch ❤️ @notpronsh`);
+
+  return (
+    <div class="border border-vesper-green/30 bg-vesper-panel p-5 shadow-2xl shadow-vesper-green/5">
+      <p class="text-sm uppercase tracking-[0.18em] text-vesper-green">Indexing unavailable</p>
+      <p class="mt-2 text-xl font-semibold text-white">{props.handle}</p>
+      <p class="mt-2 max-w-2xl text-sm text-vesper-muted">
+        This feature is currently not available. To get another YouTuber indexed, tag{" "}
+        <a
+          class="inline-flex items-center gap-1 text-vesper-green underline decoration-vesper-green/40 underline-offset-4 transition hover:text-white"
+          href={`https://twitter.com/intent/tweet?text=${tweetText()}`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          <span aria-hidden="true" class="font-semibold text-white">
+            𝕏
+          </span>
+          @notpronsh
+        </a>{" "}
+        on Twitter ❤️
+      </p>
+    </div>
+  );
+};
+
+export const ErrorState: Component<{ message: string; title?: string }> = (props) => (
   <div class="border border-vesper-red/40 bg-vesper-red/10 p-5 text-vesper-red">
-    <p class="font-semibold">Search failed</p>
+    <p class="font-semibold">{props.title ?? "Search failed"}</p>
     <p class="mt-2 text-sm text-red-100/80">{props.message}</p>
   </div>
 );

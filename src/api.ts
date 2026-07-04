@@ -1,7 +1,9 @@
 import type { IndexedChannel, SearchRequest, SearchResponse } from "./types";
 
 const DEFAULT_PER_PAGE = 12;
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ??
+  (import.meta.env.PROD ? "https://ytsearch-api-pronsh-sandbox.fly.dev" : "");
 
 export async function searchTranscripts(request: SearchRequest): Promise<SearchResponse> {
   const params = new URLSearchParams({

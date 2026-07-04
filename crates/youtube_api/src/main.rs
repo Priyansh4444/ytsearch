@@ -1,19 +1,21 @@
 use axum::{
     Json, Router,
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     env,
     net::{AddrParseError, SocketAddr},
     sync::Arc,
+    time::{Duration, Instant},
 };
 use thiserror::Error;
+use tokio::sync::Mutex;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use youtube_typesense::{
     DEFAULT_COLLECTION, TextSearchQuery, TypesenseSearchClient, TypesenseSearchConfig,
@@ -25,10 +27,21 @@ const DEFAULT_PER_PAGE: u8 = 20;
 const MAX_PER_PAGE: u8 = 100;
 const MERGE_TRANSCRIPT_HIT_WINDOW_MS: u32 = 20_000;
 const MAX_SEARCH_PAGE_FETCHES: u32 = 10;
+const CACHE_YOUTUBERS: &str = "public, max-age=30, stale-while-revalidate=300";
+const CACHE_SEARCH: &str = "public, max-age=30, stale-while-revalidate=300";
+const CACHE_NO_STORE: &str = "no-store";
+const DEFAULT_SEARCH_RATE_LIMIT_PER_MINUTE: usize = 120;
 
 #[derive(Clone)]
 struct AppState {
     search: TypesenseSearchClient,
+    rate_limiter: Arc<Mutex<RateLimiter>>,
+    search_rate_limit_per_minute: usize,
+}
+
+#[derive(Default)]
+struct RateLimiter {
+    buckets: HashMap<String, VecDeque<Instant>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -119,6 +132,8 @@ enum ApiError {
     InvalidBindAddress(String),
     #[error("query cannot be empty")]
     EmptyQuery,
+    #[error("rate limited; retry after {0} seconds")]
+    RateLimited(u64),
     #[error("typesense search failed: {0}")]
     Typesense(#[from] youtube_typesense::TypesenseError),
     #[error("search response had an unexpected shape")]
@@ -130,12 +145,7 @@ enum ApiError {
 #[tokio::main]
 async fn main() -> Result<(), ApiError> {
     let _ = dotenvy::dotenv();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "youtube_api=info,tower_http=info".into()),
-        )
-        .init();
+    init_tracing();
 
     let api_url = required_env("TYPESENSE_API_URL")?;
     let search_api_key = required_env("TYPESENSE_SEARCH_API_KEY")?;
@@ -151,6 +161,11 @@ async fn main() -> Result<(), ApiError> {
     );
     let state = Arc::new(AppState {
         search: search_client,
+        rate_limiter: Arc::new(Mutex::new(RateLimiter::default())),
+        search_rate_limit_per_minute: env_usize(
+            "YTSEARCH_SEARCH_RATE_LIMIT_PER_MINUTE",
+            DEFAULT_SEARCH_RATE_LIMIT_PER_MINUTE,
+        ),
     });
     let app = Router::new()
         .route("/api/health", get(health))
@@ -169,27 +184,43 @@ async fn main() -> Result<(), ApiError> {
     Ok(())
 }
 
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "ok": true }))
+async fn health() -> Response {
+    cache_response(CACHE_NO_STORE, Json(serde_json::json!({ "ok": true })))
 }
 
-async fn youtubers_handler(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<YoutubersResponse>, ApiError> {
-    let mut channels = state.search.list_youtubers().await?;
+async fn youtubers_handler(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
+    let mut channels = state
+        .search
+        .list_youtubers()
+        .await?
+        .into_iter()
+        .filter(is_searchable_channel)
+        .collect::<Vec<_>>();
     channels.sort_by(|left, right| {
         right
             .indexed_video_count
             .cmp(&left.indexed_video_count)
             .then_with(|| left.handle.cmp(&right.handle))
     });
-    Ok(Json(YoutubersResponse { channels }))
+    Ok(cache_response(
+        CACHE_YOUTUBERS,
+        Json(YoutubersResponse { channels }),
+    ))
 }
 
 async fn search_handler(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(params): Query<SearchParams>,
-) -> Result<Json<SearchResponse>, ApiError> {
+) -> Result<Response, ApiError> {
+    if state.search_rate_limit_per_minute > 0 {
+        let client = client_key(&headers);
+        state.rate_limiter.lock().await.allow(
+            format!("search:{client}"),
+            state.search_rate_limit_per_minute,
+            Duration::from_secs(60),
+        )?;
+    }
     let query = params.q.trim();
     if query.is_empty() {
         return Err(ApiError::EmptyQuery);
@@ -264,17 +295,50 @@ async fn search_handler(
         "search response"
     );
 
-    Ok(Json(SearchResponse {
-        query: query.to_string(),
-        total_found: found.max(hits.len() as u64),
-        out_of,
-        page,
-        per_page,
-        sort,
-        has_next_page: page_result.has_next_page,
-        hits,
-        videos,
-    }))
+    Ok(cache_response(
+        CACHE_SEARCH,
+        Json(SearchResponse {
+            query: query.to_string(),
+            total_found: found.max(hits.len() as u64),
+            out_of,
+            page,
+            per_page,
+            sort,
+            has_next_page: page_result.has_next_page,
+            hits,
+            videos,
+        }),
+    ))
+}
+
+fn is_searchable_channel(channel: &YoutuberDocument) -> bool {
+    channel.indexed_video_count > 0 && channel.indexed_chunk_count > 0
+}
+
+impl RateLimiter {
+    fn allow(&mut self, key: String, limit: usize, window: Duration) -> Result<(), ApiError> {
+        if limit == 0 {
+            return Ok(());
+        }
+        let now = Instant::now();
+        let bucket = self.buckets.entry(key).or_default();
+        while bucket
+            .front()
+            .is_some_and(|instant| now.duration_since(*instant) >= window)
+        {
+            bucket.pop_front();
+        }
+        if bucket.len() >= limit {
+            let oldest = bucket.front().copied().unwrap_or(now);
+            let retry_after = window
+                .saturating_sub(now.duration_since(oldest))
+                .as_secs()
+                .max(1);
+            return Err(ApiError::RateLimited(retry_after));
+        }
+        bucket.push_back(now);
+        Ok(())
+    }
 }
 
 struct SearchPageResult {
@@ -600,15 +664,60 @@ fn format_timestamp(milliseconds: u32) -> String {
 }
 
 fn normalize_handle(handle: &str) -> String {
-    if handle.starts_with('@') {
-        handle.to_string()
+    let trimmed = handle.trim();
+    if trimmed.starts_with('@') {
+        trimmed.to_string()
     } else {
-        format!("@{handle}")
+        format!("@{trimmed}")
     }
+}
+
+fn client_key(headers: &HeaderMap) -> String {
+    ["cf-connecting-ip", "fly-client-ip", "x-forwarded-for"]
+        .iter()
+        .filter_map(|name| headers.get(*name))
+        .filter_map(|value| value.to_str().ok())
+        .find_map(|value| {
+            value
+                .split(',')
+                .next()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn cache_response<T: IntoResponse>(cache_control: &'static str, response: T) -> Response {
+    let mut response = response.into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(cache_control),
+    );
+    response
+}
+
+fn env_usize(name: &str, default: usize) -> usize {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
 
 fn required_env(name: &'static str) -> Result<String, ApiError> {
     env::var(name).map_err(|_| ApiError::MissingEnv(name))
+}
+
+fn init_tracing() {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "youtube_api=info,tower_http=info".into());
+    let subscriber = tracing_subscriber::fmt().with_env_filter(env_filter);
+
+    if env::var("LOG_FORMAT").is_ok_and(|value| value.eq_ignore_ascii_case("json")) {
+        subscriber.json().init();
+    } else {
+        subscriber.init();
+    }
 }
 
 async fn shutdown_signal() {
@@ -619,16 +728,30 @@ async fn shutdown_signal() {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = match self {
+        let status = match &self {
             Self::EmptyQuery => StatusCode::BAD_REQUEST,
+            Self::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::MissingEnv(_) | Self::InvalidBindAddress(_) | Self::Server(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
-            Self::Typesense(_) => StatusCode::BAD_GATEWAY,
-            Self::UnexpectedSearchShape => StatusCode::BAD_GATEWAY,
+            Self::Typesense(_) | Self::UnexpectedSearchShape => StatusCode::BAD_GATEWAY,
         };
 
+        let retry_after = match &self {
+            Self::RateLimited(seconds) => Some(*seconds),
+            _ => None,
+        };
         let body = Json(serde_json::json!({ "error": self.to_string() }));
-        (status, body).into_response()
+        let mut response = (status, body).into_response();
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static(CACHE_NO_STORE),
+        );
+        if let Some(seconds) = retry_after {
+            if let Ok(value) = HeaderValue::from_str(&seconds.to_string()) {
+                response.headers_mut().insert(header::RETRY_AFTER, value);
+            }
+        }
+        response
     }
 }

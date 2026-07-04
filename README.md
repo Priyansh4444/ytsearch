@@ -45,7 +45,11 @@ Optional:
 TYPESENSE_COLLECTION=youtube_transcript_chunks
 YTSEARCH_API_ADDR=127.0.0.1:8787
 RUST_LOG=youtube_api=info,youtube_cli=info,youtube_sources=info,youtube_ytdlp=info,youtube_transcribe=info,tower_http=info
+LOG_FORMAT=json
 VITE_API_BASE_URL=https://api.example.com
+YTSEARCH_SEARCH_RATE_LIMIT_PER_MINUTE=120
+YT_DLP_COOKIES_FILE=/run/secrets/youtube-cookies.txt
+YT_DLP_EXTRACTOR_ARGS=youtube:player_client=default,mweb
 ```
 
 ## Install dependencies
@@ -53,6 +57,23 @@ VITE_API_BASE_URL=https://api.example.com
 ```bash
 bun install
 ```
+
+Install local git hooks to block TypeScript/build errors before commits and deploy the frontend to Cloudflare Pages after each commit:
+
+```bash
+bun run hooks:install
+```
+
+The hooks and deploy scripts read `.env` automatically. For Cloudflare Pages deploys, set:
+
+```env
+CLOUDFLARE_API_TOKEN=...
+CLOUDFLARE_PAGES_PROJECT=ytsearch
+CLOUDFLARE_PAGES_BRANCH=main
+VITE_API_BASE_URL=https://ytsearch-api-pronsh-sandbox.fly.dev
+```
+
+Set `YTSEARCH_SKIP_DEPLOY_ON_COMMIT=1` to skip a post-commit deploy.
 
 System tools used by optional ingestion paths:
 
@@ -89,34 +110,38 @@ The Vite dev server proxies `/api` to `http://127.0.0.1:8787`.
 
 ## Index a creator
 
+Website-triggered indexing is intentionally unavailable. When a handle starting with `@` is submitted in the UI, it shows a short request message instead of starting a public job.
+
+Queue/index creators locally with the CLI so credentials, cookies, retries, and quota stay operator-controlled.
+
 Validate a handle:
 
 ```bash
-cargo run -p youtube_cli -- validate @jo2uke
+cargo run -p youtube_cli -- validate @t3dotgg
 ```
 
 Index captions into Typesense:
 
 ```bash
-cargo run -p youtube_cli -- index-youtuber @jo2uke
+cargo run -p youtube_cli -- index-youtuber @t3dotgg
 ```
 
 By default, reindexing deletes existing transcript chunks for that YouTuber before importing the new version. For a non-destructive smoke test:
 
 ```bash
-cargo run -p youtube_cli -- index-youtuber @jo2uke --max-videos 1 --no-wipe
+cargo run -p youtube_cli -- index-youtuber @t3dotgg --max-videos 1 --no-wipe
 ```
 
 Use local audio transcription only when public captions are missing:
 
 ```bash
-cargo run -p youtube_cli -- index-youtuber @jo2uke --transcribe-missing
+cargo run -p youtube_cli -- index-youtuber @t3dotgg --transcribe-missing
 ```
 
 Optional `voxtype` engine override:
 
 ```bash
-cargo run -p youtube_cli -- index-youtuber @jo2uke \
+cargo run -p youtube_cli -- index-youtuber @t3dotgg \
   --transcribe-missing \
   --voxtype-engine whisper
 ```
@@ -124,13 +149,13 @@ cargo run -p youtube_cli -- index-youtuber @jo2uke \
 ## Search from CLI
 
 ```bash
-cargo run -p youtube_cli -- search resident --youtuber @jo2uke --per-page 5
+cargo run -p youtube_cli -- search resident --youtuber @t3dotgg --per-page 5
 ```
 
 ## Search from HTTP API
 
 ```bash
-curl 'http://127.0.0.1:8787/api/search?q=resident&youtuber=@jo2uke&per_page=5'
+curl 'http://127.0.0.1:8787/api/search?q=resident&youtuber=@t3dotgg&per_page=5'
 ```
 
 The API uses the Typesense search-only key. Admin keys are only used by indexing commands.
@@ -140,6 +165,9 @@ The API uses the Typesense search-only key. Admin keys are only used by indexing
 The Solid frontend:
 
 - Lists indexed creators from `/api/youtubers` so the homepage shows what is searchable.
+- Uses the browser History API (`pushState`, `replaceState`, and `popstate`) so channel URLs and the back button behave like normal navigation.
+- Redirects unknown creator URLs back to `/` after indexed creators load.
+- Switches to index mode when the query starts with `@`, then explains website indexing is unavailable and links to tag `@notpronsh` on X/Twitter.
 - Groups search results by video to avoid duplicate rows from nearby transcript chunks.
 - Shows a small set of matching snippets per video; clicking a snippet moves the embedded player to that timestamp.
 - Supports relevance/newest/oldest sorting with typo matching left enabled in Typesense.
@@ -152,13 +180,14 @@ The Solid frontend:
 
 ## Logging
 
-Rust services use `tracing` / `tracing-subscriber`.
+Rust services use `tracing` / `tracing-subscriber`. Set `LOG_FORMAT=json` in production to emit structured stdout logs that Fly/Railway log drains can ship to Axiom. The API also adds simple in-memory rate limits and cache headers: `/api/youtubers` and `/api/search` are briefly cacheable, while `/api/health` is `no-store`.
 
 Examples:
 
 ```bash
 RUST_LOG=info bun run api
-RUST_LOG=youtube_cli=debug,youtube_sources=debug,youtube_transcribe=debug cargo run -p youtube_cli -- index-youtuber @jo2uke --max-videos 1 --no-wipe
+LOG_FORMAT=json RUST_LOG=youtube_api=info,tower_http=info bun run api
+RUST_LOG=youtube_cli=debug,youtube_sources=debug,youtube_transcribe=debug cargo run -p youtube_cli -- index-youtuber @t3dotgg --max-videos 1 --no-wipe
 ```
 
 ## Compliance and policy considerations

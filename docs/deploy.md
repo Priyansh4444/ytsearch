@@ -6,7 +6,7 @@ This project has three deployable concerns:
 2. **Search API**: `youtube_api` Axum service using the Typesense search-only key.
 3. **Indexer**: `youtube_cli` one-shot/cron job using YouTube API + Typesense admin key + optional local tools.
 
-Keep the indexer separate from the public API. The API should never receive the Typesense admin key.
+The production pattern is to keep indexing separate from the public API. Website-triggered indexing is intentionally unavailable; use the local CLI or a private operator job to queue indexing work.
 
 ## Recommended production setup
 
@@ -29,6 +29,8 @@ TYPESENSE_SEARCH_API_KEY=...
 TYPESENSE_COLLECTION=youtube_transcript_chunks
 YTSEARCH_API_ADDR=0.0.0.0:8787
 RUST_LOG=youtube_api=info,tower_http=info
+LOG_FORMAT=json
+YTSEARCH_SEARCH_RATE_LIMIT_PER_MINUTE=120
 ```
 
 ### Indexer runtime
@@ -39,9 +41,12 @@ TYPESENSE_API_URL=...
 TYPESENSE_ADMIN_API_KEY=...
 TYPESENSE_COLLECTION=youtube_transcript_chunks
 RUST_LOG=youtube_cli=info,youtube_sources=info,youtube_ytdlp=info,youtube_transcribe=info
+LOG_FORMAT=json
 ```
 
 Optional transcription fallback also needs `yt-dlp`, `ffmpeg`, `ffprobe`, and `voxtype` available in the image/machine.
+
+
 
 ## Cloudflare Pages frontend
 
@@ -49,13 +54,39 @@ Build command:
 
 ```bash
 bun install --frozen-lockfile
-bun run build
+bun run frontend:check
 ```
+
+Manual Wrangler deploy from this repo:
+
+```bash
+export CLOUDFLARE_API_TOKEN='...'
+export CLOUDFLARE_PAGES_PROJECT=ytsearch
+export VITE_API_BASE_URL=https://ytsearch-api-pronsh-sandbox.fly.dev
+bun run deploy:frontend
+```
+
+`bun run deploy:frontend` reads `.env`, runs `typecheck`, format check, lint, and build before calling `wrangler pages deploy dist`.
 
 Output directory:
 
 ```text
 dist
+```
+
+The repo also includes tracked hook templates under `scripts/hooks/`. Install them locally with:
+
+```bash
+bun run hooks:install
+```
+
+- `pre-commit`: blocks commits if frontend typecheck/format/lint/build fails.
+- `post-commit`: deploys `dist` to Cloudflare Pages using env from `.env`.
+
+To skip deploy for a local commit:
+
+```bash
+YTSEARCH_SKIP_DEPLOY_ON_COMMIT=1 git commit ...
 ```
 
 Set a Pages environment variable if the API is on a separate origin:
@@ -68,28 +99,42 @@ If using the current relative `/api` calls, add a Cloudflare Pages redirect/prox
 
 ## Fly.io API
 
-Example `Dockerfile` for API:
+This repository includes:
 
-```Dockerfile
-FROM rust:1-bookworm AS builder
-WORKDIR /app
-COPY . .
-RUN cargo build --release -p youtube_api
+- `Dockerfile` for the API plus `ytsearch` CLI binary.
+- `fly.toml` configured for app `ytsearch-api-pronsh-sandbox` in org `pronsh-sandbox`.
+- `scripts/fly-set-secrets.sh` to set API runtime secrets from `.env`.
+- `scripts/fly-deploy.sh` to create/deploy the app with `FLYIO_TOKEN` or `FLY_ACCESS_TOKEN`.
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/youtube-api /usr/local/bin/youtube-api
-ENV YTSEARCH_API_ADDR=0.0.0.0:8787
-EXPOSE 8787
-CMD ["youtube-api"]
-```
-
-Deploy:
+Use a Fly org token as an environment variable. `flyctl` expects `FLY_ACCESS_TOKEN`, but the scripts also accept `FLYIO_TOKEN` and map it safely. The Fly scripts now read `.env` and `.env.local` automatically.
 
 ```bash
-fly launch --name ytsearch-api --dockerfile Dockerfile --no-deploy
-fly secrets set TYPESENSE_API_URL='...' TYPESENSE_SEARCH_API_KEY='...'
-fly deploy
+export FLYIO_TOKEN='...'
+export TYPESENSE_API_URL='...'
+export TYPESENSE_SEARCH_API_KEY='...'
+
+scripts/fly-set-secrets.sh
+scripts/fly-deploy.sh
+```
+
+Equivalent manual commands:
+
+```bash
+export FLY_ACCESS_TOKEN="$FLYIO_TOKEN"
+fly apps create ytsearch-api-pronsh-sandbox --org pronsh-sandbox
+fly secrets set \
+  TYPESENSE_API_URL='...' \
+  TYPESENSE_SEARCH_API_KEY='...' \
+  --app ytsearch-api-pronsh-sandbox
+fly deploy --app ytsearch-api-pronsh-sandbox --primary-region sjc
+```
+
+Operational checks:
+
+```bash
+fly status --app ytsearch-api-pronsh-sandbox
+fly logs --app ytsearch-api-pronsh-sandbox
+curl 'https://ytsearch-api-pronsh-sandbox.fly.dev/api/health'
 ```
 
 ## Railway API
@@ -114,11 +159,29 @@ If Railway does not expand `${PORT}` inside env reliably, set the service start 
 
 ## Indexing jobs
 
-Manual full/resume indexing:
+Website indexing from the frontend is unavailable. Type `@handle` into the main search field and submit to show the request message. Queue creators locally or from a private operator machine.
+
+Manual full/resume indexing locally:
 
 ```bash
 cargo run --release -p youtube_cli -- index-youtuber @t3dotgg --no-wipe --skip-existing --jobs 8
 ```
+
+Manual indexing on Fly with the same deployed image:
+
+```bash
+export FLYIO_TOKEN='...'
+fly secrets set \
+  YOUTUBE_API_KEY='...' \
+  TYPESENSE_ADMIN_API_KEY='...' \
+  TYPESENSE_API_URL='...' \
+  --app ytsearch-api-pronsh-sandbox
+scripts/fly-run-indexer.sh -- index-youtuber @t3dotgg --no-wipe --skip-existing --jobs 4
+```
+
+The Fly image includes `yt-dlp` and `ffmpeg`. `voxtype` is not installed in the image, so `--transcribe-missing` still needs a custom image layer if you want local transcription fallback on Fly.
+
+Manual full/resume indexing:
 
 Destructive clean reindex:
 
@@ -154,12 +217,48 @@ Use lower `--jobs` with transcription fallback because local audio transcription
 
 ### Logs to Axiom
 
-Recommended low-friction path: keep structured `tracing` logs on stdout and configure Fly/Railway log drains to Axiom. This avoids hardcoding log exporters in app code.
+Rust services emit normal pretty logs by default and structured JSON logs when `LOG_FORMAT=json`. The Fly app sets `LOG_FORMAT=json`, which makes stdout suitable for Axiom ingestion. API responses also set cache headers: search/channel list responses are briefly public-cacheable, while health is `no-store`.
+
+Fly sends app stdout/stderr to Fly logs. CLI indexing logs should be captured from the local/private operator environment that runs them. To export Fly API logs to Axiom, run Fly Log Shipper in the same org. The log shipper supports Axiom through the `AXIOM_TOKEN` and `AXIOM_DATASET` secrets.
+
+```bash
+export FLYIO_TOKEN='...'
+export FLY_ACCESS_TOKEN="$FLYIO_TOKEN"
+
+mkdir -p /tmp/ytsearch-log-shipper
+cd /tmp/ytsearch-log-shipper
+fly launch \
+  --image flyio/log-shipper:latest \
+  --name ytsearch-axiom-logs-pronsh-sandbox \
+  --org pronsh-sandbox \
+  --no-public-ips \
+  --no-deploy
+fly secrets set \
+  ORG=pronsh-sandbox \
+  ACCESS_TOKEN="$FLYIO_TOKEN" \
+  SUBJECT='logs.ytsearch-api-pronsh-sandbox.>' \
+  AXIOM_TOKEN='...' \
+  AXIOM_DATASET='ytsearch' \
+  --app ytsearch-axiom-logs-pronsh-sandbox \
+  --org pronsh-sandbox
+fly deploy --app ytsearch-axiom-logs-pronsh-sandbox
+```
+
+For YouTube bot-check failures from `yt-dlp`, deploy with a current `yt-dlp` build and configure authorized extraction options as needed:
+
+```bash
+fly secrets set \
+  YT_DLP_EXTRACTOR_ARGS='youtube:player_client=default,mweb' \
+  --app ytsearch-api-pronsh-sandbox
+```
+
+If you use a cookies file, mount/provision it securely and set `YT_DLP_COOKIES_FILE`; do not commit cookies or tokens.
 
 Useful log filter:
 
 ```env
 RUST_LOG=youtube_api=info,tower_http=info,youtube_cli=info,youtube_ytdlp=info,youtube_transcribe=info
+LOG_FORMAT=json
 ```
 
 ### Sentry
