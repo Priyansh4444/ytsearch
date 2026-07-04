@@ -47,6 +47,7 @@ struct SearchResponse {
     page: u32,
     per_page: u8,
     sort: SearchSort,
+    has_next_page: bool,
     hits: Vec<SearchHit>,
     videos: Vec<SearchVideoResult>,
 }
@@ -219,7 +220,7 @@ async fn search_handler(
         .get("out_of")
         .and_then(Value::as_u64)
         .unwrap_or_default();
-    let videos = collect_visible_videos(
+    let page_result = collect_visible_videos(
         &state.search,
         &typesense_query,
         first_raw,
@@ -230,6 +231,7 @@ async fn search_handler(
         sort,
     )
     .await?;
+    let videos = page_result.videos;
     let hits = videos
         .iter()
         .flat_map(|video| video.hits.iter().cloned())
@@ -249,9 +251,15 @@ async fn search_handler(
         page,
         per_page,
         sort,
+        has_next_page: page_result.has_next_page,
         hits,
         videos,
     }))
+}
+
+struct SearchPageResult {
+    videos: Vec<SearchVideoResult>,
+    has_next_page: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -264,8 +272,10 @@ async fn collect_visible_videos(
     per_page: u8,
     search_page_size: u8,
     sort: SearchSort,
-) -> Result<Vec<SearchVideoResult>, ApiError> {
-    let required_videos = local_offset.saturating_add(usize::from(per_page));
+) -> Result<SearchPageResult, ApiError> {
+    let required_videos = local_offset
+        .saturating_add(usize::from(per_page))
+        .saturating_add(1);
     let mut combined = Vec::new();
     let mut current_page = first_typesense_page;
     let mut raw = first_raw;
@@ -278,11 +288,7 @@ async fn collect_visible_videos(
         let videos = video_results_from_hits(&combined, sort);
 
         if videos.len() >= required_videos || is_empty {
-            return Ok(videos
-                .into_iter()
-                .skip(local_offset)
-                .take(usize::from(per_page))
-                .collect());
+            return Ok(page_result_from_videos(videos, local_offset, per_page));
         }
 
         let fetched_raw_hits = raw
@@ -303,11 +309,28 @@ async fn collect_visible_videos(
             .await?;
     }
 
-    Ok(video_results_from_hits(&combined, sort)
-        .into_iter()
-        .skip(local_offset)
-        .take(usize::from(per_page))
-        .collect())
+    Ok(page_result_from_videos(
+        video_results_from_hits(&combined, sort),
+        local_offset,
+        per_page,
+    ))
+}
+
+fn page_result_from_videos(
+    videos: Vec<SearchVideoResult>,
+    local_offset: usize,
+    per_page: u8,
+) -> SearchPageResult {
+    let per_page = usize::from(per_page);
+    let has_next_page = videos.len() > local_offset.saturating_add(per_page);
+    SearchPageResult {
+        videos: videos
+            .into_iter()
+            .skip(local_offset)
+            .take(per_page)
+            .collect(),
+        has_next_page,
+    }
 }
 
 fn video_results_from_hits(hits: &[SearchHit], sort: SearchSort) -> Vec<SearchVideoResult> {

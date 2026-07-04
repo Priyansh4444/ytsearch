@@ -44,6 +44,7 @@ type SearchResponse = {
   page: number;
   per_page: number;
   sort: SearchSort;
+  has_next_page: boolean;
   hits: SearchHit[];
   videos: SearchVideoResult[];
 };
@@ -270,19 +271,19 @@ const PaginationControls: Component<{
   currentPage: number;
   onPageChange: (page: number) => void;
 }> = (props) => {
-  const totalPages = () =>
-    Math.max(1, Math.ceil(props.response.total_found / props.response.per_page));
-  const pages = () => pageNumbers(props.currentPage, totalPages());
+  const hasPrevious = () => props.currentPage > 1;
+  const hasNext = () => props.response.has_next_page;
+  const pages = () => pageNumbers(props.currentPage, hasNext());
 
   return (
-    <Show when={props.response.total_found > props.response.per_page}>
+    <Show when={hasPrevious() || hasNext()}>
       <nav
         aria-label="Search result pages"
         class="mt-2 flex flex-wrap items-center justify-center gap-2 border border-vesper-border bg-vesper-panel p-3 text-sm"
       >
         <button
           type="button"
-          disabled={props.currentPage <= 1}
+          disabled={!hasPrevious()}
           onClick={() => props.onPageChange(props.currentPage - 1)}
           class="border border-vesper-border bg-vesper-bg px-3 py-1.5 text-vesper-muted transition hover:border-vesper-yellow hover:text-vesper-yellow disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-vesper-border disabled:hover:text-vesper-muted"
         >
@@ -308,7 +309,7 @@ const PaginationControls: Component<{
 
         <button
           type="button"
-          disabled={props.currentPage >= totalPages()}
+          disabled={!hasNext()}
           onClick={() => props.onPageChange(props.currentPage + 1)}
           class="border border-vesper-border bg-vesper-bg px-3 py-1.5 text-vesper-muted transition hover:border-vesper-yellow hover:text-vesper-yellow disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-vesper-border disabled:hover:text-vesper-muted"
         >
@@ -319,9 +320,9 @@ const PaginationControls: Component<{
   );
 };
 
-function pageNumbers(currentPage: number, totalPages: number): number[] {
+function pageNumbers(currentPage: number, hasNext: boolean): number[] {
   const start = Math.max(1, currentPage - 3);
-  const end = Math.min(totalPages, currentPage + 3);
+  const end = hasNext ? currentPage + 1 : currentPage;
   return Array.from({ length: end - start + 1 }, (_, index) => start + index);
 }
 
