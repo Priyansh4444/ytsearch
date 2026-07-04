@@ -10,7 +10,7 @@ use youtube_ingest::{ChunkSink, IngestError, TranscriptChunk};
 pub const DEFAULT_COLLECTION: &str = "youtube_transcript_chunks";
 pub const YOUTUBERS_COLLECTION: &str = "youtube_youtubers";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(180);
-const IMPORT_BATCH_SIZE: usize = 64;
+const IMPORT_BATCH_SIZE: usize = 8;
 const IMPORT_ATTEMPTS: u8 = 3;
 const DELETE_ATTEMPTS: u8 = 3;
 
