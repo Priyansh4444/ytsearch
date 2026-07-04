@@ -21,7 +21,8 @@ crates/youtube_client       Internal YouTube Data API v3 wrapper
 crates/youtube_ingest       Core transcript chunking/domain model
 crates/youtube_jsonl        JSONL chunk persistence helpers
 crates/youtube_semantic     Experimental embedding/semantic helpers
-crates/youtube_sources      YouTube metadata + public caption sources
+crates/youtube_sources      YouTube metadata sources + source fallback combinators
+crates/youtube_ytdlp        yt-dlp public caption transcript source
 crates/youtube_transcribe   yt-dlp audio extraction + voxtype transcription fallback
 crates/youtube_typesense    Typesense admin/search clients
 src/                        SolidJS frontend
@@ -43,7 +44,8 @@ Optional:
 ```env
 TYPESENSE_COLLECTION=youtube_transcript_chunks
 YTSEARCH_API_ADDR=127.0.0.1:8787
-RUST_LOG=youtube_api=info,youtube_cli=info,youtube_sources=info,youtube_transcribe=info,tower_http=info
+RUST_LOG=youtube_api=info,youtube_cli=info,youtube_sources=info,youtube_ytdlp=info,youtube_transcribe=info,tower_http=info
+VITE_API_BASE_URL=https://api.example.com
 ```
 
 ## Install dependencies
@@ -137,11 +139,16 @@ The API uses the Typesense search-only key. Admin keys are only used by indexing
 
 The Solid frontend:
 
-- Shows all individual hits; repeated videos are allowed.
-- Shows transcript timestamp ranges.
-- Highlights matching terms in title, transcript text, before context, and after context.
-- Embeds the YouTube player at the matching timestamp using `youtube-nocookie.com`.
-- Provides an "Open at timestamp" button for a new tab.
+- Lists indexed creators from `/api/youtubers` so the homepage shows what is searchable.
+- Groups search results by video to avoid duplicate rows from nearby transcript chunks.
+- Shows a small set of matching snippets per video; clicking a snippet moves the embedded player to that timestamp.
+- Supports relevance/newest/oldest sorting with typo matching left enabled in Typesense.
+- Uses `youtube-nocookie.com` embeds and opens timestamped YouTube links in a new tab.
+
+## Architecture and deployment
+
+- See `docs/architecture.md` for crate responsibilities and hotswappable boundaries.
+- See `docs/deploy.md` for Cloudflare/Fly/Railway deployment options, indexing commands, and observability recommendations.
 
 ## Logging
 
