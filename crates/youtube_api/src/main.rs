@@ -17,6 +17,7 @@ use thiserror::Error;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use youtube_typesense::{
     DEFAULT_COLLECTION, TextSearchQuery, TypesenseSearchClient, TypesenseSearchConfig,
+    YoutuberDocument,
 };
 
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8787";
@@ -37,6 +38,11 @@ struct SearchParams {
     per_page: Option<u8>,
     page: Option<u32>,
     sort: Option<SearchSort>,
+}
+
+#[derive(Debug, Serialize)]
+struct YoutubersResponse {
+    channels: Vec<YoutuberDocument>,
 }
 
 #[derive(Debug, Serialize)]
@@ -148,6 +154,7 @@ async fn main() -> Result<(), ApiError> {
     });
     let app = Router::new()
         .route("/api/health", get(health))
+        .route("/api/youtubers", get(youtubers_handler))
         .route("/api/search", get(search_handler))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -164,6 +171,19 @@ async fn main() -> Result<(), ApiError> {
 
 async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "ok": true }))
+}
+
+async fn youtubers_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<YoutubersResponse>, ApiError> {
+    let mut channels = state.search.list_youtubers().await?;
+    channels.sort_by(|left, right| {
+        right
+            .indexed_video_count
+            .cmp(&left.indexed_video_count)
+            .then_with(|| left.handle.cmp(&right.handle))
+    });
+    Ok(Json(YoutubersResponse { channels }))
 }
 
 async fn search_handler(

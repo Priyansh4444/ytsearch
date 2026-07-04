@@ -372,6 +372,34 @@ impl TypesenseSearchClient {
 
         json_response(response).await
     }
+
+    pub async fn list_youtubers(&self) -> Result<Vec<YoutuberDocument>> {
+        let path = format!("collections/{YOUTUBERS_COLLECTION}/documents/search");
+        let mut url = endpoint(&self.config.api_url, &path)?;
+        {
+            let mut pairs = url.query_pairs_mut();
+            pairs.append_pair("q", "*");
+            pairs.append_pair("query_by", "name,handle");
+            pairs.append_pair("per_page", "100");
+        }
+
+        let response = self
+            .http
+            .get(url)
+            .header("X-TYPESENSE-API-KEY", &self.config.search_api_key)
+            .send()
+            .await?;
+        let body = json_response(response).await?;
+        let Some(hits) = body.get("hits").and_then(Value::as_array) else {
+            return Ok(Vec::new());
+        };
+
+        hits.iter()
+            .filter_map(|hit| hit.get("document").cloned())
+            .map(serde_json::from_value)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(TypesenseError::Json)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -389,6 +417,8 @@ pub struct YoutuberDocument {
     pub public_video_count: u32,
     pub indexed_video_count: u32,
     pub indexed_chunk_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -538,7 +568,8 @@ pub fn youtubers_schema(collection: &str) -> Value {
             { "name": "uploads_playlist", "type": "string", "optional": true },
             { "name": "public_video_count", "type": "int32" },
             { "name": "indexed_video_count", "type": "int32" },
-            { "name": "indexed_chunk_count", "type": "int32" }
+            { "name": "indexed_chunk_count", "type": "int32" },
+            { "name": "avatar_url", "type": "string", "optional": true }
         ]
     })
 }

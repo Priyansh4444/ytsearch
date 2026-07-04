@@ -1,88 +1,42 @@
-import { For, Show, createEffect, createResource, createSignal } from "solid-js";
+import { For, Show, createMemo, createResource, createSignal } from "solid-js";
 import type { Component } from "solid-js";
-
-type SearchHit = {
-  id: string;
-  video_id: string;
-  title: string;
-  text: string;
-  prev_text?: string;
-  next_text?: string;
-  text_highlight?: string;
-  title_highlight?: string;
-  match_kind: "transcript" | "title";
-  youtuber_handle: string;
-  youtuber_name: string;
-  thumbnail?: string;
-  published_at?: string;
-  t_start_ms: number;
-  timestamp?: string;
-  youtube_url: string;
-  embed_url: string;
-};
-
-type SearchVideoResult = {
-  video_id: string;
-  title: string;
-  youtuber_handle: string;
-  youtuber_name: string;
-  thumbnail?: string;
-  published_at?: string;
-  match_count: number;
-  youtube_url: string;
-  embed_url: string;
-  best_timestamp?: string;
-  hits: SearchHit[];
-};
-
-type SearchSort = "relevance" | "published_desc" | "published_asc";
-
-type SearchResponse = {
-  query: string;
-  total_found: number;
-  out_of: number;
-  page: number;
-  per_page: number;
-  sort: SearchSort;
-  has_next_page: boolean;
-  hits: SearchHit[];
-  videos: SearchVideoResult[];
-};
-
-type SearchRequest = {
-  query: string;
-  youtuber: string;
-  limit: number;
-  page: number;
-  sort: SearchSort;
-};
-
-const examples = ["battery", "water", "react", "typescript", "valorant"];
+import { indexedChannels, searchTranscripts } from "./api";
+import { ChannelIdentity, ChannelPicker } from "./components/ChannelPicker";
+import { PaginationControls } from "./components/PaginationControls";
+import { SearchForm } from "./components/SearchForm";
+import { EmptyState, ErrorState, LoadingState, WelcomeState } from "./components/States";
+import { VideoResult } from "./components/VideoResult";
+import type { SearchRequest, SearchSort } from "./types";
+import { creatorFromPath, normalizeHandle } from "./utils";
 
 const App: Component = () => {
   const routeHandle = creatorFromPath();
+  const [channels] = createResource(indexedChannels);
   const [query, setQuery] = createSignal("");
-  const [youtuber, setYoutuber] = createSignal(routeHandle ?? "@t3dotgg");
-  const [limit, setLimit] = createSignal(12);
+  const [youtuber, setYoutuber] = createSignal(routeHandle ?? "");
   const [page, setPage] = createSignal(1);
   const [sort, setSort] = createSignal<SearchSort>("relevance");
   const [submitted, setSubmitted] = createSignal<SearchRequest>();
   const [result] = createResource(submitted, searchTranscripts);
 
-  createEffect(() => {
-    const handle = creatorFromPath();
-    if (handle) setYoutuber(handle);
-  });
+  const selectedChannel = createMemo(() =>
+    channels()?.find((channel) => channel.handle === youtuber()),
+  );
+  const hasChannel = () => youtuber().length > 0;
 
-  const runSearch = (nextQuery = query(), nextPage = 1) => {
-    const normalizedQuery = nextQuery.trim();
+  const selectChannel = (handle: string) => {
+    setYoutuber(normalizeHandle(handle));
+    setPage(1);
+  };
+
+  const runSearch = (nextPage = 1) => {
+    const normalizedQuery = query().trim();
     if (!normalizedQuery) return;
     setQuery(normalizedQuery);
     setPage(nextPage);
     setSubmitted({
       query: normalizedQuery,
-      youtuber: youtuber().trim(),
-      limit: limit(),
+      youtuber: youtuber(),
       page: nextPage,
       sort: sort(),
     });
@@ -96,95 +50,35 @@ const App: Component = () => {
   };
 
   return (
-    <main class="min-h-screen bg-vesper-bg px-4 py-6 text-vesper-text sm:px-6 lg:px-8">
-      <div class="mx-auto flex w-full max-w-6xl flex-col gap-5">
-        <header class="border border-vesper-border bg-vesper-panel p-5">
-          <div class="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-            <div>
-              <p class="text-xs font-semibold uppercase tracking-[0.28em] text-vesper-yellow">
-                ytsearch
-              </p>
-              <h1 class="mt-2 text-3xl font-semibold tracking-tight text-white">
-                Transcript search
-              </h1>
+    <main class="min-h-screen bg-vesper-bg px-4 py-8 text-vesper-text sm:px-6 lg:px-8">
+      <div class="mx-auto flex w-full max-w-6xl flex-col gap-6">
+        <section
+          class={`transition-all duration-500 ease-out ${
+            hasChannel() ? "flex flex-col gap-4" : "flex min-h-[45vh] flex-col justify-center gap-6"
+          }`}
+        >
+          <Show when={hasChannel()}>
+            <ChannelIdentity channel={selectedChannel()} handle={youtuber()} />
+          </Show>
+
+          <SearchForm
+            query={query()}
+            sort={sort()}
+            onQueryInput={setQuery}
+            onSortChange={setSort}
+            onSubmit={() => runSearch(1)}
+          />
+
+          <Show when={!hasChannel()}>
+            <div class="space-y-3">
+              <p class="text-sm uppercase tracking-[0.18em] text-vesper-dim">Indexed channels</p>
+              <ChannelPicker
+                channels={channels()}
+                selectedHandle={youtuber()}
+                onSelect={selectChannel}
+              />
             </div>
-            <p class="max-w-xl text-sm leading-6 text-vesper-muted">
-              Search exact transcript moments. Use URLs like <code>/t3dotgg</code> or{" "}
-              <code>/jo2uke</code> to set the creator filter.
-            </p>
-          </div>
-        </header>
-
-        <section class="border border-vesper-border bg-vesper-panel p-4">
-          <form
-            class="grid gap-3 lg:grid-cols-[1fr_13rem_7rem_10rem_auto]"
-            onSubmit={(event) => {
-              event.preventDefault();
-              runSearch(query(), 1);
-            }}
-          >
-            <Field label="Search">
-              <input
-                value={query()}
-                onInput={(event) => setQuery(event.currentTarget.value)}
-                placeholder="Search transcript text..."
-                class="h-12 w-full border border-vesper-border bg-vesper-bg px-4 text-base text-white outline-none placeholder:text-vesper-dim focus:border-vesper-yellow"
-              />
-            </Field>
-
-            <Field label="YouTuber">
-              <input
-                value={youtuber()}
-                onInput={(event) => setYoutuber(normalizeHandle(event.currentTarget.value))}
-                placeholder="@handle"
-                class="h-12 w-full border border-vesper-border bg-vesper-bg px-4 text-base text-white outline-none placeholder:text-vesper-dim focus:border-vesper-yellow"
-              />
-            </Field>
-
-            <Field label="Videos">
-              <input
-                type="number"
-                min="1"
-                max="50"
-                value={limit()}
-                onInput={(event) => setLimit(Number(event.currentTarget.value))}
-                class="h-12 w-full border border-vesper-border bg-vesper-bg px-3 text-base text-white outline-none focus:border-vesper-yellow"
-              />
-            </Field>
-
-            <Field label="Sort">
-              <select
-                value={sort()}
-                onChange={(event) => setSort(event.currentTarget.value as SearchSort)}
-                class="h-12 w-full border border-vesper-border bg-vesper-bg px-3 text-base text-white outline-none focus:border-vesper-yellow"
-              >
-                <option value="relevance">Relevant</option>
-                <option value="published_desc">Newest</option>
-                <option value="published_asc">Oldest</option>
-              </select>
-            </Field>
-
-            <button
-              type="submit"
-              class="mt-auto h-12 border border-vesper-yellow bg-vesper-yellow px-6 font-semibold text-vesper-bg transition hover:bg-vesper-orange"
-            >
-              Search
-            </button>
-          </form>
-
-          <div class="mt-3 flex flex-wrap gap-2">
-            <For each={examples}>
-              {(example) => (
-                <button
-                  type="button"
-                  onClick={() => runSearch(example, 1)}
-                  class="border border-vesper-border bg-vesper-panel2 px-3 py-1.5 text-sm text-vesper-muted transition hover:border-vesper-yellow hover:text-vesper-yellow"
-                >
-                  {example}
-                </button>
-              )}
-            </For>
-          </div>
+          </Show>
         </section>
 
         <section class="min-h-[22rem]">
@@ -197,15 +91,11 @@ const App: Component = () => {
           <Show when={!result.loading && !result.error && result()}>
             {(response) => (
               <div class="flex flex-col gap-3">
-                <div class="flex items-center justify-between border border-vesper-border bg-vesper-panel p-4">
-                  <div>
-                    <p class="text-xs uppercase tracking-[0.18em] text-vesper-dim">Results</p>
-                    <h2 class="text-xl font-semibold text-white">{response().query}</h2>
-                  </div>
-                  <p class="border border-vesper-border bg-vesper-bg px-3 py-2 text-sm text-vesper-muted">
-                    <span class="text-white">{response().videos.length}</span> videos /{" "}
-                    <span class="text-white">{response().hits.length}</span> moments
-                  </p>
+                <div class="flex items-center justify-between py-2 text-sm text-vesper-muted">
+                  <span class="text-white">{response().query}</span>
+                  <span>
+                    {response().videos.length} videos · {response().hits.length} moments
+                  </span>
                 </div>
 
                 <Show
@@ -214,7 +104,7 @@ const App: Component = () => {
                 >
                   <div class="grid gap-2">
                     <For each={response().videos}>
-                      {(video) => <VideoRow video={video} query={response().query} />}
+                      {(video) => <VideoResult video={video} query={response().query} />}
                     </For>
                   </div>
 
@@ -236,354 +126,5 @@ const App: Component = () => {
     </main>
   );
 };
-
-const Field: Component<{ label: string; children: unknown }> = (props) => (
-  <label class="flex flex-col gap-1.5">
-    <span class="text-xs font-medium uppercase tracking-[0.18em] text-vesper-dim">
-      {props.label}
-    </span>
-    {props.children}
-  </label>
-);
-
-async function searchTranscripts(request: SearchRequest): Promise<SearchResponse> {
-  const params = new URLSearchParams({
-    q: request.query,
-    per_page: String(request.limit),
-    page: String(request.page),
-    sort: request.sort,
-  });
-  if (request.youtuber) params.set("youtuber", request.youtuber);
-
-  const response = await fetch(`/api/search?${params.toString()}`);
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    throw new Error(body?.error ?? `Search failed with HTTP ${response.status}`);
-  }
-
-  return response.json();
-}
-
-const PaginationControls: Component<{
-  response: SearchResponse;
-  currentPage: number;
-  onPageChange: (page: number) => void;
-}> = (props) => {
-  const hasPrevious = () => props.currentPage > 1;
-  const hasNext = () => props.response.has_next_page;
-  const pages = () => pageNumbers(props.currentPage, hasNext());
-
-  return (
-    <Show when={hasPrevious() || hasNext()}>
-      <nav
-        aria-label="Search result pages"
-        class="mt-2 flex flex-wrap items-center justify-center gap-2 border border-vesper-border bg-vesper-panel p-3 text-sm"
-      >
-        <button
-          type="button"
-          disabled={!hasPrevious()}
-          onClick={() => props.onPageChange(props.currentPage - 1)}
-          class="border border-vesper-border bg-vesper-bg px-3 py-1.5 text-vesper-muted transition hover:border-vesper-yellow hover:text-vesper-yellow disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-vesper-border disabled:hover:text-vesper-muted"
-        >
-          Previous
-        </button>
-
-        <For each={pages()}>
-          {(pageNumber) => (
-            <button
-              type="button"
-              aria-current={pageNumber === props.currentPage ? "page" : undefined}
-              onClick={() => props.onPageChange(pageNumber)}
-              class={`border px-3 py-1.5 transition ${
-                pageNumber === props.currentPage
-                  ? "border-vesper-yellow bg-vesper-yellow text-vesper-bg"
-                  : "border-vesper-border bg-vesper-bg text-vesper-muted hover:border-vesper-yellow hover:text-vesper-yellow"
-              }`}
-            >
-              {pageNumber}
-            </button>
-          )}
-        </For>
-
-        <button
-          type="button"
-          disabled={!hasNext()}
-          onClick={() => props.onPageChange(props.currentPage + 1)}
-          class="border border-vesper-border bg-vesper-bg px-3 py-1.5 text-vesper-muted transition hover:border-vesper-yellow hover:text-vesper-yellow disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-vesper-border disabled:hover:text-vesper-muted"
-        >
-          Next
-        </button>
-      </nav>
-    </Show>
-  );
-};
-
-function pageNumbers(currentPage: number, hasNext: boolean): number[] {
-  const start = Math.max(1, currentPage - 3);
-  const end = hasNext ? currentPage + 1 : currentPage;
-  return Array.from({ length: end - start + 1 }, (_, index) => start + index);
-}
-
-const VideoRow: Component<{ video: SearchVideoResult; query: string }> = (props) => {
-  const visibleHits = () => props.video.hits.slice(0, 3);
-  const [selectedHitId, setSelectedHitId] = createSignal<string>();
-  const selectedHit = () =>
-    visibleHits().find((hit) => hit.id === selectedHitId()) ??
-    visibleHits()[0] ??
-    props.video.hits[0];
-
-  return (
-    <article class="border border-vesper-border bg-vesper-panel">
-      <div class="grid gap-0 xl:grid-cols-[minmax(32rem,40rem)_1fr]">
-        <div class="relative bg-vesper-bg">
-          <iframe
-            class="aspect-video w-full"
-            src={selectedHit()?.embed_url ?? props.video.embed_url}
-            title={`YouTube player for ${props.video.title}`}
-            loading="lazy"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-            referrerpolicy="strict-origin-when-cross-origin"
-            allowfullscreen
-          />
-          <span class="absolute bottom-2 left-2 bg-vesper-bg/90 px-2 py-1 text-xs font-semibold text-vesper-yellow ring-1 ring-vesper-border">
-            {selectedHit()?.timestamp ?? "title"}
-          </span>
-        </div>
-
-        <div class="flex flex-col gap-3 p-4">
-          <div class="flex items-start justify-between gap-4">
-            <div>
-              <a
-                href={props.video.youtube_url}
-                target="_blank"
-                rel="noreferrer"
-                class="text-lg font-semibold leading-snug text-white hover:text-vesper-yellow"
-              >
-                {props.video.title}
-              </a>
-              <p class="mt-1 text-sm text-vesper-muted">
-                {props.video.youtuber_name} · {props.video.youtuber_handle}
-                <Show when={props.video.published_at}>
-                  {" "}
-                  · {formatDate(props.video.published_at)}
-                </Show>
-              </p>
-            </div>
-            <a
-              href={selectedHit()?.youtube_url ?? props.video.youtube_url}
-              target="_blank"
-              rel="noreferrer"
-              class="shrink-0 border border-vesper-border bg-vesper-bg px-3 py-1.5 text-sm font-medium text-vesper-green hover:border-vesper-green"
-            >
-              Open
-            </a>
-          </div>
-
-          <div class="grid gap-2">
-            <For each={visibleHits()}>
-              {(hit) => (
-                <TranscriptExcerpt
-                  hit={hit}
-                  query={props.query}
-                  selected={hit.id === selectedHit()?.id}
-                  onSelect={() => setSelectedHitId(hit.id)}
-                />
-              )}
-            </For>
-          </div>
-        </div>
-      </div>
-    </article>
-  );
-};
-
-const TranscriptExcerpt: Component<{
-  hit: SearchHit;
-  query: string;
-  selected?: boolean;
-  onSelect?: () => void;
-}> = (props) => (
-  <button
-    type="button"
-    onClick={props.onSelect}
-    class={`border bg-vesper-bg p-3 text-left text-sm leading-6 text-white transition ${
-      props.selected ? "border-vesper-yellow" : "border-vesper-border hover:border-vesper-yellow/70"
-    }`}
-  >
-    <Show
-      when={props.hit.match_kind === "transcript"}
-      fallback={
-        <p class="text-vesper-muted">
-          Title match. Open the video or search transcript wording for a timestamped moment.
-        </p>
-      }
-    >
-      <Show when={props.hit.prev_text}>
-        <span class="text-vesper-muted">{props.hit.prev_text} </span>
-      </Show>
-      <span class="text-white">
-        <HighlightedText
-          text={props.hit.text}
-          highlight={props.hit.text_highlight}
-          query={props.query}
-        />
-      </span>
-      <Show when={props.hit.next_text}>
-        <span class="text-vesper-muted"> {props.hit.next_text}</span>
-      </Show>
-    </Show>
-  </button>
-);
-
-const HighlightedText: Component<{
-  text: string;
-  highlight?: string;
-  query: string;
-}> = (props) => {
-  const parts = () => highlightedParts(props.text, props.highlight, props.query);
-
-  return (
-    <>
-      <For each={parts()}>
-        {(part) => (
-          <Show when={part.highlighted} fallback={<>{part.text}</>}>
-            <mark class="bg-vesper-yellow/20 px-1 font-semibold text-vesper-yellow">
-              {part.text}
-            </mark>
-          </Show>
-        )}
-      </For>
-    </>
-  );
-};
-
-type HighlightPart = {
-  text: string;
-  highlighted: boolean;
-};
-
-function highlightedParts(
-  text: string,
-  highlight: string | undefined,
-  query: string,
-): HighlightPart[] {
-  if (highlight) return partsFromTypesenseSnippet(highlight);
-  return partsFromQuery(text, query);
-}
-
-function partsFromTypesenseSnippet(snippet: string): HighlightPart[] {
-  const parts: HighlightPart[] = [];
-  const regex = /<mark>(.*?)<\/mark>/gis;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(snippet))) {
-    if (match.index > lastIndex) {
-      parts.push({
-        text: decodeEntities(snippet.slice(lastIndex, match.index)),
-        highlighted: false,
-      });
-    }
-    parts.push({ text: decodeEntities(match[1] ?? ""), highlighted: true });
-    lastIndex = regex.lastIndex;
-  }
-
-  if (lastIndex < snippet.length) {
-    parts.push({
-      text: decodeEntities(snippet.slice(lastIndex)),
-      highlighted: false,
-    });
-  }
-
-  return parts.length > 0 ? parts : [{ text: decodeEntities(snippet), highlighted: false }];
-}
-
-function partsFromQuery(text: string, query: string): HighlightPart[] {
-  const terms = query
-    .toLowerCase()
-    .split(/\s+/)
-    .map((term) => term.replace(/[^a-z0-9']/gi, ""))
-    .filter((term) => term.length >= 2);
-  if (terms.length === 0) return [{ text, highlighted: false }];
-
-  const pattern = new RegExp(`(${terms.map(escapeRegex).join("|")})`, "gi");
-  return text
-    .split(pattern)
-    .filter(Boolean)
-    .map((part) => ({
-      text: part,
-      highlighted: terms.includes(part.toLowerCase()),
-    }));
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function decodeEntities(value: string): string {
-  const element = document.createElement("textarea");
-  element.innerHTML = value;
-  return element.value;
-}
-
-function formatDate(value: string | undefined): string {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return value;
-  return date.toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function creatorFromPath(): string | null {
-  const firstSegment = window.location.pathname.split("/").filter(Boolean)[0]?.trim();
-  if (!firstSegment) return null;
-  if (firstSegment === "api") return null;
-  return normalizeHandle(firstSegment);
-}
-
-function normalizeHandle(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
-}
-
-const LoadingState: Component = () => (
-  <div class="grid gap-2">
-    <For each={[0, 1, 2]}>
-      {() => <div class="h-40 animate-pulse border border-vesper-border bg-vesper-panel" />}
-    </For>
-  </div>
-);
-
-const ErrorState: Component<{ message: string }> = (props) => (
-  <div class="border border-vesper-red/40 bg-vesper-red/10 p-5 text-vesper-red">
-    <p class="font-semibold">Search failed</p>
-    <p class="mt-2 text-sm text-red-100/80">{props.message}</p>
-  </div>
-);
-
-const EmptyState: Component<{ query: string }> = (props) => (
-  <div class="border border-vesper-border bg-vesper-panel p-8 text-center">
-    <p class="text-xl font-semibold text-white">No hits for “{props.query}”</p>
-    <p class="mt-2 text-vesper-muted">
-      Try a broader phrase, remove the creator filter, or index more videos.
-    </p>
-  </div>
-);
-
-const WelcomeState: Component = () => (
-  <div class="border border-vesper-border bg-vesper-panel p-8 text-center">
-    <p class="text-xl font-semibold text-white">Search a creator transcript.</p>
-    <p class="mx-auto mt-2 max-w-xl text-vesper-muted">
-      Transcript hits are timestamped. Title-only hits are de-duplicated and open the video without
-      pretending to know a spoken moment.
-    </p>
-  </div>
-);
 
 export default App;
