@@ -51,17 +51,24 @@ struct SearchHit {
     prev_text: Option<String>,
     next_text: Option<String>,
     text_highlight: Option<String>,
-    prev_text_highlight: Option<String>,
-    next_text_highlight: Option<String>,
     title_highlight: Option<String>,
+    match_kind: MatchKind,
     youtuber_handle: String,
     youtuber_name: String,
     thumbnail: Option<String>,
     published_at: Option<String>,
     t_start_ms: u32,
     t_end_ms: u32,
-    timestamp: String,
+    timestamp: Option<String>,
     youtube_url: String,
+    embed_url: String,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum MatchKind {
+    Transcript,
+    Title,
 }
 
 #[derive(Debug, Error)]
@@ -139,8 +146,8 @@ async fn search_handler(
         .unwrap_or(DEFAULT_PER_PAGE)
         .clamp(1, MAX_PER_PAGE);
     let mut typesense_query = TextSearchQuery::new(query)
-        .query_by("text,prev_text,next_text,title,youtuber_name,youtuber_handle")
-        .highlight_fields("text,prev_text,next_text,title")
+        .query_by("text,title,youtuber_name,youtuber_handle")
+        .highlight_fields("text,title")
         .per_page(per_page)
         .without_grouping();
     tracing::info!(
@@ -197,11 +204,29 @@ impl SearchHit {
         let video_id = string_field(document, "video_id")?;
         let t_start_ms = u32_field(document, "t_start_ms")?;
         let t_end_ms = u32_field(document, "t_end_ms")?;
-        let timestamp = format_timestamp(t_start_ms);
-        let youtube_url = format!(
-            "https://www.youtube.com/watch?v={video_id}&t={}s",
-            t_start_ms / 1000
-        );
+        let text_highlight = highlight_for_field(hit, "text");
+        let title_highlight = highlight_for_field(hit, "title");
+        let match_kind = if text_highlight.is_some() {
+            MatchKind::Transcript
+        } else {
+            MatchKind::Title
+        };
+        let timestamp =
+            matches!(match_kind, MatchKind::Transcript).then(|| format_timestamp(t_start_ms));
+        let youtube_url = match match_kind {
+            MatchKind::Transcript => format!(
+                "https://www.youtube.com/watch?v={video_id}&t={}s",
+                t_start_ms / 1000
+            ),
+            MatchKind::Title => format!("https://www.youtube.com/watch?v={video_id}"),
+        };
+        let embed_url = match match_kind {
+            MatchKind::Transcript => format!(
+                "https://www.youtube-nocookie.com/embed/{video_id}?start={}&rel=0",
+                t_start_ms / 1000
+            ),
+            MatchKind::Title => format!("https://www.youtube-nocookie.com/embed/{video_id}?rel=0"),
+        };
 
         Ok(Self {
             id,
@@ -210,10 +235,9 @@ impl SearchHit {
             text: string_field(document, "text")?,
             prev_text: optional_string_field(document, "prev_text"),
             next_text: optional_string_field(document, "next_text"),
-            text_highlight: highlight_for_field(hit, "text"),
-            prev_text_highlight: highlight_for_field(hit, "prev_text"),
-            next_text_highlight: highlight_for_field(hit, "next_text"),
-            title_highlight: highlight_for_field(hit, "title"),
+            text_highlight,
+            title_highlight,
+            match_kind,
             youtuber_handle: string_field(document, "youtuber_handle")?,
             youtuber_name: string_field(document, "youtuber_name")?,
             thumbnail: optional_string_field(document, "thumbnail"),
@@ -222,6 +246,7 @@ impl SearchHit {
             t_end_ms,
             timestamp,
             youtube_url,
+            embed_url,
         })
     }
 }

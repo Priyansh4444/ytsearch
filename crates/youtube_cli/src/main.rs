@@ -76,7 +76,7 @@ struct IndexYoutuberCommand {
     content_kind: ContentKindFilter,
     #[arg(
         long,
-        default_value_t = 30,
+        default_value_t = 10,
         help = "Transcript chunk window in seconds"
     )]
     chunk_seconds: u32,

@@ -386,7 +386,7 @@ impl TextSearchQuery {
             group_by: Some("video_id".to_string()),
             group_limit: Some(5),
             per_page: None,
-            highlight_fields: Some("text,prev_text,next_text,title".to_string()),
+            highlight_fields: Some("text,title".to_string()),
         }
     }
 

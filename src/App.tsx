@@ -9,17 +9,17 @@ type SearchHit = {
   prev_text?: string;
   next_text?: string;
   text_highlight?: string;
-  prev_text_highlight?: string;
-  next_text_highlight?: string;
   title_highlight?: string;
+  match_kind: "transcript" | "title";
   youtuber_handle: string;
   youtuber_name: string;
   thumbnail?: string;
   published_at?: string;
   t_start_ms: number;
-  t_end_ms: number;
-  timestamp: string;
+
+  timestamp?: string;
   youtube_url: string;
+  embed_url: string;
 };
 
 type SearchResponse = {
@@ -173,7 +173,7 @@ const App: Component = () => {
                 <div class="flex flex-col justify-between gap-3 rounded-3xl border border-vesper-border bg-vesper-panel/70 p-4 sm:flex-row sm:items-center">
                   <div>
                     <p class="text-sm text-vesper-muted">
-                      Showing all timestamp hits for
+                      Showing search results for
                     </p>
                     <h2 class="text-2xl font-semibold text-white">
                       “{response().query}”
@@ -233,12 +233,7 @@ async function searchTranscripts(
 }
 
 const HitCard: Component<{ hit: SearchHit; query: string }> = (props) => {
-  const duration = () =>
-    `${props.hit.timestamp}–${formatTimestamp(props.hit.t_end_ms)}`;
-  const embedUrl = () =>
-    `https://www.youtube-nocookie.com/embed/${props.hit.video_id}?start=${Math.floor(
-      props.hit.t_start_ms / 1000,
-    )}&rel=0`;
+  const timestampLabel = () => props.hit.timestamp ?? "Title match";
 
   return (
     <article class="group overflow-hidden rounded-[1.75rem] border border-vesper-border bg-vesper-panel/90 shadow-vesper transition hover:-translate-y-0.5 hover:border-vesper-yellow/60">
@@ -246,15 +241,15 @@ const HitCard: Component<{ hit: SearchHit; query: string }> = (props) => {
         <div class="relative min-h-64 bg-vesper-panel2">
           <iframe
             class="aspect-video h-full min-h-64 w-full"
-            src={embedUrl()}
-            title={`YouTube player for ${props.hit.title} at ${props.hit.timestamp}`}
+            src={props.hit.embed_url}
+            title={`YouTube player for ${props.hit.title}`}
             loading="lazy"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
             referrerpolicy="strict-origin-when-cross-origin"
             allowfullscreen
           />
           <span class="absolute bottom-3 left-3 rounded-full bg-vesper-bg/90 px-3 py-1 text-sm font-semibold text-vesper-yellow ring-1 ring-vesper-border">
-            {duration()}
+            {timestampLabel()}
           </span>
         </div>
 
@@ -284,7 +279,9 @@ const HitCard: Component<{ hit: SearchHit; query: string }> = (props) => {
               rel="noreferrer"
               class="shrink-0 rounded-full border border-vesper-border bg-vesper-panel2 px-3 py-1.5 text-sm font-medium text-vesper-green transition hover:border-vesper-green hover:bg-vesper-green/10"
             >
-              Open at {props.hit.timestamp}
+              {props.hit.timestamp
+                ? `Open at ${props.hit.timestamp}`
+                : "Open video"}
             </a>
           </div>
 
@@ -299,31 +296,28 @@ const TranscriptExcerpt: Component<{ hit: SearchHit; query: string }> = (
   props,
 ) => (
   <div class="rounded-2xl border border-vesper-border bg-vesper-bg p-4 text-base leading-7 text-white">
-    <Show when={props.hit.prev_text}>
-      <span class="text-vesper-muted">
+    <Show
+      when={props.hit.match_kind === "transcript"}
+      fallback={
+        <p class="text-vesper-muted">
+          This result matched the video title. Search for a phrase from the
+          transcript to jump to a specific spoken moment.
+        </p>
+      }
+    >
+      <Show when={props.hit.prev_text}>
+        <span class="text-vesper-muted">{props.hit.prev_text} </span>
+      </Show>
+      <span class="font-medium text-white">
         <HighlightedText
-          text={props.hit.prev_text ?? ""}
-          highlight={props.hit.prev_text_highlight}
-          query={props.query}
-        />{" "}
-      </span>
-    </Show>
-    <span class="font-medium text-white">
-      <HighlightedText
-        text={props.hit.text}
-        highlight={props.hit.text_highlight}
-        query={props.query}
-      />
-    </span>
-    <Show when={props.hit.next_text}>
-      <span class="text-vesper-muted">
-        {" "}
-        <HighlightedText
-          text={props.hit.next_text ?? ""}
-          highlight={props.hit.next_text_highlight}
+          text={props.hit.text}
+          highlight={props.hit.text_highlight}
           query={props.query}
         />
       </span>
+      <Show when={props.hit.next_text}>
+        <span class="text-vesper-muted"> {props.hit.next_text}</span>
+      </Show>
     </Show>
   </div>
 );
@@ -454,20 +448,10 @@ const WelcomeState: Component = () => (
       Start with a transcript search.
     </p>
     <p class="mx-auto mt-2 max-w-xl text-vesper-muted">
-      Results show every matching transcript chunk with its timestamp, video
-      title, surrounding context, and a YouTube deep link.
+      Transcript matches jump to the spoken moment. Title-only matches open the
+      video without pretending to know a timestamp.
     </p>
   </div>
 );
-
-function formatTimestamp(milliseconds: number): string {
-  const totalSeconds = Math.floor(milliseconds / 1000);
-  const seconds = totalSeconds % 60;
-  const minutes = Math.floor(totalSeconds / 60) % 60;
-  const hours = Math.floor(totalSeconds / 3600);
-
-  if (hours === 0) return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-  return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
-}
 
 export default App;
