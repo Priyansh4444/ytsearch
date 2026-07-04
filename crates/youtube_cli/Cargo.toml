@@ -17,6 +17,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 youtube_client = { path = "../youtube_client" }
 youtube_ingest = { path = "../youtube_ingest" }
+youtube_meilisearch = { path = "../youtube_meilisearch" }
+youtube_search = { path = "../youtube_search" }
 youtube_sources = { path = "../youtube_sources" }
 youtube_transcribe = { path = "../youtube_transcribe" }
 youtube_typesense = { path = "../youtube_typesense" }

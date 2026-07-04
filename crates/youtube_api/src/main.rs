@@ -5,6 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -17,10 +18,12 @@ use std::{
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
-use youtube_typesense::{
-    DEFAULT_COLLECTION, TextSearchQuery, TypesenseSearchClient, TypesenseSearchConfig,
+use youtube_meilisearch::{MeilisearchSearchClient, MeilisearchSearchConfig};
+use youtube_search::{
+    DEFAULT_COLLECTION, SearchBackendError, TextSearchQuery, TranscriptSearchBackend,
     YoutuberDocument,
 };
+use youtube_typesense::{TypesenseSearchClient, TypesenseSearchConfig};
 
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8787";
 const DEFAULT_PER_PAGE: u8 = 20;
@@ -34,9 +37,18 @@ const DEFAULT_SEARCH_RATE_LIMIT_PER_MINUTE: usize = 120;
 
 #[derive(Clone)]
 struct AppState {
-    search: TypesenseSearchClient,
+    search: Arc<dyn TranscriptSearchBackend>,
+    search_backend: String,
+    axiom: Option<AxiomLogger>,
     rate_limiter: Arc<Mutex<RateLimiter>>,
     search_rate_limit_per_minute: usize,
+}
+
+#[derive(Clone, Debug)]
+struct AxiomLogger {
+    http: HttpClient,
+    endpoint: String,
+    token: String,
 }
 
 #[derive(Default)]
@@ -117,6 +129,23 @@ struct SearchVideoResult {
     hits: Vec<SearchHit>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct SearchLogEvent {
+    event: &'static str,
+    backend: String,
+    query: String,
+    youtuber: Option<String>,
+    page: u32,
+    per_page: u8,
+    sort: SearchSort,
+    total_found: u64,
+    out_of: u64,
+    returned_videos: usize,
+    returned_hits: usize,
+    has_next_page: bool,
+    duration_ms: u64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum MatchKind {
@@ -130,12 +159,14 @@ enum ApiError {
     MissingEnv(&'static str),
     #[error("invalid bind address: {0}")]
     InvalidBindAddress(String),
+    #[error("invalid search backend: {0}")]
+    InvalidSearchBackend(String),
     #[error("query cannot be empty")]
     EmptyQuery,
     #[error("rate limited; retry after {0} seconds")]
     RateLimited(u64),
-    #[error("typesense search failed: {0}")]
-    Typesense(#[from] youtube_typesense::TypesenseError),
+    #[error("search backend failed: {0}")]
+    SearchBackend(#[from] SearchBackendError),
     #[error("search response had an unexpected shape")]
     UnexpectedSearchShape,
     #[error("server failed: {0}")]
@@ -147,20 +178,18 @@ async fn main() -> Result<(), ApiError> {
     let _ = dotenvy::dotenv();
     init_tracing();
 
-    let api_url = required_env("TYPESENSE_API_URL")?;
-    let search_api_key = required_env("TYPESENSE_SEARCH_API_KEY")?;
-    let collection =
-        env::var("TYPESENSE_COLLECTION").unwrap_or_else(|_| DEFAULT_COLLECTION.to_string());
+    let backend = env::var("YTSEARCH_SEARCH_BACKEND").unwrap_or_else(|_| "meilisearch".to_string());
+    let collection = collection_env(&backend);
     let bind_addr = env::var("YTSEARCH_API_ADDR").unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string());
     let bind_addr: SocketAddr = bind_addr
         .parse()
         .map_err(|error: AddrParseError| ApiError::InvalidBindAddress(error.to_string()))?;
 
-    let search_client = TypesenseSearchClient::new(
-        TypesenseSearchConfig::new(api_url, search_api_key).with_collection(collection),
-    );
+    let search_client = search_backend(&backend, collection)?;
     let state = Arc::new(AppState {
         search: search_client,
+        search_backend: backend,
+        axiom: AxiomLogger::from_env(),
         rate_limiter: Arc::new(Mutex::new(RateLimiter::default())),
         search_rate_limit_per_minute: env_usize(
             "YTSEARCH_SEARCH_RATE_LIMIT_PER_MINUTE",
@@ -232,22 +261,23 @@ async fn search_handler(
         .clamp(1, MAX_PER_PAGE);
     let page = params.page.unwrap_or(1).max(1);
     let sort = params.sort.unwrap_or_default();
+    let search_started = Instant::now();
     let search_page_size = per_page.saturating_mul(8).min(MAX_PER_PAGE);
     let requested_offset = (page - 1).saturating_mul(u32::from(per_page));
-    let typesense_page = 1;
+    let search_backend_page = 1;
     let local_offset = requested_offset as usize;
-    let mut typesense_query = TextSearchQuery::new(query)
+    let mut search_query = TextSearchQuery::new(query)
         .query_by("text,title")
         .highlight_fields("text,title")
         .per_page(search_page_size)
-        .page(typesense_page)
+        .page(search_backend_page)
         .without_grouping();
     tracing::info!(
         query,
         per_page,
         page,
         ?sort,
-        typesense_page,
+        search_page = search_backend_page,
         search_page_size,
         youtuber = params.youtuber.as_deref().unwrap_or(""),
         "search request"
@@ -259,23 +289,27 @@ async fn search_handler(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        typesense_query = typesense_query.youtuber_handle(normalize_handle(youtuber));
+        search_query = search_query.youtuber_handle(normalize_handle(youtuber));
     }
 
-    let first_raw = state.search.search(&typesense_query).await?;
+    let first_raw = state.search.search(&search_query).await?;
     let found = first_raw
-        .get("found")
+        .get("estimatedTotalHits")
+        .or_else(|| first_raw.get("totalHits"))
+        .or_else(|| first_raw.get("found"))
         .and_then(Value::as_u64)
         .unwrap_or_default();
     let out_of = first_raw
-        .get("out_of")
+        .get("estimatedTotalHits")
+        .or_else(|| first_raw.get("totalHits"))
+        .or_else(|| first_raw.get("out_of"))
         .and_then(Value::as_u64)
         .unwrap_or_default();
     let page_result = collect_visible_videos(
-        &state.search,
-        &typesense_query,
+        state.search.as_ref(),
+        &search_query,
         first_raw,
-        typesense_page,
+        search_backend_page,
         local_offset,
         per_page,
         search_page_size,
@@ -294,6 +328,23 @@ async fn search_handler(
         returned_hits = hits.len(),
         "search response"
     );
+    if let Some(axiom) = &state.axiom {
+        axiom.log_search(SearchLogEvent {
+            event: "search_query",
+            backend: state.search_backend.clone(),
+            query: query.to_string(),
+            youtuber: params.youtuber.clone(),
+            page,
+            per_page,
+            sort,
+            total_found: found.max(hits.len() as u64),
+            out_of,
+            returned_videos: videos.len(),
+            returned_hits: hits.len(),
+            has_next_page: page_result.has_next_page,
+            duration_ms: search_started.elapsed().as_millis() as u64,
+        });
+    }
 
     Ok(cache_response(
         CACHE_SEARCH,
@@ -348,10 +399,10 @@ struct SearchPageResult {
 
 #[allow(clippy::too_many_arguments)]
 async fn collect_visible_videos(
-    search: &TypesenseSearchClient,
+    search: &dyn TranscriptSearchBackend,
     base_query: &TextSearchQuery,
     first_raw: Value,
-    first_typesense_page: u32,
+    first_search_backend_page: u32,
     local_offset: usize,
     per_page: u8,
     search_page_size: u8,
@@ -361,7 +412,7 @@ async fn collect_visible_videos(
         .saturating_add(usize::from(per_page))
         .saturating_add(1);
     let mut combined = Vec::new();
-    let mut current_page = first_typesense_page;
+    let mut current_page = first_search_backend_page;
     let mut raw = first_raw;
 
     for fetch_index in 0..MAX_SEARCH_PAGE_FETCHES {
@@ -492,8 +543,8 @@ fn parse_hits(raw: &Value) -> Result<Vec<SearchHit>, ApiError> {
 
     let mut parsed = Vec::with_capacity(hits.len());
     for hit in hits {
-        let document = hit.get("document").ok_or(ApiError::UnexpectedSearchShape)?;
-        parsed.push(SearchHit::from_typesense_hit(document, hit)?);
+        let document = hit.get("document").unwrap_or(hit);
+        parsed.push(SearchHit::from_search_backend_hit(document, hit)?);
     }
 
     Ok(parsed)
@@ -558,7 +609,7 @@ fn dedupe_title_only_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
 }
 
 impl SearchHit {
-    fn from_typesense_hit(document: &Value, hit: &Value) -> Result<Self, ApiError> {
+    fn from_search_backend_hit(document: &Value, hit: &Value) -> Result<Self, ApiError> {
         let id = string_field(document, "id")?;
         let video_id = string_field(document, "video_id")?;
         let t_start_ms = u32_field(document, "t_start_ms")?;
@@ -620,6 +671,11 @@ fn highlight_for_field(hit: &Value, field: &str) -> Option<String> {
                     .then(|| highlight.get("snippet").and_then(Value::as_str))
                     .flatten()
             })
+        })
+        .or_else(|| {
+            hit.get("_formatted")
+                .and_then(|formatted| formatted.get(field))
+                .and_then(Value::as_str)
         })
         .or_else(|| {
             hit.get("highlight")
@@ -704,8 +760,80 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+fn collection_env(backend: &str) -> String {
+    match backend {
+        "typesense" => env::var("TYPESENSE_COLLECTION"),
+        _ => env::var("MEILI_TRANSCRIPTS_INDEX").or_else(|_| env::var("TYPESENSE_COLLECTION")),
+    }
+    .unwrap_or_else(|_| DEFAULT_COLLECTION.to_string())
+}
+
+fn search_backend(
+    backend: &str,
+    collection: String,
+) -> Result<Arc<dyn TranscriptSearchBackend>, ApiError> {
+    match backend {
+        "typesense" => {
+            let api_url = required_env("TYPESENSE_API_URL")?;
+            let search_api_key = required_env("TYPESENSE_SEARCH_API_KEY")?;
+            Ok(Arc::new(TypesenseSearchClient::new(
+                TypesenseSearchConfig::new(api_url, search_api_key).with_collection(collection),
+            )))
+        }
+        "meilisearch" | "meili" => {
+            let api_url = required_env("MEILI_HTTP_ADDR")?;
+            let search_api_key = required_env("MEILI_SEARCH_API_KEY")?;
+            Ok(Arc::new(MeilisearchSearchClient::new(
+                MeilisearchSearchConfig::new(api_url, search_api_key).with_collection(collection),
+            )))
+        }
+        _ => Err(ApiError::InvalidSearchBackend(backend.to_string())),
+    }
+}
+
 fn required_env(name: &'static str) -> Result<String, ApiError> {
     env::var(name).map_err(|_| ApiError::MissingEnv(name))
+}
+
+impl AxiomLogger {
+    fn from_env() -> Option<Self> {
+        let token = env::var("AXIOM_TOKEN").ok()?;
+        let dataset = env::var("AXIOM_DATASET").ok()?;
+        let domain = env::var("AXIOM_DOMAIN").unwrap_or_else(|_| "api.axiom.co".to_string());
+        let endpoint = format!(
+            "https://{}/v1/ingest/{}",
+            domain
+                .trim()
+                .trim_start_matches("https://")
+                .trim_end_matches('/'),
+            dataset
+        );
+        Some(Self {
+            http: HttpClient::new(),
+            endpoint,
+            token,
+        })
+    }
+
+    fn log_search(&self, event: SearchLogEvent) {
+        let logger = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = logger.ingest(event).await {
+                tracing::warn!(%error, "failed to ingest search query log to Axiom");
+            }
+        });
+    }
+
+    async fn ingest(&self, event: SearchLogEvent) -> Result<(), reqwest::Error> {
+        self.http
+            .post(&self.endpoint)
+            .bearer_auth(&self.token)
+            .json(&[event])
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
 }
 
 fn init_tracing() {
@@ -731,10 +859,11 @@ impl IntoResponse for ApiError {
         let status = match &self {
             Self::EmptyQuery => StatusCode::BAD_REQUEST,
             Self::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
-            Self::MissingEnv(_) | Self::InvalidBindAddress(_) | Self::Server(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
-            Self::Typesense(_) | Self::UnexpectedSearchShape => StatusCode::BAD_GATEWAY,
+            Self::MissingEnv(_)
+            | Self::InvalidBindAddress(_)
+            | Self::InvalidSearchBackend(_)
+            | Self::Server(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::SearchBackend(_) | Self::UnexpectedSearchShape => StatusCode::BAD_GATEWAY,
         };
 
         let retry_after = match &self {

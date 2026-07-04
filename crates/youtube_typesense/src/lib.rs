@@ -6,6 +6,16 @@ use std::{fmt, time::Duration};
 use thiserror::Error;
 use tokio::time::sleep;
 use youtube_ingest::{ChunkSink, IngestError, TranscriptChunk};
+use youtube_search::{
+    SearchBackendError, TextSearchQuery as SharedTextSearchQuery, TranscriptSearchBackend,
+    YoutuberDocument as SharedYoutuberDocument,
+};
+
+#[deprecated(
+    since = "0.1.0",
+    note = "Typesense support is retained for compatibility. Prefer youtube_meilisearch for new deployments."
+)]
+pub mod deprecated_notice {}
 
 pub const DEFAULT_COLLECTION: &str = "youtube_transcript_chunks";
 pub const YOUTUBERS_COLLECTION: &str = "youtube_youtubers";
@@ -461,6 +471,52 @@ impl TypesenseSearchClient {
             .map(serde_json::from_value)
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(TypesenseError::Json)
+    }
+}
+
+#[async_trait]
+impl TranscriptSearchBackend for TypesenseSearchClient {
+    async fn search(
+        &self,
+        query: &SharedTextSearchQuery,
+    ) -> std::result::Result<Value, SearchBackendError> {
+        let query = TextSearchQuery {
+            q: query.q.clone(),
+            query_by: query.query_by.clone(),
+            filter_by: query.filter_by.clone(),
+            group_by: query.group_by.clone(),
+            group_limit: query.group_limit,
+            per_page: query.per_page,
+            page: query.page,
+            highlight_fields: query.highlight_fields.clone(),
+        };
+        TypesenseSearchClient::search(self, &query)
+            .await
+            .map_err(|error| SearchBackendError::new("typesense", error))
+    }
+
+    async fn list_youtubers(
+        &self,
+    ) -> std::result::Result<Vec<SharedYoutuberDocument>, SearchBackendError> {
+        TypesenseSearchClient::list_youtubers(self)
+            .await
+            .map(|channels| {
+                channels
+                    .into_iter()
+                    .map(|channel| SharedYoutuberDocument {
+                        id: channel.id,
+                        handle: channel.handle,
+                        name: channel.name,
+                        channel_id: channel.channel_id,
+                        uploads_playlist: channel.uploads_playlist,
+                        public_video_count: channel.public_video_count,
+                        indexed_video_count: channel.indexed_video_count,
+                        indexed_chunk_count: channel.indexed_chunk_count,
+                        avatar_url: channel.avatar_url,
+                    })
+                    .collect()
+            })
+            .map_err(|error| SearchBackendError::new("typesense", error))
     }
 }
 

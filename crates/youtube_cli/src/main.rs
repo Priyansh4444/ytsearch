@@ -5,11 +5,16 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 use youtube_client::{ListResource, Page, Query, YouTubeClient};
 use youtube_ingest::{Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource};
+use youtube_meilisearch::{
+    CreateCollectionOutcome as MeiliCreateCollectionOutcome, MeilisearchAdminClient,
+    MeilisearchAdminConfig, MeilisearchSearchClient, MeilisearchSearchConfig,
+};
+use youtube_search::{DEFAULT_COLLECTION, TextSearchQuery, YoutuberDocument};
 use youtube_sources::YouTubeMetadataSource;
 use youtube_transcribe::{TranscriptionConfig, VoxtypeTranscriptSource};
 use youtube_typesense::{
-    CreateCollectionOutcome, DEFAULT_COLLECTION, TextSearchQuery, TypesenseAdminClient,
-    TypesenseAdminConfig, TypesenseSearchClient, TypesenseSearchConfig, YoutuberDocument,
+    CreateCollectionOutcome as TypesenseCreateCollectionOutcome, TypesenseAdminClient,
+    TypesenseAdminConfig, TypesenseSearchClient, TypesenseSearchConfig,
 };
 use youtube_ytdlp::YtDlpTranscriptSource;
 
@@ -25,17 +30,17 @@ struct Cli {
 enum Command {
     #[command(about = "Validate that a YouTube handle resolves and show recent uploads")]
     Validate(ValidateCommand),
-    #[command(about = "Validate a YouTuber and create the Typesense transcript index")]
+    #[command(about = "Validate a YouTuber and create the search backend transcript index")]
     InitTypesense(InitTypesenseCommand),
     #[command(about = "Create/update the YouTuber document and report discoverable public videos")]
     IndexYoutuber(IndexYoutuberCommand),
     #[command(about = "Refresh the indexed YouTuber profile document without reindexing videos")]
     RefreshYoutuber(RefreshYoutuberCommand),
-    #[command(about = "Remove a YouTuber document and transcript chunks from Typesense")]
+    #[command(about = "Remove a YouTuber document and transcript chunks from the search backend")]
     RemoveYoutuber(RemoveYoutuberCommand),
     #[command(about = "Index one video by ID or URL")]
     IndexVideo(IndexVideoCommand),
-    #[command(about = "Search transcript chunks using the Typesense search-only API key")]
+    #[command(about = "Search transcript chunks using the selected search backend")]
     Search(SearchCommand),
 }
 
@@ -97,7 +102,10 @@ struct IndexYoutuberCommand {
     max_videos: Option<usize>,
     #[arg(long, default_value_t = 4, help = "Concurrent videos to index")]
     jobs: usize,
-    #[arg(long, help = "Skip videos that already have chunks in Typesense")]
+    #[arg(
+        long,
+        help = "Skip videos that already have chunks in the search backend"
+    )]
     skip_existing: bool,
     #[arg(
         long,
@@ -200,16 +208,23 @@ struct YouTubeAuthArgs {
 struct TypesenseAdminArgs {
     #[arg(
         long,
-        env = "TYPESENSE_API_URL",
+        env = "YTSEARCH_SEARCH_BACKEND",
+        default_value = "meilisearch",
+        help = "Search backend to use: meilisearch or typesense"
+    )]
+    backend: SearchBackend,
+    #[arg(
+        long,
+        env = "MEILI_HTTP_ADDR",
         hide_env_values = true,
-        help = "Typesense node/API URL, e.g. https://xxx.a1.typesense.net"
+        help = "Meilisearch HTTP URL, e.g. https://ytsearch-meili-staging.fly.dev"
     )]
     typesense_api_url: String,
     #[arg(
         long,
-        env = "TYPESENSE_ADMIN_API_KEY",
+        env = "MEILI_MASTER_KEY",
         hide_env_values = true,
-        help = "Typesense Admin API key; used only for schema/import operations"
+        help = "Meilisearch master/admin API key; used only for schema/import operations"
     )]
     typesense_admin_api_key: String,
 }
@@ -218,25 +233,38 @@ struct TypesenseAdminArgs {
 struct TypesenseSearchArgs {
     #[arg(
         long,
-        env = "TYPESENSE_API_URL",
+        env = "YTSEARCH_SEARCH_BACKEND",
+        default_value = "meilisearch",
+        help = "Search backend to use: meilisearch or typesense"
+    )]
+    backend: SearchBackend,
+    #[arg(
+        long,
+        env = "MEILI_HTTP_ADDR",
         hide_env_values = true,
-        help = "Typesense node/API URL, e.g. https://xxx.a1.typesense.net"
+        help = "Meilisearch HTTP URL, e.g. https://ytsearch-meili-staging.fly.dev"
     )]
     typesense_api_url: String,
     #[arg(
         long,
-        env = "TYPESENSE_SEARCH_API_KEY",
+        env = "MEILI_SEARCH_API_KEY",
         hide_env_values = true,
-        help = "Typesense search-only API key"
+        help = "Meilisearch search API key"
     )]
     typesense_search_api_key: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum SearchBackend {
+    Meilisearch,
+    Typesense,
 }
 
 #[derive(Debug, Args)]
 struct TranscriptCollectionArg {
     #[arg(
         long,
-        env = "TYPESENSE_COLLECTION",
+        env = "MEILI_TRANSCRIPTS_INDEX",
         hide_env_values = true,
         default_value = DEFAULT_COLLECTION
     )]
@@ -250,31 +278,221 @@ impl YouTubeAuthArgs {
 }
 
 impl TypesenseAdminArgs {
-    fn client(&self, collection: impl Into<String>) -> TypesenseAdminClient {
-        let config = TypesenseAdminConfig::new(
-            self.typesense_api_url.clone(),
-            self.typesense_admin_api_key.clone(),
-        )
-        .with_collection(collection);
-        TypesenseAdminClient::new(config)
+    fn client(&self, collection: impl Into<String>) -> SearchAdminClient {
+        let collection = collection.into();
+        match self.backend {
+            SearchBackend::Meilisearch => {
+                SearchAdminClient::Meilisearch(MeilisearchAdminClient::new(
+                    MeilisearchAdminConfig::new(
+                        self.typesense_api_url.clone(),
+                        self.typesense_admin_api_key.clone(),
+                    )
+                    .with_collection(collection),
+                ))
+            }
+            SearchBackend::Typesense => SearchAdminClient::Typesense(TypesenseAdminClient::new(
+                TypesenseAdminConfig::new(
+                    self.typesense_api_url.clone(),
+                    self.typesense_admin_api_key.clone(),
+                )
+                .with_collection(collection),
+            )),
+        }
     }
 
-    fn youtuber_client(&self) -> TypesenseAdminClient {
-        TypesenseAdminClient::new(TypesenseAdminConfig::new(
-            self.typesense_api_url.clone(),
-            self.typesense_admin_api_key.clone(),
-        ))
+    fn youtuber_client(&self) -> SearchAdminClient {
+        match self.backend {
+            SearchBackend::Meilisearch => SearchAdminClient::Meilisearch(
+                MeilisearchAdminClient::new(MeilisearchAdminConfig::new(
+                    self.typesense_api_url.clone(),
+                    self.typesense_admin_api_key.clone(),
+                )),
+            ),
+            SearchBackend::Typesense => {
+                SearchAdminClient::Typesense(TypesenseAdminClient::new(TypesenseAdminConfig::new(
+                    self.typesense_api_url.clone(),
+                    self.typesense_admin_api_key.clone(),
+                )))
+            }
+        }
     }
 }
 
 impl TypesenseSearchArgs {
-    fn client(&self, collection: impl Into<String>) -> TypesenseSearchClient {
-        let config = TypesenseSearchConfig::new(
-            self.typesense_api_url.clone(),
-            self.typesense_search_api_key.clone(),
-        )
-        .with_collection(collection);
-        TypesenseSearchClient::new(config)
+    fn client(&self, collection: impl Into<String>) -> SearchClient {
+        let collection = collection.into();
+        match self.backend {
+            SearchBackend::Meilisearch => SearchClient::Meilisearch(MeilisearchSearchClient::new(
+                MeilisearchSearchConfig::new(
+                    self.typesense_api_url.clone(),
+                    self.typesense_search_api_key.clone(),
+                )
+                .with_collection(collection),
+            )),
+            SearchBackend::Typesense => SearchClient::Typesense(TypesenseSearchClient::new(
+                TypesenseSearchConfig::new(
+                    self.typesense_api_url.clone(),
+                    self.typesense_search_api_key.clone(),
+                )
+                .with_collection(collection),
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum SearchAdminClient {
+    Meilisearch(MeilisearchAdminClient),
+    Typesense(TypesenseAdminClient),
+}
+
+#[derive(Clone, Debug)]
+enum SearchClient {
+    Meilisearch(MeilisearchSearchClient),
+    Typesense(TypesenseSearchClient),
+}
+
+enum CollectionOutcome {
+    Created,
+    AlreadyExists,
+}
+
+impl SearchAdminClient {
+    async fn create_collection_if_missing(&self) -> Result<CollectionOutcome, CliError> {
+        match self {
+            Self::Meilisearch(client) => Ok(match client.create_collection_if_missing().await? {
+                MeiliCreateCollectionOutcome::Created(_) => CollectionOutcome::Created,
+                MeiliCreateCollectionOutcome::AlreadyExists { .. } => {
+                    CollectionOutcome::AlreadyExists
+                }
+            }),
+            Self::Typesense(client) => Ok(match client.create_collection_if_missing().await? {
+                TypesenseCreateCollectionOutcome::Created(_) => CollectionOutcome::Created,
+                TypesenseCreateCollectionOutcome::AlreadyExists { .. } => {
+                    CollectionOutcome::AlreadyExists
+                }
+            }),
+        }
+    }
+
+    async fn create_youtubers_collection_if_missing(&self) -> Result<CollectionOutcome, CliError> {
+        match self {
+            Self::Meilisearch(client) => Ok(
+                match client.create_youtubers_collection_if_missing().await? {
+                    MeiliCreateCollectionOutcome::Created(_) => CollectionOutcome::Created,
+                    MeiliCreateCollectionOutcome::AlreadyExists { .. } => {
+                        CollectionOutcome::AlreadyExists
+                    }
+                },
+            ),
+            Self::Typesense(client) => Ok(
+                match client.create_youtubers_collection_if_missing().await? {
+                    TypesenseCreateCollectionOutcome::Created(_) => CollectionOutcome::Created,
+                    TypesenseCreateCollectionOutcome::AlreadyExists { .. } => {
+                        CollectionOutcome::AlreadyExists
+                    }
+                },
+            ),
+        }
+    }
+
+    async fn get_youtuber(&self, id: &str) -> Result<Option<YoutuberDocument>, CliError> {
+        match self {
+            Self::Meilisearch(client) => Ok(client.get_youtuber(id).await?.map(meili_youtuber)),
+            Self::Typesense(client) => Ok(client.get_youtuber(id).await?.map(typesense_youtuber)),
+        }
+    }
+
+    async fn upsert_youtuber(&self, youtuber: &YoutuberDocument) -> Result<Value, CliError> {
+        match self {
+            Self::Meilisearch(client) => client
+                .upsert_youtuber(&meili_youtuber_from_shared(youtuber))
+                .await
+                .map_err(CliError::from),
+            Self::Typesense(client) => client
+                .upsert_youtuber(&typesense_youtuber_from_shared(youtuber))
+                .await
+                .map_err(CliError::from),
+        }
+    }
+
+    async fn delete_youtuber(&self, id: &str) -> Result<Option<Value>, CliError> {
+        match self {
+            Self::Meilisearch(client) => client.delete_youtuber(id).await.map_err(CliError::from),
+            Self::Typesense(client) => client.delete_youtuber(id).await.map_err(CliError::from),
+        }
+    }
+
+    async fn delete_chunks_by_youtuber_id(&self, id: &str) -> Result<Value, CliError> {
+        match self {
+            Self::Meilisearch(client) => client
+                .delete_chunks_by_youtuber_id(id)
+                .await
+                .map_err(CliError::from),
+            Self::Typesense(client) => client
+                .delete_chunks_by_youtuber_id(id)
+                .await
+                .map_err(CliError::from),
+        }
+    }
+
+    async fn delete_chunks_by_video_id(&self, id: &str) -> Result<Value, CliError> {
+        match self {
+            Self::Meilisearch(client) => client
+                .delete_chunks_by_video_id(id)
+                .await
+                .map_err(CliError::from),
+            Self::Typesense(client) => client
+                .delete_chunks_by_video_id(id)
+                .await
+                .map_err(CliError::from),
+        }
+    }
+
+    async fn count_chunks_by_video_id(&self, id: &str) -> Result<u64, CliError> {
+        match self {
+            Self::Meilisearch(client) => client
+                .count_chunks_by_video_id(id)
+                .await
+                .map_err(CliError::from),
+            Self::Typesense(client) => client
+                .count_chunks_by_video_id(id)
+                .await
+                .map_err(CliError::from),
+        }
+    }
+
+    async fn import_chunks_batched(
+        &self,
+        chunks: &[youtube_ingest::TranscriptChunk],
+    ) -> Result<(), CliError> {
+        match self {
+            Self::Meilisearch(client) => client
+                .import_chunks_batched(chunks)
+                .await
+                .map(|_| ())
+                .map_err(CliError::from),
+            Self::Typesense(client) => client
+                .import_chunks_batched(chunks)
+                .await
+                .map(|_| ())
+                .map_err(CliError::from),
+        }
+    }
+}
+
+impl SearchClient {
+    async fn search(&self, query: &TextSearchQuery) -> Result<Value, CliError> {
+        match self {
+            Self::Meilisearch(client) => client
+                .search(&meili_query_from_shared(query))
+                .await
+                .map_err(CliError::from),
+            Self::Typesense(client) => client
+                .search(&search_query_from_shared(query))
+                .await
+                .map_err(CliError::from),
+        }
     }
 }
 
@@ -282,12 +500,100 @@ impl TypesenseSearchArgs {
 enum CliError {
     #[error("youtube api failed: {0}")]
     YouTube(#[from] youtube_client::YouTubeError),
-    #[error("typesense api failed: {0}")]
+    #[error("search backend api failed: {0}")]
     Typesense(#[from] youtube_typesense::TypesenseError),
+    #[error("meilisearch api failed: {0}")]
+    Meilisearch(#[from] youtube_meilisearch::MeilisearchError),
     #[error("ingest failed: {0}")]
     Ingest(#[from] youtube_ingest::IngestError),
     #[error("{0}")]
     Message(String),
+}
+
+fn meili_youtuber(document: youtube_meilisearch::YoutuberDocument) -> YoutuberDocument {
+    YoutuberDocument {
+        id: document.id,
+        handle: document.handle,
+        name: document.name,
+        channel_id: document.channel_id,
+        uploads_playlist: document.uploads_playlist,
+        public_video_count: document.public_video_count,
+        indexed_video_count: document.indexed_video_count,
+        indexed_chunk_count: document.indexed_chunk_count,
+        avatar_url: document.avatar_url,
+    }
+}
+
+fn typesense_youtuber(document: youtube_typesense::YoutuberDocument) -> YoutuberDocument {
+    YoutuberDocument {
+        id: document.id,
+        handle: document.handle,
+        name: document.name,
+        channel_id: document.channel_id,
+        uploads_playlist: document.uploads_playlist,
+        public_video_count: document.public_video_count,
+        indexed_video_count: document.indexed_video_count,
+        indexed_chunk_count: document.indexed_chunk_count,
+        avatar_url: document.avatar_url,
+    }
+}
+
+fn meili_youtuber_from_shared(
+    document: &YoutuberDocument,
+) -> youtube_meilisearch::YoutuberDocument {
+    youtube_meilisearch::YoutuberDocument {
+        id: document.id.clone(),
+        handle: document.handle.clone(),
+        name: document.name.clone(),
+        channel_id: document.channel_id.clone(),
+        uploads_playlist: document.uploads_playlist.clone(),
+        public_video_count: document.public_video_count,
+        indexed_video_count: document.indexed_video_count,
+        indexed_chunk_count: document.indexed_chunk_count,
+        avatar_url: document.avatar_url.clone(),
+    }
+}
+
+fn typesense_youtuber_from_shared(
+    document: &YoutuberDocument,
+) -> youtube_typesense::YoutuberDocument {
+    youtube_typesense::YoutuberDocument {
+        id: document.id.clone(),
+        handle: document.handle.clone(),
+        name: document.name.clone(),
+        channel_id: document.channel_id.clone(),
+        uploads_playlist: document.uploads_playlist.clone(),
+        public_video_count: document.public_video_count,
+        indexed_video_count: document.indexed_video_count,
+        indexed_chunk_count: document.indexed_chunk_count,
+        avatar_url: document.avatar_url.clone(),
+    }
+}
+
+fn meili_query_from_shared(query: &TextSearchQuery) -> youtube_meilisearch::TextSearchQuery {
+    youtube_meilisearch::TextSearchQuery {
+        q: query.q.clone(),
+        query_by: query.query_by.clone(),
+        filter_by: query.filter_by.clone(),
+        group_by: query.group_by.clone(),
+        group_limit: query.group_limit,
+        per_page: query.per_page,
+        page: query.page,
+        highlight_fields: query.highlight_fields.clone(),
+    }
+}
+
+fn search_query_from_shared(query: &TextSearchQuery) -> youtube_typesense::TextSearchQuery {
+    youtube_typesense::TextSearchQuery {
+        q: query.q.clone(),
+        query_by: query.query_by.clone(),
+        filter_by: query.filter_by.clone(),
+        group_by: query.group_by.clone(),
+        group_limit: query.group_limit,
+        per_page: query.per_page,
+        page: query.page,
+        highlight_fields: query.highlight_fields.clone(),
+    }
 }
 
 #[derive(Debug)]
@@ -385,11 +691,11 @@ async fn init_typesense_command(command: InitTypesenseCommand) -> Result<(), Cli
     let collection = command.collection.collection;
     let typesense = command.typesense.client(collection.clone());
     match typesense.create_collection_if_missing().await? {
-        CreateCollectionOutcome::Created(_) => {
-            println!("Created Typesense collection: {collection}");
+        CollectionOutcome::Created => {
+            println!("Created search backend collection: {collection}");
         }
-        CreateCollectionOutcome::AlreadyExists { .. } => {
-            println!("Typesense collection already exists: {collection}");
+        CollectionOutcome::AlreadyExists => {
+            println!("search backend collection already exists: {collection}");
         }
     }
 
@@ -404,11 +710,11 @@ async fn refresh_youtuber_command(command: RefreshYoutuberCommand) -> Result<(),
 
     let typesense = command.typesense.youtuber_client();
     match typesense.create_youtubers_collection_if_missing().await? {
-        CreateCollectionOutcome::Created(_) => {
-            println!("Created Typesense collection: youtube_youtubers")
+        CollectionOutcome::Created => {
+            println!("Created search backend collection: youtube_youtubers")
         }
-        CreateCollectionOutcome::AlreadyExists { .. } => {
-            println!("Typesense collection already exists: youtube_youtubers")
+        CollectionOutcome::AlreadyExists => {
+            println!("search backend collection already exists: youtube_youtubers")
         }
     }
 
@@ -475,11 +781,11 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     let collection = command.collection.collection;
     let transcript_typesense = command.typesense.client(collection.clone());
     match transcript_typesense.create_collection_if_missing().await? {
-        CreateCollectionOutcome::Created(_) => {
-            println!("Created Typesense collection: {collection}")
+        CollectionOutcome::Created => {
+            println!("Created search backend collection: {collection}")
         }
-        CreateCollectionOutcome::AlreadyExists { .. } => {
-            println!("Typesense collection already exists: {collection}")
+        CollectionOutcome::AlreadyExists => {
+            println!("search backend collection already exists: {collection}")
         }
     }
 
@@ -488,11 +794,11 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         .create_youtubers_collection_if_missing()
         .await?
     {
-        CreateCollectionOutcome::Created(_) => {
-            println!("Created Typesense collection: youtube_youtubers")
+        CollectionOutcome::Created => {
+            println!("Created search backend collection: youtube_youtubers")
         }
-        CreateCollectionOutcome::AlreadyExists { .. } => {
-            println!("Typesense collection already exists: youtube_youtubers")
+        CollectionOutcome::AlreadyExists => {
+            println!("search backend collection already exists: youtube_youtubers")
         }
     }
 
@@ -656,7 +962,7 @@ async fn index_discovered_video(
     caption_source: YtDlpTranscriptSource,
     transcribe_source: Option<VoxtypeTranscriptSource>,
     chunker: Chunker,
-    typesense: TypesenseAdminClient,
+    typesense: SearchAdminClient,
     content_kind_filter: ContentKindFilter,
     skip_existing: bool,
 ) -> Result<IndexVideoOutcome, CliError> {
@@ -806,11 +1112,11 @@ async fn index_video_command(command: IndexVideoCommand) -> Result<(), CliError>
     let typesense = command.typesense.client(collection.clone());
 
     match typesense.create_collection_if_missing().await? {
-        CreateCollectionOutcome::Created(_) => {
-            println!("Created Typesense collection: {collection}")
+        CollectionOutcome::Created => {
+            println!("Created search backend collection: {collection}")
         }
-        CreateCollectionOutcome::AlreadyExists { .. } => {
-            println!("Typesense collection already exists: {collection}")
+        CollectionOutcome::AlreadyExists => {
+            println!("search backend collection already exists: {collection}")
         }
     }
 
