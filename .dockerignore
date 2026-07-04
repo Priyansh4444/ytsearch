@@ -1,0 +1,13 @@
+.git
+.env
+.env*.local
+node_modules
+target
+dist
+data
+temp_research
+.wrangler
+.output
+.vercel
+.netlify
+.vinxi
