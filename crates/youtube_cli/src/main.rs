@@ -2,6 +2,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::Value;
 use std::{collections::HashSet, path::PathBuf};
 use thiserror::Error;
+use tokio::task::JoinSet;
 use youtube_client::{ListResource, Page, Query, YouTubeClient};
 use youtube_ingest::{Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource};
 use youtube_sources::{YouTubeMetadataSource, YtDlpTranscriptSource};
@@ -69,6 +70,10 @@ struct IndexYoutuberCommand {
     collection: TranscriptCollectionArg,
     #[arg(long, help = "Optional cap for a test indexing run")]
     max_videos: Option<usize>,
+    #[arg(long, default_value_t = 4, help = "Concurrent videos to index")]
+    jobs: usize,
+    #[arg(long, help = "Skip videos that already have chunks in Typesense")]
+    skip_existing: bool,
     #[arg(
         long,
         help = "Keep existing chunks for this YouTuber instead of wiping before import"
@@ -276,7 +281,7 @@ struct UploadPreview {
     title: String,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct DiscoveredVideo {
     video_id: String,
     title: String,
@@ -303,6 +308,7 @@ struct IndexStats {
     indexed_videos: u32,
     skipped_videos: u32,
     kind_filtered_videos: u32,
+    existing_videos: u32,
     audio_transcribed_videos: u32,
     indexed_chunks: u32,
 }
@@ -440,96 +446,51 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         );
     }
 
-    for (index, video) in public_videos
+    let videos_to_index = public_videos
         .iter()
         .take(stats.attempted_videos)
-        .enumerate()
-    {
-        tracing::info!(
-            video_id = %video.video_id,
-            title = %video.title,
-            index = index + 1,
-            total = stats.attempted_videos,
-            "indexing video"
-        );
-        println!(
-            "Indexing video {}/{}: {} {}",
-            index + 1,
-            stats.attempted_videos,
-            video.video_id,
-            video.title
-        );
+        .cloned()
+        .collect::<Vec<_>>();
+    let jobs = command.jobs.clamp(1, 16);
+    println!("Indexing with {jobs} concurrent job(s)");
+    if command.skip_existing {
+        println!("Skipping videos that already have transcript chunks");
+    }
 
-        let metadata = match metadata_source.metadata_for_video(&video.video_id).await {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                stats.skipped_videos = stats.skipped_videos.saturating_add(1);
-                tracing::warn!(video_id = %video.video_id, %error, "skipped video metadata");
-                println!("  skipped metadata: {error}");
-                continue;
-            }
-        };
+    let mut tasks = JoinSet::new();
+    let mut next_video = 0;
+    let mut active_jobs = 0usize;
+    let mut completed_videos = 0usize;
 
-        let content_kind = content_kind_for_duration(metadata.duration_ms);
-        if !command.content_kind.includes(content_kind) {
-            stats.kind_filtered_videos = stats.kind_filtered_videos.saturating_add(1);
-            tracing::info!(video_id = %video.video_id, ?content_kind, "skipped by content kind");
-            println!("  skipped by content kind: {content_kind:?}");
-            continue;
+    while next_video < videos_to_index.len() || active_jobs > 0 {
+        while active_jobs < jobs && next_video < videos_to_index.len() {
+            let video = videos_to_index[next_video].clone();
+            let index = next_video + 1;
+            next_video += 1;
+            active_jobs += 1;
+
+            tasks.spawn(index_discovered_video(
+                index,
+                stats.attempted_videos,
+                video,
+                metadata_source.clone(),
+                caption_source.clone(),
+                transcribe_source.clone(),
+                chunker.clone(),
+                transcript_typesense.clone(),
+                command.content_kind,
+                command.skip_existing,
+            ));
         }
 
-        let transcript = match caption_source.transcript_for_video(&video.video_id).await {
-            Ok(transcript) => transcript,
-            Err(caption_error) => {
-                let Some(transcribe_source) = &transcribe_source else {
-                    stats.skipped_videos = stats.skipped_videos.saturating_add(1);
-                    tracing::warn!(video_id = %video.video_id, error = %caption_error, "skipped transcript");
-                    println!("  skipped transcript: {caption_error}");
-                    continue;
-                };
-
-                tracing::info!(video_id = %video.video_id, error = %caption_error, "captions unavailable, trying local audio transcription");
-                println!(
-                    "  captions unavailable, trying local audio transcription: {caption_error}"
-                );
-                match transcribe_source
-                    .transcript_for_video(&video.video_id)
-                    .await
-                {
-                    Ok(transcript) => {
-                        stats.audio_transcribed_videos =
-                            stats.audio_transcribed_videos.saturating_add(1);
-                        transcript
-                    }
-                    Err(transcribe_error) => {
-                        stats.skipped_videos = stats.skipped_videos.saturating_add(1);
-                        tracing::warn!(video_id = %video.video_id, error = %transcribe_error, "local transcription failed");
-                        println!(
-                            "  skipped transcript: captions failed and local transcription failed: {transcribe_error}"
-                        );
-                        continue;
-                    }
-                }
-            }
+        let Some(result) = tasks.join_next().await else {
+            break;
         };
-
-        match chunker.chunks(&metadata, &transcript) {
-            Ok(chunks) => {
-                let chunk_count = chunks.len();
-                transcript_typesense.import_chunks_batched(&chunks).await?;
-                stats.indexed_videos = stats.indexed_videos.saturating_add(1);
-                stats.indexed_chunks = stats
-                    .indexed_chunks
-                    .saturating_add(saturating_u32(chunk_count));
-                tracing::info!(video_id = %video.video_id, chunk_count, "imported transcript chunks");
-                println!("  imported {chunk_count} transcript chunks");
-            }
-            Err(error) => {
-                stats.skipped_videos = stats.skipped_videos.saturating_add(1);
-                tracing::warn!(video_id = %video.video_id, %error, "skipped chunking");
-                println!("  skipped chunking: {error}");
-            }
-        }
+        active_jobs = active_jobs.saturating_sub(1);
+        completed_videos += 1;
+        let outcome = result.map_err(|error| CliError::Message(error.to_string()))??;
+        let attempted_videos = stats.attempted_videos;
+        apply_index_outcome(&mut stats, outcome, completed_videos, attempted_videos);
     }
 
     let youtuber_doc = YoutuberDocument {
@@ -539,16 +500,17 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         channel_id: youtuber.channel_id.clone(),
         uploads_playlist: youtuber.uploads_playlist.clone(),
         public_video_count: saturating_u32(stats.discovered_videos),
-        indexed_video_count: stats.indexed_videos,
+        indexed_video_count: stats.indexed_videos.saturating_add(stats.existing_videos),
         indexed_chunk_count: stats.indexed_chunks,
     };
     youtuber_typesense.upsert_youtuber(&youtuber_doc).await?;
     println!("Upserted YouTuber document: {}", youtuber_doc.id);
     println!(
-        "Index summary: discovered={}, attempted={}, indexed={}, skipped={}, kind_filtered={}, audio_transcribed={}, chunks={}",
+        "Index summary: discovered={}, attempted={}, indexed={}, existing={}, skipped={}, kind_filtered={}, audio_transcribed={}, chunks={}",
         stats.discovered_videos,
         stats.attempted_videos,
         stats.indexed_videos,
+        stats.existing_videos,
         stats.skipped_videos,
         stats.kind_filtered_videos,
         stats.audio_transcribed_videos,
@@ -556,6 +518,182 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     );
 
     Ok(())
+}
+
+#[derive(Debug)]
+enum IndexVideoOutcome {
+    Indexed {
+        video_id: String,
+        title: String,
+        chunks: usize,
+        audio_transcribed: bool,
+    },
+    Existing {
+        video_id: String,
+        title: String,
+        chunks: u64,
+    },
+    KindFiltered {
+        video_id: String,
+        title: String,
+        content_kind: ContentKind,
+    },
+    Skipped {
+        video_id: String,
+        title: String,
+        reason: String,
+    },
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn index_discovered_video(
+    index: usize,
+    total: usize,
+    video: DiscoveredVideo,
+    metadata_source: YouTubeMetadataSource,
+    caption_source: YtDlpTranscriptSource,
+    transcribe_source: Option<VoxtypeTranscriptSource>,
+    chunker: Chunker,
+    typesense: TypesenseAdminClient,
+    content_kind_filter: ContentKindFilter,
+    skip_existing: bool,
+) -> Result<IndexVideoOutcome, CliError> {
+    tracing::info!(
+        video_id = %video.video_id,
+        title = %video.title,
+        index,
+        total,
+        "indexing video"
+    );
+    println!(
+        "Indexing video {index}/{total}: {} {}",
+        video.video_id, video.title
+    );
+
+    if skip_existing {
+        let existing_chunks = typesense.count_chunks_by_video_id(&video.video_id).await?;
+        if existing_chunks > 0 {
+            return Ok(IndexVideoOutcome::Existing {
+                video_id: video.video_id,
+                title: video.title,
+                chunks: existing_chunks,
+            });
+        }
+    }
+
+    let metadata = match metadata_source.metadata_for_video(&video.video_id).await {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            tracing::warn!(video_id = %video.video_id, %error, "skipped video metadata");
+            return Ok(IndexVideoOutcome::Skipped {
+                video_id: video.video_id,
+                title: video.title,
+                reason: format!("metadata: {error}"),
+            });
+        }
+    };
+
+    let content_kind = content_kind_for_duration(metadata.duration_ms);
+    if !content_kind_filter.includes(content_kind) {
+        tracing::info!(video_id = %video.video_id, ?content_kind, "skipped by content kind");
+        return Ok(IndexVideoOutcome::KindFiltered {
+            video_id: video.video_id,
+            title: video.title,
+            content_kind,
+        });
+    }
+
+    let (transcript, audio_transcribed) = match fetch_transcript_with_optional_fallback(
+        &video.video_id,
+        &caption_source,
+        transcribe_source.as_ref(),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::warn!(video_id = %video.video_id, %error, "skipped transcript");
+            return Ok(IndexVideoOutcome::Skipped {
+                video_id: video.video_id,
+                title: video.title,
+                reason: format!("transcript: {error}"),
+            });
+        }
+    };
+
+    let chunks = match chunker.chunks(&metadata, &transcript) {
+        Ok(chunks) => chunks,
+        Err(error) => {
+            tracing::warn!(video_id = %video.video_id, %error, "skipped chunking");
+            return Ok(IndexVideoOutcome::Skipped {
+                video_id: video.video_id,
+                title: video.title,
+                reason: format!("chunking: {error}"),
+            });
+        }
+    };
+
+    let chunk_count = chunks.len();
+    typesense.import_chunks_batched(&chunks).await?;
+    tracing::info!(video_id = %video.video_id, chunk_count, "imported transcript chunks");
+
+    Ok(IndexVideoOutcome::Indexed {
+        video_id: video.video_id,
+        title: video.title,
+        chunks: chunk_count,
+        audio_transcribed,
+    })
+}
+
+fn apply_index_outcome(
+    stats: &mut IndexStats,
+    outcome: IndexVideoOutcome,
+    completed: usize,
+    total: usize,
+) {
+    match outcome {
+        IndexVideoOutcome::Indexed {
+            video_id,
+            title,
+            chunks,
+            audio_transcribed,
+        } => {
+            stats.indexed_videos = stats.indexed_videos.saturating_add(1);
+            stats.indexed_chunks = stats.indexed_chunks.saturating_add(saturating_u32(chunks));
+            if audio_transcribed {
+                stats.audio_transcribed_videos = stats.audio_transcribed_videos.saturating_add(1);
+            }
+            println!("Done {completed}/{total}: {video_id} {title} — imported {chunks} chunks");
+        }
+        IndexVideoOutcome::Existing {
+            video_id,
+            title,
+            chunks,
+        } => {
+            stats.existing_videos = stats.existing_videos.saturating_add(1);
+            println!(
+                "Done {completed}/{total}: {video_id} {title} — already indexed ({chunks} chunks)"
+            );
+        }
+        IndexVideoOutcome::KindFiltered {
+            video_id,
+            title,
+            content_kind,
+        } => {
+            stats.kind_filtered_videos = stats.kind_filtered_videos.saturating_add(1);
+            println!(
+                "Done {completed}/{total}: {video_id} {title} — skipped by kind ({content_kind:?})"
+            );
+        }
+        IndexVideoOutcome::Skipped {
+            video_id,
+            title,
+            reason,
+        } => {
+            stats.skipped_videos = stats.skipped_videos.saturating_add(1);
+            println!("Done {completed}/{total}: {video_id} {title} — skipped {reason}");
+        }
+    }
 }
 
 async fn index_video_command(command: IndexVideoCommand) -> Result<(), CliError> {

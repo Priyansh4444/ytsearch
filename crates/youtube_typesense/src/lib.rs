@@ -176,6 +176,29 @@ impl TypesenseAdminClient {
             .await
     }
 
+    pub async fn count_chunks_by_video_id(&self, video_id: &str) -> Result<u64> {
+        let path = format!("collections/{}/documents/search", self.config.collection);
+        let mut url = endpoint(&self.config.api_url, &path)?;
+        {
+            let mut pairs = url.query_pairs_mut();
+            pairs.append_pair("q", "*");
+            pairs.append_pair("filter_by", &format!("video_id:={video_id}"));
+            pairs.append_pair("per_page", "0");
+        }
+
+        let response = self
+            .http
+            .get(url)
+            .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
+            .send()
+            .await?;
+        let body = json_response(response).await?;
+        Ok(body
+            .get("found")
+            .and_then(Value::as_u64)
+            .unwrap_or_default())
+    }
+
     pub async fn delete_documents_by_filter(&self, filter_by: &str) -> Result<Value> {
         let path = format!("collections/{}/documents", self.config.collection);
         let mut url = endpoint(&self.config.api_url, &path)?;
