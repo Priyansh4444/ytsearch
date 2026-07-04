@@ -64,7 +64,7 @@ struct SearchHit {
     embed_url: String,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum MatchKind {
     Transcript,
@@ -145,10 +145,11 @@ async fn search_handler(
         .per_page
         .unwrap_or(DEFAULT_PER_PAGE)
         .clamp(1, MAX_PER_PAGE);
+    let search_page_size = per_page.saturating_mul(4).min(MAX_PER_PAGE);
     let mut typesense_query = TextSearchQuery::new(query)
-        .query_by("text,title,youtuber_name,youtuber_handle")
+        .query_by("text,title")
         .highlight_fields("text,title")
-        .per_page(per_page)
+        .per_page(search_page_size)
         .without_grouping();
     tracing::info!(
         query,
@@ -167,7 +168,8 @@ async fn search_handler(
     }
 
     let raw = state.search.search(&typesense_query).await?;
-    let hits = parse_hits(&raw)?;
+    let mut hits = parse_hits(&raw)?;
+    hits.truncate(usize::from(per_page));
     let found = raw.get("found").and_then(Value::as_u64).unwrap_or_default();
     tracing::info!(query, found, returned_hits = hits.len(), "search response");
 
@@ -195,7 +197,34 @@ fn parse_hits(raw: &Value) -> Result<Vec<SearchHit>, ApiError> {
         let document = hit.get("document").ok_or(ApiError::UnexpectedSearchShape)?;
         parsed.push(SearchHit::from_typesense_hit(document, hit)?);
     }
-    Ok(parsed)
+
+    Ok(dedupe_title_only_hits(parsed))
+}
+
+fn dedupe_title_only_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
+    let transcript_videos = hits
+        .iter()
+        .filter(|hit| hit.match_kind == MatchKind::Transcript)
+        .map(|hit| hit.video_id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let mut seen_title_videos = std::collections::HashSet::new();
+    let mut deduped = Vec::with_capacity(hits.len());
+
+    for hit in hits {
+        match hit.match_kind {
+            MatchKind::Transcript => deduped.push(hit),
+            MatchKind::Title => {
+                if transcript_videos.contains(&hit.video_id) {
+                    continue;
+                }
+                if seen_title_videos.insert(hit.video_id.clone()) {
+                    deduped.push(hit);
+                }
+            }
+        }
+    }
+
+    deduped
 }
 
 impl SearchHit {
@@ -206,10 +235,10 @@ impl SearchHit {
         let t_end_ms = u32_field(document, "t_end_ms")?;
         let text_highlight = highlight_for_field(hit, "text");
         let title_highlight = highlight_for_field(hit, "title");
-        let match_kind = if text_highlight.is_some() {
-            MatchKind::Transcript
-        } else {
+        let match_kind = if title_highlight.is_some() && text_highlight.is_none() {
             MatchKind::Title
+        } else {
+            MatchKind::Transcript
         };
         let timestamp =
             matches!(match_kind, MatchKind::Transcript).then(|| format_timestamp(t_start_ms));

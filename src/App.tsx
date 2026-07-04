@@ -1,4 +1,10 @@
-import { For, Show, createResource, createSignal } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createResource,
+  createSignal,
+} from "solid-js";
 import type { Component } from "solid-js";
 
 type SearchHit = {
@@ -16,7 +22,6 @@ type SearchHit = {
   thumbnail?: string;
   published_at?: string;
   t_start_ms: number;
-
   timestamp?: string;
   youtube_url: string;
   embed_url: string;
@@ -35,20 +40,20 @@ type SearchRequest = {
   limit: number;
 };
 
-const examples = [
-  "chiikawa",
-  "resident evil",
-  "valorant",
-  "silent hill",
-  "yakuza",
-];
+const examples = ["battery", "water", "react", "typescript", "valorant"];
 
 const App: Component = () => {
+  const routeHandle = creatorFromPath();
   const [query, setQuery] = createSignal("");
-  const [youtuber, setYoutuber] = createSignal("@jo2uke");
+  const [youtuber, setYoutuber] = createSignal(routeHandle ?? "@t3dotgg");
   const [limit, setLimit] = createSignal(25);
   const [submitted, setSubmitted] = createSignal<SearchRequest>();
   const [result] = createResource(submitted, searchTranscripts);
+
+  createEffect(() => {
+    const handle = creatorFromPath();
+    if (handle) setYoutuber(handle);
+  });
 
   const runSearch = (nextQuery = query()) => {
     const normalizedQuery = nextQuery.trim();
@@ -62,94 +67,80 @@ const App: Component = () => {
   };
 
   return (
-    <main class="min-h-screen px-4 py-6 text-vesper-text sm:px-6 lg:px-8">
-      <div class="mx-auto flex w-full max-w-6xl flex-col gap-8">
-        <header class="overflow-hidden rounded-[2rem] border border-vesper-border bg-vesper-panel/80 p-6 shadow-vesper backdrop-blur md:p-8">
-          <div class="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-            <div class="max-w-3xl">
-              <p class="mb-3 inline-flex rounded-full border border-vesper-border bg-vesper-panel2 px-3 py-1 text-xs font-medium uppercase tracking-[0.24em] text-vesper-yellow">
+    <main class="min-h-screen bg-vesper-bg px-4 py-6 text-vesper-text sm:px-6 lg:px-8">
+      <div class="mx-auto flex w-full max-w-6xl flex-col gap-5">
+        <header class="border border-vesper-border bg-vesper-panel p-5">
+          <div class="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-[0.28em] text-vesper-yellow">
                 ytsearch
               </p>
-              <h1 class="text-4xl font-semibold tracking-tight text-white sm:text-5xl">
-                Search YouTube transcripts by exact timestamp.
+              <h1 class="mt-2 text-3xl font-semibold tracking-tight text-white">
+                Transcript search
               </h1>
-              <p class="mt-4 max-w-2xl text-base leading-7 text-vesper-muted">
-                A Vesper-inspired transcript search UI backed by the Rust API
-                and Typesense. Repeated videos are intentionally shown so every
-                matching moment is easy to jump to.
-              </p>
             </div>
-            <div class="rounded-2xl border border-vesper-border bg-black/20 px-4 py-3 text-sm text-vesper-muted">
-              <span class="text-vesper-green">
-                Search key stays server-side.
-              </span>
-              <br />
-              Frontend only talks to <code>/api/search</code>.
-            </div>
+            <p class="max-w-xl text-sm leading-6 text-vesper-muted">
+              Search exact transcript moments. Use URLs like{" "}
+              <code>/t3dotgg</code> or <code>/jo2uke</code> to set the creator
+              filter.
+            </p>
           </div>
         </header>
 
-        <section class="rounded-[1.75rem] border border-vesper-border bg-vesper-panel/90 p-4 shadow-vesper md:p-5">
+        <section class="border border-vesper-border bg-vesper-panel p-4">
           <form
-            class="grid gap-3 lg:grid-cols-[1fr_14rem_9rem_auto]"
+            class="grid gap-3 lg:grid-cols-[1fr_13rem_7rem_auto]"
             onSubmit={(event) => {
               event.preventDefault();
               runSearch();
             }}
           >
-            <label class="group flex flex-col gap-2">
-              <span class="text-xs font-medium uppercase tracking-[0.18em] text-vesper-dim">
-                Search
-              </span>
+            <Field label="Search">
               <input
                 value={query()}
                 onInput={(event) => setQuery(event.currentTarget.value)}
-                placeholder="Try: chiikawa, resident evil, valorant..."
-                class="h-14 rounded-2xl border border-vesper-border bg-vesper-bg px-4 text-base text-white outline-none transition placeholder:text-vesper-dim focus:border-vesper-yellow focus:ring-4 focus:ring-vesper-yellow/10"
+                placeholder="Search transcript text..."
+                class="h-12 w-full border border-vesper-border bg-vesper-bg px-4 text-base text-white outline-none placeholder:text-vesper-dim focus:border-vesper-yellow"
               />
-            </label>
+            </Field>
 
-            <label class="flex flex-col gap-2">
-              <span class="text-xs font-medium uppercase tracking-[0.18em] text-vesper-dim">
-                YouTuber
-              </span>
+            <Field label="YouTuber">
               <input
                 value={youtuber()}
-                onInput={(event) => setYoutuber(event.currentTarget.value)}
-                placeholder="@handle or blank"
-                class="h-14 rounded-2xl border border-vesper-border bg-vesper-bg px-4 text-base text-white outline-none transition placeholder:text-vesper-dim focus:border-vesper-green focus:ring-4 focus:ring-vesper-green/10"
+                onInput={(event) =>
+                  setYoutuber(normalizeHandle(event.currentTarget.value))
+                }
+                placeholder="@handle"
+                class="h-12 w-full border border-vesper-border bg-vesper-bg px-4 text-base text-white outline-none placeholder:text-vesper-dim focus:border-vesper-yellow"
               />
-            </label>
+            </Field>
 
-            <label class="flex flex-col gap-2">
-              <span class="text-xs font-medium uppercase tracking-[0.18em] text-vesper-dim">
-                Hits
-              </span>
+            <Field label="Hits">
               <input
                 type="number"
                 min="1"
                 max="100"
                 value={limit()}
                 onInput={(event) => setLimit(Number(event.currentTarget.value))}
-                class="h-14 rounded-2xl border border-vesper-border bg-vesper-bg px-4 text-base text-white outline-none transition focus:border-vesper-blue focus:ring-4 focus:ring-vesper-blue/10"
+                class="h-12 w-full border border-vesper-border bg-vesper-bg px-3 text-base text-white outline-none focus:border-vesper-yellow"
               />
-            </label>
+            </Field>
 
             <button
               type="submit"
-              class="mt-auto h-14 rounded-2xl bg-vesper-yellow px-6 font-semibold text-vesper-bg transition hover:-translate-y-0.5 hover:bg-vesper-orange focus:outline-none focus:ring-4 focus:ring-vesper-yellow/20 active:translate-y-0"
+              class="mt-auto h-12 border border-vesper-yellow bg-vesper-yellow px-6 font-semibold text-vesper-bg transition hover:bg-vesper-orange"
             >
               Search
             </button>
           </form>
 
-          <div class="mt-4 flex flex-wrap gap-2">
+          <div class="mt-3 flex flex-wrap gap-2">
             <For each={examples}>
               {(example) => (
                 <button
                   type="button"
                   onClick={() => runSearch(example)}
-                  class="rounded-full border border-vesper-border bg-vesper-panel2 px-3 py-1.5 text-sm text-vesper-muted transition hover:border-vesper-yellow hover:text-vesper-yellow"
+                  class="border border-vesper-border bg-vesper-panel2 px-3 py-1.5 text-sm text-vesper-muted transition hover:border-vesper-yellow hover:text-vesper-yellow"
                 >
                   {example}
                 </button>
@@ -169,31 +160,31 @@ const App: Component = () => {
 
           <Show when={!result.loading && !result.error && result()}>
             {(response) => (
-              <div class="flex flex-col gap-4">
-                <div class="flex flex-col justify-between gap-3 rounded-3xl border border-vesper-border bg-vesper-panel/70 p-4 sm:flex-row sm:items-center">
+              <div class="flex flex-col gap-3">
+                <div class="flex items-center justify-between border border-vesper-border bg-vesper-panel p-4">
                   <div>
-                    <p class="text-sm text-vesper-muted">
-                      Showing search results for
+                    <p class="text-xs uppercase tracking-[0.18em] text-vesper-dim">
+                      Results
                     </p>
-                    <h2 class="text-2xl font-semibold text-white">
-                      “{response().query}”
+                    <h2 class="text-xl font-semibold text-white">
+                      {response().query}
                     </h2>
                   </div>
-                  <div class="rounded-2xl border border-vesper-border bg-vesper-bg px-4 py-3 text-sm text-vesper-muted">
+                  <p class="border border-vesper-border bg-vesper-bg px-3 py-2 text-sm text-vesper-muted">
                     <span class="text-white">{response().hits.length}</span>{" "}
                     shown /{" "}
                     <span class="text-white">{response().total_found}</span>{" "}
                     found
-                  </div>
+                  </p>
                 </div>
 
                 <Show
                   when={response().hits.length > 0}
                   fallback={<EmptyState query={response().query} />}
                 >
-                  <div class="grid gap-4">
+                  <div class="grid gap-2">
                     <For each={response().hits}>
-                      {(hit) => <HitCard hit={hit} query={response().query} />}
+                      {(hit) => <HitRow hit={hit} query={response().query} />}
                     </For>
                   </div>
                 </Show>
@@ -209,6 +200,15 @@ const App: Component = () => {
     </main>
   );
 };
+
+const Field: Component<{ label: string; children: unknown }> = (props) => (
+  <label class="flex flex-col gap-1.5">
+    <span class="text-xs font-medium uppercase tracking-[0.18em] text-vesper-dim">
+      {props.label}
+    </span>
+    {props.children}
+  </label>
+);
 
 async function searchTranscripts(
   request: SearchRequest,
@@ -232,83 +232,76 @@ async function searchTranscripts(
   return response.json();
 }
 
-const HitCard: Component<{ hit: SearchHit; query: string }> = (props) => {
-  const timestampLabel = () => props.hit.timestamp ?? "Title match";
+const HitRow: Component<{ hit: SearchHit; query: string }> = (props) => (
+  <article class="border border-vesper-border bg-vesper-panel">
+    <div class="grid gap-0 md:grid-cols-[18rem_1fr]">
+      <div class="relative min-h-40 bg-vesper-bg">
+        <iframe
+          class="aspect-video h-full min-h-40 w-full"
+          src={props.hit.embed_url}
+          title={`YouTube player for ${props.hit.title}`}
+          loading="lazy"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          referrerpolicy="strict-origin-when-cross-origin"
+          allowfullscreen
+        />
+        <span class="absolute bottom-2 left-2 bg-vesper-bg/90 px-2 py-1 text-xs font-semibold text-vesper-yellow ring-1 ring-vesper-border">
+          {props.hit.timestamp ?? "title"}
+        </span>
+      </div>
 
-  return (
-    <article class="group overflow-hidden rounded-[1.75rem] border border-vesper-border bg-vesper-panel/90 shadow-vesper transition hover:-translate-y-0.5 hover:border-vesper-yellow/60">
-      <div class="grid gap-0 lg:grid-cols-[24rem_1fr]">
-        <div class="relative min-h-64 bg-vesper-panel2">
-          <iframe
-            class="aspect-video h-full min-h-64 w-full"
-            src={props.hit.embed_url}
-            title={`YouTube player for ${props.hit.title}`}
-            loading="lazy"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-            referrerpolicy="strict-origin-when-cross-origin"
-            allowfullscreen
-          />
-          <span class="absolute bottom-3 left-3 rounded-full bg-vesper-bg/90 px-3 py-1 text-sm font-semibold text-vesper-yellow ring-1 ring-vesper-border">
-            {timestampLabel()}
-          </span>
-        </div>
-
-        <div class="flex flex-col gap-4 p-5">
-          <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <a
-                href={props.hit.youtube_url}
-                target="_blank"
-                rel="noreferrer"
-                class="text-xl font-semibold leading-snug text-white transition hover:text-vesper-yellow"
-              >
-                <HighlightedText
-                  text={props.hit.title}
-                  highlight={props.hit.title_highlight}
-                  query={props.query}
-                />
-              </a>
-              <p class="mt-1 text-sm text-vesper-muted">
-                {props.hit.youtuber_name} <span class="text-vesper-dim">·</span>{" "}
-                {props.hit.youtuber_handle}
-              </p>
-            </div>
+      <div class="flex flex-col gap-3 p-4">
+        <div class="flex items-start justify-between gap-4">
+          <div>
             <a
               href={props.hit.youtube_url}
               target="_blank"
               rel="noreferrer"
-              class="shrink-0 rounded-full border border-vesper-border bg-vesper-panel2 px-3 py-1.5 text-sm font-medium text-vesper-green transition hover:border-vesper-green hover:bg-vesper-green/10"
+              class="text-lg font-semibold leading-snug text-white hover:text-vesper-yellow"
             >
-              {props.hit.timestamp
-                ? `Open at ${props.hit.timestamp}`
-                : "Open video"}
+              <HighlightedText
+                text={props.hit.title}
+                highlight={props.hit.title_highlight}
+                query={props.query}
+              />
             </a>
+            <p class="mt-1 text-sm text-vesper-muted">
+              {props.hit.youtuber_name} · {props.hit.youtuber_handle}
+            </p>
           </div>
-
-          <TranscriptExcerpt hit={props.hit} query={props.query} />
+          <a
+            href={props.hit.youtube_url}
+            target="_blank"
+            rel="noreferrer"
+            class="shrink-0 border border-vesper-border bg-vesper-bg px-3 py-1.5 text-sm font-medium text-vesper-green hover:border-vesper-green"
+          >
+            {props.hit.timestamp ? `Open ${props.hit.timestamp}` : "Open"}
+          </a>
         </div>
+
+        <TranscriptExcerpt hit={props.hit} query={props.query} />
       </div>
-    </article>
-  );
-};
+    </div>
+  </article>
+);
 
 const TranscriptExcerpt: Component<{ hit: SearchHit; query: string }> = (
   props,
 ) => (
-  <div class="rounded-2xl border border-vesper-border bg-vesper-bg p-4 text-base leading-7 text-white">
+  <div class="border border-vesper-border bg-vesper-bg p-3 text-sm leading-6 text-white">
     <Show
       when={props.hit.match_kind === "transcript"}
       fallback={
         <p class="text-vesper-muted">
-          This result matched the video title. Search for a phrase from the
-          transcript to jump to a specific spoken moment.
+          Title match. Open the video or search transcript wording for a
+          timestamped moment.
         </p>
       }
     >
       <Show when={props.hit.prev_text}>
         <span class="text-vesper-muted">{props.hit.prev_text} </span>
       </Show>
-      <span class="font-medium text-white">
+      <span class="text-white">
         <HighlightedText
           text={props.hit.text}
           highlight={props.hit.text_highlight}
@@ -335,7 +328,7 @@ const HighlightedText: Component<{
       <For each={parts()}>
         {(part) => (
           <Show when={part.highlighted} fallback={<>{part.text}</>}>
-            <mark class="rounded-md bg-vesper-yellow/20 px-1 py-0.5 font-semibold text-vesper-yellow ring-1 ring-vesper-yellow/20">
+            <mark class="bg-vesper-yellow/20 px-1 font-semibold text-vesper-yellow">
               {part.text}
             </mark>
           </Show>
@@ -416,40 +409,54 @@ function decodeEntities(value: string): string {
   return element.value;
 }
 
+function creatorFromPath(): string | null {
+  const firstSegment = window.location.pathname
+    .split("/")
+    .filter(Boolean)[0]
+    ?.trim();
+  if (!firstSegment) return null;
+  if (firstSegment === "api") return null;
+  return normalizeHandle(firstSegment);
+}
+
+function normalizeHandle(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
+}
+
 const LoadingState: Component = () => (
-  <div class="grid gap-4">
+  <div class="grid gap-2">
     <For each={[0, 1, 2]}>
       {() => (
-        <div class="h-44 animate-pulse rounded-[1.75rem] border border-vesper-border bg-vesper-panel/70" />
+        <div class="h-40 animate-pulse border border-vesper-border bg-vesper-panel" />
       )}
     </For>
   </div>
 );
 
 const ErrorState: Component<{ message: string }> = (props) => (
-  <div class="rounded-[1.75rem] border border-vesper-red/40 bg-vesper-red/10 p-6 text-vesper-red">
+  <div class="border border-vesper-red/40 bg-vesper-red/10 p-5 text-vesper-red">
     <p class="font-semibold">Search failed</p>
     <p class="mt-2 text-sm text-red-100/80">{props.message}</p>
   </div>
 );
 
 const EmptyState: Component<{ query: string }> = (props) => (
-  <div class="rounded-[1.75rem] border border-vesper-border bg-vesper-panel/80 p-8 text-center">
-    <p class="text-2xl font-semibold text-white">No hits for “{props.query}”</p>
+  <div class="border border-vesper-border bg-vesper-panel p-8 text-center">
+    <p class="text-xl font-semibold text-white">No hits for “{props.query}”</p>
     <p class="mt-2 text-vesper-muted">
-      Try a broader phrase, remove the YouTuber filter, or index more videos.
+      Try a broader phrase, remove the creator filter, or index more videos.
     </p>
   </div>
 );
 
 const WelcomeState: Component = () => (
-  <div class="rounded-[1.75rem] border border-vesper-border bg-vesper-panel/80 p-8 text-center">
-    <p class="text-2xl font-semibold text-white">
-      Start with a transcript search.
-    </p>
+  <div class="border border-vesper-border bg-vesper-panel p-8 text-center">
+    <p class="text-xl font-semibold text-white">Search a creator transcript.</p>
     <p class="mx-auto mt-2 max-w-xl text-vesper-muted">
-      Transcript matches jump to the spoken moment. Title-only matches open the
-      video without pretending to know a timestamp.
+      Transcript hits are timestamped. Title-only hits are de-duplicated and
+      open the video without pretending to know a spoken moment.
     </p>
   </div>
 );
