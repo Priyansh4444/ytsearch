@@ -55,3 +55,6 @@ optional_secret AXIOM_TOKEN
 optional_secret AXIOM_API_KEY
 optional_secret AXIOM_DATASET
 optional_secret AXIOM_DOMAIN
+optional_secret AXIOM_URL
+optional_secret AXIOM_EDGE
+optional_secret AXIOM_EDGE_URL
