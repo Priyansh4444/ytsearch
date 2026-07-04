@@ -5,7 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use reqwest::Client as HttpClient;
+use axiom_rs::Client as AxiomClient;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -46,9 +46,8 @@ struct AppState {
 
 #[derive(Clone, Debug)]
 struct AxiomLogger {
-    http: HttpClient,
-    endpoint: String,
-    token: String,
+    client: AxiomClient,
+    dataset: String,
 }
 
 #[derive(Default)]
@@ -801,20 +800,34 @@ impl AxiomLogger {
             .or_else(|_| env::var("AXIOM_API_KEY"))
             .ok()?;
         let dataset = env::var("AXIOM_DATASET").ok()?;
-        let domain = env::var("AXIOM_DOMAIN").unwrap_or_else(|_| "api.axiom.co".to_string());
-        let endpoint = format!(
-            "https://{}/v1/ingest/{}",
-            domain
-                .trim()
-                .trim_start_matches("https://")
-                .trim_end_matches('/'),
-            dataset
-        );
-        Some(Self {
-            http: HttpClient::new(),
-            endpoint,
-            token,
-        })
+        let mut builder = AxiomClient::builder().with_token(token);
+
+        if let Ok(edge_url) = env::var("AXIOM_EDGE_URL") {
+            builder = builder.with_edge_url(edge_url);
+        } else if let Ok(edge) = env::var("AXIOM_EDGE") {
+            builder = builder.with_edge(edge);
+        } else if let Ok(url) = env::var("AXIOM_URL") {
+            builder = builder.with_url(url);
+        } else if let Ok(domain) = env::var("AXIOM_DOMAIN") {
+            builder = builder.with_url(format!(
+                "https://{}",
+                domain
+                    .trim()
+                    .trim_start_matches("https://")
+                    .trim_start_matches("http://")
+                    .trim_end_matches('/')
+            ));
+        }
+
+        let client = match builder.build() {
+            Ok(client) => client,
+            Err(error) => {
+                tracing::warn!(%error, "failed to initialize Axiom logger");
+                return None;
+            }
+        };
+
+        Some(Self { client, dataset })
     }
 
     fn log_search(&self, event: SearchLogEvent) {
@@ -826,15 +839,11 @@ impl AxiomLogger {
         });
     }
 
-    async fn ingest(&self, event: SearchLogEvent) -> Result<(), reqwest::Error> {
-        self.http
-            .post(&self.endpoint)
-            .bearer_auth(&self.token)
-            .json(&[event])
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(())
+    async fn ingest(&self, event: SearchLogEvent) -> Result<(), axiom_rs::Error> {
+        self.client
+            .ingest(self.dataset.as_str(), [event])
+            .await
+            .map(|_| ())
     }
 }
 
