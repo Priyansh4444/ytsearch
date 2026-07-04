@@ -3,8 +3,8 @@
 This project has three deployable concerns:
 
 1. **Frontend**: static Solid/Vite app.
-2. **Search API**: `youtube_api` Axum service using the Typesense search-only key.
-3. **Indexer**: `youtube_cli` one-shot/cron job using YouTube API + Typesense admin key + optional local tools.
+2. **Search API**: `youtube_api` Axum service using the Meilisearch search key.
+3. **Indexer**: `youtube_cli` one-shot/cron job using YouTube API + Meilisearch master/admin key + optional local tools.
 
 The production pattern is to keep indexing separate from the public API. Website-triggered indexing is intentionally unavailable; use the local CLI or a private operator job to queue indexing work.
 
@@ -15,7 +15,7 @@ The production pattern is to keep indexing separate from the public API. Website
 | Frontend | Cloudflare Pages | Fast static hosting, preview deploys, cheap CDN. |
 | API | Fly.io or Railway | Long-running Rust service with private env vars. |
 | Indexing | Railway cron/job or Fly machine run manually | Needs `yt-dlp`; may run longer than edge/serverless limits. |
-| Search DB | Typesense Cloud | Already supported. |
+| Search DB | Meilisearch on Fly.io | Self-hosted, persistent volume, low-latency colocated with the API. |
 | Errors/logs | Sentry + platform logs; optionally Axiom for Rust logs | Sentry for exceptions, Axiom for structured logs. |
 | Analytics | PostHog on frontend | Product analytics without mixing into backend search logs. |
 
@@ -24,9 +24,10 @@ The production pattern is to keep indexing separate from the public API. Website
 ### API runtime
 
 ```env
-TYPESENSE_API_URL=...
-TYPESENSE_SEARCH_API_KEY=...
-TYPESENSE_COLLECTION=youtube_transcript_chunks
+MEILI_HTTP_ADDR=...
+MEILI_SEARCH_API_KEY=...
+MEILI_TRANSCRIPTS_INDEX=youtube_transcript_chunks
+YTSEARCH_SEARCH_BACKEND=meilisearch
 YTSEARCH_API_ADDR=0.0.0.0:8787
 RUST_LOG=youtube_api=info,tower_http=info
 LOG_FORMAT=json
@@ -37,9 +38,10 @@ YTSEARCH_SEARCH_RATE_LIMIT_PER_MINUTE=120
 
 ```env
 YOUTUBE_API_KEY=...
-TYPESENSE_API_URL=...
-TYPESENSE_ADMIN_API_KEY=...
-TYPESENSE_COLLECTION=youtube_transcript_chunks
+MEILI_HTTP_ADDR=...
+MEILI_MASTER_KEY=...
+MEILI_TRANSCRIPTS_INDEX=youtube_transcript_chunks
+YTSEARCH_SEARCH_BACKEND=meilisearch
 RUST_LOG=youtube_cli=info,youtube_sources=info,youtube_ytdlp=info,youtube_transcribe=info
 LOG_FORMAT=json
 ```
@@ -97,6 +99,37 @@ VITE_API_BASE_URL=https://api.example.com
 
 If using the current relative `/api` calls, add a Cloudflare Pages redirect/proxy rule or host frontend and API behind the same domain.
 
+## Fly.io Meilisearch staging
+
+Meilisearch is a persistent HTTP server backed by local disk. On Fly, run it as a separate app with a volume in the same region as the API. The included `fly.meilisearch.toml` uses the official Meilisearch Docker image, `/meili_data` storage, production mode, and a health check on `/health`.
+
+```bash
+export FLYIO_TOKEN='...'
+export MEILI_MASTER_KEY='...'
+scripts/fly-deploy-meili.sh
+```
+
+After the app is healthy, create a search key in Meilisearch or use a restricted key from your operator flow, then point the API staging app at it:
+
+```bash
+export MEILI_HTTP_ADDR=https://ytsearch-meili-staging.fly.dev
+export MEILI_SEARCH_API_KEY='...'
+APP_NAME=ytsearch-api-meili-staging scripts/fly-set-meili-api-secrets.sh
+fly deploy --config fly.staging.toml --app ytsearch-api-meili-staging --primary-region sjc
+```
+
+Index into staging with:
+
+```bash
+MEILI_HTTP_ADDR=https://ytsearch-meili-staging.fly.dev \
+MEILI_MASTER_KEY='...' \
+cargo run --release -p youtube_cli -- init-typesense
+
+MEILI_HTTP_ADDR=https://ytsearch-meili-staging.fly.dev \
+MEILI_MASTER_KEY='...' \
+cargo run --release -p youtube_cli -- index-youtuber @t3dotgg --max-videos 1 --no-wipe
+```
+
 ## Fly.io API
 
 This repository includes:
@@ -110,8 +143,8 @@ Use a Fly org token as an environment variable. `flyctl` expects `FLY_ACCESS_TOK
 
 ```bash
 export FLYIO_TOKEN='...'
-export TYPESENSE_API_URL='...'
-export TYPESENSE_SEARCH_API_KEY='...'
+export MEILI_HTTP_ADDR='...'
+export MEILI_SEARCH_API_KEY='...'
 
 scripts/fly-set-secrets.sh
 scripts/fly-deploy.sh
@@ -123,8 +156,8 @@ Equivalent manual commands:
 export FLY_ACCESS_TOKEN="$FLYIO_TOKEN"
 fly apps create ytsearch-api-pronsh-sandbox --org pronsh-sandbox
 fly secrets set \
-  TYPESENSE_API_URL='...' \
-  TYPESENSE_SEARCH_API_KEY='...' \
+  MEILI_HTTP_ADDR='...' \
+  MEILI_SEARCH_API_KEY='...' \
   --app ytsearch-api-pronsh-sandbox
 fly deploy --app ytsearch-api-pronsh-sandbox --primary-region sjc
 ```
@@ -173,8 +206,8 @@ Manual indexing on Fly with the same deployed image:
 export FLYIO_TOKEN='...'
 fly secrets set \
   YOUTUBE_API_KEY='...' \
-  TYPESENSE_ADMIN_API_KEY='...' \
-  TYPESENSE_API_URL='...' \
+  MEILI_MASTER_KEY='...' \
+  MEILI_HTTP_ADDR='...' \
   --app ytsearch-api-pronsh-sandbox
 scripts/fly-run-indexer.sh -- index-youtuber @t3dotgg --no-wipe --skip-existing --jobs 4
 ```
@@ -211,7 +244,32 @@ Use lower `--jobs` with transcription fallback because local audio transcription
 | Cloudflare Pages | Railway | Railway job | Simplest all-dashboard setup. |
 | Cloudflare Pages | Fly.io | Fly manual machine | Good if you prefer one Rust-oriented runtime. |
 | Railway static | Railway API | Railway job | Easiest but less CDN-focused. |
-| Cloudflare Pages | Cloudflare Workers | Not recommended for current Rust API | Current Axum API is not Worker-native. Use a Worker only as a reverse proxy. |
+| Cloudflare Pages | Cloudflare Workers | Not recommended for current Rust API | Current Axum API is not Worker-native. Use a Worker only as a reverse proxy. Meilisearch itself should run on Fly or another container host unless Cloudflare Containers is available for the account. |
+
+## Benchmark search latency
+
+Use the included curl benchmark against local, staging, and production APIs:
+
+```bash
+API_BASE_URL=http://127.0.0.1:8787 QUERY=react RUNS=20 scripts/benchmark-search.sh
+API_BASE_URL=https://ytsearch-api-meili-staging.fly.dev QUERY=react RUNS=20 scripts/benchmark-search.sh
+API_BASE_URL=https://ytsearch-api-pronsh-sandbox.fly.dev QUERY=react RUNS=20 scripts/benchmark-search.sh
+```
+
+Compare `time_starttransfer` for perceived responsiveness and `time_total` for full response completion. Keep the API and Meilisearch in the same Fly region, leave one machine running, and use public cache headers already emitted by `/api/search` for repeat-query UX.
+
+## Typesense rollback
+
+Typesense remains available through the deprecated `youtube_typesense` crate. To roll back without changing API/frontend code, set:
+
+```env
+YTSEARCH_SEARCH_BACKEND=typesense
+TYPESENSE_API_URL=...
+TYPESENSE_SEARCH_API_KEY=...
+TYPESENSE_COLLECTION=youtube_transcript_chunks
+```
+
+CLI indexing/search commands use the same `YTSEARCH_SEARCH_BACKEND` selector. Prefer `meilisearch` for new staging and production deployments.
 
 ## Observability
 

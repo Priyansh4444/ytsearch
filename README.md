@@ -1,12 +1,12 @@
 # ytsearch
 
-A Rust + SolidJS workspace for indexing YouTube creator transcripts into Typesense and searching exact timestamped moments.
+A Rust + SolidJS workspace for indexing YouTube creator transcripts into Meilisearch and searching exact timestamped moments.
 
 The current stack:
 
-- Rust workspace for YouTube metadata, transcript ingestion, Typesense indexing/search, and a small HTTP API.
+- Rust workspace for YouTube metadata, transcript ingestion, Meilisearch indexing/search, and a small HTTP API.
 - SolidJS + Vite + TypeScript + Tailwind frontend using Bun.
-- Typesense Cloud-compatible search storage.
+- Self-hosted Meilisearch-compatible search storage.
 - `yt-dlp` caption extraction as the primary transcript source.
 - Optional local audio transcription fallback through `voxtype` when captions are unavailable.
 
@@ -21,10 +21,12 @@ crates/youtube_client       Internal YouTube Data API v3 wrapper
 crates/youtube_ingest       Core transcript chunking/domain model
 crates/youtube_jsonl        JSONL chunk persistence helpers
 crates/youtube_semantic     Experimental embedding/semantic helpers
+crates/youtube_search       Shared search backend traits, query type, and indexed creator document
+crates/youtube_meilisearch  Meilisearch admin/search clients
 crates/youtube_sources      YouTube metadata sources + source fallback combinators
 crates/youtube_ytdlp        yt-dlp public caption transcript source
 crates/youtube_transcribe   yt-dlp audio extraction + voxtype transcription fallback
-crates/youtube_typesense    Typesense admin/search clients
+crates/youtube_typesense    Deprecated Typesense admin/search clients retained for rollback
 src/                        SolidJS frontend
 ```
 
@@ -34,14 +36,19 @@ Create a local `.env` file. It is intentionally gitignored.
 
 ```env
 YOUTUBE_API_KEY=...
-TYPESENSE_API_URL=...
-TYPESENSE_ADMIN_API_KEY=...
-TYPESENSE_SEARCH_API_KEY=...
+MEILI_HTTP_ADDR=...
+MEILI_MASTER_KEY=...
+MEILI_SEARCH_API_KEY=...
+YTSEARCH_SEARCH_BACKEND=meilisearch
 ```
 
 Optional:
 
 ```env
+MEILI_TRANSCRIPTS_INDEX=youtube_transcript_chunks
+TYPESENSE_API_URL=...
+TYPESENSE_ADMIN_API_KEY=...
+TYPESENSE_SEARCH_API_KEY=...
 TYPESENSE_COLLECTION=youtube_transcript_chunks
 YTSEARCH_API_ADDR=127.0.0.1:8787
 RUST_LOG=youtube_api=info,youtube_cli=info,youtube_sources=info,youtube_ytdlp=info,youtube_transcribe=info,tower_http=info
@@ -120,7 +127,7 @@ Validate a handle:
 cargo run -p youtube_cli -- validate @t3dotgg
 ```
 
-Index captions into Typesense:
+Index captions into Meilisearch:
 
 ```bash
 cargo run -p youtube_cli -- index-youtuber @t3dotgg
@@ -146,7 +153,7 @@ cargo run -p youtube_cli -- index-youtuber @t3dotgg \
   --voxtype-engine whisper
 ```
 
-Remove a creator locally from Typesense:
+Remove a creator locally from Meilisearch:
 
 ```bash
 cargo run -p youtube_cli -- remove-youtuber @oldhandle
@@ -164,7 +171,8 @@ cargo run -p youtube_cli -- search resident --youtuber @t3dotgg --per-page 5
 curl 'http://127.0.0.1:8787/api/search?q=resident&youtuber=@t3dotgg&per_page=5'
 ```
 
-The API uses the Typesense search-only key. Admin keys are only used by indexing commands.
+The API uses the Meilisearch search key. The master/admin key is only used by indexing commands.
+Set `YTSEARCH_SEARCH_BACKEND=typesense` to use the deprecated Typesense backend during rollback.
 
 ## Frontend behavior
 
@@ -176,7 +184,7 @@ The Solid frontend:
 - Switches to index mode when the query starts with `@`, then explains website indexing is unavailable and links to tag `@notpronsh` on X/Twitter.
 - Groups search results by video to avoid duplicate rows from nearby transcript chunks.
 - Shows a small set of matching snippets per video; clicking a snippet moves the embedded player to that timestamp.
-- Supports relevance/newest/oldest sorting with typo matching left enabled in Typesense.
+- Supports relevance/newest/oldest sorting with Meilisearch typo tolerance left enabled.
 - Uses `youtube-nocookie.com` embeds and opens timestamped YouTube links in a new tab.
 
 ## Architecture and deployment
