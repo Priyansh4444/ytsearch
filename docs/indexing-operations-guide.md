@@ -41,7 +41,7 @@ scripts/index-all-backends-update.sh scripts/indexed-channels.txt
 scripts/index-all-backends-rewipe.sh scripts/indexed-channels.txt
 ```
 
-`index-all-backends-update.sh` checks the newest 50 uploads per creator by default. This is intentional for normal incremental indexing because YouTube upload playlists are newest-first. Use `RECENT_VIDEOS=100` to widen the window, `MAX_VIDEOS=10` to shrink it, or `ALL_VIDEOS=1` to scan the full channel.
+`index-all-backends-update.sh` scans newest-first and stops after 50 consecutive already-indexed videos by default. This is sustainable for normal incremental indexing because YouTube upload playlists are newest-first. Use `EXISTING_TAIL=100` to scan deeper before stopping, `MAX_VIDEOS=10` to cap a test run, or `ALL_VIDEOS=1` to scan the full channel.
 
 By default it attempts `meilisearch typesense-cloud typesense-fly`. Scope a run with `BACKENDS`:
 
@@ -105,12 +105,16 @@ The count bug was caused by writing per-run counts into the creator document ins
 Repair all known creators without reindexing:
 
 ```bash
-cargo run --release -p youtube_cli -- refresh-youtubers scripts/indexed-channels.txt --backend meilisearch
-cargo run --release -p youtube_cli -- refresh-youtubers scripts/indexed-channels.txt --backend typesense
-TYPESENSE_API_URL=https://ytsearch-typesense-staging.fly.dev \
-TYPESENSE_ADMIN_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
-TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
-cargo run --release -p youtube_cli -- refresh-youtubers scripts/indexed-channels.txt --backend typesense
+scripts/refresh-all-backend-counts.sh scripts/indexed-channels.txt
+```
+
+Quickly check what each frontend/API currently reports:
+
+```bash
+API_BASE_URL="$MEILI_API_BASE_URL" scripts/export-indexed-channels-list.sh /tmp/meili-channels.txt
+API_BASE_URL="$TYPESENSE_CLOUD_API_BASE_URL" scripts/export-indexed-channels-list.sh /tmp/typesense-cloud-channels.txt
+API_BASE_URL="$TYPESENSE_FLY_API_BASE_URL" scripts/export-indexed-channels-list.sh /tmp/typesense-fly-channels.txt
+cat /tmp/*-channels.txt
 ```
 
 ## Deploys

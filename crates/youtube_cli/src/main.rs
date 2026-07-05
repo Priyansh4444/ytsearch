@@ -114,6 +114,11 @@ struct IndexYoutuberCommand {
     collection: TranscriptCollectionArg,
     #[arg(long, help = "Optional cap for a test indexing run")]
     max_videos: Option<usize>,
+    #[arg(
+        long,
+        help = "In update mode, stop scanning newest-first after this many consecutive already-indexed videos. Use 0 to disable"
+    )]
+    stop_after_existing: Option<usize>,
     #[arg(long, value_enum, default_value_t = IndexMode::Update)]
     mode: IndexMode,
     #[arg(long, default_value_t = 4, help = "Concurrent videos to index")]
@@ -170,6 +175,11 @@ struct IndexYoutubersCommand {
     mode: IndexMode,
     #[arg(long, help = "Optional cap per creator for a test indexing run")]
     max_videos: Option<usize>,
+    #[arg(
+        long,
+        help = "In update mode, stop scanning newest-first after this many consecutive already-indexed videos. Use 0 to disable"
+    )]
+    stop_after_existing: Option<usize>,
     #[arg(
         long,
         default_value_t = 4,
@@ -917,6 +927,13 @@ async fn refresh_youtuber_command(command: RefreshYoutuberCommand) -> Result<(),
 
     let youtuber_id = youtuber_id_from_handle(&youtuber.handle, &youtuber.channel_id);
     let existing = search.get_youtuber(&youtuber_id).await?;
+    let public_video_count = match discover_videos_for_youtuber(&youtube, &youtuber).await {
+        Ok(videos) => saturating_u32(videos.len()),
+        Err(error) => {
+            tracing::warn!(handle = %youtuber.handle, %error, "failed to refresh public video count");
+            existing.as_ref().map_or(0, |doc| doc.public_video_count)
+        }
+    };
     let chunk_stats = search.chunk_stats_by_youtuber_id(&youtuber_id).await?;
     let youtuber_doc = YoutuberDocument {
         id: youtuber_id,
@@ -924,7 +941,7 @@ async fn refresh_youtuber_command(command: RefreshYoutuberCommand) -> Result<(),
         name: youtuber.title.clone(),
         channel_id: youtuber.channel_id.clone(),
         uploads_playlist: youtuber.uploads_playlist.clone(),
-        public_video_count: existing.as_ref().map_or(0, |doc| doc.public_video_count),
+        public_video_count,
         indexed_video_count: saturating_u32(chunk_stats.indexed_videos),
         indexed_chunk_count: saturating_u32(chunk_stats.indexed_chunks),
         avatar_url: youtuber.avatar_url.clone(),
@@ -1057,27 +1074,28 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     let chunker = Chunker::new(command.chunk_seconds);
     let mut stats = IndexStats {
         discovered_videos: public_videos.len(),
-        attempted_videos: command
-            .max_videos
-            .map_or(public_videos.len(), |max| max.min(public_videos.len())),
         ..IndexStats::default()
     };
+    let videos_to_index = prepare_videos_to_index(
+        &public_videos,
+        &transcript_search,
+        skip_existing,
+        command.max_videos,
+        command.stop_after_existing,
+        &mut stats,
+    )
+    .await?;
 
     if stats.attempted_videos == 0 {
         println!(
-            "No public videos were discoverable for {}. No transcript chunks were imported.",
+            "No candidate videos selected for {}. No transcript chunks were imported.",
             youtuber.handle
         );
     }
-
-    let videos_to_index = public_videos
-        .iter()
-        .take(stats.attempted_videos)
-        .cloned()
-        .collect::<Vec<_>>();
     let jobs = command.jobs.clamp(1, 16);
     println!("Indexing with {jobs} concurrent job(s)");
-    let use_worker_existing_checks = skip_existing && videos_to_index.len() <= 100;
+    let use_worker_existing_checks =
+        skip_existing && command.stop_after_existing.is_none() && videos_to_index.len() <= 100;
     let existing_video_ids = if skip_existing && !use_worker_existing_checks {
         println!("Loading existing indexed video ids for {}", youtuber.handle);
         let existing = transcript_search
@@ -1223,6 +1241,7 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
             max_videos: command.max_videos,
             mode: command.mode,
             jobs: command.jobs,
+            stop_after_existing: command.stop_after_existing,
             skip_existing: command.mode == IndexMode::Update,
             no_wipe: command.mode == IndexMode::Update,
             content_kind: command.content_kind,
@@ -1254,6 +1273,57 @@ fn read_youtuber_list(path: &PathBuf) -> Result<Vec<String>, CliError> {
         .map(ToOwned::to_owned)
         .collect();
     Ok(handles)
+}
+
+async fn prepare_videos_to_index(
+    public_videos: &[DiscoveredVideo],
+    search: &SearchAdminClient,
+    skip_existing: bool,
+    max_videos: Option<usize>,
+    stop_after_existing: Option<usize>,
+    stats: &mut IndexStats,
+) -> Result<Vec<DiscoveredVideo>, CliError> {
+    let limit = max_videos.unwrap_or(public_videos.len());
+    let candidates = public_videos.iter().take(limit);
+
+    let stop_after_existing = stop_after_existing.filter(|count| *count > 0);
+    if !skip_existing || stop_after_existing.is_none() {
+        let videos = candidates.cloned().collect::<Vec<_>>();
+        stats.attempted_videos = videos.len();
+        return Ok(videos);
+    }
+
+    let stop_after_existing = stop_after_existing.expect("checked above");
+    let mut videos = Vec::new();
+    let mut consecutive_existing = 0usize;
+
+    for video in candidates {
+        stats.attempted_videos = stats.attempted_videos.saturating_add(1);
+        let existing_chunks = search.count_chunks_by_video_id(&video.video_id).await?;
+        if existing_chunks > 0 {
+            stats.existing_videos = stats.existing_videos.saturating_add(1);
+            stats.existing_chunks = stats
+                .existing_chunks
+                .saturating_add(saturating_u32(existing_chunks));
+            consecutive_existing = consecutive_existing.saturating_add(1);
+            if consecutive_existing >= stop_after_existing {
+                println!(
+                    "Stopped update scan after {consecutive_existing} consecutive already-indexed video(s)"
+                );
+                break;
+            }
+        } else {
+            consecutive_existing = 0;
+            videos.push(video.clone());
+        }
+    }
+
+    println!(
+        "Selected {} missing video(s) after checking {} newest upload(s)",
+        videos.len(),
+        stats.attempted_videos
+    );
+    Ok(videos)
 }
 
 fn transcript_source(no_cache: bool, cache_dir: PathBuf) -> YtDlpTranscriptSource {

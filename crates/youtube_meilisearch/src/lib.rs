@@ -294,10 +294,31 @@ impl MeilisearchAdminClient {
             .unwrap_or_default())
     }
 
-    pub async fn chunk_stats_by_youtuber_id(&self, youtuber_id: &str) -> Result<ChunkStats> {
-        let (indexed_chunks, indexed_video_ids) = self
-            .chunk_count_and_video_ids_by_youtuber_id(youtuber_id)
+    pub async fn count_chunks_by_youtuber_id(&self, youtuber_id: &str) -> Result<u64> {
+        let path = format!("indexes/{}/search", self.config.collection);
+        let url = endpoint(&self.config.api_url, &path)?;
+
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(&self.config.admin_api_key)
+            .json(&json!({
+                "q": "",
+                "filter": filter_to_meili(&format!("youtuber_id:={youtuber_id}")),
+                "limit": 0,
+            }))
+            .send()
             .await?;
+        let body = json_response(response).await?;
+        Ok(body
+            .get("estimatedTotalHits")
+            .and_then(Value::as_u64)
+            .unwrap_or_default())
+    }
+
+    pub async fn chunk_stats_by_youtuber_id(&self, youtuber_id: &str) -> Result<ChunkStats> {
+        let indexed_chunks = self.count_chunks_by_youtuber_id(youtuber_id).await?;
+        let indexed_video_ids = self.indexed_video_ids_by_youtuber_id(youtuber_id).await?;
         Ok(ChunkStats {
             indexed_videos: indexed_video_ids.len() as u64,
             indexed_chunks,
@@ -334,58 +355,6 @@ impl MeilisearchAdminClient {
                     .collect()
             })
             .unwrap_or_default())
-    }
-
-    async fn chunk_count_and_video_ids_by_youtuber_id(
-        &self,
-        youtuber_id: &str,
-    ) -> Result<(u64, HashSet<String>)> {
-        let path = format!("indexes/{}/documents", self.config.collection);
-        let limit = 1000usize;
-        let mut offset = 0usize;
-        let mut chunks = 0u64;
-        let mut videos = HashSet::new();
-
-        loop {
-            let mut url = endpoint(&self.config.api_url, &path)?;
-            {
-                let mut pairs = url.query_pairs_mut();
-                pairs.append_pair(
-                    "filter",
-                    &filter_to_meili(&format!("youtuber_id:={youtuber_id}")),
-                );
-                pairs.append_pair("fields", "video_id");
-                pairs.append_pair("limit", &limit.to_string());
-                pairs.append_pair("offset", &offset.to_string());
-            }
-            let response = self
-                .http
-                .get(url)
-                .bearer_auth(&self.config.admin_api_key)
-                .send()
-                .await?;
-            let body = json_response(response).await?;
-            let results = body
-                .get("results")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            if results.is_empty() {
-                break;
-            }
-            chunks = chunks.saturating_add(results.len() as u64);
-            for document in &results {
-                if let Some(video_id) = document.get("video_id").and_then(Value::as_str) {
-                    videos.insert(video_id.to_string());
-                }
-            }
-            offset = offset.saturating_add(results.len());
-            if results.len() < limit {
-                break;
-            }
-        }
-
-        Ok((chunks, videos))
     }
 
     pub async fn delete_documents_by_filter(&self, filter_by: &str) -> Result<Value> {
