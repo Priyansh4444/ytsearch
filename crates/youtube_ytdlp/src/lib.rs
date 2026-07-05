@@ -9,7 +9,11 @@ use async_trait::async_trait;
 use reqwest::Client as HttpClient;
 use serde::Deserialize;
 use serde_json::Value;
-use std::{env, process::Stdio};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::Stdio,
+};
 use tokio::{
     process::Command,
     time::{Duration, sleep, timeout},
@@ -33,6 +37,7 @@ const YT_DLP_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct YtDlpTranscriptSource {
     http: HttpClient,
     binary: String,
+    cache_dir: Option<PathBuf>,
 }
 
 impl YtDlpTranscriptSource {
@@ -46,6 +51,7 @@ impl YtDlpTranscriptSource {
         Self {
             http: timeout_http_client(),
             binary: binary.into(),
+            cache_dir: None,
         }
     }
 
@@ -53,7 +59,63 @@ impl YtDlpTranscriptSource {
         Self {
             http,
             binary: binary.into(),
+            cache_dir: None,
         }
+    }
+
+    pub fn with_cache_dir(mut self, cache_dir: impl Into<PathBuf>) -> Self {
+        self.cache_dir = Some(cache_dir.into());
+        self
+    }
+
+    fn cached_transcript(
+        &self,
+        video_id: &str,
+    ) -> youtube_ingest::Result<Option<Vec<TranscriptSegment>>> {
+        let Some(cache_dir) = &self.cache_dir else {
+            return Ok(None);
+        };
+        let path = transcript_cache_path(cache_dir, video_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let body = fs::read_to_string(&path).map_err(|error| {
+            transcript_error(video_id, format!("transcript cache read failed: {error}"))
+        })?;
+        serde_json::from_str(&body).map(Some).map_err(|error| {
+            transcript_error(video_id, format!("transcript cache parse failed: {error}"))
+        })
+    }
+
+    fn write_cached_transcript(
+        &self,
+        video_id: &str,
+        transcript: &[TranscriptSegment],
+    ) -> youtube_ingest::Result<()> {
+        let Some(cache_dir) = &self.cache_dir else {
+            return Ok(());
+        };
+        fs::create_dir_all(cache_dir).map_err(|error| {
+            transcript_error(
+                video_id,
+                format!("transcript cache directory create failed: {error}"),
+            )
+        })?;
+        let path = transcript_cache_path(cache_dir, video_id);
+        let tmp_path = path.with_extension("json.tmp");
+        let body = serde_json::to_string(transcript).map_err(|error| {
+            transcript_error(
+                video_id,
+                format!("transcript cache serialize failed: {error}"),
+            )
+        })?;
+        fs::write(&tmp_path, body).map_err(|error| {
+            transcript_error(video_id, format!("transcript cache write failed: {error}"))
+        })?;
+        fs::rename(&tmp_path, &path).map_err(|error| {
+            transcript_error(video_id, format!("transcript cache rename failed: {error}"))
+        })?;
+        Ok(())
     }
 
     async fn video_json(&self, video_id: &str) -> youtube_ingest::Result<Value> {
@@ -167,6 +229,11 @@ impl TranscriptSource for YtDlpTranscriptSource {
         &self,
         video_id: &str,
     ) -> youtube_ingest::Result<Vec<TranscriptSegment>> {
+        if let Some(transcript) = self.cached_transcript(video_id)? {
+            tracing::info!(video_id, "loaded transcript from cache");
+            return Ok(transcript);
+        }
+
         let video = self.video_json(video_id).await?;
         let track = select_caption_track(&video).ok_or_else(|| {
             transcript_error(
@@ -181,15 +248,34 @@ impl TranscriptSource for YtDlpTranscriptSource {
         );
         let body = self.fetch_caption(video_id, &track).await?;
 
-        match track.extension.as_str() {
+        let transcript = match track.extension.as_str() {
             "json3" => parse_json3_transcript(video_id, &body),
             "vtt" => parse_vtt_transcript(video_id, &body),
             extension => Err(transcript_error(
                 video_id,
                 format!("unsupported caption extension {extension}"),
             )),
-        }
+        }?;
+
+        self.write_cached_transcript(video_id, &transcript)?;
+        Ok(transcript)
     }
+}
+
+fn transcript_cache_path(cache_dir: &Path, video_id: &str) -> PathBuf {
+    cache_dir.join(format!("{}.json", sanitize_cache_key(video_id)))
+}
+
+fn sanitize_cache_key(key: &str) -> String {
+    key.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '_' || character == '-' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

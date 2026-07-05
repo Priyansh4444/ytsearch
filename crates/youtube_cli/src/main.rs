@@ -143,6 +143,10 @@ struct IndexYoutuberCommand {
     transcribe_missing: bool,
     #[arg(long, default_value = "data/transcription-cache")]
     transcription_cache_dir: PathBuf,
+    #[arg(long, default_value = "data/transcript-cache")]
+    transcript_cache_dir: PathBuf,
+    #[arg(long, help = "Disable the yt-dlp transcript cache")]
+    no_transcript_cache: bool,
     #[arg(long, default_value_t = 30)]
     transcription_chunk_seconds: u32,
     #[arg(
@@ -187,6 +191,10 @@ struct IndexYoutubersCommand {
     transcribe_missing: bool,
     #[arg(long, default_value = "data/transcription-cache")]
     transcription_cache_dir: PathBuf,
+    #[arg(long, default_value = "data/transcript-cache")]
+    transcript_cache_dir: PathBuf,
+    #[arg(long, help = "Disable the yt-dlp transcript cache")]
+    no_transcript_cache: bool,
     #[arg(long, default_value_t = 30)]
     transcription_chunk_seconds: u32,
     #[arg(
@@ -224,6 +232,10 @@ struct IndexVideoCommand {
     transcribe_missing: bool,
     #[arg(long, default_value = "data/transcription-cache")]
     transcription_cache_dir: PathBuf,
+    #[arg(long, default_value = "data/transcript-cache")]
+    transcript_cache_dir: PathBuf,
+    #[arg(long, help = "Disable the yt-dlp transcript cache")]
+    no_transcript_cache: bool,
     #[arg(long, default_value_t = 30)]
     transcription_chunk_seconds: u32,
     #[arg(
@@ -629,6 +641,22 @@ impl SearchAdminClient {
         }
     }
 
+    async fn indexed_video_ids_by_youtuber_id(
+        &self,
+        id: &str,
+    ) -> Result<HashSet<String>, CliError> {
+        match self {
+            Self::Meilisearch(client) => client
+                .indexed_video_ids_by_youtuber_id(id)
+                .await
+                .map_err(CliError::from),
+            Self::Typesense(client) => client
+                .indexed_video_ids_by_youtuber_id(id)
+                .await
+                .map_err(CliError::from),
+        }
+    }
+
     async fn import_chunks_batched(
         &self,
         chunks: &[youtube_ingest::TranscriptChunk],
@@ -1014,7 +1042,10 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     }
 
     let metadata_source = YouTubeMetadataSource::new(youtube.clone());
-    let caption_source = YtDlpTranscriptSource::new();
+    let caption_source = transcript_source(
+        command.no_transcript_cache,
+        command.transcript_cache_dir.clone(),
+    );
     let transcribe_source = command.transcribe_missing.then(|| {
         VoxtypeTranscriptSource::with_config(
             TranscriptionConfig::default()
@@ -1046,8 +1077,36 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         .collect::<Vec<_>>();
     let jobs = command.jobs.clamp(1, 16);
     println!("Indexing with {jobs} concurrent job(s)");
-    if skip_existing {
-        println!("Skipping videos that already have transcript chunks");
+    let existing_video_ids = if skip_existing {
+        println!("Loading existing indexed video ids for {}", youtuber.handle);
+        let existing = transcript_search
+            .indexed_video_ids_by_youtuber_id(&youtuber_id)
+            .await?;
+        println!(
+            "Skipping videos that already have transcript chunks ({} cached ids)",
+            existing.len()
+        );
+        existing
+    } else {
+        HashSet::new()
+    };
+    let existing_video_count = existing_video_ids.len();
+    let videos_to_index = videos_to_index
+        .into_iter()
+        .filter(|video| {
+            if existing_video_ids.contains(&video.video_id) {
+                stats.existing_videos = stats.existing_videos.saturating_add(1);
+                false
+            } else {
+                true
+            }
+        })
+        .collect::<Vec<_>>();
+    if existing_video_count > 0 {
+        println!(
+            "Skipped {} already-indexed video(s) before starting workers",
+            stats.existing_videos
+        );
     }
 
     let mut tasks = JoinSet::new();
@@ -1072,7 +1131,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
                 chunker.clone(),
                 transcript_search.clone(),
                 command.content_kind,
-                skip_existing,
+                false,
             ));
         }
 
@@ -1164,6 +1223,8 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
             chunk_seconds: command.chunk_seconds,
             transcribe_missing: command.transcribe_missing,
             transcription_cache_dir: command.transcription_cache_dir.clone(),
+            transcript_cache_dir: command.transcript_cache_dir.clone(),
+            no_transcript_cache: command.no_transcript_cache,
             transcription_chunk_seconds: command.transcription_chunk_seconds,
             voxtype_engine: command.voxtype_engine.clone(),
         };
@@ -1187,6 +1248,15 @@ fn read_youtuber_list(path: &PathBuf) -> Result<Vec<String>, CliError> {
         .map(ToOwned::to_owned)
         .collect();
     Ok(handles)
+}
+
+fn transcript_source(no_cache: bool, cache_dir: PathBuf) -> YtDlpTranscriptSource {
+    let source = YtDlpTranscriptSource::new();
+    if no_cache {
+        source
+    } else {
+        source.with_cache_dir(cache_dir)
+    }
 }
 
 #[derive(Debug)]
@@ -1400,7 +1470,10 @@ async fn index_video_command(command: IndexVideoCommand) -> Result<(), CliError>
     }
 
     let metadata_source = YouTubeMetadataSource::new(youtube);
-    let caption_source = YtDlpTranscriptSource::new();
+    let caption_source = transcript_source(
+        command.no_transcript_cache,
+        command.transcript_cache_dir.clone(),
+    );
     let transcribe_source = command.transcribe_missing.then(|| {
         VoxtypeTranscriptSource::with_config(
             TranscriptionConfig::default()

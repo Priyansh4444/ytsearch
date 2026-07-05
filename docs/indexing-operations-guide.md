@@ -15,7 +15,7 @@ Each preview points search at a different backend API and posts `@handle` index 
 Run this in a terminal or background job. It updates all three indexes, then refreshes profile counts in all three:
 
 ```bash
-JOBS=8 nohup scripts/index-all-backends-update.sh scripts/indexed-channels.txt \
+JOBS=4 nohup scripts/index-all-backends-update.sh scripts/indexed-channels.txt \
   > /tmp/ytsearch-index-all.log 2>&1 &
 ```
 
@@ -33,6 +33,13 @@ tail -f /tmp/ytsearch-index-all.log
 ```
 
 For Meilisearch, prefer `JOBS=3` or `JOBS=4` on the current Fly staging VM. Higher concurrency can create large update temp files and trigger disk pressure.
+
+Update mode now does two layers of work avoidance:
+
+1. It loads the already-indexed `video_id`s for a creator once, then skips those videos locally before workers start.
+2. It caches fetched `yt-dlp` transcript segments under `data/transcript-cache`, so retrying after a backend import failure does not refetch captions.
+
+Use `--no-transcript-cache` when you need to force a fresh caption fetch.
 
 The script runs:
 

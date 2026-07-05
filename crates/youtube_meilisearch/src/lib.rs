@@ -295,6 +295,28 @@ impl MeilisearchAdminClient {
     }
 
     pub async fn chunk_stats_by_youtuber_id(&self, youtuber_id: &str) -> Result<ChunkStats> {
+        let (indexed_chunks, indexed_video_ids) = self
+            .chunk_count_and_video_ids_by_youtuber_id(youtuber_id)
+            .await?;
+        Ok(ChunkStats {
+            indexed_videos: indexed_video_ids.len() as u64,
+            indexed_chunks,
+        })
+    }
+
+    pub async fn indexed_video_ids_by_youtuber_id(
+        &self,
+        youtuber_id: &str,
+    ) -> Result<HashSet<String>> {
+        self.chunk_count_and_video_ids_by_youtuber_id(youtuber_id)
+            .await
+            .map(|(_, video_ids)| video_ids)
+    }
+
+    async fn chunk_count_and_video_ids_by_youtuber_id(
+        &self,
+        youtuber_id: &str,
+    ) -> Result<(u64, HashSet<String>)> {
         let path = format!("indexes/{}/documents", self.config.collection);
         let limit = 1000usize;
         let mut offset = 0usize;
@@ -340,10 +362,7 @@ impl MeilisearchAdminClient {
             }
         }
 
-        Ok(ChunkStats {
-            indexed_videos: videos.len() as u64,
-            indexed_chunks: chunks,
-        })
+        Ok((chunks, videos))
     }
 
     pub async fn delete_documents_by_filter(&self, filter_by: &str) -> Result<Value> {
