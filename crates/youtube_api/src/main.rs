@@ -1,19 +1,20 @@
+use axiom_rs::Client as AxiomClient;
 use axum::{
     Json, Router,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{delete, get, post},
 };
-use axiom_rs::Client as AxiomClient;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::{HashMap, VecDeque},
     env,
     net::{AddrParseError, SocketAddr},
+    path::PathBuf,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -42,6 +43,13 @@ struct AppState {
     axiom: Option<AxiomLogger>,
     rate_limiter: Arc<Mutex<RateLimiter>>,
     search_rate_limit_per_minute: usize,
+    index_queue: IndexQueue,
+}
+
+#[derive(Clone, Debug)]
+struct IndexQueue {
+    path: PathBuf,
+    token: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -67,6 +75,37 @@ struct SearchParams {
 #[derive(Debug, Serialize)]
 struct YoutubersResponse {
     channels: Vec<YoutuberDocument>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IndexRequestInput {
+    handle: String,
+    note: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct IndexQueueItem {
+    id: String,
+    handle: String,
+    note: Option<String>,
+    requested_at: u64,
+    source_backend: String,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct IndexQueueResponse {
+    request: IndexQueueItem,
+}
+
+#[derive(Debug, Deserialize)]
+struct IndexQueueParams {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct IndexQueueListResponse {
+    requests: Vec<IndexQueueItem>,
 }
 
 #[derive(Debug, Serialize)]
@@ -164,6 +203,12 @@ enum ApiError {
     EmptyQuery,
     #[error("rate limited; retry after {0} seconds")]
     RateLimited(u64),
+    #[error("unauthorized")]
+    Unauthorized,
+    #[error("invalid handle")]
+    InvalidHandle,
+    #[error("queue failed: {0}")]
+    Queue(String),
     #[error("search backend failed: {0}")]
     SearchBackend(#[from] SearchBackendError),
     #[error("search response had an unexpected shape")]
@@ -194,11 +239,22 @@ async fn main() -> Result<(), ApiError> {
             "YTSEARCH_SEARCH_RATE_LIMIT_PER_MINUTE",
             DEFAULT_SEARCH_RATE_LIMIT_PER_MINUTE,
         ),
+        index_queue: IndexQueue {
+            path: env::var("YTSEARCH_INDEX_QUEUE_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("data/index-requests.jsonl")),
+            token: env::var("YTSEARCH_INDEX_QUEUE_TOKEN").ok(),
+        },
     });
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/youtubers", get(youtubers_handler))
         .route("/api/search", get(search_handler))
+        .route(
+            "/api/index-requests",
+            post(create_index_request).get(list_index_requests),
+        )
+        .route("/api/index-requests/{id}", delete(ack_index_request))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -261,16 +317,29 @@ async fn search_handler(
     let page = params.page.unwrap_or(1).max(1);
     let sort = params.sort.unwrap_or_default();
     let search_started = Instant::now();
-    let search_page_size = per_page.saturating_mul(8).min(MAX_PER_PAGE);
+    let use_backend_distinct = state.search_backend.eq_ignore_ascii_case("meilisearch");
+    let search_page_size = if use_backend_distinct {
+        per_page.saturating_add(1).min(MAX_PER_PAGE)
+    } else {
+        per_page.saturating_mul(8).min(MAX_PER_PAGE)
+    };
     let requested_offset = (page - 1).saturating_mul(u32::from(per_page));
-    let search_backend_page = 1;
-    let local_offset = requested_offset as usize;
+    let search_backend_page = if use_backend_distinct { page } else { 1 };
+    let local_offset = if use_backend_distinct {
+        0
+    } else {
+        requested_offset as usize
+    };
     let mut search_query = TextSearchQuery::new(query)
         .query_by("text,title")
         .highlight_fields("text,title")
         .per_page(search_page_size)
-        .page(search_backend_page)
-        .without_grouping();
+        .page(search_backend_page);
+    if use_backend_distinct {
+        search_query = search_query.group_by("video_id").group_limit(1);
+    } else {
+        search_query = search_query.without_grouping();
+    }
     tracing::info!(
         query,
         per_page,
@@ -361,6 +430,59 @@ async fn search_handler(
     ))
 }
 
+async fn create_index_request(
+    State(state): State<Arc<AppState>>,
+    Json(input): Json<IndexRequestInput>,
+) -> Result<Response, ApiError> {
+    let handle = normalize_handle_checked(&input.handle)?;
+    let request = IndexQueueItem {
+        id: format!(
+            "{}-{}",
+            epoch_seconds(),
+            handle.trim_start_matches('@').replace('-', "")
+        ),
+        handle,
+        note: input.note.filter(|note| !note.trim().is_empty()),
+        requested_at: epoch_seconds(),
+        source_backend: state.search_backend.clone(),
+        status: "queued".to_string(),
+    };
+    state.index_queue.append(&request).await?;
+    Ok(cache_response(
+        CACHE_NO_STORE,
+        (StatusCode::ACCEPTED, Json(IndexQueueResponse { request })),
+    ))
+}
+
+async fn list_index_requests(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(params): Query<IndexQueueParams>,
+) -> Result<Response, ApiError> {
+    state.index_queue.authorize(&headers)?;
+    let requests = state
+        .index_queue
+        .list(params.limit.unwrap_or(100).clamp(1, 1000))
+        .await?;
+    Ok(cache_response(
+        CACHE_NO_STORE,
+        Json(IndexQueueListResponse { requests }),
+    ))
+}
+
+async fn ack_index_request(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    state.index_queue.authorize(&headers)?;
+    state.index_queue.ack(&id).await?;
+    Ok(cache_response(
+        CACHE_NO_STORE,
+        Json(serde_json::json!({ "ok": true })),
+    ))
+}
+
 fn is_searchable_channel(channel: &YoutuberDocument) -> bool {
     channel.indexed_video_count > 0 && channel.indexed_chunk_count > 0
 }
@@ -388,6 +510,77 @@ impl RateLimiter {
         }
         bucket.push_back(now);
         Ok(())
+    }
+}
+
+impl IndexQueue {
+    async fn append(&self, request: &IndexQueueItem) -> Result<(), ApiError> {
+        if let Some(parent) = self.path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let line =
+            serde_json::to_string(request).map_err(|error| ApiError::Queue(error.to_string()))?;
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .await?;
+        use tokio::io::AsyncWriteExt;
+        file.write_all(line.as_bytes()).await?;
+        file.write_all(b"\n").await?;
+        Ok(())
+    }
+
+    async fn list(&self, limit: usize) -> Result<Vec<IndexQueueItem>, ApiError> {
+        let body = match tokio::fs::read_to_string(&self.path).await {
+            Ok(body) => body,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(ApiError::Server(error)),
+        };
+        Ok(body
+            .lines()
+            .filter_map(|line| serde_json::from_str::<IndexQueueItem>(line).ok())
+            .take(limit)
+            .collect())
+    }
+
+    async fn ack(&self, id: &str) -> Result<(), ApiError> {
+        let requests = self
+            .list(usize::MAX)
+            .await?
+            .into_iter()
+            .filter(|request| request.id != id)
+            .collect::<Vec<_>>();
+        if let Some(parent) = self.path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let mut body = String::new();
+        for request in requests {
+            let line = serde_json::to_string(&request)
+                .map_err(|error| ApiError::Queue(error.to_string()))?;
+            body.push_str(&line);
+            body.push('\n');
+        }
+        tokio::fs::write(&self.path, body).await?;
+        Ok(())
+    }
+
+    fn authorize(&self, headers: &HeaderMap) -> Result<(), ApiError> {
+        let Some(expected) = &self.token else {
+            return Err(ApiError::Unauthorized);
+        };
+        let bearer = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "));
+        let explicit = headers
+            .get("x-index-queue-token")
+            .and_then(|value| value.to_str().ok());
+        if bearer == Some(expected.as_str()) || explicit == Some(expected.as_str()) {
+            Ok(())
+        } else {
+            Err(ApiError::Unauthorized)
+        }
     }
 }
 
@@ -727,6 +920,27 @@ fn normalize_handle(handle: &str) -> String {
     }
 }
 
+fn normalize_handle_checked(handle: &str) -> Result<String, ApiError> {
+    let normalized = normalize_handle(handle);
+    if normalized.len() <= 1
+        || !normalized
+            .strip_prefix('@')
+            .unwrap_or_default()
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.')
+    {
+        return Err(ApiError::InvalidHandle);
+    }
+    Ok(normalized)
+}
+
+fn epoch_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 fn client_key(headers: &HeaderMap) -> String {
     ["cf-connecting-ip", "fly-client-ip", "x-forwarded-for"]
         .iter()
@@ -868,11 +1082,13 @@ async fn shutdown_signal() {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self {
-            Self::EmptyQuery => StatusCode::BAD_REQUEST,
+            Self::EmptyQuery | Self::InvalidHandle => StatusCode::BAD_REQUEST,
+            Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::MissingEnv(_)
             | Self::InvalidBindAddress(_)
             | Self::InvalidSearchBackend(_)
+            | Self::Queue(_)
             | Self::Server(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::SearchBackend(_) | Self::UnexpectedSearchShape => StatusCode::BAD_GATEWAY,
         };

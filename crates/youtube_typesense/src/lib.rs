@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use reqwest::{Client as HttpClient, StatusCode, Url, header::CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{fmt, time::Duration};
+use std::{collections::HashSet, fmt, time::Duration};
 use thiserror::Error;
 use tokio::time::sleep;
 use youtube_ingest::{ChunkSink, IngestError, TranscriptChunk};
@@ -21,7 +21,7 @@ pub const DEFAULT_COLLECTION: &str = "youtube_transcript_chunks";
 pub const YOUTUBERS_COLLECTION: &str = "youtube_youtubers";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(180);
 const IMPORT_BATCH_SIZE: usize = 1;
-const IMPORT_ATTEMPTS: u8 = 3;
+const IMPORT_ATTEMPTS: u8 = 6;
 const DELETE_ATTEMPTS: u8 = 3;
 
 #[derive(Clone, Eq, PartialEq)]
@@ -269,6 +269,61 @@ impl TypesenseAdminClient {
             .get("found")
             .and_then(Value::as_u64)
             .unwrap_or_default())
+    }
+
+    pub async fn chunk_stats_by_youtuber_id(&self, youtuber_id: &str) -> Result<ChunkStats> {
+        let path = format!("collections/{}/documents/search", self.config.collection);
+        let per_page = 250u32;
+        let mut page = 1u32;
+        let mut chunks = 0u64;
+        let mut videos = HashSet::new();
+
+        loop {
+            let mut url = endpoint(&self.config.api_url, &path)?;
+            {
+                let mut pairs = url.query_pairs_mut();
+                pairs.append_pair("q", "*");
+                pairs.append_pair("filter_by", &format!("youtuber_id:={youtuber_id}"));
+                pairs.append_pair("include_fields", "video_id");
+                pairs.append_pair("per_page", &per_page.to_string());
+                pairs.append_pair("page", &page.to_string());
+            }
+
+            let response = self
+                .http
+                .get(url)
+                .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
+                .send()
+                .await?;
+            let body = json_response(response).await?;
+            let hits = body
+                .get("hits")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if hits.is_empty() {
+                break;
+            }
+            chunks = chunks.saturating_add(hits.len() as u64);
+            for hit in &hits {
+                if let Some(video_id) = hit
+                    .get("document")
+                    .and_then(|document| document.get("video_id"))
+                    .and_then(Value::as_str)
+                {
+                    videos.insert(video_id.to_string());
+                }
+            }
+            if hits.len() < per_page as usize {
+                break;
+            }
+            page = page.saturating_add(1);
+        }
+
+        Ok(ChunkStats {
+            indexed_videos: videos.len() as u64,
+            indexed_chunks: chunks,
+        })
     }
 
     pub async fn delete_documents_by_filter(&self, filter_by: &str) -> Result<Value> {
@@ -525,6 +580,12 @@ pub struct TypesenseImport {
     pub body: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChunkStats {
+    pub indexed_videos: u64,
+    pub indexed_chunks: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct YoutuberDocument {
     pub id: String,
@@ -637,7 +698,9 @@ impl TypesenseError {
         match self {
             Self::Http(error) => error.is_timeout() || error.is_connect() || error.is_request(),
             Self::Api { status, .. } => {
-                status.is_server_error() || *status == StatusCode::TOO_MANY_REQUESTS
+                status.is_server_error()
+                    || *status == StatusCode::TOO_MANY_REQUESTS
+                    || *status == StatusCode::REQUEST_TIMEOUT
             }
             Self::InvalidUrl(_) | Self::Json(_) | Self::RetryExhausted => false,
         }

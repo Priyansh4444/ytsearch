@@ -34,8 +34,12 @@ enum Command {
     InitTypesense(InitTypesenseCommand),
     #[command(about = "Create/update the YouTuber document and report discoverable public videos")]
     IndexYoutuber(IndexYoutuberCommand),
+    #[command(about = "Index YouTubers from a text file")]
+    IndexYoutubers(IndexYoutubersCommand),
     #[command(about = "Refresh the indexed YouTuber profile document without reindexing videos")]
     RefreshYoutuber(RefreshYoutuberCommand),
+    #[command(about = "Refresh indexed YouTuber profile documents from a text file")]
+    RefreshYoutubers(RefreshYoutubersCommand),
     #[command(about = "Remove a YouTuber document and transcript chunks from the search backend")]
     RemoveYoutuber(RemoveYoutuberCommand),
     #[command(about = "Index one video by ID or URL")]
@@ -44,7 +48,7 @@ enum Command {
     Search(SearchCommand),
 }
 
-#[derive(Debug, Args)]
+#[derive(Clone, Debug, Args)]
 struct ValidateCommand {
     #[command(flatten)]
     youtuber: YoutuberArg,
@@ -54,7 +58,7 @@ struct ValidateCommand {
     youtube: YouTubeAuthArgs,
 }
 
-#[derive(Debug, Args)]
+#[derive(Clone, Debug, Args)]
 struct InitTypesenseCommand {
     #[command(flatten)]
     youtuber: YoutuberArg,
@@ -63,43 +67,55 @@ struct InitTypesenseCommand {
     #[command(flatten)]
     youtube: YouTubeAuthArgs,
     #[command(flatten)]
-    typesense: TypesenseAdminArgs,
+    search: SearchAdminArgs,
     #[command(flatten)]
     collection: TranscriptCollectionArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Clone, Debug, Args)]
 struct RefreshYoutuberCommand {
     #[command(flatten)]
     youtuber: YoutuberArg,
     #[command(flatten)]
     youtube: YouTubeAuthArgs,
     #[command(flatten)]
-    typesense: TypesenseAdminArgs,
+    search: SearchAdminArgs,
 }
 
-#[derive(Debug, Args)]
+#[derive(Clone, Debug, Args)]
+struct RefreshYoutubersCommand {
+    #[arg(value_name = "LIST_FILE")]
+    list_file: PathBuf,
+    #[command(flatten)]
+    youtube: YouTubeAuthArgs,
+    #[command(flatten)]
+    search: SearchAdminArgs,
+}
+
+#[derive(Clone, Debug, Args)]
 struct RemoveYoutuberCommand {
     #[command(flatten)]
     youtuber: YoutuberArg,
     #[command(flatten)]
-    typesense: TypesenseAdminArgs,
+    search: SearchAdminArgs,
     #[command(flatten)]
     collection: TranscriptCollectionArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Clone, Debug, Args)]
 struct IndexYoutuberCommand {
     #[command(flatten)]
     youtuber: YoutuberArg,
     #[command(flatten)]
     youtube: YouTubeAuthArgs,
     #[command(flatten)]
-    typesense: TypesenseAdminArgs,
+    search: SearchAdminArgs,
     #[command(flatten)]
     collection: TranscriptCollectionArg,
     #[arg(long, help = "Optional cap for a test indexing run")]
     max_videos: Option<usize>,
+    #[arg(long, value_enum, default_value_t = IndexMode::Update)]
+    mode: IndexMode,
     #[arg(long, default_value_t = 4, help = "Concurrent videos to index")]
     jobs: usize,
     #[arg(
@@ -136,14 +152,58 @@ struct IndexYoutuberCommand {
     voxtype_engine: Option<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Clone, Debug, Args)]
+struct IndexYoutubersCommand {
+    #[arg(value_name = "LIST_FILE")]
+    list_file: PathBuf,
+    #[command(flatten)]
+    youtube: YouTubeAuthArgs,
+    #[command(flatten)]
+    search: SearchAdminArgs,
+    #[command(flatten)]
+    collection: TranscriptCollectionArg,
+    #[arg(long, value_enum, default_value_t = IndexMode::Update)]
+    mode: IndexMode,
+    #[arg(long, help = "Optional cap per creator for a test indexing run")]
+    max_videos: Option<usize>,
+    #[arg(
+        long,
+        default_value_t = 4,
+        help = "Concurrent videos to index per creator"
+    )]
+    jobs: usize,
+    #[arg(long, value_enum, default_value_t = ContentKindFilter::All)]
+    content_kind: ContentKindFilter,
+    #[arg(
+        long,
+        default_value_t = 10,
+        help = "Transcript chunk window in seconds"
+    )]
+    chunk_seconds: u32,
+    #[arg(
+        long,
+        help = "When captions are missing, extract audio with yt-dlp and transcribe locally with voxtype"
+    )]
+    transcribe_missing: bool,
+    #[arg(long, default_value = "data/transcription-cache")]
+    transcription_cache_dir: PathBuf,
+    #[arg(long, default_value_t = 30)]
+    transcription_chunk_seconds: u32,
+    #[arg(
+        long,
+        help = "Optional voxtype engine override, e.g. whisper or parakeet"
+    )]
+    voxtype_engine: Option<String>,
+}
+
+#[derive(Clone, Debug, Args)]
 struct IndexVideoCommand {
     #[arg(value_name = "VIDEO_ID_OR_URL")]
     video: String,
     #[command(flatten)]
     youtube: YouTubeAuthArgs,
     #[command(flatten)]
-    typesense: TypesenseAdminArgs,
+    search: SearchAdminArgs,
     #[command(flatten)]
     collection: TranscriptCollectionArg,
     #[arg(
@@ -173,27 +233,27 @@ struct IndexVideoCommand {
     voxtype_engine: Option<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Clone, Debug, Args)]
 struct SearchCommand {
     #[arg(value_name = "QUERY")]
     query: String,
     #[arg(long, help = "Optional YouTube handle filter, e.g. @t3dotgg")]
     youtuber: Option<String>,
     #[command(flatten)]
-    typesense: TypesenseSearchArgs,
+    search: SearchQueryArgs,
     #[command(flatten)]
     collection: TranscriptCollectionArg,
     #[arg(long, default_value_t = 10)]
     per_page: u8,
 }
 
-#[derive(Debug, Args)]
+#[derive(Clone, Debug, Args)]
 struct YoutuberArg {
     #[arg(value_name = "HANDLE", help = "YouTube handle, e.g. @t3dotgg")]
     handle: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Clone, Debug, Args)]
 struct YouTubeAuthArgs {
     #[arg(
         long,
@@ -204,8 +264,8 @@ struct YouTubeAuthArgs {
     youtube_api_key: String,
 }
 
-#[derive(Debug, Args)]
-struct TypesenseAdminArgs {
+#[derive(Clone, Debug, Args)]
+struct SearchAdminArgs {
     #[arg(
         long,
         env = "YTSEARCH_SEARCH_BACKEND",
@@ -215,22 +275,22 @@ struct TypesenseAdminArgs {
     backend: SearchBackend,
     #[arg(
         long,
-        env = "MEILI_HTTP_ADDR",
+        env = "YTSEARCH_SEARCH_API_URL",
         hide_env_values = true,
-        help = "Meilisearch HTTP URL, e.g. https://ytsearch-meili-staging.fly.dev"
+        help = "Search backend admin URL. Defaults to MEILI_HTTP_ADDR or TYPESENSE_API_URL based on backend"
     )]
-    typesense_api_url: String,
+    api_url: Option<String>,
     #[arg(
         long,
-        env = "MEILI_MASTER_KEY",
+        env = "YTSEARCH_SEARCH_ADMIN_API_KEY",
         hide_env_values = true,
-        help = "Meilisearch master/admin API key; used only for schema/import operations"
+        help = "Search backend admin key. Defaults to MEILI_MASTER_KEY or TYPESENSE_ADMIN_API_KEY based on backend"
     )]
-    typesense_admin_api_key: String,
+    admin_api_key: Option<String>,
 }
 
-#[derive(Debug, Args)]
-struct TypesenseSearchArgs {
+#[derive(Clone, Debug, Args)]
+struct SearchQueryArgs {
     #[arg(
         long,
         env = "YTSEARCH_SEARCH_BACKEND",
@@ -240,18 +300,18 @@ struct TypesenseSearchArgs {
     backend: SearchBackend,
     #[arg(
         long,
-        env = "MEILI_HTTP_ADDR",
+        env = "YTSEARCH_SEARCH_API_URL",
         hide_env_values = true,
-        help = "Meilisearch HTTP URL, e.g. https://ytsearch-meili-staging.fly.dev"
+        help = "Search backend URL. Defaults to MEILI_HTTP_ADDR or TYPESENSE_API_URL based on backend"
     )]
-    typesense_api_url: String,
+    api_url: Option<String>,
     #[arg(
         long,
-        env = "MEILI_SEARCH_API_KEY",
+        env = "YTSEARCH_SEARCH_API_KEY",
         hide_env_values = true,
-        help = "Meilisearch search API key"
+        help = "Search key. Defaults to MEILI_SEARCH_API_KEY/MEILI_MASTER_KEY or TYPESENSE_SEARCH_API_KEY based on backend"
     )]
-    typesense_search_api_key: String,
+    search_api_key: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -260,7 +320,13 @@ enum SearchBackend {
     Typesense,
 }
 
-#[derive(Debug, Args)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum IndexMode {
+    Update,
+    Rewipe,
+}
+
+#[derive(Clone, Debug, Args)]
 struct TranscriptCollectionArg {
     #[arg(
         long,
@@ -277,67 +343,143 @@ impl YouTubeAuthArgs {
     }
 }
 
-impl TypesenseAdminArgs {
-    fn client(&self, collection: impl Into<String>) -> SearchAdminClient {
+impl SearchAdminArgs {
+    fn resolved(&self) -> Result<ResolvedSearchAdminArgs, CliError> {
+        let api_url = self.api_url.clone().or_else(|| match self.backend {
+            SearchBackend::Meilisearch => std::env::var("MEILI_HTTP_ADDR").ok(),
+            SearchBackend::Typesense => std::env::var("TYPESENSE_API_URL").ok(),
+        });
+        let admin_api_key = self.admin_api_key.clone().or_else(|| match self.backend {
+            SearchBackend::Meilisearch => std::env::var("MEILI_MASTER_KEY").ok(),
+            SearchBackend::Typesense => std::env::var("TYPESENSE_ADMIN_API_KEY").ok(),
+        });
+
+        Ok(ResolvedSearchAdminArgs {
+            backend: self.backend,
+            api_url: api_url.ok_or_else(|| {
+                CliError::Message(format!(
+                    "missing admin URL for {} backend",
+                    self.backend.name()
+                ))
+            })?,
+            admin_api_key: admin_api_key.ok_or_else(|| {
+                CliError::Message(format!(
+                    "missing admin key for {} backend",
+                    self.backend.name()
+                ))
+            })?,
+        })
+    }
+
+    fn client(&self, collection: impl Into<String>) -> Result<SearchAdminClient, CliError> {
         let collection = collection.into();
-        match self.backend {
+        let resolved = self.resolved()?;
+        Ok(match resolved.backend {
             SearchBackend::Meilisearch => {
                 SearchAdminClient::Meilisearch(MeilisearchAdminClient::new(
                     MeilisearchAdminConfig::new(
-                        self.typesense_api_url.clone(),
-                        self.typesense_admin_api_key.clone(),
+                        resolved.api_url.clone(),
+                        resolved.admin_api_key.clone(),
                     )
                     .with_collection(collection),
                 ))
             }
             SearchBackend::Typesense => SearchAdminClient::Typesense(TypesenseAdminClient::new(
-                TypesenseAdminConfig::new(
-                    self.typesense_api_url.clone(),
-                    self.typesense_admin_api_key.clone(),
-                )
-                .with_collection(collection),
+                TypesenseAdminConfig::new(resolved.api_url.clone(), resolved.admin_api_key.clone())
+                    .with_collection(collection),
             )),
-        }
+        })
     }
 
-    fn youtuber_client(&self) -> SearchAdminClient {
-        match self.backend {
+    fn youtuber_client(&self) -> Result<SearchAdminClient, CliError> {
+        let resolved = self.resolved()?;
+        Ok(match resolved.backend {
             SearchBackend::Meilisearch => SearchAdminClient::Meilisearch(
                 MeilisearchAdminClient::new(MeilisearchAdminConfig::new(
-                    self.typesense_api_url.clone(),
-                    self.typesense_admin_api_key.clone(),
+                    resolved.api_url.clone(),
+                    resolved.admin_api_key.clone(),
                 )),
             ),
-            SearchBackend::Typesense => {
-                SearchAdminClient::Typesense(TypesenseAdminClient::new(TypesenseAdminConfig::new(
-                    self.typesense_api_url.clone(),
-                    self.typesense_admin_api_key.clone(),
-                )))
-            }
-        }
+            SearchBackend::Typesense => SearchAdminClient::Typesense(TypesenseAdminClient::new(
+                TypesenseAdminConfig::new(resolved.api_url.clone(), resolved.admin_api_key.clone()),
+            )),
+        })
     }
 }
 
-impl TypesenseSearchArgs {
-    fn client(&self, collection: impl Into<String>) -> SearchClient {
+impl SearchQueryArgs {
+    fn resolved(&self) -> Result<ResolvedSearchArgs, CliError> {
+        let api_url = self.api_url.clone().or_else(|| match self.backend {
+            SearchBackend::Meilisearch => std::env::var("MEILI_HTTP_ADDR").ok(),
+            SearchBackend::Typesense => std::env::var("TYPESENSE_API_URL").ok(),
+        });
+        let search_api_key = self.search_api_key.clone().or_else(|| match self.backend {
+            SearchBackend::Meilisearch => std::env::var("MEILI_SEARCH_API_KEY")
+                .ok()
+                .or_else(|| std::env::var("MEILI_MASTER_KEY").ok()),
+            SearchBackend::Typesense => std::env::var("TYPESENSE_SEARCH_API_KEY").ok(),
+        });
+
+        Ok(ResolvedSearchArgs {
+            backend: self.backend,
+            api_url: api_url.ok_or_else(|| {
+                CliError::Message(format!(
+                    "missing search URL for {} backend",
+                    self.backend.name()
+                ))
+            })?,
+            search_api_key: search_api_key.ok_or_else(|| {
+                CliError::Message(format!(
+                    "missing search key for {} backend",
+                    self.backend.name()
+                ))
+            })?,
+        })
+    }
+
+    fn client(&self, collection: impl Into<String>) -> Result<SearchClient, CliError> {
         let collection = collection.into();
-        match self.backend {
+        let resolved = self.resolved()?;
+        Ok(match resolved.backend {
             SearchBackend::Meilisearch => SearchClient::Meilisearch(MeilisearchSearchClient::new(
                 MeilisearchSearchConfig::new(
-                    self.typesense_api_url.clone(),
-                    self.typesense_search_api_key.clone(),
+                    resolved.api_url.clone(),
+                    resolved.search_api_key.clone(),
                 )
                 .with_collection(collection),
             )),
             SearchBackend::Typesense => SearchClient::Typesense(TypesenseSearchClient::new(
                 TypesenseSearchConfig::new(
-                    self.typesense_api_url.clone(),
-                    self.typesense_search_api_key.clone(),
+                    resolved.api_url.clone(),
+                    resolved.search_api_key.clone(),
                 )
                 .with_collection(collection),
             )),
+        })
+    }
+}
+
+impl SearchBackend {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Meilisearch => "meilisearch",
+            Self::Typesense => "typesense",
         }
     }
+}
+
+#[derive(Debug)]
+struct ResolvedSearchAdminArgs {
+    backend: SearchBackend,
+    api_url: String,
+    admin_api_key: String,
+}
+
+#[derive(Debug)]
+struct ResolvedSearchArgs {
+    backend: SearchBackend,
+    api_url: String,
+    search_api_key: String,
 }
 
 #[derive(Clone, Debug)]
@@ -355,6 +497,12 @@ enum SearchClient {
 enum CollectionOutcome {
     Created,
     AlreadyExists,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BackendChunkStats {
+    indexed_videos: u64,
+    indexed_chunks: u64,
 }
 
 impl SearchAdminClient {
@@ -459,6 +607,25 @@ impl SearchAdminClient {
                 .count_chunks_by_video_id(id)
                 .await
                 .map_err(CliError::from),
+        }
+    }
+
+    async fn chunk_stats_by_youtuber_id(&self, id: &str) -> Result<BackendChunkStats, CliError> {
+        match self {
+            Self::Meilisearch(client) => {
+                let stats = client.chunk_stats_by_youtuber_id(id).await?;
+                Ok(BackendChunkStats {
+                    indexed_videos: stats.indexed_videos,
+                    indexed_chunks: stats.indexed_chunks,
+                })
+            }
+            Self::Typesense(client) => {
+                let stats = client.chunk_stats_by_youtuber_id(id).await?;
+                Ok(BackendChunkStats {
+                    indexed_videos: stats.indexed_videos,
+                    indexed_chunks: stats.indexed_chunks,
+                })
+            }
         }
     }
 
@@ -655,7 +822,9 @@ async fn main() -> Result<(), CliError> {
         Command::Validate(command) => validate_command(command).await,
         Command::InitTypesense(command) => init_typesense_command(command).await,
         Command::IndexYoutuber(command) => index_youtuber_command(command).await,
+        Command::IndexYoutubers(command) => index_youtubers_command(command).await,
         Command::RefreshYoutuber(command) => refresh_youtuber_command(command).await,
+        Command::RefreshYoutubers(command) => refresh_youtubers_command(command).await,
         Command::RemoveYoutuber(command) => remove_youtuber_command(command).await,
         Command::IndexVideo(command) => index_video_command(command).await,
         Command::Search(command) => search_command(command).await,
@@ -689,8 +858,8 @@ async fn init_typesense_command(command: InitTypesenseCommand) -> Result<(), Cli
     print_validated_youtuber(&youtuber);
 
     let collection = command.collection.collection;
-    let typesense = command.typesense.client(collection.clone());
-    match typesense.create_collection_if_missing().await? {
+    let search = command.search.client(collection.clone())?;
+    match search.create_collection_if_missing().await? {
         CollectionOutcome::Created => {
             println!("Created search backend collection: {collection}");
         }
@@ -708,8 +877,8 @@ async fn refresh_youtuber_command(command: RefreshYoutuberCommand) -> Result<(),
     let youtuber = validate_youtuber(&youtube, &command.youtuber.handle, 5).await?;
     print_validated_youtuber(&youtuber);
 
-    let typesense = command.typesense.youtuber_client();
-    match typesense.create_youtubers_collection_if_missing().await? {
+    let search = command.search.youtuber_client()?;
+    match search.create_youtubers_collection_if_missing().await? {
         CollectionOutcome::Created => {
             println!("Created search backend collection: youtube_youtubers")
         }
@@ -719,7 +888,8 @@ async fn refresh_youtuber_command(command: RefreshYoutuberCommand) -> Result<(),
     }
 
     let youtuber_id = youtuber_id_from_handle(&youtuber.handle, &youtuber.channel_id);
-    let existing = typesense.get_youtuber(&youtuber_id).await?;
+    let existing = search.get_youtuber(&youtuber_id).await?;
+    let chunk_stats = search.chunk_stats_by_youtuber_id(&youtuber_id).await?;
     let youtuber_doc = YoutuberDocument {
         id: youtuber_id,
         handle: youtuber.handle.clone(),
@@ -727,22 +897,43 @@ async fn refresh_youtuber_command(command: RefreshYoutuberCommand) -> Result<(),
         channel_id: youtuber.channel_id.clone(),
         uploads_playlist: youtuber.uploads_playlist.clone(),
         public_video_count: existing.as_ref().map_or(0, |doc| doc.public_video_count),
-        indexed_video_count: existing.as_ref().map_or(0, |doc| doc.indexed_video_count),
-        indexed_chunk_count: existing.as_ref().map_or(0, |doc| doc.indexed_chunk_count),
+        indexed_video_count: saturating_u32(chunk_stats.indexed_videos),
+        indexed_chunk_count: saturating_u32(chunk_stats.indexed_chunks),
         avatar_url: youtuber.avatar_url.clone(),
     };
-    typesense.upsert_youtuber(&youtuber_doc).await?;
+    search.upsert_youtuber(&youtuber_doc).await?;
     println!("Refreshed YouTuber document: {}", youtuber_doc.id);
+    Ok(())
+}
+
+async fn refresh_youtubers_command(command: RefreshYoutubersCommand) -> Result<(), CliError> {
+    let handles = read_youtuber_list(&command.list_file)?;
+    if handles.is_empty() {
+        return Err(CliError::Message(format!(
+            "no YouTube handles found in {}",
+            command.list_file.display()
+        )));
+    }
+
+    for handle in handles {
+        refresh_youtuber_command(RefreshYoutuberCommand {
+            youtuber: YoutuberArg { handle },
+            youtube: command.youtube.clone(),
+            search: command.search.clone(),
+        })
+        .await?;
+    }
+
     Ok(())
 }
 
 async fn remove_youtuber_command(command: RemoveYoutuberCommand) -> Result<(), CliError> {
     let handle = normalize_handle(&command.youtuber.handle)?;
     let youtuber_id = youtuber_id_from_handle(&handle, "");
-    let transcript_typesense = command.typesense.client(command.collection.collection);
-    let youtuber_typesense = command.typesense.youtuber_client();
+    let transcript_search = command.search.client(command.collection.collection)?;
+    let youtuber_search = command.search.youtuber_client()?;
 
-    let delete_response = transcript_typesense
+    let delete_response = transcript_search
         .delete_chunks_by_youtuber_id(&youtuber_id)
         .await?;
     println!(
@@ -750,7 +941,7 @@ async fn remove_youtuber_command(command: RemoveYoutuberCommand) -> Result<(), C
         serde_json::to_string(&delete_response).unwrap_or_else(|_| delete_response.to_string())
     );
 
-    match youtuber_typesense.delete_youtuber(&youtuber_id).await? {
+    match youtuber_search.delete_youtuber(&youtuber_id).await? {
         Some(response) => println!(
             "Deleted YouTuber document for {handle}: {}",
             serde_json::to_string(&response).unwrap_or_else(|_| response.to_string())
@@ -779,8 +970,8 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     }
 
     let collection = command.collection.collection;
-    let transcript_typesense = command.typesense.client(collection.clone());
-    match transcript_typesense.create_collection_if_missing().await? {
+    let transcript_search = command.search.client(collection.clone())?;
+    match transcript_search.create_collection_if_missing().await? {
         CollectionOutcome::Created => {
             println!("Created search backend collection: {collection}")
         }
@@ -789,8 +980,8 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         }
     }
 
-    let youtuber_typesense = command.typesense.youtuber_client();
-    match youtuber_typesense
+    let youtuber_search = command.search.youtuber_client()?;
+    match youtuber_search
         .create_youtubers_collection_if_missing()
         .await?
     {
@@ -803,14 +994,17 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     }
 
     let youtuber_id = youtuber_id_from_handle(&youtuber.handle, &youtuber.channel_id);
-    if command.no_wipe {
+    let no_wipe = command.no_wipe || command.mode == IndexMode::Update;
+    let skip_existing = command.skip_existing || command.mode == IndexMode::Update;
+
+    if no_wipe {
         println!("Keeping existing transcript chunks for {}", youtuber.handle);
     } else {
         println!(
             "Deleting existing transcript chunks for {} before reindex",
             youtuber.handle
         );
-        let delete_response = transcript_typesense
+        let delete_response = transcript_search
             .delete_chunks_by_youtuber_id(&youtuber_id)
             .await?;
         println!(
@@ -852,7 +1046,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         .collect::<Vec<_>>();
     let jobs = command.jobs.clamp(1, 16);
     println!("Indexing with {jobs} concurrent job(s)");
-    if command.skip_existing {
+    if skip_existing {
         println!("Skipping videos that already have transcript chunks");
     }
 
@@ -876,9 +1070,9 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
                 caption_source.clone(),
                 transcribe_source.clone(),
                 chunker.clone(),
-                transcript_typesense.clone(),
+                transcript_search.clone(),
                 command.content_kind,
-                command.skip_existing,
+                skip_existing,
             ));
         }
 
@@ -887,17 +1081,32 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         };
         active_jobs = active_jobs.saturating_sub(1);
         completed_videos += 1;
-        let outcome = result.map_err(|error| CliError::Message(error.to_string()))??;
         let attempted_videos = stats.attempted_videos;
-        apply_index_outcome(&mut stats, outcome, completed_videos, attempted_videos);
+        match result {
+            Ok(Ok(outcome)) => {
+                apply_index_outcome(&mut stats, outcome, completed_videos, attempted_videos);
+            }
+            Ok(Err(error)) => {
+                stats.skipped_videos = stats.skipped_videos.saturating_add(1);
+                tracing::warn!(%error, "skipped video after indexing task failed");
+                println!(
+                    "Done {completed_videos}/{attempted_videos}: skipped indexing error: {error}"
+                );
+            }
+            Err(error) => {
+                stats.skipped_videos = stats.skipped_videos.saturating_add(1);
+                tracing::warn!(%error, "skipped video after indexing task panicked");
+                println!("Done {completed_videos}/{attempted_videos}: skipped task error: {error}");
+            }
+        }
     }
 
-    let total_indexed_videos = stats.indexed_videos.saturating_add(stats.existing_videos);
-    let total_indexed_chunks = stats.indexed_chunks.saturating_add(stats.existing_chunks);
+    let run_indexed_videos = stats.indexed_videos.saturating_add(stats.existing_videos);
+    let run_indexed_chunks = stats.indexed_chunks.saturating_add(stats.existing_chunks);
     print_index_summary(&stats);
 
-    if stats.attempted_videos > 0 && (total_indexed_videos == 0 || total_indexed_chunks == 0) {
-        if let Err(error) = youtuber_typesense.delete_youtuber(&youtuber_id).await {
+    if stats.attempted_videos > 0 && (run_indexed_videos == 0 || run_indexed_chunks == 0) {
+        if let Err(error) = youtuber_search.delete_youtuber(&youtuber_id).await {
             tracing::warn!(handle = %youtuber.handle, %error, "failed to remove unsearchable YouTuber document");
         } else {
             println!("Removed unsearchable YouTuber document: {youtuber_id}");
@@ -911,6 +1120,9 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         )));
     }
 
+    let chunk_stats = transcript_search
+        .chunk_stats_by_youtuber_id(&youtuber_id)
+        .await?;
     let youtuber_doc = YoutuberDocument {
         id: youtuber_id,
         handle: youtuber.handle.clone(),
@@ -918,14 +1130,63 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         channel_id: youtuber.channel_id.clone(),
         uploads_playlist: youtuber.uploads_playlist.clone(),
         public_video_count: saturating_u32(stats.discovered_videos),
-        indexed_video_count: total_indexed_videos,
-        indexed_chunk_count: total_indexed_chunks,
+        indexed_video_count: saturating_u32(chunk_stats.indexed_videos),
+        indexed_chunk_count: saturating_u32(chunk_stats.indexed_chunks),
         avatar_url: youtuber.avatar_url.clone(),
     };
-    youtuber_typesense.upsert_youtuber(&youtuber_doc).await?;
+    youtuber_search.upsert_youtuber(&youtuber_doc).await?;
     println!("Upserted YouTuber document: {}", youtuber_doc.id);
 
     Ok(())
+}
+
+async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), CliError> {
+    let handles = read_youtuber_list(&command.list_file)?;
+    if handles.is_empty() {
+        return Err(CliError::Message(format!(
+            "no YouTube handles found in {}",
+            command.list_file.display()
+        )));
+    }
+
+    for handle in handles {
+        let command = IndexYoutuberCommand {
+            youtuber: YoutuberArg { handle },
+            youtube: command.youtube.clone(),
+            search: command.search.clone(),
+            collection: command.collection.clone(),
+            max_videos: command.max_videos,
+            mode: command.mode,
+            jobs: command.jobs,
+            skip_existing: command.mode == IndexMode::Update,
+            no_wipe: command.mode == IndexMode::Update,
+            content_kind: command.content_kind,
+            chunk_seconds: command.chunk_seconds,
+            transcribe_missing: command.transcribe_missing,
+            transcription_cache_dir: command.transcription_cache_dir.clone(),
+            transcription_chunk_seconds: command.transcription_chunk_seconds,
+            voxtype_engine: command.voxtype_engine.clone(),
+        };
+        index_youtuber_command(command).await?;
+    }
+
+    Ok(())
+}
+
+fn read_youtuber_list(path: &PathBuf) -> Result<Vec<String>, CliError> {
+    let body = std::fs::read_to_string(path).map_err(|error| {
+        CliError::Message(format!("failed to read {}: {error}", path.display()))
+    })?;
+    let handles = body
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.split('|').next())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    Ok(handles)
 }
 
 #[derive(Debug)]
@@ -962,7 +1223,7 @@ async fn index_discovered_video(
     caption_source: YtDlpTranscriptSource,
     transcribe_source: Option<VoxtypeTranscriptSource>,
     chunker: Chunker,
-    typesense: SearchAdminClient,
+    search: SearchAdminClient,
     content_kind_filter: ContentKindFilter,
     skip_existing: bool,
 ) -> Result<IndexVideoOutcome, CliError> {
@@ -979,7 +1240,7 @@ async fn index_discovered_video(
     );
 
     if skip_existing {
-        let existing_chunks = typesense.count_chunks_by_video_id(&video.video_id).await?;
+        let existing_chunks = search.count_chunks_by_video_id(&video.video_id).await?;
         if existing_chunks > 0 {
             return Ok(IndexVideoOutcome::Existing {
                 video_id: video.video_id,
@@ -1042,7 +1303,14 @@ async fn index_discovered_video(
     };
 
     let chunk_count = chunks.len();
-    typesense.import_chunks_batched(&chunks).await?;
+    if let Err(error) = search.import_chunks_batched(&chunks).await {
+        tracing::warn!(video_id = %video.video_id, %error, "skipped import");
+        return Ok(IndexVideoOutcome::Skipped {
+            video_id: video.video_id,
+            title: video.title,
+            reason: format!("import: {error}"),
+        });
+    }
     tracing::info!(video_id = %video.video_id, chunk_count, "imported transcript chunks");
 
     Ok(IndexVideoOutcome::Indexed {
@@ -1109,9 +1377,9 @@ async fn index_video_command(command: IndexVideoCommand) -> Result<(), CliError>
     let video_id = parse_video_id(&command.video)?;
     let youtube = command.youtube.client()?;
     let collection = command.collection.collection;
-    let typesense = command.typesense.client(collection.clone());
+    let search = command.search.client(collection.clone())?;
 
-    match typesense.create_collection_if_missing().await? {
+    match search.create_collection_if_missing().await? {
         CollectionOutcome::Created => {
             println!("Created search backend collection: {collection}")
         }
@@ -1124,7 +1392,7 @@ async fn index_video_command(command: IndexVideoCommand) -> Result<(), CliError>
         println!("Keeping existing transcript chunks for video {video_id}");
     } else {
         println!("Deleting existing transcript chunks for video {video_id} before reindex");
-        let delete_response = typesense.delete_chunks_by_video_id(&video_id).await?;
+        let delete_response = search.delete_chunks_by_video_id(&video_id).await?;
         println!(
             "Deleted existing chunks response: {}",
             serde_json::to_string(&delete_response).unwrap_or_else(|_| delete_response.to_string())
@@ -1159,7 +1427,7 @@ async fn index_video_command(command: IndexVideoCommand) -> Result<(), CliError>
     .await?;
     let chunks = chunker.chunks(&metadata, &transcript)?;
     let chunk_count = chunks.len();
-    typesense.import_chunks_batched(&chunks).await?;
+    search.import_chunks_batched(&chunks).await?;
 
     println!("  imported {chunk_count} transcript chunks");
     println!(
@@ -1171,14 +1439,14 @@ async fn index_video_command(command: IndexVideoCommand) -> Result<(), CliError>
 }
 
 async fn search_command(command: SearchCommand) -> Result<(), CliError> {
-    let typesense = command.typesense.client(command.collection.collection);
+    let search_client = command.search.client(command.collection.collection)?;
     let mut search = TextSearchQuery::new(command.query).per_page(command.per_page);
 
     if let Some(youtuber) = command.youtuber {
         search = search.youtuber_handle(normalize_handle(&youtuber)?);
     }
 
-    let response = typesense.search(&search).await?;
+    let response = search_client.search(&search).await?;
     println!(
         "{}",
         serde_json::to_string_pretty(&response).unwrap_or(response.to_string())

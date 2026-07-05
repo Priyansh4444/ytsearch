@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use reqwest::{Client as HttpClient, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{fmt, time::Duration};
+use std::{collections::HashSet, fmt, time::Duration};
 use thiserror::Error;
 use tokio::time::sleep;
 use youtube_ingest::{ChunkSink, IngestError, TranscriptChunk};
@@ -13,7 +13,7 @@ use youtube_search::{
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(180);
 const IMPORT_BATCH_SIZE: usize = 1;
-const IMPORT_ATTEMPTS: u8 = 3;
+const IMPORT_ATTEMPTS: u8 = 6;
 const DELETE_ATTEMPTS: u8 = 3;
 
 #[derive(Clone, Eq, PartialEq)]
@@ -294,6 +294,58 @@ impl MeilisearchAdminClient {
             .unwrap_or_default())
     }
 
+    pub async fn chunk_stats_by_youtuber_id(&self, youtuber_id: &str) -> Result<ChunkStats> {
+        let path = format!("indexes/{}/documents", self.config.collection);
+        let limit = 1000usize;
+        let mut offset = 0usize;
+        let mut chunks = 0u64;
+        let mut videos = HashSet::new();
+
+        loop {
+            let mut url = endpoint(&self.config.api_url, &path)?;
+            {
+                let mut pairs = url.query_pairs_mut();
+                pairs.append_pair(
+                    "filter",
+                    &filter_to_meili(&format!("youtuber_id:={youtuber_id}")),
+                );
+                pairs.append_pair("fields", "video_id");
+                pairs.append_pair("limit", &limit.to_string());
+                pairs.append_pair("offset", &offset.to_string());
+            }
+            let response = self
+                .http
+                .get(url)
+                .bearer_auth(&self.config.admin_api_key)
+                .send()
+                .await?;
+            let body = json_response(response).await?;
+            let results = body
+                .get("results")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if results.is_empty() {
+                break;
+            }
+            chunks = chunks.saturating_add(results.len() as u64);
+            for document in &results {
+                if let Some(video_id) = document.get("video_id").and_then(Value::as_str) {
+                    videos.insert(video_id.to_string());
+                }
+            }
+            offset = offset.saturating_add(results.len());
+            if results.len() < limit {
+                break;
+            }
+        }
+
+        Ok(ChunkStats {
+            indexed_videos: videos.len() as u64,
+            indexed_chunks: chunks,
+        })
+    }
+
     pub async fn delete_documents_by_filter(&self, filter_by: &str) -> Result<Value> {
         let path = format!("indexes/{}/documents/delete", self.config.collection);
         let url = endpoint(&self.config.api_url, &path)?;
@@ -427,6 +479,20 @@ impl MeilisearchSearchClient {
             "limit": limit,
             "offset": offset,
             "attributesToSearchOn": split_csv(&query.query_by),
+            "attributesToRetrieve": [
+                "id",
+                "video_id",
+                "title",
+                "text",
+                "prev_text",
+                "next_text",
+                "youtuber_handle",
+                "youtuber_name",
+                "thumbnail",
+                "published_at",
+                "t_start_ms",
+                "t_end_ms",
+            ],
             "attributesToHighlight": query
                 .highlight_fields
                 .as_deref()
@@ -437,6 +503,9 @@ impl MeilisearchSearchClient {
         });
         if let Some(filter_by) = &query.filter_by {
             body["filter"] = Value::String(filter_to_meili(filter_by));
+        }
+        if let Some(group_by) = &query.group_by {
+            body["distinct"] = Value::String(group_by.clone());
         }
 
         let response = self
@@ -527,6 +596,12 @@ impl TranscriptSearchBackend for MeilisearchSearchClient {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MeilisearchImport {
     pub body: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChunkStats {
+    pub indexed_videos: u64,
+    pub indexed_chunks: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -641,7 +716,9 @@ impl MeilisearchError {
         match self {
             Self::Http(error) => error.is_timeout() || error.is_connect() || error.is_request(),
             Self::Api { status, .. } => {
-                status.is_server_error() || *status == StatusCode::TOO_MANY_REQUESTS
+                status.is_server_error()
+                    || *status == StatusCode::TOO_MANY_REQUESTS
+                    || *status == StatusCode::REQUEST_TIMEOUT
             }
             Self::InvalidUrl(_) | Self::Json(_) | Self::RetryExhausted => false,
         }

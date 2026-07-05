@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import type { Component } from "solid-js";
+import type { Component, JSX } from "solid-js";
 import type { SearchResponse } from "../types";
 
 export const PaginationControls: Component<{
@@ -47,7 +47,7 @@ const PageButton: Component<{
   active?: boolean;
   disabled?: boolean;
   onClick: () => void;
-  children: unknown;
+  children: JSX.Element;
 }> = (props) => (
   <button
     type="button"

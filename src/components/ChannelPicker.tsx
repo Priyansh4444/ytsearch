@@ -1,7 +1,7 @@
 import { For, Show } from "solid-js";
 import type { Component } from "solid-js";
 import type { IndexedChannel } from "../types";
-import { routeForHandle } from "../utils";
+import { normalizeHandle, routeForHandle } from "../utils";
 
 export const ChannelPicker: Component<{
   channels: IndexedChannel[] | undefined;
@@ -12,7 +12,8 @@ export const ChannelPicker: Component<{
     <div class="flex flex-wrap gap-2">
       <For each={props.channels}>
         {(channel) => {
-          const selected = () => channel.handle === props.selectedHandle;
+          const selected = () =>
+            normalizeHandle(channel.handle) === normalizeHandle(props.selectedHandle);
           return (
             <a
               href={routeForHandle(channel.handle)}
@@ -42,9 +43,10 @@ export const ChannelPicker: Component<{
   </Show>
 );
 
-export const ChannelIdentity: Component<{ channel: IndexedChannel | undefined; handle: string }> = (
-  props,
-) => (
+export const ChannelIdentity: Component<{
+  channel: IndexedChannel | undefined;
+  handle: string;
+}> = (props) => (
   <div class="flex items-center gap-3 transition-all duration-500 ease-out">
     <ChannelAvatar channel={props.channel} />
     <div>
@@ -71,7 +73,7 @@ const ChannelAvatar: Component<{ channel: IndexedChannel | undefined }> = (props
         src={avatarUrl()}
         alt=""
         class="size-11 border border-vesper-border object-cover"
-        loading="lazy"
+        loading="eager"
       />
     )}
   </Show>

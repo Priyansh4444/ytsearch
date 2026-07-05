@@ -64,3 +64,12 @@ export type IndexedChannel = {
   indexed_chunk_count: number;
   avatar_url?: string;
 };
+
+export type IndexQueueRequest = {
+  id: string;
+  handle: string;
+  note?: string;
+  requested_at: number;
+  source_backend: string;
+  status: string;
+};

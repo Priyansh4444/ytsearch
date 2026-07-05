@@ -8,13 +8,14 @@ import {
   onCleanup,
 } from "solid-js";
 import type { Component } from "solid-js";
-import { indexedChannels, searchTranscripts } from "./api";
+import { indexedChannels, requestIndex, searchTranscripts } from "./api";
 import { ChannelIdentity, ChannelPicker } from "./components/ChannelPicker";
 import { PaginationControls } from "./components/PaginationControls";
 import { SearchForm } from "./components/SearchForm";
 import {
   EmptyState,
   ErrorState,
+  IndexQueuedState,
   IndexUnavailableState,
   LoadingState,
   WelcomeState,
@@ -32,6 +33,10 @@ const App: Component = () => {
   const [sort, setSort] = createSignal<SearchSort>("relevance");
   const [submitted, setSubmitted] = createSignal<SearchRequest>();
   const [unavailableIndexHandle, setUnavailableIndexHandle] = createSignal<string>();
+  const [queuedIndexRequest, setQueuedIndexRequest] = createSignal<{
+    handle: string;
+    requestId: string;
+  }>();
   const [result] = createResource(submitted, searchTranscripts);
 
   const selectedChannel = createMemo(() => {
@@ -47,6 +52,7 @@ const App: Component = () => {
     setYoutuber(nextHandle ?? "");
     setSubmitted(undefined);
     setUnavailableIndexHandle(undefined);
+    setQueuedIndexRequest(undefined);
     setPage(1);
   };
 
@@ -63,6 +69,8 @@ const App: Component = () => {
     setRouteHandle(null);
     setYoutuber("");
     setSubmitted(undefined);
+    setUnavailableIndexHandle(undefined);
+    setQueuedIndexRequest(undefined);
     setPage(1);
   });
 
@@ -72,27 +80,34 @@ const App: Component = () => {
     setRouteHandle(normalized);
     setSubmitted(undefined);
     setUnavailableIndexHandle(undefined);
+    setQueuedIndexRequest(undefined);
     setPage(1);
     window.history.pushState({}, "", routeForHandle(normalized));
   };
 
-  const showIndexUnavailable = () => {
+  const queueIndexRequest = async () => {
     const handle = normalizeHandle(query());
     if (!handle) return;
     setQuery(handle);
     setSubmitted(undefined);
-    setUnavailableIndexHandle(handle);
+    setUnavailableIndexHandle(undefined);
+    const request = await requestIndex(handle);
+    setQueuedIndexRequest({ handle, requestId: request.id });
   };
 
   const runSearch = (nextPage = 1) => {
     const normalizedQuery = query().trim();
     if (!normalizedQuery) return;
     if (isIndexMode()) {
-      showIndexUnavailable();
+      void queueIndexRequest().catch((error) => {
+        setQueuedIndexRequest(undefined);
+        setUnavailableIndexHandle(String(error));
+      });
       return;
     }
     setQuery(normalizedQuery);
     setUnavailableIndexHandle(undefined);
+    setQueuedIndexRequest(undefined);
     setPage(nextPage);
     setSubmitted({
       query: normalizedQuery,
@@ -147,15 +162,29 @@ const App: Component = () => {
             {(handle) => <IndexUnavailableState handle={handle()} />}
           </Show>
 
-          <Show when={!unavailableIndexHandle() && result.loading}>
+          <Show when={!unavailableIndexHandle() && queuedIndexRequest()}>
+            {(request) => (
+              <IndexQueuedState handle={request().handle} requestId={request().requestId} />
+            )}
+          </Show>
+
+          <Show when={!unavailableIndexHandle() && !queuedIndexRequest() && result.loading}>
             <LoadingState />
           </Show>
 
-          <Show when={!unavailableIndexHandle() && result.error}>
+          <Show when={!unavailableIndexHandle() && !queuedIndexRequest() && result.error}>
             {(error) => <ErrorState message={String(error())} />}
           </Show>
 
-          <Show when={!unavailableIndexHandle() && !result.loading && !result.error && result()}>
+          <Show
+            when={
+              !unavailableIndexHandle() &&
+              !queuedIndexRequest() &&
+              !result.loading &&
+              !result.error &&
+              result()
+            }
+          >
             {(response) => (
               <div class="flex flex-col gap-3">
                 <div class="flex items-center justify-between py-2 text-sm text-vesper-muted">
@@ -185,7 +214,15 @@ const App: Component = () => {
             )}
           </Show>
 
-          <Show when={!unavailableIndexHandle() && !result.loading && !result.error && !result()}>
+          <Show
+            when={
+              !unavailableIndexHandle() &&
+              !queuedIndexRequest() &&
+              !result.loading &&
+              !result.error &&
+              !result()
+            }
+          >
             <WelcomeState />
           </Show>
         </section>

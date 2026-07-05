@@ -36,6 +36,16 @@ export const IndexUnavailableState: Component<{ handle: string }> = (props) => {
   );
 };
 
+export const IndexQueuedState: Component<{ handle: string; requestId: string }> = (props) => (
+  <div class="border border-vesper-green/30 bg-vesper-panel p-5 shadow-2xl shadow-vesper-green/5">
+    <p class="text-sm uppercase tracking-[0.18em] text-vesper-green">Index request queued</p>
+    <p class="mt-2 text-xl font-semibold text-white">{props.handle}</p>
+    <p class="mt-2 max-w-2xl text-sm text-vesper-muted">
+      Request {props.requestId} is waiting for the local index worker.
+    </p>
+  </div>
+);
+
 export const ErrorState: Component<{ message: string; title?: string }> = (props) => (
   <div class="border border-vesper-red/40 bg-vesper-red/10 p-5 text-vesper-red">
     <p class="font-semibold">{props.title ?? "Search failed"}</p>
