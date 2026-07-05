@@ -33,20 +33,29 @@ Benchmark shape:
 - Client scripts: `scripts/benchmark-search-backends.sh` and `scripts/benchmark-search-globalping.sh`
 - Meilisearch API: `https://ytsearch-api-meili-staging.fly.dev`
 - Existing Typesense Cloud-backed API: `https://ytsearch-api-pronsh-sandbox.fly.dev`
+- Self-hosted Typesense API: `https://ytsearch-api-typesense-fly-staging.fly.dev`
 
-Measured after the Meilisearch API stopped over-fetching and deduping videos in application code:
+Measured on 2026-07-05 after restarting the overloaded Meilisearch staging machine:
 
-| Probe | Meilisearch on Fly | Typesense Cloud | Typesense on Fly |
+| Local metric, 5 runs | Meilisearch on Fly | Typesense Cloud | Typesense on Fly |
 | --- | ---: | ---: | ---: |
-| Local run range, 10 runs | 287-1595 ms | 166-294 ms | 205-739 ms |
-| Local warm-ish range, excluding first run | 287-708 ms | 166-218 ms | 205-739 ms |
-| US public probe | 729 ms | 254 ms | 197 ms |
-| Great Britain public probe | 678 ms | 344 ms | 464 ms |
-| Japan public probe | 841 ms | 452 ms | 197 ms |
-| Australia public probe | 710 ms | 452 ms | 236 ms |
-| Brazil public probe | 785 ms | 578 ms | 291 ms |
+| min | 123 ms | 163 ms | 156 ms |
+| average | 420 ms | 226 ms | 197 ms |
+| p50 | 150 ms | 190 ms | 181 ms |
+| p95 | 1487 ms | 368 ms | 294 ms |
+| max | 1487 ms | 368 ms | 294 ms |
+| HTTP errors | 0 | 0 | 0 |
 
-Interpretation: Typesense Cloud is the most consistent locally. Self-hosted Typesense on Fly was fastest from several Globalping probes, likely because the API and engine are both on Fly and the partial index is smaller right now. Meilisearch is slower on this `fable` query, but it is still usable after the API distincting fix.
+| Public probe | Meilisearch on Fly | Typesense Cloud | Typesense on Fly |
+| --- | ---: | ---: | ---: |
+| US, Buffalo | 295 ms | 209 ms | 189 ms |
+| Great Britain, London | 401 ms | 343 ms | 403 ms |
+| Japan, Tokyo | 344 ms | 490 ms | 296 ms |
+| Australia, Sydney | 330 ms | 538 ms | 243 ms |
+| Brazil, Sao Paulo | 439 ms | 621 ms | 487 ms |
+| Public probe average | 362 ms | 440 ms | 324 ms |
+
+Interpretation: self-hosted Typesense on Fly was fastest on average in this short local and public-probe run. Typesense Cloud remained consistent and fully managed. Meilisearch was fast after warmup, but the first local request was slow and the machine had just been restarted after `408 Request Timeout` responses during/after heavy indexing. Treat Meilisearch benchmark numbers as sensitive to indexing load on the current 1 GB staging VM.
 
 Self-hosted Typesense on Fly is only partially indexed because the full indexing job was intentionally stopped. Re-run the full one-off update before treating self-host Typesense quality/counts as final.
 

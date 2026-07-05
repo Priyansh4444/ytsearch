@@ -3,14 +3,27 @@ set -eu
 
 # Run one HTTP benchmark measurement per backend through Globalping probes.
 
+# shellcheck disable=SC1091
+. "$(dirname "$0")/load-env.sh"
+
 QUERY="${QUERY:-react}"
 YOUTUBER="${YOUTUBER:-}"
 PER_PAGE="${PER_PAGE:-10}"
 MEILI_API_HOST="${MEILI_API_HOST:-}"
 TYPESENSE_CLOUD_API_HOST="${TYPESENSE_CLOUD_API_HOST:-${TYPESENSE_API_HOST:-}}"
 TYPESENSE_FLY_API_HOST="${TYPESENSE_FLY_API_HOST:-}"
+MEILI_API_BASE_URL="${MEILI_API_BASE_URL:-}"
+TYPESENSE_CLOUD_API_BASE_URL="${TYPESENSE_CLOUD_API_BASE_URL:-${TYPESENSE_API_BASE_URL:-}}"
+TYPESENSE_FLY_API_BASE_URL="${TYPESENSE_FLY_API_BASE_URL:-}"
 GLOBALPING_COUNTRIES="${GLOBALPING_COUNTRIES:-US GB JP AU BR}"
 GLOBALPING_USER_AGENT="${GLOBALPING_USER_AGENT:-ytsearch-benchmark/0.1}"
+
+host_from_url() {
+  value="$1"
+  value="${value#http://}"
+  value="${value#https://}"
+  printf '%s' "${value%%/*}"
+}
 
 required_env() {
   name="$1"
@@ -20,6 +33,16 @@ required_env() {
     exit 1
   fi
 }
+
+if [ -z "$MEILI_API_HOST" ] && [ -n "$MEILI_API_BASE_URL" ]; then
+  MEILI_API_HOST="$(host_from_url "$MEILI_API_BASE_URL")"
+fi
+if [ -z "$TYPESENSE_CLOUD_API_HOST" ] && [ -n "$TYPESENSE_CLOUD_API_BASE_URL" ]; then
+  TYPESENSE_CLOUD_API_HOST="$(host_from_url "$TYPESENSE_CLOUD_API_BASE_URL")"
+fi
+if [ -z "$TYPESENSE_FLY_API_HOST" ] && [ -n "$TYPESENSE_FLY_API_BASE_URL" ]; then
+  TYPESENSE_FLY_API_HOST="$(host_from_url "$TYPESENSE_FLY_API_BASE_URL")"
+fi
 
 required_env MEILI_API_HOST
 required_env TYPESENSE_CLOUD_API_HOST

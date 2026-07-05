@@ -49,11 +49,17 @@ By default it attempts `meilisearch typesense-cloud typesense-fly`. Scope a run 
 BACKENDS="meilisearch typesense-cloud" scripts/index-all-backends-update.sh scripts/indexed-channels.txt
 ```
 
+Run the full local validation suite before a deploy or long index run:
+
+```bash
+bun run check:all
+```
+
 If `typesense-fly` is selected but `TYPESENSE_SELFHOST_API_KEY` or `TYPESENSE_SELFHOST_API_URL` is missing, that backend is skipped instead of failing the entire all-backends update.
 
 Update mode now does two layers of work avoidance:
 
-1. It loads the already-indexed `video_id`s for a creator once, then skips those videos locally before workers start.
+1. It checks videos newest-first and stops after a configurable tail of already-indexed videos. For uncapped small batches without the tail shortcut, it can still use per-worker existing checks.
 2. It caches fetched `yt-dlp` transcript segments under `data/transcript-cache`, so retrying after a backend import failure does not refetch captions.
 
 Use `--no-transcript-cache` when you need to force a fresh caption fetch.
@@ -117,6 +123,12 @@ API_BASE_URL="$TYPESENSE_FLY_API_BASE_URL" scripts/export-indexed-channels-list.
 cat /tmp/*-channels.txt
 ```
 
+Smoke-check that all three frontend variants and their backing search APIs are reachable:
+
+```bash
+scripts/check-frontend-backends.sh
+```
+
 ## Deploys
 
 Queue app:
@@ -145,6 +157,12 @@ Local:
 
 ```bash
 QUERY=fable YOUTUBER=@t3dotgg RUNS=10 scripts/benchmark-search-backends.sh
+```
+
+The local/multi-region backend benchmark prints raw curl timings and a summary table with `min_ms`, `avg_ms`, `p50_ms`, `p95_ms`, and `max_ms` per backend. Keep a raw run file with:
+
+```bash
+RESULTS_FILE=/tmp/ytsearch-benchmark.$(date +%s).log QUERY=fable YOUTUBER=@t3dotgg RUNS=20 scripts/benchmark-search-backends.sh
 ```
 
 Global:

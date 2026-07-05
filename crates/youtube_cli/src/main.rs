@@ -1076,12 +1076,13 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         discovered_videos: public_videos.len(),
         ..IndexStats::default()
     };
+    let stop_after_existing = normalized_stop_after_existing(command.stop_after_existing);
     let videos_to_index = prepare_videos_to_index(
         &public_videos,
         &transcript_search,
         skip_existing,
         command.max_videos,
-        command.stop_after_existing,
+        stop_after_existing,
         &mut stats,
     )
     .await?;
@@ -1094,10 +1095,11 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     }
     let jobs = command.jobs.clamp(1, 16);
     println!("Indexing with {jobs} concurrent job(s)");
-    let use_worker_existing_checks = skip_existing
-        && command.stop_after_existing.is_none()
-        && !videos_to_index.is_empty()
-        && videos_to_index.len() <= 100;
+    let use_worker_existing_checks = should_use_worker_existing_checks(
+        skip_existing,
+        stop_after_existing,
+        videos_to_index.len(),
+    );
     let existing_video_ids = if skip_existing && !use_worker_existing_checks {
         if videos_to_index.is_empty() {
             HashSet::new()
@@ -1292,7 +1294,6 @@ async fn prepare_videos_to_index(
     let limit = max_videos.unwrap_or(public_videos.len());
     let candidates = public_videos.iter().take(limit);
 
-    let stop_after_existing = stop_after_existing.filter(|count| *count > 0);
     if !skip_existing || stop_after_existing.is_none() {
         let videos = candidates.cloned().collect::<Vec<_>>();
         stats.attempted_videos = videos.len();
@@ -1303,24 +1304,17 @@ async fn prepare_videos_to_index(
     let mut videos = Vec::new();
     let mut consecutive_existing = 0usize;
 
-    for video in candidates {
-        stats.attempted_videos = stats.attempted_videos.saturating_add(1);
+    for video in candidates.cloned() {
         let existing_chunks = search.count_chunks_by_video_id(&video.video_id).await?;
-        if existing_chunks > 0 {
-            stats.existing_videos = stats.existing_videos.saturating_add(1);
-            stats.existing_chunks = stats
-                .existing_chunks
-                .saturating_add(saturating_u32(existing_chunks));
-            consecutive_existing = consecutive_existing.saturating_add(1);
-            if consecutive_existing >= stop_after_existing {
-                println!(
-                    "Stopped update scan after {consecutive_existing} consecutive already-indexed video(s)"
-                );
-                break;
-            }
-        } else {
-            consecutive_existing = 0;
-            videos.push(video.clone());
+        if select_missing_video_until_existing_tail(
+            video,
+            existing_chunks,
+            stop_after_existing,
+            stats,
+            &mut videos,
+            &mut consecutive_existing,
+        ) {
+            break;
         }
     }
 
@@ -1330,6 +1324,48 @@ async fn prepare_videos_to_index(
         stats.attempted_videos
     );
     Ok(videos)
+}
+
+fn normalized_stop_after_existing(stop_after_existing: Option<usize>) -> Option<usize> {
+    stop_after_existing.filter(|count| *count > 0)
+}
+
+fn should_use_worker_existing_checks(
+    skip_existing: bool,
+    stop_after_existing: Option<usize>,
+    candidate_count: usize,
+) -> bool {
+    skip_existing && stop_after_existing.is_none() && (1..=100).contains(&candidate_count)
+}
+
+fn select_missing_video_until_existing_tail(
+    video: DiscoveredVideo,
+    existing_chunks: u64,
+    stop_after_existing: usize,
+    stats: &mut IndexStats,
+    videos: &mut Vec<DiscoveredVideo>,
+    consecutive_existing: &mut usize,
+) -> bool {
+    stats.attempted_videos = stats.attempted_videos.saturating_add(1);
+    if existing_chunks > 0 {
+        stats.existing_videos = stats.existing_videos.saturating_add(1);
+        stats.existing_chunks = stats
+            .existing_chunks
+            .saturating_add(saturating_u32(existing_chunks));
+        *consecutive_existing = (*consecutive_existing).saturating_add(1);
+        if *consecutive_existing >= stop_after_existing {
+            let stopped_after = *consecutive_existing;
+            println!(
+                "Stopped update scan after {stopped_after} consecutive already-indexed video(s)"
+            );
+            return true;
+        }
+    } else {
+        *consecutive_existing = 0;
+        videos.push(video);
+    }
+
+    false
 }
 
 fn transcript_source(no_cache: bool, cache_dir: PathBuf) -> YtDlpTranscriptSource {
@@ -2030,5 +2066,91 @@ fn print_validated_youtuber(youtuber: &ValidatedYoutuber) {
     println!("  recent uploads:");
     for upload in &youtuber.recent_uploads {
         println!("    - {} {}", upload.video_id, upload.title);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn video(id: &str) -> DiscoveredVideo {
+        DiscoveredVideo {
+            video_id: id.to_string(),
+            title: id.to_string(),
+        }
+    }
+
+    fn run_existing_tail_plan(
+        checks: &[(&str, u64)],
+        stop_after_existing: usize,
+    ) -> (Vec<String>, IndexStats, usize, bool) {
+        let mut stats = IndexStats::default();
+        let mut selected = Vec::new();
+        let mut consecutive_existing = 0usize;
+        let mut stopped = false;
+
+        for (id, existing_chunks) in checks {
+            stopped = select_missing_video_until_existing_tail(
+                video(id),
+                *existing_chunks,
+                stop_after_existing,
+                &mut stats,
+                &mut selected,
+                &mut consecutive_existing,
+            );
+            if stopped {
+                break;
+            }
+        }
+
+        (
+            selected.into_iter().map(|video| video.video_id).collect(),
+            stats,
+            consecutive_existing,
+            stopped,
+        )
+    }
+
+    #[test]
+    fn existing_tail_scan_stops_after_consecutive_existing_videos() {
+        let (selected, stats, consecutive_existing, stopped) =
+            run_existing_tail_plan(&[("new-1", 0), ("old-1", 3), ("old-2", 7), ("new-2", 0)], 2);
+
+        assert_eq!(selected, vec!["new-1"]);
+        assert_eq!(stats.attempted_videos, 3);
+        assert_eq!(stats.existing_videos, 2);
+        assert_eq!(stats.existing_chunks, 10);
+        assert_eq!(consecutive_existing, 2);
+        assert!(stopped);
+    }
+
+    #[test]
+    fn existing_tail_scan_resets_after_missing_video() {
+        let (selected, stats, consecutive_existing, stopped) =
+            run_existing_tail_plan(&[("old-1", 3), ("new-1", 0), ("old-2", 4), ("old-3", 5)], 2);
+
+        assert_eq!(selected, vec!["new-1"]);
+        assert_eq!(stats.attempted_videos, 4);
+        assert_eq!(stats.existing_videos, 3);
+        assert_eq!(stats.existing_chunks, 12);
+        assert_eq!(consecutive_existing, 2);
+        assert!(stopped);
+    }
+
+    #[test]
+    fn zero_stop_after_existing_is_normalized_to_disabled() {
+        assert_eq!(normalized_stop_after_existing(Some(0)), None);
+        assert_eq!(normalized_stop_after_existing(Some(50)), Some(50));
+        assert_eq!(normalized_stop_after_existing(None), None);
+    }
+
+    #[test]
+    fn worker_existing_checks_only_run_for_small_uncapped_update_batches() {
+        assert!(should_use_worker_existing_checks(true, None, 1));
+        assert!(should_use_worker_existing_checks(true, None, 100));
+        assert!(!should_use_worker_existing_checks(true, None, 0));
+        assert!(!should_use_worker_existing_checks(true, None, 101));
+        assert!(!should_use_worker_existing_checks(false, None, 10));
+        assert!(!should_use_worker_existing_checks(true, Some(50), 10));
     }
 }

@@ -23,6 +23,8 @@ TYPESENSE_FLY_API_BASE_URL="${TYPESENSE_FLY_API_BASE_URL:-}"
 FLY_REGIONS="${FLY_REGIONS:-}"
 BENCH_FLY_APP="${BENCH_FLY_APP:-ytsearch-api-meili-staging}"
 BENCH_FLY_ORG="${BENCH_FLY_ORG:-pronsh-sandbox}"
+SUMMARY="${SUMMARY:-1}"
+RESULTS_FILE="${RESULTS_FILE:-/tmp/ytsearch-benchmark-backends.$$.log}"
 
 required_env() {
   name="$1"
@@ -44,11 +46,22 @@ bench_one() {
     sh "$(dirname "$0")/benchmark-search.sh" | sed "s/^/backend=$label /"
 }
 
+record() {
+  tee -a "$RESULTS_FILE"
+}
+
+summarize() {
+  if [ "$SUMMARY" = "1" ]; then
+    echo "summary_file=$RESULTS_FILE"
+    "$(dirname "$0")/summarize-benchmark-results.sh" "$RESULTS_FILE"
+  fi
+}
+
 bench_local() {
   echo "location=local"
-  bench_one meilisearch "$MEILI_API_BASE_URL"
-  bench_one typesense-cloud "$TYPESENSE_CLOUD_API_BASE_URL"
-  bench_one typesense-fly "$TYPESENSE_FLY_API_BASE_URL"
+  bench_one meilisearch "$MEILI_API_BASE_URL" | record
+  bench_one typesense-cloud "$TYPESENSE_CLOUD_API_BASE_URL" | record
+  bench_one typesense-fly "$TYPESENSE_FLY_API_BASE_URL" | record
 }
 
 quote_remote() {
@@ -61,6 +74,7 @@ QUERY='$(quote_remote "$QUERY")'
 YOUTUBER='$(quote_remote "$YOUTUBER")'
 RUNS='$RUNS'
 PER_PAGE='$PER_PAGE'
+CURL_MAX_TIME='${CURL_MAX_TIME:-15}'
 MEILI_API_BASE_URL='$(quote_remote "$MEILI_API_BASE_URL")'
 TYPESENSE_CLOUD_API_BASE_URL='$(quote_remote "$TYPESENSE_CLOUD_API_BASE_URL")'
 TYPESENSE_FLY_API_BASE_URL='$(quote_remote "$TYPESENSE_FLY_API_BASE_URL")'
@@ -76,8 +90,9 @@ bench() {
   i=1
   while [ "\$i" -le "\$RUNS" ]; do
     curl -sS -o /tmp/ytsearch-benchmark-response.json \
+      --max-time "\$CURL_MAX_TIME" \
       -w "backend=\$label run=\$i http=%{http_code} dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s ttfb=%{time_starttransfer}s total=%{time_total}s\n" \
-      "\$url"
+      "\$url" || true
     i=\$((i + 1))
   done
 }
@@ -89,6 +104,7 @@ EOF
 
 if [ -z "$FLY_REGIONS" ]; then
   bench_local
+  summarize
   exit 0
 fi
 
@@ -105,5 +121,7 @@ for region in $FLY_REGIONS; do
     --app "$BENCH_FLY_APP" \
     --org "$BENCH_FLY_ORG" \
     --region "$region" \
-    --command "sh -lc $(printf '%s' "$(remote_command)" | jq -sRr @sh)"
+    --command "sh -lc $(printf '%s' "$(remote_command)" | jq -sRr @sh)" | record
 done
+
+summarize

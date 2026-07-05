@@ -6,6 +6,7 @@ QUERY="${QUERY:-react}"
 YOUTUBER="${YOUTUBER:-}"
 RUNS="${RUNS:-20}"
 PER_PAGE="${PER_PAGE:-10}"
+CURL_MAX_TIME="${CURL_MAX_TIME:-15}"
 
 url="$API_BASE_URL/api/search?q=$(printf '%s' "$QUERY" | jq -sRr @uri)&per_page=$PER_PAGE"
 if [ -n "$YOUTUBER" ]; then
@@ -16,7 +17,8 @@ echo "Benchmarking $url ($RUNS runs)"
 i=1
 while [ "$i" -le "$RUNS" ]; do
   curl -sS -o /tmp/ytsearch-benchmark-response.json \
+    --max-time "$CURL_MAX_TIME" \
     -w "run=$i http=%{http_code} dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s ttfb=%{time_starttransfer}s total=%{time_total}s\n" \
-    "$url"
+    "$url" || true
   i=$((i + 1))
 done
