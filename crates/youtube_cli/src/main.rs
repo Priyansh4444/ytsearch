@@ -1077,7 +1077,8 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         .collect::<Vec<_>>();
     let jobs = command.jobs.clamp(1, 16);
     println!("Indexing with {jobs} concurrent job(s)");
-    let existing_video_ids = if skip_existing {
+    let use_worker_existing_checks = skip_existing && videos_to_index.len() <= 100;
+    let existing_video_ids = if skip_existing && !use_worker_existing_checks {
         println!("Loading existing indexed video ids for {}", youtuber.handle);
         let existing = transcript_search
             .indexed_video_ids_by_youtuber_id(&youtuber_id)
@@ -1107,6 +1108,11 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
             "Skipped {} already-indexed video(s) before starting workers",
             stats.existing_videos
         );
+    } else if use_worker_existing_checks {
+        println!(
+            "Using per-video existing checks for {} recent candidate video(s)",
+            videos_to_index.len()
+        );
     }
 
     let mut tasks = JoinSet::new();
@@ -1131,7 +1137,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
                 chunker.clone(),
                 transcript_search.clone(),
                 command.content_kind,
-                false,
+                use_worker_existing_checks,
             ));
         }
 

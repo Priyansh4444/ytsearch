@@ -285,9 +285,45 @@ impl TypesenseAdminClient {
         &self,
         youtuber_id: &str,
     ) -> Result<HashSet<String>> {
-        self.chunk_count_and_video_ids_by_youtuber_id(youtuber_id)
-            .await
-            .map(|(_, video_ids)| video_ids)
+        let path = format!("collections/{}/documents/search", self.config.collection);
+        let mut url = endpoint(&self.config.api_url, &path)?;
+        {
+            let mut pairs = url.query_pairs_mut();
+            pairs.append_pair("q", "*");
+            pairs.append_pair("filter_by", &format!("youtuber_id:={youtuber_id}"));
+            pairs.append_pair("facet_by", "video_id");
+            pairs.append_pair("max_facet_values", "20000");
+            pairs.append_pair("per_page", "0");
+        }
+
+        let response = self
+            .http
+            .get(url)
+            .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
+            .send()
+            .await?;
+        let body = json_response(response).await?;
+        Ok(body
+            .get("facet_counts")
+            .and_then(Value::as_array)
+            .and_then(|facets| {
+                facets.iter().find(|facet| {
+                    facet
+                        .get("field_name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|field| field == "video_id")
+                })
+            })
+            .and_then(|facet| facet.get("counts"))
+            .and_then(Value::as_array)
+            .map(|counts| {
+                counts
+                    .iter()
+                    .filter_map(|count| count.get("value").and_then(Value::as_str))
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     async fn chunk_count_and_video_ids_by_youtuber_id(

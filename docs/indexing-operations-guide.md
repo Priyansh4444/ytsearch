@@ -41,6 +41,8 @@ scripts/index-all-backends-update.sh scripts/indexed-channels.txt
 scripts/index-all-backends-rewipe.sh scripts/indexed-channels.txt
 ```
 
+`index-all-backends-update.sh` checks the newest 50 uploads per creator by default. This is intentional for normal incremental indexing because YouTube upload playlists are newest-first. Use `RECENT_VIDEOS=100` to widen the window, `MAX_VIDEOS=10` to shrink it, or `ALL_VIDEOS=1` to scan the full channel.
+
 By default it attempts `meilisearch typesense-cloud typesense-fly`. Scope a run with `BACKENDS`:
 
 ```bash

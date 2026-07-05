@@ -308,9 +308,32 @@ impl MeilisearchAdminClient {
         &self,
         youtuber_id: &str,
     ) -> Result<HashSet<String>> {
-        self.chunk_count_and_video_ids_by_youtuber_id(youtuber_id)
-            .await
-            .map(|(_, video_ids)| video_ids)
+        let path = format!("indexes/{}/search", self.config.collection);
+        let url = endpoint(&self.config.api_url, &path)?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(&self.config.admin_api_key)
+            .json(&json!({
+                "q": "",
+                "filter": filter_to_meili(&format!("youtuber_id:={youtuber_id}")),
+                "attributesToRetrieve": ["video_id"],
+                "distinct": "video_id",
+                "limit": 20_000,
+            }))
+            .send()
+            .await?;
+        let body = json_response(response).await?;
+        Ok(body
+            .get("hits")
+            .and_then(Value::as_array)
+            .map(|hits| {
+                hits.iter()
+                    .filter_map(|hit| hit.get("video_id").and_then(Value::as_str))
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     async fn chunk_count_and_video_ids_by_youtuber_id(
