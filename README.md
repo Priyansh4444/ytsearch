@@ -32,7 +32,7 @@ src/                        SolidJS frontend
 
 ## Required environment
 
-Create a local `.env` file. It is intentionally gitignored.
+Create a local `.env` file from `.env.example`. It is intentionally gitignored.
 
 ```env
 YOUTUBE_API_KEY=...
@@ -127,16 +127,47 @@ Validate a handle:
 cargo run -p youtube_cli -- validate @t3dotgg
 ```
 
-Index captions into Meilisearch:
+Index captions into Meilisearch. The default operational mode is `update`,
+which keeps existing chunks and only adds videos that are not already indexed:
 
 ```bash
-cargo run -p youtube_cli -- index-youtuber @t3dotgg
+cargo run -p youtube_cli -- index-youtuber @t3dotgg --backend meilisearch --mode update
 ```
 
-By default, reindexing deletes existing transcript chunks for that YouTuber before importing the new version. For a non-destructive smoke test:
+Use `rewipe` when you intentionally want to delete a creator's existing chunks
+first, for example after changing schema, chunk size, or transcript source:
 
 ```bash
-cargo run -p youtube_cli -- index-youtuber @t3dotgg --max-videos 1 --no-wipe
+cargo run -p youtube_cli -- index-youtuber @t3dotgg --backend meilisearch --mode rewipe
+```
+
+Thin wrapper scripts are also available:
+
+```bash
+scripts/index-youtuber-meili-update.sh @t3dotgg --jobs 8
+scripts/index-youtuber-meili-rewipe.sh @t3dotgg --jobs 8
+scripts/index-youtuber-typesense-update.sh @t3dotgg --jobs 8
+scripts/index-youtuber-typesense-rewipe.sh @t3dotgg --jobs 8
+```
+
+Typesense uses the same modes with `--backend typesense`.
+
+To index every handle from a plain text list, one creator per line:
+
+```bash
+cargo run -p youtube_cli -- index-youtubers scripts/indexed-channels.txt --backend meilisearch --mode update --jobs 8
+```
+
+To export the current indexed creator list from staging:
+
+```bash
+scripts/export-indexed-channels-list.sh indexed-channels.txt
+```
+
+By default, the raw CLI reindexing command deletes existing transcript chunks for that YouTuber before importing the new version. For a non-destructive smoke test:
+
+```bash
+cargo run -p youtube_cli -- index-youtuber @t3dotgg --mode update --max-videos 1
 ```
 
 Use local audio transcription only when public captions are missing:
@@ -173,6 +204,56 @@ curl 'http://127.0.0.1:8787/api/search?q=resident&youtuber=@t3dotgg&per_page=5'
 
 The API uses the Meilisearch search key. The master/admin key is only used by indexing commands.
 Set `YTSEARCH_SEARCH_BACKEND=typesense` to use the deprecated Typesense backend during rollback.
+
+## Benchmark search backends
+
+Compare the Meilisearch staging API with the legacy Typesense API:
+
+```bash
+QUERY=fable YOUTUBER=@t3dotgg RUNS=20 scripts/benchmark-search-backends.sh
+```
+
+To run the same benchmark from multiple Fly regions, provide region codes and a
+Fly app that can run `curl` over SSH:
+
+```bash
+FLY_REGIONS="sjc iad lhr nrt syd" \
+BENCH_FLY_APP=ytsearch-api-meili-staging \
+QUERY=fable \
+YOUTUBER=@t3dotgg \
+RUNS=20 \
+scripts/benchmark-search-backends.sh
+```
+
+If you want independent public probes instead of Fly SSH, use Globalping:
+
+```bash
+QUERY=fable YOUTUBER=@t3dotgg scripts/benchmark-search-globalping.sh
+```
+
+## Deploy frontend variants
+
+Each Cloudflare Pages preview is built with a different `VITE_API_BASE_URL`:
+
+```bash
+scripts/cloudflare-pages-deploy-backends.sh
+```
+
+Default preview branches:
+
+- `frontend-meilisearch` -> `https://ytsearch-api-meili-staging.fly.dev`
+- `frontend-typesense-cloud` -> `https://ytsearch-api-pronsh-sandbox.fly.dev`
+- `frontend-typesense-fly` -> `https://ytsearch-api-typesense-fly-staging.fly.dev`
+
+See `docs/indexing-operations-guide.md` for the queue workflow, full three-backend update command, and count-repair commands.
+
+## Notes From Today
+
+The main performance issue was Meilisearch doing extra work to dedupe video hits in the API. The fix was to use backend-side distincting on `video_id` and fetch only the fields the API needs.
+
+Cloudflare Pages deployment works against the `ytsearch` project, which serves `ytsearch-755.pages.dev`. The staging preview branch I used is `meilisearch-fly-staging`.
+
+Wrangler works in this repo through `bunx wrangler`, but in non-interactive sessions it still needs Cloudflare auth unless an existing local login is present.
 
 ## Frontend behavior
 

@@ -5,8 +5,9 @@ API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:8787}"
 QUERY="${QUERY:-react}"
 YOUTUBER="${YOUTUBER:-}"
 RUNS="${RUNS:-20}"
+PER_PAGE="${PER_PAGE:-10}"
 
-url="$API_BASE_URL/api/search?q=$(printf '%s' "$QUERY" | jq -sRr @uri)&per_page=10"
+url="$API_BASE_URL/api/search?q=$(printf '%s' "$QUERY" | jq -sRr @uri)&per_page=$PER_PAGE"
 if [ -n "$YOUTUBER" ]; then
   url="$url&youtuber=$(printf '%s' "$YOUTUBER" | jq -sRr @uri)"
 fi

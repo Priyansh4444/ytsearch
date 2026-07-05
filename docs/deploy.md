@@ -148,6 +148,47 @@ MEILI_MASTER_KEY='...' \
 cargo run --release -p youtube_cli -- index-youtuber @t3dotgg --max-videos 1 --no-wipe
 ```
 
+## Fly.io Typesense staging
+
+This branch includes `fly.typesense.toml` for a single-node self-hosted
+Typesense staging app. It uses the official Typesense Docker image, persistent
+storage at `/typesense-data`, and a health check on `/health`.
+
+```bash
+export FLYIO_TOKEN='...'
+export TYPESENSE_SELFHOST_API_KEY='...' # generate with: openssl rand -hex 32
+scripts/fly-deploy-typesense.sh
+```
+
+Point the API or CLI at it with:
+
+```env
+YTSEARCH_SEARCH_BACKEND=typesense
+TYPESENSE_API_URL=https://ytsearch-typesense-staging.fly.dev
+TYPESENSE_ADMIN_API_KEY=...
+TYPESENSE_SEARCH_API_KEY=...
+```
+
+The self-hosted Typesense API app is separate from the engine app:
+
+```bash
+scripts/fly-set-typesense-selfhost-api-secrets.sh
+scripts/fly-deploy-typesense-api.sh
+curl 'https://ytsearch-api-typesense-fly-staging.fly.dev/api/health'
+```
+
+For UI comparison, deploy one Cloudflare Pages preview per backend:
+
+```bash
+scripts/cloudflare-pages-deploy-backends.sh
+```
+
+Default preview branches:
+
+- `frontend-meilisearch`
+- `frontend-typesense-cloud`
+- `frontend-typesense-fly`
+
 ## Fly.io API
 
 This repository includes:
@@ -212,10 +253,47 @@ If Railway does not expand `${PORT}` inside env reliably, set the service start 
 
 Website indexing from the frontend is unavailable. Type `@handle` into the main search field and submit to show the request message. Queue creators locally or from a private operator machine.
 
-Manual full/resume indexing locally:
+Manual update indexing locally:
 
 ```bash
-cargo run --release -p youtube_cli -- index-youtuber @t3dotgg --no-wipe --skip-existing --jobs 8
+cargo run --release -p youtube_cli -- index-youtuber @t3dotgg --backend meilisearch --mode update --jobs 8
+```
+
+Manual rewipe indexing locally:
+
+```bash
+cargo run --release -p youtube_cli -- index-youtuber @t3dotgg --backend meilisearch --mode rewipe --jobs 8
+```
+
+Thin wrappers are split by backend and mode:
+
+```bash
+scripts/index-youtuber-meili-update.sh @t3dotgg --jobs 8
+scripts/index-youtuber-meili-rewipe.sh @t3dotgg --jobs 8
+scripts/index-youtuber-typesense-update.sh @t3dotgg --jobs 8
+scripts/index-youtuber-typesense-rewipe.sh @t3dotgg --jobs 8
+```
+
+`update` keeps existing chunks and only adds new videos.
+`rewipe` deletes the creator transcript chunks first so you can reindex after a schema or chunking change.
+
+Index multiple creators from a plain text file, one handle per line:
+
+```bash
+cargo run --release -p youtube_cli -- index-youtubers scripts/indexed-channels.txt --backend meilisearch --mode update --jobs 8
+```
+
+Export the current indexed creator list from the API into a plain text file:
+
+```bash
+scripts/export-indexed-channels-list.sh indexed-channels.txt
+```
+
+The exported format is intentionally simple so it can be edited by hand:
+
+```text
+@t3dotgg | Theo - t3.gg | 973 indexed
+@rasmic | Ras Mic | 124 indexed
 ```
 
 Manual indexing on Fly with the same deployed image:
@@ -227,18 +305,10 @@ flyctl secrets set \
   MEILI_MASTER_KEY='...' \
   MEILI_HTTP_ADDR='...' \
   --app ytsearch-api-pronsh-sandbox
-scripts/fly-run-indexer.sh -- index-youtuber @t3dotgg --no-wipe --skip-existing --jobs 4
+scripts/fly-run-indexer.sh -- index-youtuber @t3dotgg --backend meilisearch --mode update --jobs 4
 ```
 
 The Fly image includes `yt-dlp` and `ffmpeg`. `voxtype` is not installed in the image, so `--transcribe-missing` still needs a custom image layer if you want local transcription fallback on Fly.
-
-Manual full/resume indexing:
-
-Destructive clean reindex:
-
-```bash
-cargo run --release -p youtube_cli -- index-youtuber @t3dotgg --jobs 8
-```
 
 Single video:
 

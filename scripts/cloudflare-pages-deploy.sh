@@ -18,7 +18,10 @@ if [ -n "${CF_API_TOKEN:-}" ] && [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
   export CLOUDFLARE_API_TOKEN="$CF_API_TOKEN"
 fi
 
-export VITE_API_BASE_URL="${VITE_API_BASE_URL:-https://ytsearch-api-pronsh-sandbox.fly.dev}"
+if [ -z "${VITE_API_BASE_URL:-}" ]; then
+  echo "Missing required environment variable: VITE_API_BASE_URL" >&2
+  exit 1
+fi
 
 if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
   if ! bunx wrangler whoami >/dev/null 2>&1; then
