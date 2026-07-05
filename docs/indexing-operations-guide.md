@@ -12,7 +12,7 @@ Each preview points search at a different backend API and posts `@handle` index 
 
 ## One-Off Full Update
 
-Run this in a terminal or background job. It updates all three indexes, then refreshes profile counts in all three:
+Run this in a terminal or background job. It updates every configured backend, then refreshes profile counts:
 
 ```bash
 JOBS=4 nohup scripts/index-all-backends-update.sh scripts/indexed-channels.txt \
@@ -34,6 +34,21 @@ tail -f /tmp/ytsearch-index-all.log
 
 For Meilisearch, prefer `JOBS=3` or `JOBS=4` on the current Fly staging VM. Higher concurrency can create large update temp files and trigger disk pressure.
 
+The shared runner is `scripts/index-all-backends.sh`. The update and rewipe wrappers set `MODE` for you:
+
+```bash
+scripts/index-all-backends-update.sh scripts/indexed-channels.txt
+scripts/index-all-backends-rewipe.sh scripts/indexed-channels.txt
+```
+
+By default it attempts `meilisearch typesense-cloud typesense-fly`. Scope a run with `BACKENDS`:
+
+```bash
+BACKENDS="meilisearch typesense-cloud" scripts/index-all-backends-update.sh scripts/indexed-channels.txt
+```
+
+If `typesense-fly` is selected but `TYPESENSE_SELFHOST_API_KEY` or `TYPESENSE_SELFHOST_API_URL` is missing, that backend is skipped instead of failing the entire all-backends update.
+
 Update mode now does two layers of work avoidance:
 
 1. It loads the already-indexed `video_id`s for a creator once, then skips those videos locally before workers start.
@@ -41,7 +56,7 @@ Update mode now does two layers of work avoidance:
 
 Use `--no-transcript-cache` when you need to force a fresh caption fetch.
 
-The script runs:
+The default update script runs:
 
 1. Meilisearch update.
 2. Typesense Cloud update.
