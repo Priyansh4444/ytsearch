@@ -1,0 +1,40 @@
+app = 'ytsearch-typesense-staging'
+primary_region = 'sjc'
+
+[build]
+  image = 'typesense/typesense:30.2'
+
+[env]
+  TYPESENSE_DATA_DIR = '/typesense-data'
+  TYPESENSE_API_ADDRESS = '0.0.0.0'
+  TYPESENSE_API_PORT = '8108'
+  TYPESENSE_ENABLE_CORS = 'false'
+  TYPESENSE_ENABLE_SEARCH_ANALYTICS = 'false'
+  TYPESENSE_LOG_SLOW_REQUESTS_TIME_MS = '1000'
+
+[mounts]
+  source = 'typesense_data'
+  destination = '/typesense-data'
+
+[http_service]
+  internal_port = 8108
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+[[vm]]
+  memory = '1024mb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+[checks]
+  [checks.health]
+    port = 8108
+    type = 'http'
+    interval = '15s'
+    timeout = '2s'
+    grace_period = '15s'
+    method = 'get'
+    path = '/health'

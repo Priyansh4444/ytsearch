@@ -2,16 +2,26 @@ use async_trait::async_trait;
 use reqwest::{Client as HttpClient, StatusCode, Url, header::CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{fmt, time::Duration};
+use std::{collections::HashSet, fmt, time::Duration};
 use thiserror::Error;
 use tokio::time::sleep;
 use youtube_ingest::{ChunkSink, IngestError, TranscriptChunk};
+use youtube_search::{
+    SearchBackendError, TextSearchQuery as SharedTextSearchQuery, TranscriptSearchBackend,
+    YoutuberDocument as SharedYoutuberDocument,
+};
+
+#[deprecated(
+    since = "0.1.0",
+    note = "Typesense support is retained for compatibility. Prefer youtube_meilisearch for new deployments."
+)]
+pub mod deprecated_notice {}
 
 pub const DEFAULT_COLLECTION: &str = "youtube_transcript_chunks";
 pub const YOUTUBERS_COLLECTION: &str = "youtube_youtubers";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(180);
 const IMPORT_BATCH_SIZE: usize = 1;
-const IMPORT_ATTEMPTS: u8 = 3;
+const IMPORT_ATTEMPTS: u8 = 6;
 const DELETE_ATTEMPTS: u8 = 3;
 
 #[derive(Clone, Eq, PartialEq)]
@@ -261,6 +271,61 @@ impl TypesenseAdminClient {
             .unwrap_or_default())
     }
 
+    pub async fn chunk_stats_by_youtuber_id(&self, youtuber_id: &str) -> Result<ChunkStats> {
+        let path = format!("collections/{}/documents/search", self.config.collection);
+        let per_page = 250u32;
+        let mut page = 1u32;
+        let mut chunks = 0u64;
+        let mut videos = HashSet::new();
+
+        loop {
+            let mut url = endpoint(&self.config.api_url, &path)?;
+            {
+                let mut pairs = url.query_pairs_mut();
+                pairs.append_pair("q", "*");
+                pairs.append_pair("filter_by", &format!("youtuber_id:={youtuber_id}"));
+                pairs.append_pair("include_fields", "video_id");
+                pairs.append_pair("per_page", &per_page.to_string());
+                pairs.append_pair("page", &page.to_string());
+            }
+
+            let response = self
+                .http
+                .get(url)
+                .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
+                .send()
+                .await?;
+            let body = json_response(response).await?;
+            let hits = body
+                .get("hits")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if hits.is_empty() {
+                break;
+            }
+            chunks = chunks.saturating_add(hits.len() as u64);
+            for hit in &hits {
+                if let Some(video_id) = hit
+                    .get("document")
+                    .and_then(|document| document.get("video_id"))
+                    .and_then(Value::as_str)
+                {
+                    videos.insert(video_id.to_string());
+                }
+            }
+            if hits.len() < per_page as usize {
+                break;
+            }
+            page = page.saturating_add(1);
+        }
+
+        Ok(ChunkStats {
+            indexed_videos: videos.len() as u64,
+            indexed_chunks: chunks,
+        })
+    }
+
     pub async fn delete_documents_by_filter(&self, filter_by: &str) -> Result<Value> {
         let path = format!("collections/{}/documents", self.config.collection);
         let mut url = endpoint(&self.config.api_url, &path)?;
@@ -464,9 +529,61 @@ impl TypesenseSearchClient {
     }
 }
 
+#[async_trait]
+impl TranscriptSearchBackend for TypesenseSearchClient {
+    async fn search(
+        &self,
+        query: &SharedTextSearchQuery,
+    ) -> std::result::Result<Value, SearchBackendError> {
+        let query = TextSearchQuery {
+            q: query.q.clone(),
+            query_by: query.query_by.clone(),
+            filter_by: query.filter_by.clone(),
+            group_by: query.group_by.clone(),
+            group_limit: query.group_limit,
+            per_page: query.per_page,
+            page: query.page,
+            highlight_fields: query.highlight_fields.clone(),
+        };
+        TypesenseSearchClient::search(self, &query)
+            .await
+            .map_err(|error| SearchBackendError::new("typesense", error))
+    }
+
+    async fn list_youtubers(
+        &self,
+    ) -> std::result::Result<Vec<SharedYoutuberDocument>, SearchBackendError> {
+        TypesenseSearchClient::list_youtubers(self)
+            .await
+            .map(|channels| {
+                channels
+                    .into_iter()
+                    .map(|channel| SharedYoutuberDocument {
+                        id: channel.id,
+                        handle: channel.handle,
+                        name: channel.name,
+                        channel_id: channel.channel_id,
+                        uploads_playlist: channel.uploads_playlist,
+                        public_video_count: channel.public_video_count,
+                        indexed_video_count: channel.indexed_video_count,
+                        indexed_chunk_count: channel.indexed_chunk_count,
+                        avatar_url: channel.avatar_url,
+                    })
+                    .collect()
+            })
+            .map_err(|error| SearchBackendError::new("typesense", error))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypesenseImport {
     pub body: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChunkStats {
+    pub indexed_videos: u64,
+    pub indexed_chunks: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -581,7 +698,9 @@ impl TypesenseError {
         match self {
             Self::Http(error) => error.is_timeout() || error.is_connect() || error.is_request(),
             Self::Api { status, .. } => {
-                status.is_server_error() || *status == StatusCode::TOO_MANY_REQUESTS
+                status.is_server_error()
+                    || *status == StatusCode::TOO_MANY_REQUESTS
+                    || *status == StatusCode::REQUEST_TIMEOUT
             }
             Self::InvalidUrl(_) | Self::Json(_) | Self::RetryExhausted => false,
         }

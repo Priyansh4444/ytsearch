@@ -11,9 +11,11 @@
 | `youtube_ytdlp` | `yt-dlp` backed public caption transcript source. Parses `json3`/`vtt` into timestamped segments. | Implements `TranscriptSource`; can be replaced by any captions provider. |
 | `youtube_transcribe` | Optional local audio fallback using `yt-dlp` audio extraction, `ffmpeg`, `ffprobe`, and `voxtype`. | Implements `TranscriptSource`; use only when captions are missing and you are allowed to transcribe. |
 | `youtube_ingest` | Core domain model, ports/traits, and transcript chunker. | Defines `VideoMetadataSource`, `TranscriptSource`, `ChunkSink`, `EmbeddingSource`. |
-| `youtube_typesense` | Typesense schema, admin import/delete/upsert, search client, indexed creator documents. | Implements `ChunkSink`; replace for another search backend. |
+| `youtube_search` | Shared query type, indexed creator document, and search backend trait. | API-facing hotswap boundary for search backends. |
+| `youtube_meilisearch` | Meilisearch settings, admin import/delete/upsert, and search client. | Preferred backend for new deployments; implements `ChunkSink` and `TranscriptSearchBackend`. |
+| `youtube_typesense` | Deprecated Typesense schema, admin import/delete/upsert, and search client. | Retained for rollback/compatibility; implements `ChunkSink` and `TranscriptSearchBackend`. |
 | `youtube_cli` | Operator CLI for validation, indexing, direct video indexing, and CLI search. | Wires sources/sinks together; no core parsing logic should live here. |
-| `youtube_api` | Axum HTTP API for frontend search and indexed channel listing. | Uses search-only Typesense key. Keep admin actions out of this service. |
+| `youtube_api` | Axum HTTP API for frontend search and indexed channel listing. | Uses `youtube_search::TranscriptSearchBackend`; keep admin actions out of this service. |
 | `youtube_jsonl` | Local JSONL chunk persistence helpers. | Useful for offline/debug export. |
 | `youtube_semantic` | Experimental embedding/vector-search abstractions. | Keep optional until semantic search is production-ready. |
 
@@ -28,8 +30,10 @@ flowchart TD
     META --> ING[youtube_ingest chunker]
     CAP --> ING
     VOX --> ING
-    ING --> TS[youtube_typesense admin import]
-    API[youtube_api search-only API] --> TSSEARCH[youtube_typesense search client]
+    ING --> SEARCHADMIN[youtube_meilisearch or deprecated youtube_typesense admin import]
+    API[youtube_api search-only API] --> SEARCH[youtube_search backend trait]
+    SEARCH --> MEILI[youtube_meilisearch search client]
+    SEARCH --> TYPESENSE[deprecated youtube_typesense search client]
     WEB[Solid frontend] --> API
 ```
 

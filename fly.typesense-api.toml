@@ -1,0 +1,35 @@
+app = 'ytsearch-api-typesense-fly-staging'
+primary_region = 'sjc'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  YTSEARCH_API_ADDR = '0.0.0.0:8787'
+  TYPESENSE_COLLECTION = 'youtube_transcript_chunks'
+  YTSEARCH_SEARCH_BACKEND = 'typesense'
+  RUST_LOG = 'youtube_api=info,tower_http=info'
+  LOG_FORMAT = 'json'
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+[checks]
+  [checks.health]
+    port = 8787
+    type = 'http'
+    interval = '15s'
+    timeout = '2s'
+    grace_period = '10s'
+    method = 'get'
+    path = '/api/health'

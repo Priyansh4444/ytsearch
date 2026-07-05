@@ -1,9 +1,10 @@
-import type { IndexedChannel, SearchRequest, SearchResponse } from "./types";
+import type { IndexQueueRequest, IndexedChannel, SearchRequest, SearchResponse } from "./types";
 
 const DEFAULT_PER_PAGE = 12;
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ??
-  (import.meta.env.PROD ? "https://ytsearch-api-pronsh-sandbox.fly.dev" : "");
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+const INDEX_QUEUE_API_BASE_URL = (
+  import.meta.env.VITE_INDEX_QUEUE_API_BASE_URL ?? API_BASE_URL
+).replace(/\/$/, "");
 
 export async function searchTranscripts(request: SearchRequest): Promise<SearchResponse> {
   const params = new URLSearchParams({
@@ -24,6 +25,17 @@ export async function indexedChannels(): Promise<IndexedChannel[]> {
   if (!response.ok) throw await apiError(response, "Could not load indexed channels");
   const body = (await response.json()) as { channels: IndexedChannel[] };
   return body.channels;
+}
+
+export async function requestIndex(handle: string): Promise<IndexQueueRequest> {
+  const response = await fetch(`${INDEX_QUEUE_API_BASE_URL}/api/index-requests`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ handle }),
+  });
+  if (!response.ok) throw await apiError(response, "Could not queue index request");
+  const body = (await response.json()) as { request: IndexQueueRequest };
+  return body.request;
 }
 
 async function apiError(response: Response, fallback: string): Promise<Error> {
