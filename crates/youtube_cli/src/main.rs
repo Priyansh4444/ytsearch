@@ -1094,18 +1094,24 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     }
     let jobs = command.jobs.clamp(1, 16);
     println!("Indexing with {jobs} concurrent job(s)");
-    let use_worker_existing_checks =
-        skip_existing && command.stop_after_existing.is_none() && videos_to_index.len() <= 100;
+    let use_worker_existing_checks = skip_existing
+        && command.stop_after_existing.is_none()
+        && !videos_to_index.is_empty()
+        && videos_to_index.len() <= 100;
     let existing_video_ids = if skip_existing && !use_worker_existing_checks {
-        println!("Loading existing indexed video ids for {}", youtuber.handle);
-        let existing = transcript_search
-            .indexed_video_ids_by_youtuber_id(&youtuber_id)
-            .await?;
-        println!(
-            "Skipping videos that already have transcript chunks ({} cached ids)",
-            existing.len()
-        );
-        existing
+        if videos_to_index.is_empty() {
+            HashSet::new()
+        } else {
+            println!("Loading existing indexed video ids for {}", youtuber.handle);
+            let existing = transcript_search
+                .indexed_video_ids_by_youtuber_id(&youtuber_id)
+                .await?;
+            println!(
+                "Skipping videos that already have transcript chunks ({} cached ids)",
+                existing.len()
+            );
+            existing
+        }
     } else {
         HashSet::new()
     };
