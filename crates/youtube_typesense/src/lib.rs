@@ -23,6 +23,8 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 const IMPORT_BATCH_SIZE: usize = 500;
 const IMPORT_ATTEMPTS: u8 = 6;
 const DELETE_ATTEMPTS: u8 = 3;
+const DELETE_BATCH_SIZE: &str = "1000";
+const DELETE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const CONTROL_PLANE_ATTEMPTS: u8 = 3;
 
 #[derive(Clone, Eq, PartialEq)]
@@ -389,13 +391,7 @@ impl TypesenseAdminClient {
     }
 
     pub async fn delete_documents_by_filter(&self, filter_by: &str) -> Result<Value> {
-        let path = format!("collections/{}/documents", self.config.collection);
-        let mut url = endpoint(&self.config.api_url, &path)?;
-        {
-            let mut pairs = url.query_pairs_mut();
-            pairs.append_pair("filter_by", filter_by);
-            pairs.append_pair("batch_size", "100");
-        }
+        let url = delete_documents_url(&self.config, filter_by)?;
 
         let mut last_error = None;
         for attempt in 1..=DELETE_ATTEMPTS {
@@ -403,6 +399,7 @@ impl TypesenseAdminClient {
                 .http
                 .delete(url.clone())
                 .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
+                .timeout(DELETE_TIMEOUT)
                 .send()
                 .await;
 
@@ -931,6 +928,16 @@ fn endpoint(api_url: &str, path: &str) -> Result<Url> {
         .map_err(|source| TypesenseError::InvalidUrl(source.to_string()))
 }
 
+fn delete_documents_url(config: &TypesenseAdminConfig, filter_by: &str) -> Result<Url> {
+    let path = format!("collections/{}/documents", config.collection);
+    let mut url = endpoint(&config.api_url, &path)?;
+    let mut pairs = url.query_pairs_mut();
+    pairs.append_pair("filter_by", filter_by);
+    pairs.append_pair("batch_size", DELETE_BATCH_SIZE);
+    drop(pairs);
+    Ok(url)
+}
+
 fn append_search_query_params(url: &mut Url, query: &TextSearchQuery) {
     let mut pairs = url.query_pairs_mut();
     pairs.append_pair("q", &query.q);
@@ -1142,6 +1149,24 @@ mod tests {
         let url = endpoint("example.a1.typesense.net", "collections").unwrap();
 
         assert_eq!(url.as_str(), "https://example.a1.typesense.net/collections");
+    }
+
+    #[test]
+    fn delete_url_uses_bounded_large_batch() {
+        let config = TypesenseAdminConfig::new("localhost:8108", "admin-secret");
+        let url = delete_documents_url(&config, "youtuber_id:=t3dotgg").expect("delete URL");
+        let params = url.query_pairs().collect::<Vec<_>>();
+
+        assert!(
+            params
+                .iter()
+                .any(|(key, value)| { key == "filter_by" && value == "youtuber_id:=t3dotgg" })
+        );
+        assert!(
+            params
+                .iter()
+                .any(|(key, value)| key == "batch_size" && value == DELETE_BATCH_SIZE)
+        );
     }
 
     #[test]
