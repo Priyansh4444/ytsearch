@@ -23,6 +23,7 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 const IMPORT_BATCH_SIZE: usize = 500;
 const IMPORT_ATTEMPTS: u8 = 6;
 const DELETE_ATTEMPTS: u8 = 3;
+const CONTROL_PLANE_ATTEMPTS: u8 = 3;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct TypesenseAdminConfig {
@@ -196,12 +197,26 @@ impl TypesenseAdminClient {
     pub async fn get_collection(&self, name: &str) -> Result<Option<String>> {
         let path = format!("collections/{name}");
         let url = endpoint(&self.config.api_url, &path)?;
-        let response = self
-            .http
-            .get(url)
-            .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
-            .send()
-            .await?;
+        let mut response = None;
+        for attempt in 1..=CONTROL_PLANE_ATTEMPTS {
+            match self
+                .http
+                .get(url.clone())
+                .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
+                .send()
+                .await
+            {
+                Ok(result) => {
+                    response = Some(result);
+                    break;
+                }
+                Err(error) if error.is_timeout() && attempt < CONTROL_PLANE_ATTEMPTS => {
+                    sleep(Duration::from_secs(u64::from(attempt))).await;
+                }
+                Err(error) => return Err(TypesenseError::Http(error)),
+            }
+        }
+        let response = response.expect("successful response or timeout error");
 
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
