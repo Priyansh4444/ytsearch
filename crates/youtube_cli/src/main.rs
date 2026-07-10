@@ -49,6 +49,10 @@ enum Command {
     RefreshYoutuber(RefreshYoutuberCommand),
     #[command(about = "Refresh indexed YouTuber profile documents from a text file")]
     RefreshYoutubers(RefreshYoutubersCommand),
+    #[command(about = "Reconcile one creator's indexed counts from backend chunks only")]
+    RefreshYoutuberCounts(RefreshYoutuberCountsCommand),
+    #[command(about = "Reconcile creator indexed counts from a text file without YouTube")]
+    RefreshYoutuberCountsList(RefreshYoutuberCountsListCommand),
     #[command(about = "Remove a YouTuber document and transcript chunks from the search backend")]
     RemoveYoutuber(RemoveYoutuberCommand),
     #[command(about = "Copy canonical transcript chunks between search backends without YouTube")]
@@ -104,6 +108,26 @@ struct RefreshYoutubersCommand {
 }
 
 #[derive(Clone, Debug, Args)]
+struct RefreshYoutuberCountsCommand {
+    #[command(flatten)]
+    youtuber: YoutuberArg,
+    #[command(flatten)]
+    search: SearchAdminArgs,
+    #[command(flatten)]
+    collection: TranscriptCollectionArg,
+}
+
+#[derive(Clone, Debug, Args)]
+struct RefreshYoutuberCountsListCommand {
+    #[arg(value_name = "LIST_FILE")]
+    list_file: PathBuf,
+    #[command(flatten)]
+    search: SearchAdminArgs,
+    #[command(flatten)]
+    collection: TranscriptCollectionArg,
+}
+
+#[derive(Clone, Debug, Args)]
 struct RemoveYoutuberCommand {
     #[command(flatten)]
     youtuber: YoutuberArg,
@@ -156,6 +180,11 @@ struct IndexYoutuberCommand {
     stop_after_existing: Option<usize>,
     #[arg(long, value_enum, default_value_t = IndexMode::Update)]
     mode: IndexMode,
+    #[arg(
+        long,
+        help = "Acknowledge that rewipe deletes existing chunks before replacement data is imported"
+    )]
+    allow_destructive_rewipe: bool,
     #[arg(long, default_value_t = 4, help = "Concurrent videos to index")]
     jobs: usize,
     #[arg(
@@ -214,6 +243,11 @@ struct IndexYoutubersCommand {
     collection: TranscriptCollectionArg,
     #[arg(long, value_enum, default_value_t = IndexMode::Update)]
     mode: IndexMode,
+    #[arg(
+        long,
+        help = "Acknowledge that rewipe deletes existing chunks before replacement data is imported"
+    )]
+    allow_destructive_rewipe: bool,
     #[arg(long, help = "Optional cap per creator for a test indexing run")]
     max_videos: Option<usize>,
     #[arg(
@@ -970,6 +1004,10 @@ async fn main() -> Result<(), CliError> {
         Command::BenchmarkIndexYoutuber(command) => benchmark_index_youtuber_command(command).await,
         Command::RefreshYoutuber(command) => refresh_youtuber_command(command).await,
         Command::RefreshYoutubers(command) => refresh_youtubers_command(command).await,
+        Command::RefreshYoutuberCounts(command) => refresh_youtuber_counts_command(command).await,
+        Command::RefreshYoutuberCountsList(command) => {
+            refresh_youtuber_counts_list_command(command).await
+        }
         Command::RemoveYoutuber(command) => remove_youtuber_command(command).await,
         Command::CopyYoutuberChunks(command) => copy_youtuber_chunks_command(command).await,
         Command::IndexVideo(command) => index_video_command(command).await,
@@ -1162,6 +1200,62 @@ async fn refresh_youtubers_command(command: RefreshYoutubersCommand) -> Result<(
     Ok(())
 }
 
+async fn refresh_youtuber_counts_command(
+    command: RefreshYoutuberCountsCommand,
+) -> Result<(), CliError> {
+    let handle = normalize_handle(&command.youtuber.handle)?;
+    let youtuber_id = youtuber_id_from_handle(&handle, "");
+    let search = command.search.client(command.collection.collection)?;
+    refresh_youtuber_counts(&search, &handle, &youtuber_id).await
+}
+
+async fn refresh_youtuber_counts_list_command(
+    command: RefreshYoutuberCountsListCommand,
+) -> Result<(), CliError> {
+    let handles = read_youtuber_list(&command.list_file)?;
+    if handles.is_empty() {
+        return Err(CliError::Message(format!(
+            "no YouTube handles found in {}",
+            command.list_file.display()
+        )));
+    }
+
+    let search = command.search.client(command.collection.collection)?;
+    for raw_handle in handles {
+        let handle = normalize_handle(&raw_handle)?;
+        let youtuber_id = youtuber_id_from_handle(&handle, "");
+        refresh_youtuber_counts(&search, &handle, &youtuber_id).await?;
+    }
+    Ok(())
+}
+
+async fn refresh_youtuber_counts(
+    search: &SearchAdminClient,
+    handle: &str,
+    youtuber_id: &str,
+) -> Result<(), CliError> {
+    let Some(mut youtuber) = search.get_youtuber(youtuber_id).await? else {
+        println!("Skipped count refresh for {handle}: profile document is missing");
+        return Ok(());
+    };
+    let stats = search.chunk_stats_by_youtuber_id(youtuber_id).await?;
+    apply_backend_chunk_stats(&mut youtuber, stats);
+    search.upsert_youtuber(&youtuber).await?;
+    println!(
+        "Refreshed counts for {handle}: {} videos / {} chunks",
+        youtuber.indexed_video_count, youtuber.indexed_chunk_count
+    );
+    Ok(())
+}
+
+fn apply_backend_chunk_stats(youtuber: &mut YoutuberDocument, stats: BackendChunkStats) {
+    youtuber.indexed_video_count = u32::try_from(stats.indexed_videos).unwrap_or(u32::MAX);
+    youtuber.indexed_chunk_count = u32::try_from(stats.indexed_chunks).unwrap_or(u32::MAX);
+    youtuber.public_video_count = youtuber
+        .public_video_count
+        .max(youtuber.indexed_video_count);
+}
+
 async fn remove_youtuber_command(command: RemoveYoutuberCommand) -> Result<(), CliError> {
     let handle = normalize_handle(&command.youtuber.handle)?;
     let youtuber_id = youtuber_id_from_handle(&handle, "");
@@ -1220,10 +1314,8 @@ async fn copy_youtuber_chunks_command(command: CopyYoutuberChunksCommand) -> Res
         SearchAdminClient::Meilisearch(client) => {
             copy_chunks_from_source(client, &target, &youtuber_id, command.batch_size).await?
         }
-        SearchAdminClient::Typesense(_) => {
-            return Err(CliError::Message(
-                "typesense does not yet implement paginated transcript export".to_string(),
-            ));
+        SearchAdminClient::Typesense(client) => {
+            copy_chunks_from_source(client, &target, &youtuber_id, command.batch_size).await?
         }
     };
 
@@ -1252,6 +1344,7 @@ async fn copy_chunks_from_source<S: TranscriptChunkSource + Sync>(
 ) -> Result<usize, CliError> {
     let mut offset = 0;
     let mut copied = 0;
+    let mut pending = Vec::with_capacity(batch_size);
 
     loop {
         let mut page = source
@@ -1266,19 +1359,33 @@ async fn copy_chunks_from_source<S: TranscriptChunkSource + Sync>(
         }
 
         let page_len = page.chunks.len();
-        target.import_chunks_batched(&page.chunks).await?;
+        pending.append(&mut page.chunks);
         copied += page_len;
         offset = page.offset + page_len;
-        println!("Copied {copied}/{} chunks for {youtuber_id}", page.total);
-        if offset >= page.total {
+        let finished = offset >= page.total;
+        if pending.len() >= batch_size || finished {
+            target.import_chunks_batched(&pending).await?;
+            pending.clear();
+            println!("Copied {copied}/{} chunks for {youtuber_id}", page.total);
+        }
+        if finished {
             break;
         }
+    }
+
+    if !pending.is_empty() {
+        target.import_chunks_batched(&pending).await?;
     }
 
     Ok(copied)
 }
 
 async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), CliError> {
+    validate_rewipe_safety(
+        command.mode,
+        command.no_wipe,
+        command.allow_destructive_rewipe,
+    )?;
     let youtube = command.youtube.optional_client()?;
     let caption_source = transcript_source(
         command.no_transcript_cache,
@@ -1622,6 +1729,7 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
             collection: command.collection.clone(),
             max_videos: command.max_videos,
             mode: command.mode,
+            allow_destructive_rewipe: command.allow_destructive_rewipe,
             jobs: command.jobs,
             video_timeout_seconds: command.video_timeout_seconds,
             stop_after_existing: command.stop_after_existing,
@@ -1639,6 +1747,20 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
         index_youtuber_command(command).await?;
     }
 
+    Ok(())
+}
+
+fn validate_rewipe_safety(
+    mode: IndexMode,
+    no_wipe: bool,
+    allow_destructive_rewipe: bool,
+) -> Result<(), CliError> {
+    if mode == IndexMode::Rewipe && !no_wipe && !allow_destructive_rewipe {
+        return Err(CliError::Message(
+            "rewipe deletes existing chunks before replacement captions are confirmed; use update or backend copy when possible, or pass --allow-destructive-rewipe after verifying a recoverable source"
+                .to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -3033,5 +3155,40 @@ mod tests {
             youtuber_id_from_handle("@t3dotgg", "UCbRP3c757lWg9M-U7TyEkXA"),
             "t3dotgg"
         );
+    }
+
+    #[test]
+    fn backend_counts_replace_stale_profile_counts() {
+        let mut youtuber = YoutuberDocument {
+            id: "t3dotgg".to_string(),
+            handle: "@t3dotgg".to_string(),
+            name: "Theo".to_string(),
+            channel_id: "channel".to_string(),
+            uploads_playlist: None,
+            public_video_count: 500,
+            indexed_video_count: 1,
+            indexed_chunk_count: 114,
+            avatar_url: None,
+        };
+
+        apply_backend_chunk_stats(
+            &mut youtuber,
+            BackendChunkStats {
+                indexed_videos: 576,
+                indexed_chunks: 165_451,
+            },
+        );
+
+        assert_eq!(youtuber.indexed_video_count, 576);
+        assert_eq!(youtuber.indexed_chunk_count, 165_451);
+        assert_eq!(youtuber.public_video_count, 576);
+    }
+
+    #[test]
+    fn destructive_rewipe_requires_explicit_acknowledgement() {
+        assert!(validate_rewipe_safety(IndexMode::Update, false, false).is_ok());
+        assert!(validate_rewipe_safety(IndexMode::Rewipe, true, false).is_ok());
+        assert!(validate_rewipe_safety(IndexMode::Rewipe, false, true).is_ok());
+        assert!(validate_rewipe_safety(IndexMode::Rewipe, false, false).is_err());
     }
 }

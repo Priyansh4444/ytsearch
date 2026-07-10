@@ -14,7 +14,7 @@ use youtube_search::{
 };
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
-const IMPORT_BATCH_SIZE: usize = 500;
+const IMPORT_BATCH_SIZE: usize = 5_000;
 const IMPORT_ATTEMPTS: u8 = 6;
 const DELETE_ATTEMPTS: u8 = 3;
 const TASK_POLL_INTERVAL: Duration = Duration::from_millis(250);

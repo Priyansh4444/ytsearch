@@ -5,7 +5,9 @@ use serde_json::{Value, json};
 use std::{collections::HashSet, fmt, time::Duration};
 use thiserror::Error;
 use tokio::time::sleep;
-use youtube_ingest::{ChunkSink, IngestError, TranscriptChunk};
+use youtube_ingest::{
+    ChunkSink, IngestError, TranscriptChunk, TranscriptChunkPage, TranscriptChunkSource,
+};
 use youtube_search::{
     SearchBackendError, TextSearchQuery as SharedTextSearchQuery, TranscriptSearchBackend,
     YoutuberDocument as SharedYoutuberDocument,
@@ -26,6 +28,8 @@ const DELETE_ATTEMPTS: u8 = 3;
 const DELETE_BATCH_SIZE: &str = "1000";
 const DELETE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const CONTROL_PLANE_ATTEMPTS: u8 = 3;
+const EXPORT_PAGE_SIZE_MAX: usize = 250;
+const EXPORT_QUERY_BY: &str = "text";
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct TypesenseAdminConfig {
@@ -345,6 +349,50 @@ impl TypesenseAdminClient {
         })
     }
 
+    pub async fn chunks_page_by_youtuber_id(
+        &self,
+        youtuber_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<TranscriptChunkPage> {
+        let page_size = limit.clamp(1, EXPORT_PAGE_SIZE_MAX);
+        let page = offset / page_size + 1;
+        let path = format!("collections/{}/documents/search", self.config.collection);
+        let mut url = endpoint(&self.config.api_url, &path)?;
+        {
+            let mut pairs = url.query_pairs_mut();
+            pairs.append_pair("q", "*");
+            pairs.append_pair("query_by", EXPORT_QUERY_BY);
+            pairs.append_pair("filter_by", &typesense_youtuber_id_filter(youtuber_id));
+            pairs.append_pair("per_page", &page_size.to_string());
+            pairs.append_pair("page", &page.to_string());
+        }
+        let response = self
+            .http
+            .get(url)
+            .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
+            .send()
+            .await?;
+        let body = json_response(response).await?;
+        let chunks = body
+            .get("hits")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|hit| hit.get("document").cloned())
+            .map(serde_json::from_value)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(TranscriptChunkPage {
+            chunks,
+            offset,
+            total: body
+                .get("found")
+                .and_then(Value::as_u64)
+                .unwrap_or_default() as usize,
+        })
+    }
+
     pub async fn indexed_video_ids_by_youtuber_id(
         &self,
         youtuber_id: &str,
@@ -498,6 +546,20 @@ impl ChunkSink for TypesenseAdminClient {
             .await
             .map(|_| ())
             .map_err(|error| IngestError::Sink(error.to_string()))
+    }
+}
+
+#[async_trait]
+impl TranscriptChunkSource for TypesenseAdminClient {
+    async fn chunks_page_by_youtuber_id(
+        &self,
+        youtuber_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> youtube_ingest::Result<TranscriptChunkPage> {
+        TypesenseAdminClient::chunks_page_by_youtuber_id(self, youtuber_id, offset, limit)
+            .await
+            .map_err(|error| IngestError::ChunkSource(error.to_string()))
     }
 }
 
@@ -938,6 +1000,11 @@ fn delete_documents_url(config: &TypesenseAdminConfig, filter_by: &str) -> Resul
     Ok(url)
 }
 
+fn typesense_youtuber_id_filter(youtuber_id: &str) -> String {
+    let canonical = youtuber_id.trim_start_matches('@');
+    format!("youtuber_id:={canonical} || youtuber_id:=@{canonical}")
+}
+
 fn append_search_query_params(url: &mut Url, query: &TextSearchQuery) {
     let mut pairs = url.query_pairs_mut();
     pairs.append_pair("q", &query.q);
@@ -1166,6 +1233,15 @@ mod tests {
             params
                 .iter()
                 .any(|(key, value)| key == "batch_size" && value == DELETE_BATCH_SIZE)
+        );
+    }
+
+    #[test]
+    fn export_filter_matches_canonical_and_legacy_youtuber_ids() {
+        assert_eq!(EXPORT_QUERY_BY, "text");
+        assert_eq!(
+            typesense_youtuber_id_filter("@t3dotgg"),
+            "youtuber_id:=t3dotgg || youtuber_id:=@t3dotgg"
         );
     }
 
