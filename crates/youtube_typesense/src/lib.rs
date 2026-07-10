@@ -176,26 +176,7 @@ impl TypesenseAdminClient {
         desired_schema: &Value,
     ) -> Result<()> {
         let existing: Value = serde_json::from_str(existing_collection)?;
-        let existing_names = existing
-            .get("fields")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|field| field.get("name").and_then(Value::as_str))
-            .collect::<HashSet<_>>();
-        let missing = desired_schema
-            .get("fields")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|field| {
-                field
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .is_some_and(|name| !existing_names.contains(name))
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        let missing = missing_schema_fields(&existing, desired_schema);
         if missing.is_empty() {
             return Ok(());
         }
@@ -849,6 +830,32 @@ impl TypesenseError {
 
 pub type Result<T> = std::result::Result<T, TypesenseError>;
 
+fn missing_schema_fields(existing: &Value, desired_schema: &Value) -> Vec<Value> {
+    let existing_names = existing
+        .get("fields")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|field| field.get("name").and_then(Value::as_str))
+        .collect::<HashSet<_>>();
+
+    desired_schema
+        .get("fields")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|field| {
+            field
+                .get("name")
+                .and_then(Value::as_str)
+                // `id` is built into Typesense. It is accepted at collection creation,
+                // but Typesense rejects it in a subsequent schema PATCH.
+                .is_some_and(|name| name != "id" && !existing_names.contains(name))
+        })
+        .cloned()
+        .collect()
+}
+
 pub fn transcript_chunk_schema(collection: &str) -> Value {
     json!({
         "name": collection,
@@ -1036,6 +1043,22 @@ mod tests {
             schema["default_sorting_field"],
             Value::String("published_at_timestamp".to_string())
         );
+    }
+
+    #[test]
+    fn schema_patch_excludes_typesense_builtin_id() {
+        let existing = serde_json::json!({
+            "fields": [{ "name": "video_id", "type": "string" }]
+        });
+        let missing =
+            missing_schema_fields(&existing, &transcript_chunk_schema(DEFAULT_COLLECTION));
+        let missing_names = missing
+            .iter()
+            .filter_map(|field| field["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(!missing_names.contains(&"id"));
+        assert!(missing_names.contains(&"published_at_timestamp"));
     }
 
     #[test]
