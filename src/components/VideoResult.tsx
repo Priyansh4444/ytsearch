@@ -39,7 +39,11 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string }>
                 rel="noreferrer"
                 class="text-lg font-semibold leading-snug text-white transition hover:text-vesper-yellow"
               >
-                {props.video.title}
+                <HighlightedText
+                  text={props.video.title}
+                  highlight={props.video.title_highlight}
+                  query={props.query}
+                />
               </a>
               <p class="mt-1 text-sm text-vesper-muted">
                 {props.video.youtuber_name} · {props.video.youtuber_handle}
@@ -94,7 +98,11 @@ const TranscriptExcerpt: Component<{
       when={props.hit.match_kind === "transcript"}
       fallback={
         <p class="text-vesper-muted">
-          Title match. Open the video or search transcript wording for a timestamped moment.
+          <HighlightedText
+            text={props.hit.title}
+            highlight={props.hit.title_highlight}
+            query={props.query}
+          />
         </p>
       }
     >

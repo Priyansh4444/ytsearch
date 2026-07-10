@@ -21,23 +21,58 @@ import {
   WelcomeState,
 } from "./components/States";
 import { VideoResult } from "./components/VideoResult";
-import type { SearchRequest, SearchSort } from "./types";
+import type { SearchRequest, SearchSort, SearchVideoResult } from "./types";
 import { creatorFromPath, normalizeHandle, routeForHandle } from "./utils";
 
+const pluralize = (count: number, singular: string, plural = `${singular}s`) =>
+  `${count} ${count === 1 ? singular : plural}`;
+
+const sectionVideos = (videos: SearchVideoResult[], kind: "video" | "short") =>
+  videos.filter((video) => video.content_kind === kind);
+
+const unknownVideos = (videos: SearchVideoResult[]) =>
+  videos.filter((video) => video.content_kind === "unknown");
+
+const searchStateFromLocation = (): SearchRequest | undefined => {
+  const params = new URLSearchParams(window.location.search);
+  const query = params.get("q")?.trim();
+  if (!query) return undefined;
+  const sort = (params.get("sort") ?? "relevance") as SearchSort;
+  const page = Number(params.get("page") ?? "1");
+  return {
+    query,
+    youtuber: normalizeHandle(params.get("youtuber") ?? creatorFromPath() ?? ""),
+    page: Number.isFinite(page) && page > 0 ? Math.floor(page) : 1,
+    sort: ["relevance", "published_desc", "published_asc"].includes(sort) ? sort : "relevance",
+  };
+};
+
+const writeSearchUrl = (request: SearchRequest) => {
+  const params = new URLSearchParams();
+  params.set("q", request.query);
+  if (request.youtuber) params.set("youtuber", normalizeHandle(request.youtuber));
+  if (request.sort !== "relevance") params.set("sort", request.sort);
+  if (request.page > 1) params.set("page", String(request.page));
+  window.history.pushState({}, "", `/?${params.toString()}`);
+};
+
 const App: Component = () => {
-  const [routeHandle, setRouteHandle] = createSignal(creatorFromPath());
+  const initialSearch = searchStateFromLocation();
+  const [routeHandle, setRouteHandle] = createSignal(
+    initialSearch?.youtuber ? normalizeHandle(initialSearch.youtuber) : creatorFromPath(),
+  );
   const [channels] = createResource(indexedChannels);
-  const [query, setQuery] = createSignal("");
-  const [youtuber, setYoutuber] = createSignal(routeHandle() ?? "");
-  const [page, setPage] = createSignal(1);
-  const [sort, setSort] = createSignal<SearchSort>("relevance");
-  const [submitted, setSubmitted] = createSignal<SearchRequest>();
+  const [query, setQuery] = createSignal(initialSearch?.query ?? "");
+  const [youtuber, setYoutuber] = createSignal(initialSearch?.youtuber ?? routeHandle() ?? "");
+  const [page, setPage] = createSignal(initialSearch?.page ?? 1);
+  const [sort, setSort] = createSignal<SearchSort>(initialSearch?.sort ?? "relevance");
+  const [submitted, setSubmitted] = createSignal<SearchRequest | undefined>(initialSearch);
   const [unavailableIndexHandle, setUnavailableIndexHandle] = createSignal<string>();
   const [queuedIndexRequest, setQueuedIndexRequest] = createSignal<{
     handle: string;
     requestId: string;
   }>();
-  const [result] = createResource(submitted, searchTranscripts);
+  const [result] = createResource(submitted, (request) => searchTranscripts(request));
 
   const selectedChannel = createMemo(() => {
     const selectedHandle = normalizeHandle(youtuber());
@@ -47,32 +82,20 @@ const App: Component = () => {
   const isIndexMode = () => query().trim().startsWith("@");
 
   const syncRoute = () => {
+    const searchState = searchStateFromLocation();
     const nextHandle = creatorFromPath();
-    setRouteHandle(nextHandle);
-    setYoutuber(nextHandle ?? "");
-    setSubmitted(undefined);
+    setRouteHandle(searchState?.youtuber ? normalizeHandle(searchState.youtuber) : nextHandle);
+    setQuery(searchState?.query ?? "");
+    setYoutuber(searchState?.youtuber ?? nextHandle ?? "");
+    setSort(searchState?.sort ?? "relevance");
+    setPage(searchState?.page ?? 1);
+    setSubmitted(searchState);
     setUnavailableIndexHandle(undefined);
     setQueuedIndexRequest(undefined);
-    setPage(1);
   };
 
   window.addEventListener("popstate", syncRoute);
   onCleanup(() => window.removeEventListener("popstate", syncRoute));
-
-  createEffect(() => {
-    const loadedChannels = channels();
-    const handle = routeHandle();
-    if (!handle || !loadedChannels) return;
-    if (loadedChannels.some((channel) => normalizeHandle(channel.handle) === handle)) return;
-
-    window.history.replaceState({}, "", "/");
-    setRouteHandle(null);
-    setYoutuber("");
-    setSubmitted(undefined);
-    setUnavailableIndexHandle(undefined);
-    setQueuedIndexRequest(undefined);
-    setPage(1);
-  });
 
   const selectChannel = (handle: string) => {
     const normalized = normalizeHandle(handle);
@@ -109,24 +132,65 @@ const App: Component = () => {
     setUnavailableIndexHandle(undefined);
     setQueuedIndexRequest(undefined);
     setPage(nextPage);
-    setSubmitted({
+    const request = {
       query: normalizedQuery,
       youtuber: youtuber(),
       page: nextPage,
       sort: sort(),
-    });
+    };
+    setSubmitted(request);
+    writeSearchUrl(request);
   };
 
   const goToPage = (nextPage: number) => {
     const current = submitted();
     if (!current) return;
+    const request = { ...current, page: nextPage };
     setPage(nextPage);
-    setSubmitted({ ...current, page: nextPage });
+    setSubmitted(request);
+    writeSearchUrl(request);
   };
 
+  createEffect(() => {
+    const normalizedQuery = query().trim();
+    const currentMode = normalizedQuery.startsWith("@") ? "index" : "search";
+    const currentYoutuber = youtuber();
+    const currentSort = sort();
+    const currentSubmitted = submitted();
+    if (currentMode !== "search" || normalizedQuery.length < 2) return;
+    if (
+      currentSubmitted?.query === normalizedQuery &&
+      currentSubmitted.youtuber === currentYoutuber &&
+      currentSubmitted.sort === currentSort &&
+      currentSubmitted.page === 1
+    ) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      void searchTranscripts(
+        {
+          query: normalizedQuery,
+          youtuber: currentYoutuber,
+          page: 1,
+          sort: currentSort,
+        },
+        { signal: controller.signal },
+      ).catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+      });
+    }, 450);
+
+    onCleanup(() => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    });
+  });
+
   return (
-    <main class="min-h-screen bg-vesper-bg px-4 py-8 text-vesper-text sm:px-6 lg:px-8">
-      <div class="mx-auto flex w-full max-w-6xl flex-col gap-6">
+    <main class="min-h-screen bg-vesper-bg text-vesper-text">
+      <div class="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8">
         <section
           class={`transition-all duration-500 ease-out ${
             hasChannel() ? "flex flex-col gap-4" : "flex min-h-[45vh] flex-col justify-center gap-6"
@@ -190,7 +254,9 @@ const App: Component = () => {
                 <div class="flex items-center justify-between py-2 text-sm text-vesper-muted">
                   <span class="text-white">{response().query}</span>
                   <span>
-                    {response().videos.length} videos · {response().hits.length} moments
+                    {pluralize(response().total_videos ?? response().videos.length, "video")} ·{" "}
+                    {pluralize(response().total_moments ?? response().total_found, "moment")} ·{" "}
+                    {response().time_to_first_result_ms} ms to first result
                   </span>
                 </div>
 
@@ -198,10 +264,22 @@ const App: Component = () => {
                   when={response().videos.length > 0}
                   fallback={<EmptyState query={response().query} />}
                 >
-                  <div class="grid gap-2">
-                    <For each={response().videos}>
-                      {(video) => <VideoResult video={video} query={response().query} />}
-                    </For>
+                  <div class="flex flex-col gap-6">
+                    <ResultSection
+                      title="Videos"
+                      videos={[
+                        ...sectionVideos(response().videos, "video"),
+                        ...unknownVideos(response().videos),
+                      ]}
+                      query={response().query}
+                      totalLabel="current page"
+                    />
+                    <ResultSection
+                      title="Shorts"
+                      videos={sectionVideos(response().videos, "short")}
+                      query={response().query}
+                      totalLabel="current page"
+                    />
                   </div>
 
                   <PaginationControls
@@ -227,8 +305,39 @@ const App: Component = () => {
           </Show>
         </section>
       </div>
+      <footer class="border-t border-white/10 px-4 py-5 text-center text-sm text-vesper-muted sm:px-6 lg:px-8">
+        <span>Support this project on </span>
+        <a
+          class="font-medium text-white underline decoration-white/30 underline-offset-4 transition hover:decoration-white"
+          href="https://ko-fi.com/pronsh"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Ko-fi
+        </a>
+      </footer>
     </main>
   );
 };
 
 export default App;
+
+const ResultSection: Component<{
+  title: string;
+  videos: SearchVideoResult[];
+  query: string;
+  totalLabel: string;
+}> = (props) => (
+  <Show when={props.videos.length > 0}>
+    <section class="flex flex-col gap-2">
+      <div class="border-b border-white/10 pb-2 text-sm font-medium uppercase tracking-[0.14em] text-vesper-dim">
+        {props.title} · {props.videos.length} on {props.totalLabel}
+      </div>
+      <div class="grid gap-2">
+        <For each={props.videos}>
+          {(video) => <VideoResult video={video} query={props.query} />}
+        </For>
+      </div>
+    </section>
+  </Show>
+);

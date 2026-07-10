@@ -12,6 +12,7 @@ export type SearchHit = {
   youtuber_name: string;
   thumbnail?: string;
   published_at?: string;
+  content_kind: "video" | "short" | "unknown";
   t_start_ms: number;
   timestamp?: string;
   youtube_url: string;
@@ -21,10 +22,12 @@ export type SearchHit = {
 export type SearchVideoResult = {
   video_id: string;
   title: string;
+  title_highlight?: string;
   youtuber_handle: string;
   youtuber_name: string;
   thumbnail?: string;
   published_at?: string;
+  content_kind: "video" | "short" | "unknown";
   match_count: number;
   youtube_url: string;
   embed_url: string;
@@ -36,8 +39,11 @@ export type SearchSort = "relevance" | "published_desc" | "published_asc";
 
 export type SearchResponse = {
   query: string;
+  total_moments: number;
+  total_videos: number;
   total_found: number;
   out_of: number;
+  time_to_first_result_ms: number;
   page: number;
   per_page: number;
   sort: SearchSort;

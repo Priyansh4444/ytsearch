@@ -6,7 +6,10 @@ const INDEX_QUEUE_API_BASE_URL = (
   import.meta.env.VITE_INDEX_QUEUE_API_BASE_URL ?? API_BASE_URL
 ).replace(/\/$/, "");
 
-export async function searchTranscripts(request: SearchRequest): Promise<SearchResponse> {
+export async function searchTranscripts(
+  request: SearchRequest,
+  options: { signal?: AbortSignal } = {},
+): Promise<SearchResponse> {
   const params = new URLSearchParams({
     q: request.query,
     per_page: String(DEFAULT_PER_PAGE),
@@ -15,7 +18,9 @@ export async function searchTranscripts(request: SearchRequest): Promise<SearchR
   });
   if (request.youtuber) params.set("youtuber", request.youtuber);
 
-  const response = await fetch(`${API_BASE_URL}/api/search?${params.toString()}`);
+  const response = await fetch(`${API_BASE_URL}/api/search?${params.toString()}`, {
+    signal: options.signal,
+  });
   if (!response.ok) throw await apiError(response, "Search failed");
   return response.json();
 }

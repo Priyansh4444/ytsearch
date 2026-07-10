@@ -3,6 +3,15 @@ import type { Component } from "solid-js";
 import type { IndexedChannel } from "../types";
 import { normalizeHandle, routeForHandle } from "../utils";
 
+const indexedCountLabel = (channel: IndexedChannel) => {
+  const publicVideoCount = Math.max(channel.public_video_count, channel.indexed_video_count);
+  if (publicVideoCount > channel.indexed_video_count) {
+    return `${channel.indexed_video_count} / ${publicVideoCount} videos indexed`;
+  }
+
+  return `${channel.indexed_video_count} videos indexed`;
+};
+
 export const ChannelPicker: Component<{
   channels: IndexedChannel[] | undefined;
   selectedHandle: string;
@@ -32,7 +41,7 @@ export const ChannelPicker: Component<{
               <span class="leading-tight">
                 <span class="block text-sm font-medium">{channel.name}</span>
                 <span class="block text-xs text-vesper-dim">
-                  {channel.handle} · {channel.indexed_video_count} indexed
+                  {channel.handle} · {indexedCountLabel(channel)}
                 </span>
               </span>
             </a>
@@ -53,7 +62,7 @@ export const ChannelIdentity: Component<{
       <p class="text-lg font-semibold text-white">{props.channel?.name ?? props.handle}</p>
       <p class="text-sm text-vesper-muted">
         {props.channel?.handle ?? props.handle}
-        <Show when={props.channel}> · {props.channel?.indexed_video_count} videos indexed</Show>
+        <Show when={props.channel}> · {props.channel ? indexedCountLabel(props.channel) : ""}</Show>
       </p>
     </div>
   </div>
