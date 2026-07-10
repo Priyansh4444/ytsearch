@@ -78,7 +78,7 @@ scripts/copy-meili-to-typesense.sh @t3dotgg
 REPLACE=1 scripts/copy-meili-to-typesense.sh @t3dotgg
 ```
 
-The CLI command behind this wrapper is `ytsearch copy-youtuber-chunks`. It reads paginated canonical `TranscriptChunk` values through the `TranscriptChunkSource` port and writes through the existing backend sink. It also normalizes legacy creator IDs and refreshes target indexed video/chunk counts without contacting YouTube. Meilisearch is the currently implemented export source; additional engines can implement the same port without changing the copy workflow.
+The CLI command behind this wrapper is `ytsearch copy-youtuber-chunks`. It reads paginated canonical `TranscriptChunk` values through the `TranscriptChunkSource` port and writes through the existing backend sink. It also normalizes legacy creator IDs and refreshes target indexed video/chunk counts without contacting YouTube. Meilisearch and Typesense both implement the same export port, so either can repair or migrate the other without changing the copy workflow.
 
 Start a conservative cloud update across the active backends:
 
@@ -90,11 +90,11 @@ scripts/fly-run-cloud-indexer.sh scripts/indexed-channels.txt
 For an overnight full rewipe, start one isolated Machine per backend so Meilisearch and Typesense rebuild in parallel. Keep `JOBS=1` per machine unless engine metrics demonstrate more write headroom:
 
 ```bash
-ONE_OFF_NO_VOLUME=1 BACKENDS=meilisearch MODE=rewipe JOBS=1 MEILI_JOBS=1 \
+ALLOW_DESTRUCTIVE_REWIPE=1 ONE_OFF_NO_VOLUME=1 BACKENDS=meilisearch MODE=rewipe JOBS=1 MEILI_JOBS=1 \
   INDEXER_MACHINE_NAME=ytsearch-rewipe-meili-$(date +%Y%m%d) \
   scripts/fly-run-cloud-indexer.sh scripts/indexed-channels.txt
 
-ONE_OFF_NO_VOLUME=1 BACKENDS=typesense-fly MODE=rewipe JOBS=1 TYPESENSE_JOBS=1 \
+ALLOW_DESTRUCTIVE_REWIPE=1 ONE_OFF_NO_VOLUME=1 BACKENDS=typesense-fly MODE=rewipe JOBS=1 TYPESENSE_JOBS=1 \
   INDEXER_MACHINE_NAME=ytsearch-rewipe-typesense-$(date +%Y%m%d) \
   scripts/fly-run-cloud-indexer.sh scripts/indexed-channels.txt
 ```
@@ -136,7 +136,7 @@ The shared runner is `scripts/index-all-backends.sh`. The update and rewipe wrap
 
 ```bash
 scripts/index-all-backends-update.sh scripts/indexed-channels.txt
-scripts/index-all-backends-rewipe.sh scripts/indexed-channels.txt
+ALLOW_DESTRUCTIVE_REWIPE=1 scripts/index-all-backends-rewipe.sh scripts/indexed-channels.txt
 ```
 
 `index-all-backends-update.sh` scans the full channel by default so older holes are eventually repaired. Use `EXISTING_TAIL=50` or `STOP_AFTER_EXISTING=50` only when you intentionally want a faster newest-first check, and `MAX_VIDEOS=10` to cap a test run.
@@ -207,14 +207,14 @@ scripts/check-queue-indexers.sh
 
 ### Typesense publication-sort migration
 
-Typesense now uses the numeric `published_at_timestamp` field for newest and oldest results. Adding the field to an existing collection is additive, but old chunks do not acquire a value automatically. After deploying this code, run a deliberate Typesense-only rewipe during a quiet window to populate the field and restore newest-first behavior for low-signal queries:
+Typesense now uses the numeric `published_at_timestamp` field for newest and oldest results. Adding the field to an existing collection is additive, but old chunks do not acquire a value automatically. Prefer non-destructive Meilisearch-to-Typesense chunk copies to backfill existing creators. The upserted canonical chunks include the derived timestamp without deleting the Typesense copy first:
 
 ```bash
-BACKENDS=typesense-fly MODE=rewipe JOBS=1 \
-scripts/fly-run-cloud-indexer.sh scripts/indexed-channels.txt
+ytsearch copy-youtuber-chunks @t3dotgg \
+  --source-backend meilisearch --target-backend typesense --batch-size 5000
 ```
 
-Do not run this alongside a Typesense queue daemon that is actively indexing the same creators. Confirm the daemon is idle first; update mode preserves existing chunks and therefore cannot backfill this new field.
+Run large copies during lower write load. A destructive source re-extraction remains available only with both `--allow-destructive-rewipe` and `ALLOW_DESTRUCTIVE_REWIPE=1` in the wrappers.
 
 Enable a daily caption/video update pass from YouTube for the indexed-channel list on the same daemon:
 
@@ -227,7 +227,7 @@ JOBS=1 \
 scripts/fly-run-queue-indexers.sh
 ```
 
-In the split daemon setup, each daily update runs `index-youtubers --mode update` and `refresh-youtubers` for its own backend. `DAILY_UPDATE_INITIAL_DELAY_SECONDS=86400` means the first daily update starts about one day after the daemon launches; set it to `0` only when you want an immediate catch-up run. `EXISTING_TAIL=0` scans the full channel list so older missing captions can eventually be repaired; use a positive value only for a faster newest-first pass.
+In the split daemon setup, each daily update runs `index-youtubers --mode update` and then `refresh-youtuber-counts-list` for its own backend. Count reconciliation reads only backend chunks and does not contact YouTube. Run `refresh-youtubers` separately when profile metadata, public counts, or avatars need enrichment. `DAILY_UPDATE_INITIAL_DELAY_SECONDS=86400` means the first daily update starts about one day after the daemon launches; set it to `0` only when you want an immediate catch-up run. `EXISTING_TAIL=0` scans the full channel list so older missing captions can eventually be repaired; use a positive value only for a faster newest-first pass.
 
 Index one request at your leisure:
 

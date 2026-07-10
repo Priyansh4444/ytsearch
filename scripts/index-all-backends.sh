@@ -17,6 +17,15 @@ COLLECTION="${COLLECTION:-youtube_transcript_chunks}"
 . "$(dirname "$0")/load-env.sh"
 
 COLLECTION="${YTSEARCH_TRANSCRIPTS_INDEX:-${MEILI_TRANSCRIPTS_INDEX:-${TYPESENSE_COLLECTION:-$COLLECTION}}}"
+REWIPE_ACK_ARG=""
+
+if [ "$MODE" = "rewipe" ]; then
+  if [ "${ALLOW_DESTRUCTIVE_REWIPE:-0}" != "1" ]; then
+    echo "Refusing destructive rewipe. Verify a recoverable source, then set ALLOW_DESTRUCTIVE_REWIPE=1." >&2
+    exit 1
+  fi
+  REWIPE_ACK_ARG="--allow-destructive-rewipe"
+fi
 
 if [ ! -f "$LIST_FILE" ]; then
   echo "List file not found: $LIST_FILE" >&2
@@ -35,6 +44,7 @@ run_index() {
     --mode "$MODE" \
     --collection "$COLLECTION" \
     --jobs "$JOBS" \
+    $REWIPE_ACK_ARG \
     "$@"
 }
 
@@ -44,8 +54,9 @@ run_refresh() {
 
   echo "Refreshing profile counts for $label"
   cargo run --release -p youtube_cli -- \
-    refresh-youtubers "$LIST_FILE" \
-    --backend "$backend"
+    refresh-youtuber-counts-list "$LIST_FILE" \
+    --backend "$backend" \
+    --collection "$COLLECTION"
 }
 
 run_index_typesense_fly() {
@@ -59,6 +70,7 @@ run_index_typesense_fly() {
     --mode "$MODE" \
     --collection "$COLLECTION" \
     --jobs "$JOBS" \
+    $REWIPE_ACK_ARG \
     "$@"
 }
 
@@ -68,8 +80,9 @@ run_refresh_typesense_fly() {
   TYPESENSE_ADMIN_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
   TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
   cargo run --release -p youtube_cli -- \
-    refresh-youtubers "$LIST_FILE" \
-    --backend typesense
+    refresh-youtuber-counts-list "$LIST_FILE" \
+    --backend typesense \
+    --collection "$COLLECTION"
 }
 
 has_backend() {

@@ -134,20 +134,22 @@ which keeps existing chunks and only adds videos that are not already indexed:
 cargo run -p youtube_cli -- index-youtuber @t3dotgg --backend meilisearch --mode update
 ```
 
-Use `rewipe` when you intentionally want to delete a creator's existing chunks
-first, for example after changing schema, chunk size, or transcript source:
+Use `rewipe` only when you intentionally accept deleting a creator's existing
+chunks before replacement captions are confirmed. It is fail-closed and requires
+an explicit acknowledgement:
 
 ```bash
-cargo run -p youtube_cli -- index-youtuber @t3dotgg --backend meilisearch --mode rewipe
+ALLOW_DESTRUCTIVE_REWIPE=1 cargo run -p youtube_cli -- \
+  index-youtuber @t3dotgg --backend meilisearch --mode rewipe --allow-destructive-rewipe
 ```
 
 Thin wrapper scripts are also available:
 
 ```bash
 scripts/index-youtuber-meili-update.sh @t3dotgg --jobs 8
-scripts/index-youtuber-meili-rewipe.sh @t3dotgg --jobs 8
+ALLOW_DESTRUCTIVE_REWIPE=1 scripts/index-youtuber-meili-rewipe.sh @t3dotgg --jobs 8
 scripts/index-youtuber-typesense-update.sh @t3dotgg --jobs 8
-scripts/index-youtuber-typesense-rewipe.sh @t3dotgg --jobs 8
+ALLOW_DESTRUCTIVE_REWIPE=1 scripts/index-youtuber-typesense-rewipe.sh @t3dotgg --jobs 8
 ```
 
 Typesense uses the same modes with `--backend typesense`.

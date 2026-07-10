@@ -16,6 +16,15 @@ MEILI_WAIT_FOR_TASKS="${MEILI_WAIT_FOR_TASKS:-1}"
 export MEILI_WAIT_FOR_TASKS
 mkdir -p "$TRANSCRIPT_CACHE_DIR"
 
+REWIPE_ACK_ARG=""
+if [ "$MODE" = "rewipe" ]; then
+  if [ "${ALLOW_DESTRUCTIVE_REWIPE:-0}" != "1" ]; then
+    echo "cloud-indexer: refusing destructive rewipe without ALLOW_DESTRUCTIVE_REWIPE=1" >&2
+    exit 1
+  fi
+  REWIPE_ACK_ARG="--allow-destructive-rewipe"
+fi
+
 has_backend() {
   backend="$1"
   case " $BACKENDS " in
@@ -39,10 +48,13 @@ index_backend() {
     --video-timeout-seconds "$VIDEO_TIMEOUT_SECONDS" \
     --stop-after-existing "$EXISTING_TAIL" \
     --transcript-cache-dir "$TRANSCRIPT_CACHE_DIR" \
+    $REWIPE_ACK_ARG \
     "$@"
 
   echo "cloud-indexer: refreshing counts for $label"
-  ytsearch refresh-youtubers "$LIST_FILE" --backend "$backend"
+  ytsearch refresh-youtuber-counts-list "$LIST_FILE" \
+    --backend "$backend" \
+    --collection "$COLLECTION"
 }
 
 if has_backend typesense-fly; then

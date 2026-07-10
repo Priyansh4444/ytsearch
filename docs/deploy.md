@@ -262,20 +262,22 @@ cargo run --release -p youtube_cli -- index-youtuber @t3dotgg --backend meilisea
 Manual rewipe indexing locally:
 
 ```bash
-cargo run --release -p youtube_cli -- index-youtuber @t3dotgg --backend meilisearch --mode rewipe --jobs 8
+ALLOW_DESTRUCTIVE_REWIPE=1 cargo run --release -p youtube_cli -- \
+  index-youtuber @t3dotgg --backend meilisearch --mode rewipe \
+  --allow-destructive-rewipe --jobs 8
 ```
 
 Thin wrappers are split by backend and mode:
 
 ```bash
 scripts/index-youtuber-meili-update.sh @t3dotgg --jobs 8
-scripts/index-youtuber-meili-rewipe.sh @t3dotgg --jobs 8
+ALLOW_DESTRUCTIVE_REWIPE=1 scripts/index-youtuber-meili-rewipe.sh @t3dotgg --jobs 8
 scripts/index-youtuber-typesense-update.sh @t3dotgg --jobs 8
-scripts/index-youtuber-typesense-rewipe.sh @t3dotgg --jobs 8
+ALLOW_DESTRUCTIVE_REWIPE=1 scripts/index-youtuber-typesense-rewipe.sh @t3dotgg --jobs 8
 ```
 
 `update` keeps existing chunks and only adds new videos.
-`rewipe` deletes the creator transcript chunks first so you can reindex after a schema or chunking change.
+`rewipe` deletes the creator transcript chunks before replacement data is confirmed. Prefer `update` or `copy-youtuber-chunks`; rewipe requires explicit CLI and wrapper acknowledgements.
 
 Index multiple creators from a plain text file, one handle per line:
 

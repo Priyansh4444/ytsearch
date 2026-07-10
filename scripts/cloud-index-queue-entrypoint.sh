@@ -260,7 +260,9 @@ index_one_backend() {
   fi
 
   echo "cloud-queue-indexer: refreshing $handle backend=$label"
-  if ! ytsearch refresh-youtuber "$handle" --backend "$backend"; then
+  if ! ytsearch refresh-youtuber-counts "$handle" \
+    --backend "$backend" \
+    --collection "$COLLECTION"; then
     echo "cloud-queue-indexer: refresh failed handle=$handle backend=$label (indexed data kept)" >&2
   fi
 }
@@ -337,7 +339,9 @@ index_list_backend() {
     "$@"
 
   echo "cloud-queue-indexer: daily refreshing backend=$label"
-  if ! ytsearch refresh-youtubers "$DAILY_UPDATE_LIST_FILE" --backend "$backend"; then
+  if ! ytsearch refresh-youtuber-counts-list "$DAILY_UPDATE_LIST_FILE" \
+    --backend "$backend" \
+    --collection "$COLLECTION"; then
     echo "cloud-queue-indexer: daily refresh failed backend=$label (indexed data kept)" >&2
   fi
 }

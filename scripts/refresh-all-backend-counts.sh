@@ -21,7 +21,8 @@ has_backend() {
 }
 
 if has_backend meilisearch; then
-  cargo run --release -p youtube_cli -- refresh-youtubers "$LIST_FILE" --backend meilisearch
+  cargo run --release -p youtube_cli -- \
+    refresh-youtuber-counts-list "$LIST_FILE" --backend meilisearch
 fi
 
 if has_backend typesense-fly; then
@@ -31,6 +32,7 @@ if has_backend typesense-fly; then
     TYPESENSE_API_URL="$TYPESENSE_SELFHOST_API_URL" \
     TYPESENSE_ADMIN_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
     TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
-    cargo run --release -p youtube_cli -- refresh-youtubers "$LIST_FILE" --backend typesense
+    cargo run --release -p youtube_cli -- \
+      refresh-youtuber-counts-list "$LIST_FILE" --backend typesense
   fi
 fi

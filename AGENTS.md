@@ -82,10 +82,10 @@ Search:
 Indexing:
 
 - `update` means add missing videos and preserve existing chunks.
-- `rewipe` means delete a creator’s chunks and rebuild them; use for schema/chunking/source changes.
+- `rewipe` deletes a creator's chunks before rebuilding and requires explicit destructive acknowledgement. Prefer `update` or `copy-youtuber-chunks` from the other backend when possible.
 - Heavy indexing should default conservative: `JOBS=1` in cloud, `JOBS=3` or `JOBS=4` for Meili on current staging if local.
 - High Meili write concurrency can produce 408/502s or disk pressure because Meili creates update files.
-- Count refresh matters. After indexing, run `refresh-youtuber(s)` or the wrapper scripts so frontend channel cards show correct indexed counts.
+- Count refresh matters. After indexing, run `refresh-youtuber-counts(-list)` or the wrapper scripts so frontend channel cards match backend chunks. Use `refresh-youtuber(s)` only when profile metadata/public counts/avatars also need YouTube enrichment.
 - `scripts/indexed-channels.txt` is the active creator list for bulk update/daily queue update.
 
 Queue:
@@ -208,7 +208,7 @@ flyctl machines list -a ytsearch-indexer-staging
 
 ## Current Known Sharp Edges
 
-- Typesense Fly is not search-quality-equivalent to Meili for newest ordering on low-signal queries. Fix requires schema/index migration with a numeric published timestamp field, then rewipe/reindex.
+- Typesense Fly needs `published_at_timestamp` on old chunks for newest ordering on low-signal queries. Backfill it with a non-destructive Meili-to-Typesense chunk copy when Meili has the complete creator.
 - Meili can become slow during heavy writes. Keep indexing concurrency conservative and watch disk/update-file pressure.
 - The queue API uses JSONL on one Fly volume. Do not scale it horizontally without replacing storage/locking.
 - Cloud indexing cannot run Voxtype unless the image is extended. Use public captions, cookies, or uploaded transcript cache.
