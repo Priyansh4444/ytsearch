@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-# Smoke-check the three frontend variants and the API each one is meant to use.
+# Smoke-check active frontend variants and the API each one is meant to use.
 
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
@@ -10,9 +10,8 @@ QUERY="${QUERY:-fable}"
 PER_PAGE="${PER_PAGE:-3}"
 CURL_MAX_TIME="${CURL_MAX_TIME:-15}"
 
-MEILI_FRONTEND_URL="${MEILI_FRONTEND_URL:-https://frontend-meilisearch.ytsearch-755.pages.dev}"
-TYPESENSE_CLOUD_FRONTEND_URL="${TYPESENSE_CLOUD_FRONTEND_URL:-https://frontend-typesense-cloud.ytsearch-755.pages.dev}"
-TYPESENSE_FLY_FRONTEND_URL="${TYPESENSE_FLY_FRONTEND_URL:-https://frontend-typesense-fly.ytsearch-755.pages.dev}"
+MEILI_FRONTEND_URL="${MEILI_FRONTEND_URL:-https://meili.ytsearch-755.pages.dev}"
+TYPESENSE_FRONTEND_URL="${TYPESENSE_FRONTEND_URL:-${TYPESENSE_FLY_FRONTEND_URL:-https://typesense.ytsearch-755.pages.dev}}"
 
 required_env() {
   name="$1"
@@ -45,14 +44,10 @@ check_api() {
 }
 
 required_env MEILI_API_BASE_URL
-required_env TYPESENSE_CLOUD_API_BASE_URL
 required_env TYPESENSE_FLY_API_BASE_URL
 
 check_url "frontend meilisearch" "$MEILI_FRONTEND_URL"
 check_api "frontend meilisearch" "$MEILI_API_BASE_URL"
 
-check_url "frontend typesense-cloud" "$TYPESENSE_CLOUD_FRONTEND_URL"
-check_api "frontend typesense-cloud" "$TYPESENSE_CLOUD_API_BASE_URL"
-
-check_url "frontend typesense-fly" "$TYPESENSE_FLY_FRONTEND_URL"
-check_api "frontend typesense-fly" "$TYPESENSE_FLY_API_BASE_URL"
+check_url "frontend typesense" "$TYPESENSE_FRONTEND_URL"
+check_api "frontend typesense" "$TYPESENSE_FLY_API_BASE_URL"

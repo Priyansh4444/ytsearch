@@ -7,7 +7,7 @@ The current stack:
 - Rust workspace for YouTube metadata, transcript ingestion, Meilisearch indexing/search, and a small HTTP API.
 - SolidJS + Vite + TypeScript + Tailwind frontend using Bun.
 - Self-hosted Meilisearch-compatible search storage.
-- `yt-dlp` caption extraction as the primary transcript source.
+- `yt-dlp` caption extraction and creator discovery as the primary source, with an optional YouTube Data API fallback.
 - Optional local audio transcription fallback through `voxtype` when captions are unavailable.
 
 > Legal/compliance note: this project is experimental software. It is not legal advice. You are responsible for complying with YouTube's Terms of Service, YouTube API Services Terms and Developer Policies, copyright law, privacy law, and the rights of creators whose content you process.
@@ -26,7 +26,7 @@ crates/youtube_meilisearch  Meilisearch admin/search clients
 crates/youtube_sources      YouTube metadata sources + source fallback combinators
 crates/youtube_ytdlp        yt-dlp public caption transcript source
 crates/youtube_transcribe   yt-dlp audio extraction + voxtype transcription fallback
-crates/youtube_typesense    Deprecated Typesense admin/search clients retained for rollback
+crates/youtube_typesense    Typesense admin/search clients used for comparison and rollback
 src/                        SolidJS frontend
 ```
 
@@ -35,6 +35,7 @@ src/                        SolidJS frontend
 Create a local `.env` file from `.env.example`. It is intentionally gitignored.
 
 ```env
+# Optional yt-dlp fallback for metadata/discovery only.
 YOUTUBE_API_KEY=...
 MEILI_HTTP_ADDR=...
 MEILI_MASTER_KEY=...
@@ -46,9 +47,8 @@ Optional:
 
 ```env
 MEILI_TRANSCRIPTS_INDEX=youtube_transcript_chunks
-TYPESENSE_API_URL=...
-TYPESENSE_ADMIN_API_KEY=...
-TYPESENSE_SEARCH_API_KEY=...
+TYPESENSE_SELFHOST_API_URL=https://ytsearch-typesense-staging.fly.dev
+TYPESENSE_SELFHOST_API_KEY=...
 TYPESENSE_COLLECTION=youtube_transcript_chunks
 YTSEARCH_API_ADDR=127.0.0.1:8787
 RUST_LOG=youtube_api=info,youtube_cli=info,youtube_sources=info,youtube_ytdlp=info,youtube_transcribe=info,tower_http=info
@@ -77,7 +77,7 @@ The hooks and deploy scripts read `.env` automatically. For Cloudflare Pages dep
 CLOUDFLARE_API_TOKEN=...
 CLOUDFLARE_PAGES_PROJECT=ytsearch
 CLOUDFLARE_PAGES_BRANCH=main
-VITE_API_BASE_URL=https://ytsearch-api-pronsh-sandbox.fly.dev
+VITE_API_BASE_URL=https://ytsearch-api-meili-staging.fly.dev
 ```
 
 Set `YTSEARCH_SKIP_DEPLOY_ON_COMMIT=1` to skip a post-commit deploy.
@@ -213,6 +213,12 @@ Compare the Meilisearch staging API with the legacy Typesense API:
 QUERY=fable YOUTUBER=@t3dotgg RUNS=20 scripts/benchmark-search-backends.sh
 ```
 
+Run the maintained relevance/latency query suite:
+
+```bash
+RUNS=10 scripts/benchmark-search-cases.sh
+```
+
 To run the same benchmark from multiple Fly regions, provide region codes and a
 Fly app that can run `curl` over SSH:
 
@@ -241,11 +247,10 @@ scripts/cloudflare-pages-deploy-backends.sh
 
 Default preview branches:
 
-- `frontend-meilisearch` -> `https://ytsearch-api-meili-staging.fly.dev`
-- `frontend-typesense-cloud` -> `https://ytsearch-api-pronsh-sandbox.fly.dev`
-- `frontend-typesense-fly` -> `https://ytsearch-api-typesense-fly-staging.fly.dev`
+- `meili` -> `https://ytsearch-api-meili-staging.fly.dev`
+- `typesense` -> `https://ytsearch-api-typesense-fly-staging.fly.dev`
 
-See `docs/indexing-operations-guide.md` for the queue workflow, full three-backend update command, and count-repair commands.
+See `docs/indexing-operations-guide.md` for the queue workflow, active backend update command, and count-repair commands.
 
 ## Notes From Today
 

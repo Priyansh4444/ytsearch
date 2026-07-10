@@ -13,7 +13,7 @@
 | `youtube_ingest` | Core domain model, ports/traits, and transcript chunker. | Defines `VideoMetadataSource`, `TranscriptSource`, `ChunkSink`, `EmbeddingSource`. |
 | `youtube_search` | Shared query type, indexed creator document, and search backend trait. | API-facing hotswap boundary for search backends. |
 | `youtube_meilisearch` | Meilisearch settings, admin import/delete/upsert, and search client. | Preferred backend for new deployments; implements `ChunkSink` and `TranscriptSearchBackend`. |
-| `youtube_typesense` | Deprecated Typesense schema, admin import/delete/upsert, and search client. | Retained for rollback/compatibility; implements `ChunkSink` and `TranscriptSearchBackend`. |
+| `youtube_typesense` | Typesense schema, admin import/delete/upsert, and search client. | Secondary staging/rollback backend; implements `ChunkSink` and `TranscriptSearchBackend`. |
 | `youtube_cli` | Operator CLI for validation, indexing, direct video indexing, and CLI search. | Wires sources/sinks together; no core parsing logic should live here. |
 | `youtube_api` | Axum HTTP API for frontend search and indexed channel listing. | Uses `youtube_search::TranscriptSearchBackend`; keep admin actions out of this service. |
 | `youtube_jsonl` | Local JSONL chunk persistence helpers. | Useful for offline/debug export. |

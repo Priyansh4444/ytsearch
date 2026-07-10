@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-# Deploy three Cloudflare Pages previews, one per backend API.
+# Deploy Cloudflare Pages previews for active backend APIs.
 
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
@@ -24,11 +24,8 @@ deploy_backend() {
     scripts/cloudflare-pages-deploy.sh "$branch"
 }
 
-deploy_backend "${MEILI_PAGES_BRANCH:-frontend-meilisearch}" \
+deploy_backend "${MEILI_PAGES_BRANCH:-meili}" \
   "${MEILI_API_BASE_URL:-}"
 
-deploy_backend "${TYPESENSE_CLOUD_PAGES_BRANCH:-frontend-typesense-cloud}" \
-  "${TYPESENSE_CLOUD_API_BASE_URL:-}"
-
-deploy_backend "${TYPESENSE_FLY_PAGES_BRANCH:-frontend-typesense-fly}" \
+deploy_backend "${TYPESENSE_PAGES_BRANCH:-${TYPESENSE_FLY_PAGES_BRANCH:-typesense}}" \
   "${TYPESENSE_FLY_API_BASE_URL:-}"

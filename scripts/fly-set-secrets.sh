@@ -1,13 +1,13 @@
 #!/usr/bin/env sh
 set -eu
 
-APP_NAME="${APP_NAME:-ytsearch-api-pronsh-sandbox}"
+APP_NAME="${APP_NAME:-ytsearch-api-meili-staging}"
 FLY_ORG="${FLY_ORG:-pronsh-sandbox}"
 
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
 
-APP_NAME="${APP_NAME:-ytsearch-api-pronsh-sandbox}"
+APP_NAME="${APP_NAME:-ytsearch-api-meili-staging}"
 FLY_ORG="${FLY_ORG:-pronsh-sandbox}"
 
 if [ -n "${FLYIO_TOKEN:-}" ]; then
@@ -26,12 +26,12 @@ required_env() {
   fi
 }
 
-required_env TYPESENSE_API_URL
-required_env TYPESENSE_SEARCH_API_KEY
+required_env MEILI_HTTP_ADDR
+required_env MEILI_SEARCH_API_KEY
 
 if [ "${INDEXING_ENABLED:-false}" = "true" ]; then
   required_env YOUTUBE_API_KEY
-  required_env TYPESENSE_ADMIN_API_KEY
+  required_env MEILI_MASTER_KEY
 fi
 
 if ! flyctl apps list --org "$FLY_ORG" | grep -q "$APP_NAME"; then
@@ -39,8 +39,9 @@ if ! flyctl apps list --org "$FLY_ORG" | grep -q "$APP_NAME"; then
 fi
 
 flyctl secrets set \
-  TYPESENSE_API_URL="$TYPESENSE_API_URL" \
-  TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SEARCH_API_KEY" \
+  MEILI_HTTP_ADDR="$MEILI_HTTP_ADDR" \
+  MEILI_SEARCH_API_KEY="$MEILI_SEARCH_API_KEY" \
+  YTSEARCH_SEARCH_BACKEND="${YTSEARCH_SEARCH_BACKEND:-meilisearch}" \
   --app "$APP_NAME"
 
 optional_secret() {
@@ -51,9 +52,9 @@ optional_secret() {
   fi
 }
 
-optional_secret TYPESENSE_COLLECTION
+optional_secret MEILI_MASTER_KEY
+optional_secret MEILI_TRANSCRIPTS_INDEX
 optional_secret YOUTUBE_API_KEY
-optional_secret TYPESENSE_ADMIN_API_KEY
 optional_secret INDEXING_ENABLED
 optional_secret YTSEARCH_INDEX_MAX_VIDEOS
 optional_secret YTSEARCH_INDEX_JOBS

@@ -9,7 +9,7 @@ fi
 MODE="${MODE:-update}"
 JOBS="${JOBS:-4}"
 if [ "${BACKENDS+x}" != "x" ]; then
-  BACKENDS="meilisearch typesense-cloud typesense-fly"
+  BACKENDS="meilisearch typesense-fly"
 fi
 COLLECTION="${COLLECTION:-youtube_transcript_chunks}"
 
@@ -83,11 +83,6 @@ has_backend() {
 if has_backend meilisearch; then
   run_index meilisearch meilisearch "$@"
   run_refresh meilisearch meilisearch
-fi
-
-if has_backend typesense-cloud; then
-  run_index typesense-cloud typesense "$@"
-  run_refresh typesense-cloud typesense
 fi
 
 if has_backend typesense-fly; then

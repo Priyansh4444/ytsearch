@@ -275,7 +275,7 @@ Channel indexing:
 
 ## Operational Notes
 
-Keep a local JSONL export even when publishing to Typesense Cloud. It gives you:
+Keep a local JSONL export even when publishing to a hosted search backend. It gives you:
 
 - Reproducible imports.
 - Easier debugging.

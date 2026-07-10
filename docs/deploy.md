@@ -37,6 +37,7 @@ YTSEARCH_SEARCH_RATE_LIMIT_PER_MINUTE=120
 ### Indexer runtime
 
 ```env
+# Optional yt-dlp fallback. Set YOUTUBE_API_FALLBACK=1 when uploading it.
 YOUTUBE_API_KEY=...
 MEILI_HTTP_ADDR=...
 MEILI_MASTER_KEY=...
@@ -64,7 +65,7 @@ Manual Wrangler deploy from this repo:
 ```bash
 export CLOUDFLARE_API_TOKEN='...'
 export CLOUDFLARE_PAGES_PROJECT=ytsearch
-export VITE_API_BASE_URL=https://ytsearch-api-pronsh-sandbox.fly.dev
+export VITE_API_BASE_URL=https://ytsearch-api-meili-staging.fly.dev
 bun run deploy:frontend
 ```
 
@@ -185,16 +186,15 @@ scripts/cloudflare-pages-deploy-backends.sh
 
 Default preview branches:
 
-- `frontend-meilisearch`
-- `frontend-typesense-cloud`
-- `frontend-typesense-fly`
+- `meili`
+- `typesense`
 
 ## Fly.io API
 
 This repository includes:
 
 - `Dockerfile` for the API plus `ytsearch` CLI binary.
-- `fly.toml` configured for app `ytsearch-api-pronsh-sandbox` in org `pronsh-sandbox`.
+- `fly.staging.toml` configured for app `ytsearch-api-meili-staging` in org `pronsh-sandbox`.
 - `scripts/fly-set-secrets.sh` to set API runtime secrets from `.env`.
 - `scripts/fly-deploy.sh` to create/deploy the app with `FLYIO_TOKEN` or `FLY_ACCESS_TOKEN`.
 
@@ -213,20 +213,20 @@ Equivalent manual commands:
 
 ```bash
 export FLY_ACCESS_TOKEN="$FLYIO_TOKEN"
-flyctl apps create ytsearch-api-pronsh-sandbox --org pronsh-sandbox
+flyctl apps create ytsearch-api-meili-staging --org pronsh-sandbox
 flyctl secrets set \
   MEILI_HTTP_ADDR='...' \
   MEILI_SEARCH_API_KEY='...' \
-  --app ytsearch-api-pronsh-sandbox
-flyctl deploy --app ytsearch-api-pronsh-sandbox --primary-region sjc
+  --app ytsearch-api-meili-staging
+flyctl deploy --config fly.staging.toml --app ytsearch-api-meili-staging --primary-region sjc
 ```
 
 Operational checks:
 
 ```bash
-flyctl status --app ytsearch-api-pronsh-sandbox
-flyctl logs --app ytsearch-api-pronsh-sandbox
-curl 'https://ytsearch-api-pronsh-sandbox.fly.dev/api/health'
+flyctl status --app ytsearch-api-meili-staging
+flyctl logs --app ytsearch-api-meili-staging
+curl 'https://ytsearch-api-meili-staging.fly.dev/api/health'
 ```
 
 ## Railway API
@@ -301,10 +301,9 @@ Manual indexing on Fly with the same deployed image:
 ```bash
 export FLYIO_TOKEN='...'
 flyctl secrets set \
-  YOUTUBE_API_KEY='...' \
   MEILI_MASTER_KEY='...' \
   MEILI_HTTP_ADDR='...' \
-  --app ytsearch-api-pronsh-sandbox
+  --app ytsearch-api-meili-staging
 scripts/fly-run-indexer.sh -- index-youtuber @t3dotgg --backend meilisearch --mode update --jobs 4
 ```
 
@@ -341,7 +340,7 @@ Use the included curl benchmark against local, staging, and production APIs:
 ```bash
 API_BASE_URL=http://127.0.0.1:8787 QUERY=react RUNS=20 scripts/benchmark-search.sh
 API_BASE_URL=https://ytsearch-api-meili-staging.fly.dev QUERY=react RUNS=20 scripts/benchmark-search.sh
-API_BASE_URL=https://ytsearch-api-pronsh-sandbox.fly.dev QUERY=react RUNS=20 scripts/benchmark-search.sh
+API_BASE_URL=https://ytsearch-api-typesense-fly-staging.fly.dev QUERY=react RUNS=20 scripts/benchmark-search.sh
 ```
 
 Compare `time_starttransfer` for perceived responsiveness and `time_total` for full response completion. Keep the API and Meilisearch in the same Fly region, leave one machine running, and use public cache headers already emitted by `/api/search` for repeat-query UX.
@@ -384,7 +383,7 @@ flyctl launch \
 flyctl secrets set \
   ORG=pronsh-sandbox \
   ACCESS_TOKEN="$FLYIO_TOKEN" \
-  SUBJECT='logs.ytsearch-api-pronsh-sandbox.>' \
+  SUBJECT='logs.ytsearch-api-meili-staging.>' \
   AXIOM_TOKEN='...' \
   AXIOM_DATASET='ytsearch' \
   --app ytsearch-axiom-logs-pronsh-sandbox \
@@ -397,7 +396,7 @@ For YouTube bot-check failures from `yt-dlp`, deploy with a current `yt-dlp` bui
 ```bash
 flyctl secrets set \
   YT_DLP_EXTRACTOR_ARGS='youtube:player_client=default,mweb' \
-  --app ytsearch-api-pronsh-sandbox
+  --app ytsearch-api-meili-staging
 ```
 
 If you use a cookies file, mount/provision it securely and set `YT_DLP_COOKIES_FILE`; do not commit cookies or tokens.

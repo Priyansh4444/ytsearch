@@ -29,7 +29,7 @@ if ! flyctl apps list --org "$FLY_ORG" | grep -q "$APP_NAME"; then
 fi
 
 if ! flyctl volumes list --app "$APP_NAME" | grep -q 'meili_data'; then
-  flyctl volumes create meili_data --app "$APP_NAME" --region "$FLY_REGION" --size "${MEILI_VOLUME_SIZE_GB:-3}" --yes
+  flyctl volumes create meili_data --app "$APP_NAME" --region "$FLY_REGION" --size "${MEILI_VOLUME_SIZE_GB:-10}" --yes
 fi
 
 flyctl secrets set MEILI_MASTER_KEY="$MEILI_MASTER_KEY" --app "$APP_NAME"

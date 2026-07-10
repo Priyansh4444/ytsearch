@@ -2,7 +2,7 @@
 set -eu
 
 LIST_FILE="${1:-scripts/indexed-channels.txt}"
-BACKENDS="${BACKENDS:-meilisearch typesense-cloud typesense-fly}"
+BACKENDS="${BACKENDS:-meilisearch typesense-fly}"
 
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
@@ -22,10 +22,6 @@ has_backend() {
 
 if has_backend meilisearch; then
   cargo run --release -p youtube_cli -- refresh-youtubers "$LIST_FILE" --backend meilisearch
-fi
-
-if has_backend typesense-cloud; then
-  cargo run --release -p youtube_cli -- refresh-youtubers "$LIST_FILE" --backend typesense
 fi
 
 if has_backend typesense-fly; then

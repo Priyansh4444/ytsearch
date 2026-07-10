@@ -1,13 +1,13 @@
 #!/usr/bin/env sh
 set -eu
 
-APP_NAME="${APP_NAME:-ytsearch-api-pronsh-sandbox}"
+APP_NAME="${APP_NAME:-ytsearch-api-meili-staging}"
 FLY_ORG="${FLY_ORG:-pronsh-sandbox}"
 
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
 
-APP_NAME="${APP_NAME:-ytsearch-api-pronsh-sandbox}"
+APP_NAME="${APP_NAME:-ytsearch-api-meili-staging}"
 FLY_ORG="${FLY_ORG:-pronsh-sandbox}"
 
 if [ -n "${FLYIO_TOKEN:-}" ]; then

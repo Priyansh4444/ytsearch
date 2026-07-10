@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-# Compare Meilisearch, Typesense Cloud, and self-hosted Typesense API endpoints.
+# Compare active search API endpoints.
 # Local run:
 #   scripts/benchmark-search-backends.sh
 #
@@ -18,8 +18,8 @@ YOUTUBER="${YOUTUBER:-}"
 RUNS="${RUNS:-20}"
 PER_PAGE="${PER_PAGE:-10}"
 MEILI_API_BASE_URL="${MEILI_API_BASE_URL:-}"
-TYPESENSE_CLOUD_API_BASE_URL="${TYPESENSE_CLOUD_API_BASE_URL:-${TYPESENSE_API_BASE_URL:-}}"
 TYPESENSE_FLY_API_BASE_URL="${TYPESENSE_FLY_API_BASE_URL:-}"
+BACKENDS="${BACKENDS:-meilisearch typesense-fly}"
 FLY_REGIONS="${FLY_REGIONS:-}"
 BENCH_FLY_APP="${BENCH_FLY_APP:-ytsearch-api-meili-staging}"
 BENCH_FLY_ORG="${BENCH_FLY_ORG:-pronsh-sandbox}"
@@ -35,9 +35,19 @@ required_env() {
   fi
 }
 
-required_env MEILI_API_BASE_URL
-required_env TYPESENSE_CLOUD_API_BASE_URL
-required_env TYPESENSE_FLY_API_BASE_URL
+has_backend() {
+  case " $BACKENDS " in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+if has_backend meilisearch; then
+  required_env MEILI_API_BASE_URL
+fi
+if has_backend typesense-fly; then
+  required_env TYPESENSE_FLY_API_BASE_URL
+fi
 
 bench_one() {
   label="$1"
@@ -59,9 +69,12 @@ summarize() {
 
 bench_local() {
   echo "location=local"
-  bench_one meilisearch "$MEILI_API_BASE_URL" | record
-  bench_one typesense-cloud "$TYPESENSE_CLOUD_API_BASE_URL" | record
-  bench_one typesense-fly "$TYPESENSE_FLY_API_BASE_URL" | record
+  if has_backend meilisearch; then
+    bench_one meilisearch "$MEILI_API_BASE_URL" | record
+  fi
+  if has_backend typesense-fly; then
+    bench_one typesense-fly "$TYPESENSE_FLY_API_BASE_URL" | record
+  fi
 }
 
 quote_remote() {
@@ -76,8 +89,14 @@ RUNS='$RUNS'
 PER_PAGE='$PER_PAGE'
 CURL_MAX_TIME='${CURL_MAX_TIME:-15}'
 MEILI_API_BASE_URL='$(quote_remote "$MEILI_API_BASE_URL")'
-TYPESENSE_CLOUD_API_BASE_URL='$(quote_remote "$TYPESENSE_CLOUD_API_BASE_URL")'
 TYPESENSE_FLY_API_BASE_URL='$(quote_remote "$TYPESENSE_FLY_API_BASE_URL")'
+BACKENDS='$(quote_remote "$BACKENDS")'
+has_backend() {
+  case " \$BACKENDS " in
+    *" \$1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 bench() {
   label="\$1"
   base_url="\$2"
@@ -96,9 +115,12 @@ bench() {
     i=\$((i + 1))
   done
 }
-bench meilisearch "\$MEILI_API_BASE_URL"
-bench typesense-cloud "\$TYPESENSE_CLOUD_API_BASE_URL"
-bench typesense-fly "\$TYPESENSE_FLY_API_BASE_URL"
+if has_backend meilisearch; then
+  bench meilisearch "\$MEILI_API_BASE_URL"
+fi
+if has_backend typesense-fly; then
+  bench typesense-fly "\$TYPESENSE_FLY_API_BASE_URL"
+fi
 EOF
 }
 
