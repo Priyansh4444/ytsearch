@@ -9,7 +9,9 @@ use std::{
 use thiserror::Error;
 use tokio::task::JoinSet;
 use youtube_client::{ListResource, Page, Query, YouTubeClient};
-use youtube_ingest::{Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource};
+use youtube_ingest::{
+    Chunker, TranscriptChunkSource, TranscriptSegment, TranscriptSource, VideoMetadataSource,
+};
 use youtube_meilisearch::{
     CreateCollectionOutcome as MeiliCreateCollectionOutcome, MeilisearchAdminClient,
     MeilisearchAdminConfig, MeilisearchSearchClient, MeilisearchSearchConfig,
@@ -49,6 +51,8 @@ enum Command {
     RefreshYoutubers(RefreshYoutubersCommand),
     #[command(about = "Remove a YouTuber document and transcript chunks from the search backend")]
     RemoveYoutuber(RemoveYoutuberCommand),
+    #[command(about = "Copy canonical transcript chunks between search backends without YouTube")]
+    CopyYoutuberChunks(CopyYoutuberChunksCommand),
     #[command(about = "Index one video by ID or URL")]
     IndexVideo(IndexVideoCommand),
     #[command(about = "Search transcript chunks using the selected search backend")]
@@ -107,6 +111,30 @@ struct RemoveYoutuberCommand {
     search: SearchAdminArgs,
     #[command(flatten)]
     collection: TranscriptCollectionArg,
+}
+
+#[derive(Clone, Debug, Args)]
+struct CopyYoutuberChunksCommand {
+    #[command(flatten)]
+    youtuber: YoutuberArg,
+    #[arg(long, default_value = "meilisearch")]
+    source_backend: SearchBackend,
+    #[arg(long, hide_env_values = true)]
+    source_api_url: Option<String>,
+    #[arg(long, hide_env_values = true)]
+    source_admin_api_key: Option<String>,
+    #[arg(long, default_value = "typesense")]
+    target_backend: SearchBackend,
+    #[arg(long, hide_env_values = true)]
+    target_api_url: Option<String>,
+    #[arg(long, hide_env_values = true)]
+    target_admin_api_key: Option<String>,
+    #[command(flatten)]
+    collection: TranscriptCollectionArg,
+    #[arg(long, default_value_t = 500)]
+    batch_size: usize,
+    #[arg(long, help = "Delete the target creator chunks before copying")]
+    replace: bool,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -943,6 +971,7 @@ async fn main() -> Result<(), CliError> {
         Command::RefreshYoutuber(command) => refresh_youtuber_command(command).await,
         Command::RefreshYoutubers(command) => refresh_youtubers_command(command).await,
         Command::RemoveYoutuber(command) => remove_youtuber_command(command).await,
+        Command::CopyYoutuberChunks(command) => copy_youtuber_chunks_command(command).await,
         Command::IndexVideo(command) => index_video_command(command).await,
         Command::Search(command) => search_command(command).await,
     }
@@ -1158,6 +1187,97 @@ async fn remove_youtuber_command(command: RemoveYoutuberCommand) -> Result<(), C
     Ok(())
 }
 
+async fn copy_youtuber_chunks_command(command: CopyYoutuberChunksCommand) -> Result<(), CliError> {
+    if command.batch_size == 0 {
+        return Err(CliError::Message(
+            "copy batch size must be greater than zero".to_string(),
+        ));
+    }
+
+    let handle = normalize_handle(&command.youtuber.handle)?;
+    let youtuber_id = youtuber_id_from_handle(&handle, "");
+    let collection = command.collection.collection;
+    let source = SearchAdminArgs {
+        backend: command.source_backend,
+        api_url: command.source_api_url,
+        admin_api_key: command.source_admin_api_key,
+    }
+    .client(collection.clone())?;
+    let target = SearchAdminArgs {
+        backend: command.target_backend,
+        api_url: command.target_api_url,
+        admin_api_key: command.target_admin_api_key,
+    }
+    .client(collection)?;
+
+    target.create_collection_if_missing().await?;
+    target.create_youtubers_collection_if_missing().await?;
+    if command.replace {
+        target.delete_chunks_by_youtuber_id(&youtuber_id).await?;
+    }
+
+    let copied = match &source {
+        SearchAdminClient::Meilisearch(client) => {
+            copy_chunks_from_source(client, &target, &youtuber_id, command.batch_size).await?
+        }
+        SearchAdminClient::Typesense(_) => {
+            return Err(CliError::Message(
+                "typesense does not yet implement paginated transcript export".to_string(),
+            ));
+        }
+    };
+
+    let stats = target.chunk_stats_by_youtuber_id(&youtuber_id).await?;
+    if let Some(mut youtuber) = source.get_youtuber(&youtuber_id).await? {
+        youtuber.indexed_video_count = u32::try_from(stats.indexed_videos).unwrap_or(u32::MAX);
+        youtuber.indexed_chunk_count = u32::try_from(stats.indexed_chunks).unwrap_or(u32::MAX);
+        target.upsert_youtuber(&youtuber).await?;
+    }
+
+    println!(
+        "Copied {copied} chunks for {handle}: {} -> {}; target has {} videos / {} chunks",
+        command.source_backend.name(),
+        command.target_backend.name(),
+        stats.indexed_videos,
+        stats.indexed_chunks
+    );
+    Ok(())
+}
+
+async fn copy_chunks_from_source<S: TranscriptChunkSource + Sync>(
+    source: &S,
+    target: &SearchAdminClient,
+    youtuber_id: &str,
+    batch_size: usize,
+) -> Result<usize, CliError> {
+    let mut offset = 0;
+    let mut copied = 0;
+
+    loop {
+        let mut page = source
+            .chunks_page_by_youtuber_id(youtuber_id, offset, batch_size)
+            .await?;
+        if page.chunks.is_empty() {
+            break;
+        }
+
+        for chunk in &mut page.chunks {
+            chunk.youtuber_id = youtuber_id.to_string();
+        }
+
+        let page_len = page.chunks.len();
+        target.import_chunks_batched(&page.chunks).await?;
+        copied += page_len;
+        offset = page.offset + page_len;
+        println!("Copied {copied}/{} chunks for {youtuber_id}", page.total);
+        if offset >= page.total {
+            break;
+        }
+    }
+
+    Ok(copied)
+}
+
 async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), CliError> {
     let youtube = command.youtube.optional_client()?;
     let caption_source = transcript_source(
@@ -1351,6 +1471,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
             let transcribe_source = transcribe_source.clone();
             let chunker = chunker.clone();
             let transcript_search = transcript_search.clone();
+            let worker_youtuber_id = youtuber_id.clone();
             let content_kind = command.content_kind;
             let timeout_video_id = video.video_id.clone();
             let timeout_title = video.title.clone();
@@ -1361,6 +1482,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
                         index,
                         attempted_videos,
                         video,
+                        worker_youtuber_id,
                         metadata_source,
                         caption_source,
                         transcribe_source,
@@ -1560,6 +1682,7 @@ async fn benchmark_index_youtuber_command(
         )
     });
     let chunker = Chunker::new(command.chunk_seconds);
+    let youtuber_id = youtuber_id_from_handle(&youtuber.handle, &youtuber.channel_id);
 
     println!(
         "Index benchmark: handle={} discovered={} sampled={} import={}",
@@ -1578,6 +1701,7 @@ async fn benchmark_index_youtuber_command(
         let timing = benchmark_index_video(
             offset + 1,
             video,
+            &youtuber_id,
             &metadata_source,
             &caption_source,
             transcribe_source.as_ref(),
@@ -1838,6 +1962,7 @@ impl BenchmarkIndexSummary {
 async fn benchmark_index_video(
     index: usize,
     video: DiscoveredVideo,
+    youtuber_id: &str,
     metadata_source: &Arc<FallbackMetadataSource>,
     caption_source: &YtDlpTranscriptSource,
     transcribe_source: Option<&VoxtypeTranscriptSource>,
@@ -1885,7 +2010,7 @@ async fn benchmark_index_video(
     }
 
     let started = Instant::now();
-    let metadata = match metadata_source.metadata_for_video(&video.video_id).await {
+    let mut metadata = match metadata_source.metadata_for_video(&video.video_id).await {
         Ok(metadata) => {
             timing.metadata_ms = millis(started.elapsed());
             metadata
@@ -1897,6 +2022,7 @@ async fn benchmark_index_video(
             return timing;
         }
     };
+    metadata.youtuber.id = youtuber_id.to_string();
 
     let content_kind = content_kind_for_duration(metadata.duration_ms);
     if !content_kind_filter.includes(content_kind) {
@@ -1964,6 +2090,7 @@ async fn index_discovered_video(
     index: usize,
     total: usize,
     video: DiscoveredVideo,
+    youtuber_id: String,
     metadata_source: Arc<FallbackMetadataSource>,
     caption_source: YtDlpTranscriptSource,
     transcribe_source: Option<VoxtypeTranscriptSource>,
@@ -1995,7 +2122,7 @@ async fn index_discovered_video(
         }
     }
 
-    let metadata = match metadata_source.metadata_for_video(&video.video_id).await {
+    let mut metadata = match metadata_source.metadata_for_video(&video.video_id).await {
         Ok(metadata) => metadata,
         Err(error) => {
             tracing::warn!(video_id = %video.video_id, %error, "skipped video metadata");
@@ -2006,6 +2133,7 @@ async fn index_discovered_video(
             });
         }
     };
+    metadata.youtuber.id = youtuber_id;
 
     let content_kind = content_kind_for_duration(metadata.duration_ms);
     if !content_kind_filter.includes(content_kind) {
@@ -2897,5 +3025,13 @@ mod tests {
         assert!(!should_use_worker_existing_checks(true, None, 101));
         assert!(!should_use_worker_existing_checks(false, None, 10));
         assert!(!should_use_worker_existing_checks(true, Some(50), 10));
+    }
+
+    #[test]
+    fn canonical_youtuber_id_does_not_include_handle_prefix() {
+        assert_eq!(
+            youtuber_id_from_handle("@t3dotgg", "UCbRP3c757lWg9M-U7TyEkXA"),
+            "t3dotgg"
+        );
     }
 }

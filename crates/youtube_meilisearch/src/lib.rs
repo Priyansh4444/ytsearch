@@ -5,7 +5,9 @@ use serde_json::{Value, json};
 use std::{collections::HashSet, fmt, time::Duration};
 use thiserror::Error;
 use tokio::time::sleep;
-use youtube_ingest::{ChunkSink, IngestError, TranscriptChunk};
+use youtube_ingest::{
+    ChunkSink, IngestError, TranscriptChunk, TranscriptChunkPage, TranscriptChunkSource,
+};
 use youtube_search::{
     DEFAULT_COLLECTION, SearchBackendError, TextSearchQuery as SharedTextSearchQuery,
     TranscriptSearchBackend, YOUTUBERS_COLLECTION, YoutuberDocument as SharedYoutuberDocument,
@@ -266,7 +268,7 @@ impl MeilisearchAdminClient {
     }
 
     pub async fn delete_chunks_by_youtuber_id(&self, youtuber_id: &str) -> Result<Value> {
-        self.delete_documents_by_filter(&format!("youtuber_id:={youtuber_id}"))
+        self.delete_documents_by_meili_filter(&youtuber_id_filter(youtuber_id))
             .await
     }
 
@@ -307,7 +309,7 @@ impl MeilisearchAdminClient {
             .bearer_auth(&self.config.admin_api_key)
             .json(&json!({
                 "q": "",
-                "filter": filter_to_meili(&format!("youtuber_id:={youtuber_id}")),
+                "filter": youtuber_id_filter(youtuber_id),
                 "limit": 0,
             }))
             .send()
@@ -328,6 +330,46 @@ impl MeilisearchAdminClient {
         })
     }
 
+    pub async fn chunks_page_by_youtuber_id(
+        &self,
+        youtuber_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<TranscriptChunkPage> {
+        let path = format!("indexes/{}/documents/fetch", self.config.collection);
+        let url = endpoint(&self.config.api_url, &path)?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(&self.config.admin_api_key)
+            .json(&json!({
+                "filter": youtuber_id_filter(youtuber_id),
+                "offset": offset,
+                "limit": limit,
+            }))
+            .send()
+            .await?;
+        let body = json_response(response).await?;
+        let chunks = body
+            .get("results")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or_default();
+
+        Ok(TranscriptChunkPage {
+            chunks,
+            offset: body
+                .get("offset")
+                .and_then(Value::as_u64)
+                .unwrap_or_default() as usize,
+            total: body
+                .get("total")
+                .and_then(Value::as_u64)
+                .unwrap_or_default() as usize,
+        })
+    }
+
     pub async fn indexed_video_ids_by_youtuber_id(
         &self,
         youtuber_id: &str,
@@ -340,7 +382,7 @@ impl MeilisearchAdminClient {
             .bearer_auth(&self.config.admin_api_key)
             .json(&json!({
                 "q": "",
-                "filter": filter_to_meili(&format!("youtuber_id:={youtuber_id}")),
+                "filter": youtuber_id_filter(youtuber_id),
                 "attributesToRetrieve": ["video_id"],
                 "distinct": "video_id",
                 "limit": 20_000,
@@ -361,6 +403,11 @@ impl MeilisearchAdminClient {
     }
 
     pub async fn delete_documents_by_filter(&self, filter_by: &str) -> Result<Value> {
+        self.delete_documents_by_meili_filter(&filter_to_meili(filter_by))
+            .await
+    }
+
+    async fn delete_documents_by_meili_filter(&self, filter: &str) -> Result<Value> {
         let path = format!("indexes/{}/documents/delete", self.config.collection);
         let url = endpoint(&self.config.api_url, &path)?;
 
@@ -370,7 +417,7 @@ impl MeilisearchAdminClient {
                 .http
                 .post(url.clone())
                 .bearer_auth(&self.config.admin_api_key)
-                .json(&json!({ "filter": filter_to_meili(filter_by) }))
+                .json(&json!({ "filter": filter }))
                 .send()
                 .await;
 
@@ -503,6 +550,20 @@ impl ChunkSink for MeilisearchAdminClient {
             .await
             .map(|_| ())
             .map_err(|error| IngestError::Sink(error.to_string()))
+    }
+}
+
+#[async_trait]
+impl TranscriptChunkSource for MeilisearchAdminClient {
+    async fn chunks_page_by_youtuber_id(
+        &self,
+        youtuber_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> youtube_ingest::Result<TranscriptChunkPage> {
+        self.chunks_page_by_youtuber_id(youtuber_id, offset, limit)
+            .await
+            .map_err(|error| IngestError::ChunkSource(error.to_string()))
     }
 }
 
@@ -984,6 +1045,12 @@ fn filter_to_meili(filter_by: &str) -> String {
         .join(" AND ")
 }
 
+fn youtuber_id_filter(youtuber_id: &str) -> String {
+    let canonical = youtuber_id.trim_start_matches('@');
+    let legacy = format!("@{canonical}");
+    format!("youtuber_id = {canonical:?} OR youtuber_id = {legacy:?}")
+}
+
 fn endpoint(api_url: &str, path: &str) -> Result<Url> {
     let base = normalized_api_url(api_url)?;
     Url::parse(&format!("{base}/{path}"))
@@ -1080,6 +1147,16 @@ mod tests {
         let url = endpoint("example.fly.dev", "indexes").unwrap();
 
         assert_eq!(url.as_str(), "https://example.fly.dev/indexes");
+    }
+
+    #[test]
+    fn youtuber_filter_matches_canonical_and_legacy_ids() {
+        let filter = youtuber_id_filter("@t3dotgg");
+
+        assert_eq!(
+            filter,
+            r#"youtuber_id = "t3dotgg" OR youtuber_id = "@t3dotgg""#
+        );
     }
 
     #[test]

@@ -8,6 +8,8 @@ pub enum IngestError {
     EmptyTranscript { video_id: String },
     #[error("search sink failed: {0}")]
     Sink(String),
+    #[error("transcript chunk source failed: {0}")]
+    ChunkSource(String),
 }
 
 pub type Result<T> = std::result::Result<T, IngestError>;

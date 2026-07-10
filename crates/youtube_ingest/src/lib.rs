@@ -10,4 +10,7 @@ pub use ingestor::VideoIngestor;
 pub use model::{
     DurationMs, TimestampMs, TranscriptChunk, TranscriptSegment, VideoMetadata, Youtuber,
 };
-pub use ports::{ChunkSink, EmbeddingSource, TranscriptSource, VideoMetadataSource};
+pub use ports::{
+    ChunkSink, EmbeddingSource, TranscriptChunkPage, TranscriptChunkSource, TranscriptSource,
+    VideoMetadataSource,
+};

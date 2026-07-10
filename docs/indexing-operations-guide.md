@@ -68,6 +68,18 @@ You can also set `YT_DLP_EXTRACTOR_ARGS` or `YT_DLP_USER_AGENT` locally before r
 
 Do not attempt to generate or fabricate a YouTube login cookie in cloud infrastructure. A valid cookie represents an authenticated browser session and is subject to YouTube's controls. The supported recovery paths are: use public captions without cookies, mount an existing authorized-session export through the secret script, or seed `/data/transcript-cache` from a permitted local run. The YouTube Data API fallback supplies discovery and metadata only; it does not provide transcript access.
 
+When one search backend already has canonical transcript chunks, copy them directly instead of downloading captions again:
+
+```bash
+# Idempotent upsert; safe to repeat while repairing a partial target.
+scripts/copy-meili-to-typesense.sh @t3dotgg
+
+# Deliberately clear this creator from Typesense before copying.
+REPLACE=1 scripts/copy-meili-to-typesense.sh @t3dotgg
+```
+
+The CLI command behind this wrapper is `ytsearch copy-youtuber-chunks`. It reads paginated canonical `TranscriptChunk` values through the `TranscriptChunkSource` port and writes through the existing backend sink. It also normalizes legacy creator IDs and refreshes target indexed video/chunk counts without contacting YouTube. Meilisearch is the currently implemented export source; additional engines can implement the same port without changing the copy workflow.
+
 Start a conservative cloud update across the active backends:
 
 ```bash
