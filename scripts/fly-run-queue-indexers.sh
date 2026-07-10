@@ -64,6 +64,6 @@ run_worker() {
 run_worker meilisearch "${MEILI_INDEXER_MACHINE_NAME:-ytsearch-queue-meili}" \
   "${MEILI_INDEXER_VOLUME_NAME:-ytsearch_indexer_data_meili}"
 run_worker typesense-fly "${TYPESENSE_INDEXER_MACHINE_NAME:-ytsearch-queue-typesense}" \
-  "${TYPESENSE_INDEXER_VOLUME_NAME:-ytsearch_indexer_data_typesense}"
+  "${TYPESENSE_INDEXER_VOLUME_NAME:-ytsearch_indexer_data_ts}"
 
 "$SCRIPT_DIR/check-queue-indexers.sh"
