@@ -19,8 +19,8 @@ pub mod deprecated_notice {}
 
 pub const DEFAULT_COLLECTION: &str = "youtube_transcript_chunks";
 pub const YOUTUBERS_COLLECTION: &str = "youtube_youtubers";
-const HTTP_TIMEOUT: Duration = Duration::from_secs(180);
-const IMPORT_BATCH_SIZE: usize = 1;
+const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
+const IMPORT_BATCH_SIZE: usize = 500;
 const IMPORT_ATTEMPTS: u8 = 6;
 const DELETE_ATTEMPTS: u8 = 3;
 
@@ -147,6 +147,7 @@ impl TypesenseAdminClient {
         schema: Value,
     ) -> Result<CreateCollectionOutcome> {
         if let Some(body) = self.get_collection(name).await? {
+            self.add_missing_schema_fields(name, &body, &schema).await?;
             return Ok(CreateCollectionOutcome::AlreadyExists { body });
         }
 
@@ -166,6 +167,49 @@ impl TypesenseAdminClient {
             }
             Err(error) => Err(error),
         }
+    }
+
+    async fn add_missing_schema_fields(
+        &self,
+        name: &str,
+        existing_collection: &str,
+        desired_schema: &Value,
+    ) -> Result<()> {
+        let existing: Value = serde_json::from_str(existing_collection)?;
+        let existing_names = existing
+            .get("fields")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|field| field.get("name").and_then(Value::as_str))
+            .collect::<HashSet<_>>();
+        let missing = desired_schema
+            .get("fields")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|field| {
+                field
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| !existing_names.contains(name))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if missing.is_empty() {
+            return Ok(());
+        }
+
+        let path = format!("collections/{name}");
+        let url = endpoint(&self.config.api_url, &path)?;
+        let response = self
+            .http
+            .patch(url)
+            .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
+            .json(&json!({ "fields": missing }))
+            .send()
+            .await?;
+        json_response(response).await.map(|_| ())
     }
 
     pub async fn get_collection(&self, name: &str) -> Result<Option<String>> {
@@ -448,6 +492,8 @@ impl TypesenseAdminClient {
             return Err(TypesenseError::Api { status, body });
         }
 
+        validate_import_body(&body)?;
+
         Ok(TypesenseImport { body })
     }
 }
@@ -487,30 +533,7 @@ impl TypesenseSearchClient {
     pub async fn search(&self, query: &TextSearchQuery) -> Result<Value> {
         let path = format!("collections/{}/documents/search", self.config.collection);
         let mut url = endpoint(&self.config.api_url, &path)?;
-        {
-            let mut pairs = url.query_pairs_mut();
-            pairs.append_pair("q", &query.q);
-            pairs.append_pair("query_by", &query.query_by);
-
-            if let Some(filter_by) = &query.filter_by {
-                pairs.append_pair("filter_by", filter_by);
-            }
-            if let Some(group_by) = &query.group_by {
-                pairs.append_pair("group_by", group_by);
-            }
-            if let Some(group_limit) = query.group_limit {
-                pairs.append_pair("group_limit", &group_limit.to_string());
-            }
-            if let Some(per_page) = query.per_page {
-                pairs.append_pair("per_page", &per_page.to_string());
-            }
-            if let Some(page) = query.page {
-                pairs.append_pair("page", &page.to_string());
-            }
-            if let Some(highlight_fields) = &query.highlight_fields {
-                pairs.append_pair("highlight_fields", highlight_fields);
-            }
-        }
+        append_search_query_params(&mut url, query);
 
         let response = self
             .http
@@ -522,14 +545,21 @@ impl TypesenseSearchClient {
         json_response(response).await
     }
 
-    pub async fn list_youtubers(&self) -> Result<Vec<YoutuberDocument>> {
-        let path = format!("collections/{YOUTUBERS_COLLECTION}/documents/search");
+    pub async fn count_distinct(&self, query: &TextSearchQuery, field: &str) -> Result<u64> {
+        let path = format!("collections/{}/documents/search", self.config.collection);
         let mut url = endpoint(&self.config.api_url, &path)?;
         {
             let mut pairs = url.query_pairs_mut();
-            pairs.append_pair("q", "*");
-            pairs.append_pair("query_by", "name,handle");
-            pairs.append_pair("per_page", "100");
+            pairs.append_pair("q", &query.q);
+            pairs.append_pair("query_by", &query.query_by);
+            pairs.append_pair("per_page", "0");
+            pairs.append_pair("facet_by", field);
+            pairs.append_pair("max_facet_values", "100000");
+            pairs.append_pair("use_cache", "true");
+            pairs.append_pair("cache_ttl", "60");
+            if let Some(filter_by) = &query.filter_by {
+                pairs.append_pair("filter_by", filter_by);
+            }
         }
 
         let response = self
@@ -538,16 +568,70 @@ impl TypesenseSearchClient {
             .header("X-TYPESENSE-API-KEY", &self.config.search_api_key)
             .send()
             .await?;
-        let body = json_response(response).await?;
-        let Some(hits) = body.get("hits").and_then(Value::as_array) else {
-            return Ok(Vec::new());
-        };
 
-        hits.iter()
-            .filter_map(|hit| hit.get("document").cloned())
-            .map(serde_json::from_value)
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(TypesenseError::Json)
+        let body = json_response(response).await?;
+        Ok(body
+            .get("facet_counts")
+            .and_then(Value::as_array)
+            .and_then(|facets| {
+                facets.iter().find(|facet| {
+                    facet
+                        .get("field_name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|field_name| field_name == field)
+                })
+            })
+            .and_then(|facet| facet.get("counts"))
+            .and_then(Value::as_array)
+            .map_or(0, |values| values.len() as u64))
+    }
+
+    pub async fn list_youtubers(&self) -> Result<Vec<YoutuberDocument>> {
+        let path = format!("collections/{YOUTUBERS_COLLECTION}/documents/search");
+        const PAGE_SIZE: u64 = 250;
+        let mut page = 1_u64;
+        let mut channels = Vec::new();
+
+        loop {
+            let mut url = endpoint(&self.config.api_url, &path)?;
+            {
+                let mut pairs = url.query_pairs_mut();
+                pairs.append_pair("q", "*");
+                pairs.append_pair("query_by", "name,handle");
+                pairs.append_pair("per_page", &PAGE_SIZE.to_string());
+                pairs.append_pair("page", &page.to_string());
+            }
+
+            let response = self
+                .http
+                .get(url)
+                .header("X-TYPESENSE-API-KEY", &self.config.search_api_key)
+                .send()
+                .await?;
+            let body = json_response(response).await?;
+            let hits = body
+                .get("hits")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let hit_count = hits.len() as u64;
+            channels.extend(
+                hits.into_iter()
+                    .filter_map(|hit| hit.get("document").cloned())
+                    .map(serde_json::from_value)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(TypesenseError::Json)?,
+            );
+
+            let total = body
+                .get("found")
+                .and_then(Value::as_u64)
+                .unwrap_or(channels.len() as u64);
+            if hit_count == 0 || channels.len() as u64 >= total {
+                return Ok(channels);
+            }
+            page = page.saturating_add(1);
+        }
     }
 }
 
@@ -566,8 +650,30 @@ impl TranscriptSearchBackend for TypesenseSearchClient {
             per_page: query.per_page,
             page: query.page,
             highlight_fields: query.highlight_fields.clone(),
+            sort_by: query.sort_by.clone(),
         };
         TypesenseSearchClient::search(self, &query)
+            .await
+            .map_err(|error| SearchBackendError::new("typesense", error))
+    }
+
+    async fn count_distinct(
+        &self,
+        query: &SharedTextSearchQuery,
+        field: &str,
+    ) -> std::result::Result<u64, SearchBackendError> {
+        let query = TextSearchQuery {
+            q: query.q.clone(),
+            query_by: query.query_by.clone(),
+            filter_by: query.filter_by.clone(),
+            group_by: query.group_by.clone(),
+            group_limit: query.group_limit,
+            per_page: query.per_page,
+            page: query.page,
+            highlight_fields: query.highlight_fields.clone(),
+            sort_by: query.sort_by.clone(),
+        };
+        TypesenseSearchClient::count_distinct(self, &query, field)
             .await
             .map_err(|error| SearchBackendError::new("typesense", error))
     }
@@ -638,6 +744,7 @@ pub struct TextSearchQuery {
     pub per_page: Option<u8>,
     pub page: Option<u32>,
     pub highlight_fields: Option<String>,
+    pub sort_by: Option<String>,
 }
 
 impl TextSearchQuery {
@@ -651,6 +758,7 @@ impl TextSearchQuery {
             per_page: None,
             page: None,
             highlight_fields: Some("text,title".to_string()),
+            sort_by: None,
         }
     }
 
@@ -699,6 +807,11 @@ impl TextSearchQuery {
         self.highlight_fields = Some(highlight_fields.into());
         self
     }
+
+    pub fn sort_by(mut self, sort_by: impl Into<String>) -> Self {
+        self.sort_by = Some(sort_by.into());
+        self
+    }
 }
 
 #[derive(Debug, Error)]
@@ -711,6 +824,8 @@ pub enum TypesenseError {
     Json(#[from] serde_json::Error),
     #[error("typesense returned {status}: {body}")]
     Api { status: StatusCode, body: String },
+    #[error("typesense import failed for {failed} document(s): {sample}")]
+    ImportFailures { failed: usize, sample: String },
     #[error("typesense import retry attempts exhausted")]
     RetryExhausted,
 }
@@ -724,7 +839,10 @@ impl TypesenseError {
                     || *status == StatusCode::TOO_MANY_REQUESTS
                     || *status == StatusCode::REQUEST_TIMEOUT
             }
-            Self::InvalidUrl(_) | Self::Json(_) | Self::RetryExhausted => false,
+            Self::InvalidUrl(_)
+            | Self::Json(_)
+            | Self::ImportFailures { .. }
+            | Self::RetryExhausted => false,
         }
     }
 }
@@ -753,10 +871,11 @@ pub fn transcript_chunk_schema(collection: &str) -> Value {
             { "name": "t_end_ms", "type": "int32" },
             { "name": "thumbnail", "type": "string", "optional": true },
             { "name": "published_at", "type": "string", "facet": true, "optional": true },
+            { "name": "published_at_timestamp", "type": "int64", "optional": true },
             { "name": "upload_date", "type": "string", "facet": true, "optional": true },
             { "name": "uploader_id", "type": "string", "facet": true }
         ],
-        "default_sorting_field": "t_start_ms"
+        "default_sorting_field": "published_at_timestamp"
     })
 }
 
@@ -790,6 +909,40 @@ fn endpoint(api_url: &str, path: &str) -> Result<Url> {
         .map_err(|source| TypesenseError::InvalidUrl(source.to_string()))
 }
 
+fn append_search_query_params(url: &mut Url, query: &TextSearchQuery) {
+    let mut pairs = url.query_pairs_mut();
+    pairs.append_pair("q", &query.q);
+    pairs.append_pair("query_by", &query.query_by);
+
+    if let Some(filter_by) = &query.filter_by {
+        pairs.append_pair("filter_by", filter_by);
+    }
+    if let Some(group_by) = &query.group_by {
+        pairs.append_pair("group_by", group_by);
+    }
+    if let Some(group_limit) = query.group_limit {
+        pairs.append_pair("group_limit", &group_limit.to_string());
+    }
+    if let Some(per_page) = query.per_page {
+        pairs.append_pair("per_page", &per_page.to_string());
+    }
+    if let Some(page) = query.page {
+        pairs.append_pair("page", &page.to_string());
+    }
+    if let Some(highlight_fields) = &query.highlight_fields {
+        pairs.append_pair("highlight_fields", highlight_fields);
+    }
+    if let Some(sort_by) = &query.sort_by {
+        pairs.append_pair("sort_by", sort_by);
+    }
+    pairs.append_pair(
+        "include_fields",
+        "id,video_id,title,text,prev_text,next_text,youtuber_handle,youtuber_name,thumbnail,published_at,duration,t_start_ms,t_end_ms",
+    );
+    pairs.append_pair("use_cache", "true");
+    pairs.append_pair("cache_ttl", "60");
+}
+
 fn normalized_api_url(api_url: &str) -> Result<String> {
     let api_url = api_url.trim().trim_end_matches('/');
     if api_url.is_empty() {
@@ -813,6 +966,30 @@ async fn json_response(response: reqwest::Response) -> Result<Value> {
     }
 
     Ok(serde_json::from_str(&body)?)
+}
+
+fn validate_import_body(body: &str) -> Result<()> {
+    let mut failed = 0usize;
+    let mut sample = None;
+
+    for line in body.lines().filter(|line| !line.trim().is_empty()) {
+        let value: Value = serde_json::from_str(line)?;
+        if value.get("success").and_then(Value::as_bool) == Some(false) {
+            failed = failed.saturating_add(1);
+            if sample.is_none() {
+                sample = Some(line.to_string());
+            }
+        }
+    }
+
+    if failed > 0 {
+        return Err(TypesenseError::ImportFailures {
+            failed,
+            sample: sample.unwrap_or_default(),
+        });
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -848,6 +1025,33 @@ mod tests {
     }
 
     #[test]
+    fn schema_has_numeric_publication_sort_field() {
+        let schema = transcript_chunk_schema(DEFAULT_COLLECTION);
+        let fields = schema["fields"].as_array().expect("schema fields");
+
+        assert!(fields.iter().any(|field| {
+            field["name"] == "published_at_timestamp" && field["type"] == "int64"
+        }));
+        assert_eq!(
+            schema["default_sorting_field"],
+            Value::String("published_at_timestamp".to_string())
+        );
+    }
+
+    #[test]
+    fn import_batches_multiple_chunks_per_request() {
+        assert!(IMPORT_BATCH_SIZE > 1);
+    }
+
+    #[test]
+    fn validates_typesense_import_failures() {
+        let body = r#"{"success":true}
+{"success":false,"error":"bad doc"}"#;
+        let error = validate_import_body(body).unwrap_err();
+        assert!(error.to_string().contains("bad doc"));
+    }
+
+    #[test]
     fn search_query_defaults_to_grouped_transcript_search() {
         let query = TextSearchQuery::new("react server components");
 
@@ -857,7 +1061,46 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_accepts_typesense_cloud_host_without_scheme() {
+    fn search_query_params_limit_payload_and_enable_cache() {
+        let mut url = endpoint(
+            "http://localhost:8108",
+            "collections/chunks/documents/search",
+        )
+        .expect("valid url");
+        let query = TextSearchQuery::new("react")
+            .query_by("text,title")
+            .youtuber_handle("@t3dotgg")
+            .without_grouping()
+            .per_page(240)
+            .page(2);
+
+        append_search_query_params(&mut url, &query);
+        let pairs = url.query_pairs().collect::<Vec<_>>();
+
+        assert!(
+            pairs
+                .iter()
+                .any(|(key, value)| key == "per_page" && value == "240")
+        );
+        assert!(
+            pairs
+                .iter()
+                .any(|(key, value)| key == "include_fields" && value.contains("video_id"))
+        );
+        assert!(
+            pairs
+                .iter()
+                .any(|(key, value)| key == "use_cache" && value == "true")
+        );
+        assert!(
+            pairs
+                .iter()
+                .any(|(key, value)| key == "cache_ttl" && value == "60")
+        );
+    }
+
+    #[test]
+    fn endpoint_accepts_host_without_scheme() {
         let url = endpoint("example.a1.typesense.net", "collections").unwrap();
 
         assert_eq!(url.as_str(), "https://example.a1.typesense.net/collections");

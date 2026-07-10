@@ -177,6 +177,7 @@ mod tests {
             thumbnail: None,
             upload_date: Some("20260101".to_string()),
             published_at: Some("2026-01-01T00:00:00Z".to_string()),
+            published_at_timestamp: Some(1_767_225_600),
             uploader_id: "@t3dotgg".to_string(),
             embedding: Some(embedding),
             extra: BTreeMap::new(),

@@ -31,6 +31,7 @@ const DEFAULT_PER_PAGE: u8 = 20;
 const MAX_PER_PAGE: u8 = 100;
 const MERGE_TRANSCRIPT_HIT_WINDOW_MS: u32 = 20_000;
 const MAX_SEARCH_PAGE_FETCHES: u32 = 10;
+const MAX_HITS_PER_VIDEO: usize = 5;
 const CACHE_YOUTUBERS: &str = "public, max-age=30, stale-while-revalidate=300";
 const CACHE_SEARCH: &str = "public, max-age=30, stale-while-revalidate=300";
 const CACHE_NO_STORE: &str = "no-store";
@@ -81,6 +82,7 @@ struct YoutubersResponse {
 struct IndexRequestInput {
     handle: String,
     note: Option<String>,
+    backends: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -90,12 +92,15 @@ struct IndexQueueItem {
     note: Option<String>,
     requested_at: u64,
     source_backend: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    target_backend: Option<String>,
     status: String,
 }
 
 #[derive(Debug, Serialize)]
 struct IndexQueueResponse {
     request: IndexQueueItem,
+    requests: Vec<IndexQueueItem>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,8 +116,11 @@ struct IndexQueueListResponse {
 #[derive(Debug, Serialize)]
 struct SearchResponse {
     query: String,
+    total_moments: u64,
+    total_videos: u64,
     total_found: u64,
     out_of: u64,
+    time_to_first_result_ms: u64,
     page: u32,
     per_page: u8,
     sort: SearchSort,
@@ -145,6 +153,7 @@ struct SearchHit {
     youtuber_name: String,
     thumbnail: Option<String>,
     published_at: Option<String>,
+    content_kind: ContentKind,
     t_start_ms: u32,
     t_end_ms: u32,
     timestamp: Option<String>,
@@ -156,10 +165,12 @@ struct SearchHit {
 struct SearchVideoResult {
     video_id: String,
     title: String,
+    title_highlight: Option<String>,
     youtuber_handle: String,
     youtuber_name: String,
     thumbnail: Option<String>,
     published_at: Option<String>,
+    content_kind: ContentKind,
     match_count: usize,
     youtube_url: String,
     embed_url: String,
@@ -173,8 +184,13 @@ struct SearchLogEvent {
     backend: String,
     query: String,
     youtuber: Option<String>,
+    client_country: Option<String>,
+    cf_ray: Option<String>,
+    user_agent: Option<String>,
     page: u32,
     per_page: u8,
+    backend_page: u32,
+    backend_page_size: u8,
     sort: SearchSort,
     total_found: u64,
     out_of: u64,
@@ -182,6 +198,14 @@ struct SearchLogEvent {
     returned_hits: usize,
     has_next_page: bool,
     duration_ms: u64,
+    backend_search_ms: u64,
+    first_backend_search_ms: u64,
+    result_processing_ms: u64,
+    backend_search_calls: u32,
+    backend_raw_hits: usize,
+    backend_grouped_hits: usize,
+    response_body_bytes: usize,
+    cache_control: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -189,6 +213,14 @@ struct SearchLogEvent {
 enum MatchKind {
     Transcript,
     Title,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ContentKind {
+    Video,
+    Short,
+    Unknown,
 }
 
 #[derive(Debug, Error)]
@@ -201,6 +233,8 @@ enum ApiError {
     InvalidSearchBackend(String),
     #[error("query cannot be empty")]
     EmptyQuery,
+    #[error("{0}")]
+    BadRequest(String),
     #[error("rate limited; retry after {0} seconds")]
     RateLimited(u64),
     #[error("unauthorized")]
@@ -315,27 +349,53 @@ async fn search_handler(
         .unwrap_or(DEFAULT_PER_PAGE)
         .clamp(1, MAX_PER_PAGE);
     let page = params.page.unwrap_or(1).max(1);
-    let sort = params.sort.unwrap_or_default();
+    let mut sort = params.sort.unwrap_or_default();
+    let low_signal_query = is_low_signal_query(query);
+    if sort == SearchSort::Relevance && low_signal_query {
+        sort = SearchSort::PublishedDesc;
+    }
     let search_started = Instant::now();
-    let use_backend_distinct = state.search_backend.eq_ignore_ascii_case("meilisearch");
-    let search_page_size = if use_backend_distinct {
+    // Fetch raw transcript hits so a single video can return multiple matching
+    // moments. The API groups those hits into video cards after retrieval.
+    let use_backend_grouping = false;
+    let search_page_size = if use_backend_grouping {
         per_page.saturating_add(1).min(MAX_PER_PAGE)
     } else {
         per_page.saturating_mul(8).min(MAX_PER_PAGE)
     };
     let requested_offset = (page - 1).saturating_mul(u32::from(per_page));
-    let search_backend_page = if use_backend_distinct { page } else { 1 };
-    let local_offset = if use_backend_distinct {
+    let search_backend_page = if use_backend_grouping { page } else { 1 };
+    let local_offset = if use_backend_grouping {
         0
     } else {
         requested_offset as usize
     };
-    let mut search_query = TextSearchQuery::new(query)
+    let backend_query = if low_signal_query {
+        if state.search_backend.eq_ignore_ascii_case("meilisearch") {
+            ""
+        } else {
+            "*"
+        }
+    } else {
+        query
+    };
+    let mut search_query = TextSearchQuery::new(backend_query)
         .query_by("text,title")
         .highlight_fields("text,title")
         .per_page(search_page_size)
         .page(search_backend_page);
-    if use_backend_distinct {
+    search_query = match sort {
+        SearchSort::PublishedDesc if state.search_backend.eq_ignore_ascii_case("meilisearch") => {
+            search_query.sort_by("published_at:desc")
+        }
+        SearchSort::PublishedAsc if state.search_backend.eq_ignore_ascii_case("meilisearch") => {
+            search_query.sort_by("published_at:asc")
+        }
+        SearchSort::PublishedDesc => search_query.sort_by("published_at_timestamp:desc"),
+        SearchSort::PublishedAsc => search_query.sort_by("published_at_timestamp:asc"),
+        SearchSort::Relevance => search_query,
+    };
+    if use_backend_grouping {
         search_query = search_query.group_by("video_id").group_limit(1);
     } else {
         search_query = search_query.without_grouping();
@@ -360,7 +420,15 @@ async fn search_handler(
         search_query = search_query.youtuber_handle(normalize_handle(youtuber));
     }
 
-    let first_raw = state.search.search(&search_query).await?;
+    let first_search = async {
+        let first_backend_started = Instant::now();
+        let raw = state.search.search(&search_query).await?;
+        Ok::<_, ApiError>((raw, first_backend_started.elapsed().as_millis() as u64))
+    };
+    let ((first_raw, first_backend_search_ms), total_videos) = tokio::try_join!(
+        first_search,
+        grouped_total_count(state.search.as_ref(), &search_query)
+    )?;
     let found = first_raw
         .get("estimatedTotalHits")
         .or_else(|| first_raw.get("totalHits"))
@@ -373,6 +441,7 @@ async fn search_handler(
         .or_else(|| first_raw.get("out_of"))
         .and_then(Value::as_u64)
         .unwrap_or_default();
+    let processing_started = Instant::now();
     let page_result = collect_visible_videos(
         state.search.as_ref(),
         &search_query,
@@ -382,18 +451,40 @@ async fn search_handler(
         per_page,
         search_page_size,
         sort,
+        query,
+        first_backend_search_ms,
     )
     .await?;
+    let result_processing_ms = processing_started.elapsed().as_millis() as u64;
     let videos = page_result.videos;
     let hits = videos
         .iter()
         .flat_map(|video| video.hits.iter().cloned())
         .collect::<Vec<_>>();
+    let response = SearchResponse {
+        query: query.to_string(),
+        total_moments: found.max(hits.len() as u64),
+        total_videos: total_videos.max(videos.len() as u64),
+        total_found: found.max(hits.len() as u64),
+        out_of,
+        time_to_first_result_ms: first_backend_search_ms,
+        page,
+        per_page,
+        sort,
+        has_next_page: page_result.has_next_page,
+        hits,
+        videos,
+    };
+    let response_body_bytes = serde_json::to_vec(&response).map_or(0, |body| body.len());
     tracing::info!(
         query,
         found,
-        returned_videos = videos.len(),
-        returned_hits = hits.len(),
+        returned_videos = response.videos.len(),
+        returned_hits = response.hits.len(),
+        backend_search_ms = page_result.timings.backend_search_ms,
+        first_backend_search_ms,
+        result_processing_ms,
+        response_body_bytes,
         "search response"
     );
     if let Some(axiom) = &state.axiom {
@@ -402,32 +493,39 @@ async fn search_handler(
             backend: state.search_backend.clone(),
             query: query.to_string(),
             youtuber: params.youtuber.clone(),
+            client_country: header_string(&headers, "cf-ipcountry"),
+            cf_ray: header_string(&headers, "cf-ray"),
+            user_agent: header_string(&headers, "user-agent"),
             page,
             per_page,
+            backend_page: search_backend_page,
+            backend_page_size: search_page_size,
             sort,
-            total_found: found.max(hits.len() as u64),
+            total_found: response.total_found,
             out_of,
-            returned_videos: videos.len(),
-            returned_hits: hits.len(),
-            has_next_page: page_result.has_next_page,
+            returned_videos: response.videos.len(),
+            returned_hits: response.hits.len(),
+            has_next_page: response.has_next_page,
             duration_ms: search_started.elapsed().as_millis() as u64,
+            backend_search_ms: page_result.timings.backend_search_ms,
+            first_backend_search_ms,
+            result_processing_ms,
+            backend_search_calls: page_result.timings.backend_search_calls,
+            backend_raw_hits: page_result.timings.backend_raw_hits,
+            backend_grouped_hits: page_result.timings.backend_grouped_hits,
+            response_body_bytes,
+            cache_control: CACHE_SEARCH,
         });
     }
 
-    Ok(cache_response(
-        CACHE_SEARCH,
-        Json(SearchResponse {
-            query: query.to_string(),
-            total_found: found.max(hits.len() as u64),
-            out_of,
-            page,
-            per_page,
-            sort,
-            has_next_page: page_result.has_next_page,
-            hits,
-            videos,
-        }),
-    ))
+    Ok(cache_response(CACHE_SEARCH, Json(response)))
+}
+
+async fn grouped_total_count(
+    search: &dyn TranscriptSearchBackend,
+    base_query: &TextSearchQuery,
+) -> Result<u64, ApiError> {
+    Ok(search.count_distinct(base_query, "video_id").await?)
 }
 
 async fn create_index_request(
@@ -435,22 +533,40 @@ async fn create_index_request(
     Json(input): Json<IndexRequestInput>,
 ) -> Result<Response, ApiError> {
     let handle = normalize_handle_checked(&input.handle)?;
-    let request = IndexQueueItem {
-        id: format!(
-            "{}-{}",
-            epoch_seconds(),
-            handle.trim_start_matches('@').replace('-', "")
-        ),
-        handle,
-        note: input.note.filter(|note| !note.trim().is_empty()),
-        requested_at: epoch_seconds(),
-        source_backend: state.search_backend.clone(),
-        status: "queued".to_string(),
-    };
-    state.index_queue.append(&request).await?;
+    let requested_at = epoch_seconds();
+    let note = input
+        .note
+        .map(|note| note.trim().to_string())
+        .filter(|note| !note.is_empty());
+    let backends = queue_target_backends(input.backends.as_deref())?;
+    let mut requests = Vec::with_capacity(backends.len());
+    for target_backend in backends {
+        let request = IndexQueueItem {
+            id: format!(
+                "{}-{}-{}",
+                requested_at,
+                target_backend,
+                handle.trim_start_matches('@').replace('-', "")
+            ),
+            handle: handle.clone(),
+            note: note.clone(),
+            requested_at,
+            source_backend: state.search_backend.clone(),
+            target_backend: Some(target_backend),
+            status: "queued".to_string(),
+        };
+        requests.push(state.index_queue.enqueue(request).await?);
+    }
+    let request = requests
+        .first()
+        .cloned()
+        .ok_or_else(|| ApiError::Queue("no target backends selected".to_string()))?;
     Ok(cache_response(
         CACHE_NO_STORE,
-        (StatusCode::ACCEPTED, Json(IndexQueueResponse { request })),
+        (
+            StatusCode::ACCEPTED,
+            Json(IndexQueueResponse { request, requests }),
+        ),
     ))
 }
 
@@ -487,6 +603,37 @@ fn is_searchable_channel(channel: &YoutuberDocument) -> bool {
     channel.indexed_video_count > 0 && channel.indexed_chunk_count > 0
 }
 
+fn queue_target_backends(input: Option<&[String]>) -> Result<Vec<String>, ApiError> {
+    let requested = input
+        .map(|backends| backends.iter().map(String::as_str).collect::<Vec<_>>())
+        .unwrap_or_else(|| vec!["meilisearch", "typesense-fly"]);
+    let mut normalized = Vec::new();
+    for backend in requested {
+        let backend = backend.trim();
+        if backend.is_empty() {
+            continue;
+        }
+        let backend = match backend {
+            "meilisearch" | "meili" => "meilisearch",
+            "typesense-fly" | "typesense" => "typesense-fly",
+            other => {
+                return Err(ApiError::BadRequest(format!(
+                    "unsupported target backend: {other}"
+                )));
+            }
+        };
+        if !normalized.iter().any(|existing| existing == backend) {
+            normalized.push(backend.to_string());
+        }
+    }
+    if normalized.is_empty() {
+        return Err(ApiError::BadRequest(
+            "at least one target backend is required".to_string(),
+        ));
+    }
+    Ok(normalized)
+}
+
 impl RateLimiter {
     fn allow(&mut self, key: String, limit: usize, window: Duration) -> Result<(), ApiError> {
         if limit == 0 {
@@ -514,6 +661,19 @@ impl RateLimiter {
 }
 
 impl IndexQueue {
+    async fn enqueue(&self, request: IndexQueueItem) -> Result<IndexQueueItem, ApiError> {
+        if let Some(existing) = self.list(usize::MAX).await?.into_iter().find(|queued| {
+            queued.handle == request.handle
+                && queued.status == "queued"
+                && queued.target_backend == request.target_backend
+        }) {
+            return Ok(existing);
+        }
+
+        self.append(&request).await?;
+        Ok(request)
+    }
+
     async fn append(&self, request: &IndexQueueItem) -> Result<(), ApiError> {
         if let Some(parent) = self.path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -587,6 +747,15 @@ impl IndexQueue {
 struct SearchPageResult {
     videos: Vec<SearchVideoResult>,
     has_next_page: bool,
+    timings: SearchCollectionTimings,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct SearchCollectionTimings {
+    backend_search_calls: u32,
+    backend_search_ms: u64,
+    backend_raw_hits: usize,
+    backend_grouped_hits: usize,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -599,6 +768,8 @@ async fn collect_visible_videos(
     per_page: u8,
     search_page_size: u8,
     sort: SearchSort,
+    query: &str,
+    first_backend_search_ms: u64,
 ) -> Result<SearchPageResult, ApiError> {
     let required_videos = local_offset
         .saturating_add(usize::from(per_page))
@@ -606,16 +777,32 @@ async fn collect_visible_videos(
     let mut combined = Vec::new();
     let mut current_page = first_search_backend_page;
     let mut raw = first_raw;
+    let mut timings = SearchCollectionTimings {
+        backend_search_calls: 1,
+        backend_search_ms: first_backend_search_ms,
+        ..SearchCollectionTimings::default()
+    };
 
     for fetch_index in 0..MAX_SEARCH_PAGE_FETCHES {
+        timings.backend_raw_hits = timings
+            .backend_raw_hits
+            .saturating_add(raw_hits_count(&raw));
+        timings.backend_grouped_hits = timings
+            .backend_grouped_hits
+            .saturating_add(grouped_hits_count(&raw));
         let page_hits = parse_hits(&raw)?;
         let is_empty = page_hits.is_empty();
         combined.extend(page_hits);
         combined = merge_nearby_transcript_hits(dedupe_title_only_hits(combined));
-        let videos = video_results_from_hits(&combined, sort);
+        let videos = video_results_from_hits(&combined, sort, query);
 
         if videos.len() >= required_videos || is_empty {
-            return Ok(page_result_from_videos(videos, local_offset, per_page));
+            return Ok(page_result_from_videos(
+                videos,
+                local_offset,
+                per_page,
+                timings,
+            ));
         }
 
         let fetched_raw_hits = raw
@@ -631,15 +818,21 @@ async fn collect_visible_videos(
         }
 
         current_page = current_page.saturating_add(1);
+        let backend_started = Instant::now();
         raw = search
             .search(&base_query.clone().page(current_page))
             .await?;
+        timings.backend_search_calls = timings.backend_search_calls.saturating_add(1);
+        timings.backend_search_ms = timings
+            .backend_search_ms
+            .saturating_add(backend_started.elapsed().as_millis() as u64);
     }
 
     Ok(page_result_from_videos(
-        video_results_from_hits(&combined, sort),
+        video_results_from_hits(&combined, sort, query),
         local_offset,
         per_page,
+        timings,
     ))
 }
 
@@ -647,6 +840,7 @@ fn page_result_from_videos(
     videos: Vec<SearchVideoResult>,
     local_offset: usize,
     per_page: u8,
+    timings: SearchCollectionTimings,
 ) -> SearchPageResult {
     let per_page = usize::from(per_page);
     let has_next_page = videos.len() > local_offset.saturating_add(per_page);
@@ -657,10 +851,16 @@ fn page_result_from_videos(
             .take(per_page)
             .collect(),
         has_next_page,
+        timings,
     }
 }
 
-fn video_results_from_hits(hits: &[SearchHit], sort: SearchSort) -> Vec<SearchVideoResult> {
+fn video_results_from_hits(
+    hits: &[SearchHit],
+    sort: SearchSort,
+    query: &str,
+) -> Vec<SearchVideoResult> {
+    let terms = searchable_terms(query);
     let mut order = Vec::new();
     let mut by_video: HashMap<String, SearchVideoResult> = HashMap::new();
 
@@ -676,8 +876,18 @@ fn video_results_from_hits(hits: &[SearchHit], sort: SearchSort) -> Vec<SearchVi
         .into_iter()
         .filter_map(|video_id| by_video.remove(&video_id))
         .map(|mut video| {
-            video.hits.sort_by_key(|hit| hit.t_start_ms);
             video.match_count = video.hits.len();
+            match sort {
+                SearchSort::Relevance => video.hits.sort_by(|left, right| {
+                    hit_relevance_score(right, &terms)
+                        .cmp(&hit_relevance_score(left, &terms))
+                        .then_with(|| left.t_start_ms.cmp(&right.t_start_ms))
+                }),
+                SearchSort::PublishedDesc | SearchSort::PublishedAsc => {
+                    video.hits.sort_by_key(|hit| hit.t_start_ms);
+                }
+            }
+            video.hits.truncate(MAX_HITS_PER_VIDEO);
             if let Some(best_hit) = video
                 .hits
                 .iter()
@@ -693,7 +903,13 @@ fn video_results_from_hits(hits: &[SearchHit], sort: SearchSort) -> Vec<SearchVi
         .collect::<Vec<_>>();
 
     match sort {
-        SearchSort::Relevance => {}
+        SearchSort::Relevance => videos.sort_by(|left, right| {
+            video_relevance_score(right, &terms)
+                .cmp(&video_relevance_score(left, &terms))
+                .then_with(|| right.match_count.cmp(&left.match_count))
+                .then_with(|| right.published_at.cmp(&left.published_at))
+                .then_with(|| left.title.cmp(&right.title))
+        }),
         SearchSort::PublishedDesc => videos.sort_by(|left, right| {
             right
                 .published_at
@@ -710,15 +926,130 @@ fn video_results_from_hits(hits: &[SearchHit], sort: SearchSort) -> Vec<SearchVi
     videos
 }
 
+fn searchable_terms(query: &str) -> Vec<String> {
+    query
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .map(str::to_ascii_lowercase)
+        .filter(|term| term.len() >= 2 && !is_stopword(term))
+        .collect()
+}
+
+fn is_stopword(term: &str) -> bool {
+    matches!(
+        term,
+        "a" | "an"
+            | "and"
+            | "are"
+            | "for"
+            | "i"
+            | "in"
+            | "is"
+            | "it"
+            | "of"
+            | "on"
+            | "or"
+            | "the"
+            | "to"
+    )
+}
+
+fn is_low_signal_query(query: &str) -> bool {
+    let searchable_chars = query
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .count();
+    searchable_chars <= 1
+}
+
+fn hit_relevance_score(hit: &SearchHit, terms: &[String]) -> usize {
+    if terms.is_empty() {
+        return usize::from(hit.match_kind == MatchKind::Title);
+    }
+
+    let title = hit.title.to_ascii_lowercase();
+    let text = hit.text.to_ascii_lowercase();
+    let title_highlight = hit
+        .title_highlight
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let text_highlight = hit
+        .text_highlight
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    terms
+        .iter()
+        .map(|term| {
+            let mut score = 0;
+            if title.contains(term) {
+                score += 3;
+            }
+            if title_highlight.contains(term) {
+                score += 2;
+            }
+            if text_highlight.contains(term) {
+                score += 2;
+            }
+            if text.contains(term) {
+                score += 1;
+            }
+            score
+        })
+        .sum()
+}
+
+// Backends retrieve the candidate moments. This deterministic pass favors
+// videos that cover more meaningful query terms, especially in their title,
+// while retaining backend ranking as a tie-breaker through stable input order.
+fn video_relevance_score(video: &SearchVideoResult, terms: &[String]) -> usize {
+    if terms.is_empty() {
+        return 0;
+    }
+
+    let title = video.title.to_ascii_lowercase();
+    let title_compact = alphanumeric_compact(&title);
+    let joined_terms = terms.join("");
+    let mut score = video
+        .hits
+        .iter()
+        .map(|hit| hit_relevance_score(hit, terms))
+        .max()
+        .unwrap_or_default();
+
+    for term in terms {
+        if title.contains(term) {
+            score += 8;
+        }
+        if video.hits.iter().any(|hit| {
+            hit.title.to_ascii_lowercase().contains(term)
+                || hit.text.to_ascii_lowercase().contains(term)
+        }) {
+            score += 3;
+        }
+    }
+    if terms.len() > 1 && title_compact.contains(&joined_terms) {
+        score += 12;
+    }
+    score
+}
+
+fn alphanumeric_compact(value: &str) -> String {
+    value.chars().filter(char::is_ascii_alphanumeric).collect()
+}
+
 impl SearchVideoResult {
     fn from_hit(hit: &SearchHit) -> Self {
         Self {
             video_id: hit.video_id.clone(),
             title: hit.title.clone(),
+            title_highlight: hit.title_highlight.clone(),
             youtuber_handle: hit.youtuber_handle.clone(),
             youtuber_name: hit.youtuber_name.clone(),
             thumbnail: hit.thumbnail.clone(),
             published_at: hit.published_at.clone(),
+            content_kind: hit.content_kind,
             match_count: 0,
             youtube_url: hit.youtube_url.clone(),
             embed_url: hit.embed_url.clone(),
@@ -728,7 +1059,34 @@ impl SearchVideoResult {
     }
 }
 
+fn content_kind_for_duration(duration_ms: Option<u32>) -> ContentKind {
+    match duration_ms {
+        Some(duration_ms) if duration_ms <= 60_000 => ContentKind::Short,
+        Some(_) => ContentKind::Video,
+        None => ContentKind::Unknown,
+    }
+}
+
 fn parse_hits(raw: &Value) -> Result<Vec<SearchHit>, ApiError> {
+    if let Some(grouped_hits) = raw.get("grouped_hits").and_then(Value::as_array) {
+        let hit_count = grouped_hits
+            .iter()
+            .filter_map(|group| group.get("hits").and_then(Value::as_array))
+            .map(Vec::len)
+            .sum();
+        let mut parsed = Vec::with_capacity(hit_count);
+        for group in grouped_hits {
+            let Some(hits) = group.get("hits").and_then(Value::as_array) else {
+                continue;
+            };
+            for hit in hits {
+                let document = hit.get("document").unwrap_or(hit);
+                parsed.push(SearchHit::from_search_backend_hit(document, hit)?);
+            }
+        }
+        return Ok(parsed);
+    }
+
     let Some(hits) = raw.get("hits").and_then(Value::as_array) else {
         return Ok(Vec::new());
     };
@@ -740,6 +1098,174 @@ fn parse_hits(raw: &Value) -> Result<Vec<SearchHit>, ApiError> {
     }
 
     Ok(parsed)
+}
+
+fn raw_hits_count(raw: &Value) -> usize {
+    raw.get("hits")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len)
+}
+
+fn grouped_hits_count(raw: &Value) -> usize {
+    raw.get("grouped_hits")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn test_document(id: &str, video_id: &str, text: &str) -> Value {
+        json!({
+            "id": id,
+            "video_id": video_id,
+            "title": "Test video",
+            "text": text,
+            "youtuber_handle": "@test",
+            "youtuber_name": "Test",
+            "t_start_ms": 1000,
+            "t_end_ms": 2000
+        })
+    }
+
+    fn test_hit(video_id: &str, title: &str, text: &str) -> SearchHit {
+        let document = json!({
+            "id": format!("{video_id}-1"),
+            "video_id": video_id,
+            "title": title,
+            "text": text,
+            "youtuber_handle": "@test",
+            "youtuber_name": "Test",
+            "t_start_ms": 1000,
+            "t_end_ms": 2000,
+            "published_at": "2026-01-01T00:00:00Z"
+        });
+        SearchHit::from_search_backend_hit(&document, &json!({})).expect("test hit")
+    }
+
+    #[test]
+    fn parse_hits_flattens_typesense_grouped_hits() {
+        let raw = json!({
+            "grouped_hits": [
+                {
+                    "group_key": ["video-a"],
+                    "hits": [
+                        {
+                            "document": test_document("a-1", "video-a", "first"),
+                            "highlights": [{"field": "text", "snippet": "<mark>first</mark>"}]
+                        }
+                    ]
+                },
+                {
+                    "group_key": ["video-b"],
+                    "hits": [
+                        {
+                            "document": test_document("b-1", "video-b", "second"),
+                            "highlights": [{"field": "text", "snippet": "<mark>second</mark>"}]
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let hits = parse_hits(&raw).expect("grouped hits parse");
+
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].video_id, "video-a");
+        assert_eq!(hits[1].video_id, "video-b");
+    }
+
+    #[test]
+    fn one_character_queries_are_low_signal() {
+        assert!(is_low_signal_query("I"));
+        assert!(is_low_signal_query("?"));
+        assert!(!is_low_signal_query("fable"));
+    }
+
+    #[test]
+    fn searchable_terms_ignore_short_terms_and_stopwords() {
+        assert_eq!(searchable_terms("fable on high"), vec!["fable", "high"]);
+        assert!(searchable_terms("I").is_empty());
+    }
+
+    #[test]
+    fn relevance_score_prefers_specific_query_terms_over_stopword_noise() {
+        let focused = SearchHit {
+            text: "Use Fable on high reasoning".to_string(),
+            text_highlight: Some(
+                "Use <mark>Fable</mark> on <mark>high</mark> reasoning".to_string(),
+            ),
+            ..SearchHit::from_search_backend_hit(
+                &test_document("focused", "video-a", "Use Fable on high reasoning"),
+                &json!({}),
+            )
+            .expect("focused hit")
+        };
+        let noisy = SearchHit {
+            text: "on and on and on".to_string(),
+            text_highlight: Some("<mark>on</mark> and <mark>on</mark>".to_string()),
+            ..SearchHit::from_search_backend_hit(
+                &test_document("noisy", "video-a", "on and on and on"),
+                &json!({}),
+            )
+            .expect("noisy hit")
+        };
+        let terms = searchable_terms("fable on high");
+
+        assert!(hit_relevance_score(&focused, &terms) > hit_relevance_score(&noisy, &terms));
+    }
+
+    #[test]
+    fn relevance_reranker_promotes_batterygate_over_generic_battery_mentions() {
+        let videos = video_results_from_hits(
+            &[
+                test_hit(
+                    "generic",
+                    "Why phones have batteries",
+                    "The battery can age over time.",
+                ),
+                test_hit(
+                    "batterygate",
+                    "The BatteryGate incident explained",
+                    "Apple slowed phones during the BatteryGate incident.",
+                ),
+            ],
+            SearchSort::Relevance,
+            "battery gate incident",
+        );
+
+        assert_eq!(
+            videos.first().map(|video| video.video_id.as_str()),
+            Some("batterygate")
+        );
+    }
+
+    #[test]
+    fn relevance_reranker_promotes_a_direct_linux_exploit_match() {
+        let videos = video_results_from_hits(
+            &[
+                test_hit(
+                    "generic-linux",
+                    "A tour of Linux desktops",
+                    "Linux has a broad software ecosystem.",
+                ),
+                test_hit(
+                    "exploit",
+                    "How the Linux exploit worked",
+                    "This Linux exploit gained local privileges.",
+                ),
+            ],
+            SearchSort::Relevance,
+            "linux exploit",
+        );
+
+        assert_eq!(
+            videos.first().map(|video| video.video_id.as_str()),
+            Some("exploit")
+        );
+    }
 }
 
 fn merge_nearby_transcript_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
@@ -806,6 +1332,7 @@ impl SearchHit {
         let video_id = string_field(document, "video_id")?;
         let t_start_ms = u32_field(document, "t_start_ms")?;
         let t_end_ms = u32_field(document, "t_end_ms")?;
+        let content_kind = content_kind_for_duration(optional_u32_field(document, "duration"));
         let text_highlight = highlight_for_field(hit, "text");
         let title_highlight = highlight_for_field(hit, "title");
         let match_kind = if title_highlight.is_some() && text_highlight.is_none() {
@@ -844,6 +1371,7 @@ impl SearchHit {
             youtuber_name: string_field(document, "youtuber_name")?,
             thumbnail: optional_string_field(document, "thumbnail"),
             published_at: optional_string_field(document, "published_at"),
+            content_kind,
             t_start_ms,
             t_end_ms,
             timestamp,
@@ -890,12 +1418,29 @@ fn optional_string_field(document: &Value, field: &'static str) -> Option<String
     document.get(field)?.as_str().map(ToOwned::to_owned)
 }
 
+fn optional_u32_field(document: &Value, field: &'static str) -> Option<u32> {
+    document.get(field).and_then(value_as_u32)
+}
+
 fn u32_field(document: &Value, field: &'static str) -> Result<u32, ApiError> {
-    document
-        .get(field)
-        .and_then(Value::as_u64)
-        .and_then(|value| u32::try_from(value).ok())
-        .ok_or(ApiError::UnexpectedSearchShape)
+    optional_u32_field(document, field).ok_or(ApiError::UnexpectedSearchShape)
+}
+
+fn value_as_u32(value: &Value) -> Option<u32> {
+    match value {
+        Value::Number(number) => number
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .or_else(|| number.as_i64().and_then(|value| u32::try_from(value).ok()))
+            .or_else(|| {
+                number
+                    .as_f64()
+                    .filter(|value| value.is_finite() && *value >= 0.0)
+                    .and_then(|value| u32::try_from(value.round() as i64).ok())
+            }),
+        Value::String(text) => text.parse().ok(),
+        _ => None,
+    }
 }
 
 fn format_timestamp(milliseconds: u32) -> String {
@@ -955,6 +1500,13 @@ fn client_key(headers: &HeaderMap) -> String {
         })
         .unwrap_or("unknown")
         .to_string()
+}
+
+fn header_string(headers: &HeaderMap, name: &'static str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned)
 }
 
 fn cache_response<T: IntoResponse>(cache_control: &'static str, response: T) -> Response {
@@ -1082,7 +1634,7 @@ async fn shutdown_signal() {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self {
-            Self::EmptyQuery | Self::InvalidHandle => StatusCode::BAD_REQUEST,
+            Self::EmptyQuery | Self::InvalidHandle | Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::MissingEnv(_)

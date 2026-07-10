@@ -51,6 +51,7 @@ pub struct TranscriptChunk {
     pub thumbnail: Option<String>,
     pub upload_date: Option<String>,
     pub published_at: Option<String>,
+    pub published_at_timestamp: Option<i64>,
     pub uploader_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding: Option<Vec<f32>>,

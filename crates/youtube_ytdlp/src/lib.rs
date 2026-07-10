@@ -18,7 +18,10 @@ use tokio::{
     process::Command,
     time::{Duration, sleep, timeout},
 };
-use youtube_ingest::{DurationMs, IngestError, TimestampMs, TranscriptSegment, TranscriptSource};
+use youtube_ingest::{
+    DurationMs, IngestError, TimestampMs, TranscriptSegment, TranscriptSource, VideoMetadata,
+    VideoMetadataSource, Youtuber,
+};
 
 const YOUTUBE_WATCH_URL_PREFIX: &str = "https://www.youtube.com/watch?v=";
 const DEFAULT_YT_DLP_BINARY: &str = "yt-dlp";
@@ -118,8 +121,7 @@ impl YtDlpTranscriptSource {
         Ok(())
     }
 
-    async fn video_json(&self, video_id: &str) -> youtube_ingest::Result<Value> {
-        let url = video_url(video_id);
+    async fn ytdlp_json(&self, url: impl AsRef<str>) -> youtube_ingest::Result<Value> {
         let mut command = Command::new(&self.binary);
         command
             .arg("--skip-download")
@@ -145,26 +147,95 @@ impl YtDlpTranscriptSource {
         let output = timeout(
             YT_DLP_TIMEOUT,
             command
-                .arg(url)
+                .arg(url.as_ref())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .output(),
         )
         .await
-        .map_err(|_| transcript_error(video_id, "yt-dlp timed out"))?
-        .map_err(|error| transcript_error(video_id, format!("failed to run yt-dlp: {error}")))?;
+        .map_err(|_| ytdlp_error(url.as_ref(), "yt-dlp timed out"))?
+        .map_err(|error| ytdlp_error(url.as_ref(), format!("failed to run yt-dlp: {error}")))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(transcript_error(
-                video_id,
+            return Err(ytdlp_error(
+                url.as_ref(),
                 format!("yt-dlp exited with {}: {}", output.status, stderr.trim()),
             ));
         }
 
         serde_json::from_slice(&output.stdout).map_err(|error| {
-            transcript_error(video_id, format!("yt-dlp json parse failed: {error}"))
+            ytdlp_error(url.as_ref(), format!("yt-dlp json parse failed: {error}"))
         })
+    }
+
+    async fn video_json(&self, video_id: &str) -> youtube_ingest::Result<Value> {
+        self.ytdlp_json(video_url(video_id)).await
+    }
+
+    pub async fn channel_videos(
+        &self,
+        handle: &str,
+        max_videos: Option<usize>,
+    ) -> youtube_ingest::Result<Vec<YtDlpVideo>> {
+        let handle = normalize_handle(handle);
+        let url = format!("https://www.youtube.com/{handle}/videos");
+        let mut command = Command::new(&self.binary);
+        command
+            .arg("--flat-playlist")
+            .arg("--dump-json")
+            .arg("--no-warnings");
+
+        if let Some(max_videos) = max_videos {
+            command.arg("--playlist-end").arg(max_videos.to_string());
+        }
+        if let Ok(cookies_file) = env::var(YT_DLP_COOKIES_FILE_ENV) {
+            if !cookies_file.trim().is_empty() {
+                command.arg("--cookies").arg(cookies_file);
+            }
+        }
+        if let Ok(extractor_args) = env::var(YT_DLP_EXTRACTOR_ARGS_ENV) {
+            if !extractor_args.trim().is_empty() {
+                command.arg("--extractor-args").arg(extractor_args);
+            }
+        }
+        if let Ok(user_agent) = env::var(YT_DLP_USER_AGENT_ENV) {
+            if !user_agent.trim().is_empty() {
+                command.arg("--user-agent").arg(user_agent);
+            }
+        }
+
+        let output = timeout(
+            Duration::from_secs(180),
+            command
+                .arg(&url)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output(),
+        )
+        .await
+        .map_err(|_| ytdlp_error(&url, "yt-dlp channel discovery timed out"))?
+        .map_err(|error| ytdlp_error(&url, format!("failed to run yt-dlp: {error}")))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(ytdlp_error(
+                &url,
+                format!("yt-dlp exited with {}: {}", output.status, stderr.trim()),
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut videos = Vec::new();
+        for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+            let value: Value = serde_json::from_str(line)
+                .map_err(|error| ytdlp_error(&url, format!("yt-dlp json parse failed: {error}")))?;
+            if let Some(video) = ytdlp_video_from_json(&value) {
+                videos.push(video);
+            }
+        }
+
+        Ok(videos)
     }
 
     async fn fetch_caption(
@@ -215,6 +286,64 @@ impl YtDlpTranscriptSource {
 
         Ok(body)
     }
+}
+
+#[async_trait]
+impl VideoMetadataSource for YtDlpTranscriptSource {
+    async fn metadata_for_video(&self, video_id: &str) -> youtube_ingest::Result<VideoMetadata> {
+        let video = self.video_json(video_id).await?;
+        let title = required_string(&video, "title", video_id)?;
+        let channel_id = optional_string(&video, "channel_id")
+            .or_else(|| optional_string(&video, "channel"))
+            .unwrap_or_else(|| "unknown".to_string());
+        let uploader = optional_string(&video, "uploader")
+            .or_else(|| optional_string(&video, "channel"))
+            .unwrap_or_else(|| channel_id.clone());
+        let handle = optional_string(&video, "uploader_id")
+            .or_else(|| optional_string(&video, "channel"))
+            .unwrap_or_else(|| channel_id.clone());
+        let upload_date = optional_string(&video, "upload_date");
+        let published_at = upload_date.as_deref().and_then(compact_date_to_rfc3339);
+
+        Ok(VideoMetadata {
+            video_id: video_id.to_string(),
+            title,
+            youtuber: Youtuber {
+                id: stable_youtuber_id(&handle, &channel_id),
+                handle,
+                name: uploader,
+                channel_id,
+            },
+            duration_ms: video
+                .get("duration")
+                .and_then(Value::as_f64)
+                .and_then(seconds_to_ms),
+            thumbnail: optional_string(&video, "thumbnail"),
+            published_at,
+            upload_date,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct YtDlpVideo {
+    pub video_id: String,
+    pub title: String,
+    pub channel_id: Option<String>,
+    pub channel: Option<String>,
+    pub uploader_id: Option<String>,
+    pub thumbnail: Option<String>,
+}
+
+fn ytdlp_video_from_json(value: &Value) -> Option<YtDlpVideo> {
+    Some(YtDlpVideo {
+        video_id: optional_string(value, "id").or_else(|| optional_string(value, "url"))?,
+        title: optional_string(value, "title")?,
+        channel_id: optional_string(value, "channel_id"),
+        channel: optional_string(value, "channel").or_else(|| optional_string(value, "uploader")),
+        uploader_id: optional_string(value, "uploader_id"),
+        thumbnail: optional_string(value, "thumbnail"),
+    })
 }
 
 impl Default for YtDlpTranscriptSource {
@@ -498,11 +627,68 @@ fn video_url(video_id: &str) -> String {
     url
 }
 
+fn ytdlp_error(subject: &str, reason: impl Into<String>) -> IngestError {
+    IngestError::TranscriptUnavailable {
+        video_id: subject.to_string(),
+        reason: reason.into(),
+    }
+}
+
 fn transcript_error(video_id: &str, reason: impl Into<String>) -> IngestError {
     IngestError::TranscriptUnavailable {
         video_id: video_id.to_string(),
         reason: reason.into(),
     }
+}
+
+fn optional_string(value: &Value, key: &str) -> Option<String> {
+    value.get(key)?.as_str().map(ToString::to_string)
+}
+
+fn required_string(value: &Value, key: &str, subject: &str) -> youtube_ingest::Result<String> {
+    optional_string(value, key)
+        .ok_or_else(|| ytdlp_error(subject, format!("missing required field {key}")))
+}
+
+fn normalize_handle(handle: &str) -> String {
+    let trimmed = handle.trim();
+    if trimmed.starts_with('@') {
+        trimmed.to_string()
+    } else {
+        format!("@{trimmed}")
+    }
+}
+
+fn stable_youtuber_id(handle: &str, channel_id: &str) -> String {
+    if handle.starts_with('@') {
+        handle.to_ascii_lowercase()
+    } else {
+        channel_id.to_string()
+    }
+}
+
+fn seconds_to_ms(seconds: f64) -> Option<u32> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return None;
+    }
+    let millis = seconds * 1000.0;
+    if millis > u32::MAX as f64 {
+        None
+    } else {
+        Some(millis.round() as u32)
+    }
+}
+
+fn compact_date_to_rfc3339(date: &str) -> Option<String> {
+    if date.len() != 8 || !date.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!(
+        "{}-{}-{}T00:00:00Z",
+        &date[0..4],
+        &date[4..6],
+        &date[6..8]
+    ))
 }
 
 fn has_text(text: &str) -> bool {

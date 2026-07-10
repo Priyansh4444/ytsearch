@@ -11,10 +11,12 @@ use youtube_search::{
     TranscriptSearchBackend, YOUTUBERS_COLLECTION, YoutuberDocument as SharedYoutuberDocument,
 };
 
-const HTTP_TIMEOUT: Duration = Duration::from_secs(180);
-const IMPORT_BATCH_SIZE: usize = 1;
+const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
+const IMPORT_BATCH_SIZE: usize = 500;
 const IMPORT_ATTEMPTS: u8 = 6;
 const DELETE_ATTEMPTS: u8 = 3;
+const TASK_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const TASK_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct MeilisearchAdminConfig {
@@ -148,6 +150,7 @@ impl MeilisearchAdminClient {
         schema: Value,
     ) -> Result<CreateCollectionOutcome> {
         if let Some(body) = self.get_collection(name).await? {
+            self.configure_index(name, &schema).await?;
             return Ok(CreateCollectionOutcome::AlreadyExists { body });
         }
 
@@ -443,7 +446,53 @@ impl MeilisearchAdminClient {
             return Err(MeilisearchError::Api { status, body });
         }
 
+        self.wait_for_import_task_if_enabled(&body).await?;
+
         Ok(MeilisearchImport { body })
+    }
+
+    async fn wait_for_import_task_if_enabled(&self, body: &str) -> Result<()> {
+        if std::env::var("MEILI_WAIT_FOR_TASKS")
+            .is_ok_and(|value| value == "0" || value.eq_ignore_ascii_case("false"))
+        {
+            return Ok(());
+        }
+
+        let task: Value = serde_json::from_str(body)?;
+        let Some(task_uid) = task
+            .get("taskUid")
+            .or_else(|| task.get("uid"))
+            .and_then(Value::as_u64)
+        else {
+            return Ok(());
+        };
+
+        self.wait_for_task(task_uid).await
+    }
+
+    async fn wait_for_task(&self, task_uid: u64) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + TASK_TIMEOUT;
+        loop {
+            let path = format!("tasks/{task_uid}");
+            let url = endpoint(&self.config.api_url, &path)?;
+            let response = self
+                .http
+                .get(url)
+                .bearer_auth(&self.config.admin_api_key)
+                .send()
+                .await?;
+            let task = json_response(response).await?;
+            match task.get("status").and_then(Value::as_str) {
+                Some("succeeded") => return Ok(()),
+                Some("failed") | Some("canceled") => {
+                    return Err(MeilisearchError::TaskFailed(task.to_string()));
+                }
+                _ if tokio::time::Instant::now() >= deadline => {
+                    return Err(MeilisearchError::TaskTimeout(task_uid));
+                }
+                _ => sleep(TASK_POLL_INTERVAL).await,
+            }
+        }
     }
 }
 
@@ -501,6 +550,7 @@ impl MeilisearchSearchClient {
                 "youtuber_name",
                 "thumbnail",
                 "published_at",
+                "duration",
                 "t_start_ms",
                 "t_end_ms",
             ],
@@ -518,6 +568,9 @@ impl MeilisearchSearchClient {
         if let Some(group_by) = &query.group_by {
             body["distinct"] = Value::String(group_by.clone());
         }
+        if let Some(sort_by) = &query.sort_by {
+            body["sort"] = Value::Array(vec![Value::String(sort_by.clone())]);
+        }
 
         let response = self
             .http
@@ -530,31 +583,79 @@ impl MeilisearchSearchClient {
         json_response(response).await
     }
 
-    pub async fn list_youtubers(&self) -> Result<Vec<YoutuberDocument>> {
-        let path = format!("indexes/{YOUTUBERS_COLLECTION}/search");
+    pub async fn count_distinct(&self, query: &TextSearchQuery, field: &str) -> Result<u64> {
+        let path = format!("indexes/{}/search", self.config.collection);
         let url = endpoint(&self.config.api_url, &path)?;
+        let mut body = json!({
+            "q": query.q,
+            "limit": 0,
+            "attributesToSearchOn": split_csv(&query.query_by),
+            "facets": [field],
+        });
+        if let Some(filter_by) = &query.filter_by {
+            body["filter"] = Value::String(filter_to_meili(filter_by));
+        }
 
         let response = self
             .http
             .post(url)
             .bearer_auth(&self.config.search_api_key)
-            .json(&json!({
-                "q": "",
-                "limit": 100,
-                "attributesToSearchOn": ["name", "handle"],
-            }))
+            .json(&body)
             .send()
             .await?;
-        let body = json_response(response).await?;
-        let Some(hits) = body.get("hits").and_then(Value::as_array) else {
-            return Ok(Vec::new());
-        };
 
-        hits.iter()
-            .cloned()
-            .map(serde_json::from_value)
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(MeilisearchError::Json)
+        let body = json_response(response).await?;
+        Ok(body
+            .get("facetDistribution")
+            .and_then(|facets| facets.get(field))
+            .and_then(Value::as_object)
+            .map_or(0, |values| values.len() as u64))
+    }
+
+    pub async fn list_youtubers(&self) -> Result<Vec<YoutuberDocument>> {
+        let path = format!("indexes/{YOUTUBERS_COLLECTION}/search");
+        let url = endpoint(&self.config.api_url, &path)?;
+        const PAGE_SIZE: u64 = 1_000;
+        let mut offset = 0_u64;
+        let mut channels = Vec::new();
+
+        loop {
+            let response = self
+                .http
+                .post(url.clone())
+                .bearer_auth(&self.config.search_api_key)
+                .json(&json!({
+                    "q": "",
+                    "limit": PAGE_SIZE,
+                    "offset": offset,
+                    "attributesToSearchOn": ["name", "handle"],
+                }))
+                .send()
+                .await?;
+            let body = json_response(response).await?;
+            let hits = body
+                .get("hits")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let hit_count = hits.len() as u64;
+            channels.extend(
+                hits.into_iter()
+                    .map(serde_json::from_value)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(MeilisearchError::Json)?,
+            );
+
+            let total = body
+                .get("totalHits")
+                .or_else(|| body.get("estimatedTotalHits"))
+                .and_then(Value::as_u64)
+                .unwrap_or(offset.saturating_add(hit_count));
+            offset = offset.saturating_add(hit_count);
+            if hit_count == 0 || offset >= total {
+                return Ok(channels);
+            }
+        }
     }
 }
 
@@ -573,8 +674,30 @@ impl TranscriptSearchBackend for MeilisearchSearchClient {
             per_page: query.per_page,
             page: query.page,
             highlight_fields: query.highlight_fields.clone(),
+            sort_by: query.sort_by.clone(),
         };
         MeilisearchSearchClient::search(self, &query)
+            .await
+            .map_err(|error| SearchBackendError::new("meilisearch", error))
+    }
+
+    async fn count_distinct(
+        &self,
+        query: &SharedTextSearchQuery,
+        field: &str,
+    ) -> std::result::Result<u64, SearchBackendError> {
+        let query = TextSearchQuery {
+            q: query.q.clone(),
+            query_by: query.query_by.clone(),
+            filter_by: query.filter_by.clone(),
+            group_by: query.group_by.clone(),
+            group_limit: query.group_limit,
+            per_page: query.per_page,
+            page: query.page,
+            highlight_fields: query.highlight_fields.clone(),
+            sort_by: query.sort_by.clone(),
+        };
+        MeilisearchSearchClient::count_distinct(self, &query, field)
             .await
             .map_err(|error| SearchBackendError::new("meilisearch", error))
     }
@@ -645,6 +768,7 @@ pub struct TextSearchQuery {
     pub per_page: Option<u8>,
     pub page: Option<u32>,
     pub highlight_fields: Option<String>,
+    pub sort_by: Option<String>,
 }
 
 impl TextSearchQuery {
@@ -658,6 +782,7 @@ impl TextSearchQuery {
             per_page: None,
             page: None,
             highlight_fields: Some("text,title".to_string()),
+            sort_by: None,
         }
     }
 
@@ -706,6 +831,11 @@ impl TextSearchQuery {
         self.highlight_fields = Some(highlight_fields.into());
         self
     }
+
+    pub fn sort_by(mut self, sort_by: impl Into<String>) -> Self {
+        self.sort_by = Some(sort_by.into());
+        self
+    }
 }
 
 #[derive(Debug, Error)]
@@ -718,6 +848,10 @@ pub enum MeilisearchError {
     Json(#[from] serde_json::Error),
     #[error("meilisearch returned {status}: {body}")]
     Api { status: StatusCode, body: String },
+    #[error("meilisearch task did not finish before timeout: {0}")]
+    TaskTimeout(u64),
+    #[error("meilisearch task failed: {0}")]
+    TaskFailed(String),
     #[error("meilisearch import retry attempts exhausted")]
     RetryExhausted,
 }
@@ -731,7 +865,11 @@ impl MeilisearchError {
                     || *status == StatusCode::TOO_MANY_REQUESTS
                     || *status == StatusCode::REQUEST_TIMEOUT
             }
-            Self::InvalidUrl(_) | Self::Json(_) | Self::RetryExhausted => false,
+            Self::InvalidUrl(_)
+            | Self::Json(_)
+            | Self::TaskTimeout(_)
+            | Self::TaskFailed(_)
+            | Self::RetryExhausted => false,
         }
     }
 }
@@ -810,6 +948,12 @@ fn meili_settings_from_schema(schema: &Value) -> Value {
 
     json!({
         "filterableAttributes": filterable,
+        "pagination": {
+            "maxTotalHits": 1_000_000,
+        },
+        "faceting": {
+            "maxValuesPerFacet": 100_000,
+        },
         "sortableAttributes": ["published_at", "t_start_ms"],
         "searchableAttributes": searchable,
         "displayedAttributes": ["*"],
@@ -901,6 +1045,25 @@ mod tests {
         assert!(fields.iter().any(|field| field["name"] == "text"));
         assert!(fields.iter().any(|field| field["name"] == "video_id"));
         assert!(fields.iter().any(|field| field["name"] == "t_start_ms"));
+    }
+
+    #[test]
+    fn import_batches_multiple_chunks_per_request() {
+        assert!(IMPORT_BATCH_SIZE > 1);
+    }
+
+    #[test]
+    fn meili_settings_raise_total_hit_cap_for_counts() {
+        let settings = meili_settings_from_schema(&transcript_chunk_schema(DEFAULT_COLLECTION));
+
+        assert_eq!(settings["pagination"]["maxTotalHits"], 1_000_000);
+    }
+
+    #[test]
+    fn meili_settings_raise_facet_value_cap_for_distinct_counts() {
+        let settings = meili_settings_from_schema(&transcript_chunk_schema(DEFAULT_COLLECTION));
+
+        assert_eq!(settings["faceting"]["maxValuesPerFacet"], 100_000);
     }
 
     #[test]

@@ -30,6 +30,7 @@ pub struct TextSearchQuery {
     pub per_page: Option<u8>,
     pub page: Option<u32>,
     pub highlight_fields: Option<String>,
+    pub sort_by: Option<String>,
 }
 
 impl TextSearchQuery {
@@ -43,6 +44,7 @@ impl TextSearchQuery {
             per_page: None,
             page: None,
             highlight_fields: Some("text,title".to_string()),
+            sort_by: None,
         }
     }
 
@@ -91,6 +93,11 @@ impl TextSearchQuery {
         self.highlight_fields = Some(highlight_fields.into());
         self
     }
+
+    pub fn sort_by(mut self, sort_by: impl Into<String>) -> Self {
+        self.sort_by = Some(sort_by.into());
+        self
+    }
 }
 
 #[derive(Debug, Error)]
@@ -112,5 +119,10 @@ impl SearchBackendError {
 #[async_trait]
 pub trait TranscriptSearchBackend: Send + Sync {
     async fn search(&self, query: &TextSearchQuery) -> Result<Value, SearchBackendError>;
+    async fn count_distinct(
+        &self,
+        query: &TextSearchQuery,
+        field: &str,
+    ) -> Result<u64, SearchBackendError>;
     async fn list_youtubers(&self) -> Result<Vec<YoutuberDocument>, SearchBackendError>;
 }
