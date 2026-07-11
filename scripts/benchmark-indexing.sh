@@ -12,7 +12,7 @@ fi
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
 
-BACKENDS="${BACKENDS:-meilisearch typesense-fly}"
+BACKENDS="${BACKENDS:-typesense-fly}"
 MAX_VIDEOS="${MAX_VIDEOS:-5}"
 IMPORT="${IMPORT:-0}"
 
@@ -44,6 +44,10 @@ run_bench() {
 }
 
 if has_backend meilisearch; then
+  if [ "${ALLOW_LEGACY_MEILI:-0}" != "1" ]; then
+    echo "Meilisearch is retired. Set ALLOW_LEGACY_MEILI=1 only for historical benchmarking." >&2
+    exit 1
+  fi
   run_bench meilisearch meilisearch "$@"
 fi
 

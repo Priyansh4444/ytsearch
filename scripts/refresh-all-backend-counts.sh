@@ -2,7 +2,7 @@
 set -eu
 
 LIST_FILE="${1:-scripts/indexed-channels.txt}"
-BACKENDS="${BACKENDS:-meilisearch typesense-fly}"
+BACKENDS="${BACKENDS:-typesense-fly}"
 
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
@@ -21,6 +21,10 @@ has_backend() {
 }
 
 if has_backend meilisearch; then
+  if [ "${ALLOW_LEGACY_MEILI:-0}" != "1" ]; then
+    echo "Meilisearch is retired. Set ALLOW_LEGACY_MEILI=1 only for historical migration work." >&2
+    exit 1
+  fi
   cargo run --release -p youtube_cli -- \
     refresh-youtuber-counts-list "$LIST_FILE" --backend meilisearch
 fi

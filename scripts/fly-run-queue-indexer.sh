@@ -22,7 +22,7 @@ case "$QUEUE_TARGET_BACKEND" in
     ;;
   *)
     echo "QUEUE_TARGET_BACKEND must be either meilisearch or typesense-fly." >&2
-    echo "Use scripts/fly-run-queue-indexers.sh to start both persistent workers." >&2
+    echo "Use scripts/fly-run-queue-indexers.sh to start the active Typesense worker." >&2
     exit 1
     ;;
 esac
