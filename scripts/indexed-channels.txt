@@ -26,4 +26,4 @@
 @GoogleDevelopers | Google for Developers (Google I/O; broad channel until playlist scoping is available)
 @NeetCode
 @PawelCodeStuff
-@RyanCarniato | Ryan Carniato (video uploads; stream-tab ingestion remains a scoped follow-up)
+@RyanCarniato | Ryan Carniato (video uploads and public streams)
