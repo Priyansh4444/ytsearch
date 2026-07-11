@@ -10,7 +10,7 @@ QUERY="${QUERY:-fable}"
 PER_PAGE="${PER_PAGE:-3}"
 CURL_MAX_TIME="${CURL_MAX_TIME:-15}"
 
-TYPESENSE_FRONTEND_URL="${TYPESENSE_FRONTEND_URL:-${TYPESENSE_FLY_FRONTEND_URL:-https://typesense.ytsearch-755.pages.dev}}"
+TYPESENSE_FRONTEND_URL="${TYPESENSE_FRONTEND_URL:-${TYPESENSE_FLY_FRONTEND_URL:-https://ytsearch-755.pages.dev}}"
 
 required_env() {
   name="$1"

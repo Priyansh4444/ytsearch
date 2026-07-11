@@ -80,7 +80,8 @@ Interpretation:
 
 - `@vsauce` is queued, but no active backend has indexed searchable data for it yet.
 - `@thePrimagen` is not indexed and was not present in the queue at the time of this check.
-- This historical sample predates the split workers. Current staging should instead have one started worker for `meilisearch` and one for `typesense-fly`.
+- This historical sample predates Meilisearch retirement. Current staging has one
+  started worker for `typesense-fly`; retired-Meili workers must not be started.
 
 ## Axiom Search Timing
 
@@ -177,7 +178,10 @@ meilisearch	5	213	350	433
 typesense-fly	5	1727	2045	2325
 ```
 
-Interpretation: on the current live staging setup, Meilisearch is the better default for `meili.ytsearch-755.pages.dev`. Typesense Fly is healthy, but its API path is spending much more time before first byte for this query.
+Historical interpretation: before the Typesense capacity upgrade, Meilisearch
+was the better default for this sample. This is not a current deployment
+recommendation; see `docs/performance-investigation-2026-07-11.md` for the
+reversal, controls, and retirement decision.
 
 After optimizing Typesense Fly grouping and response fields:
 

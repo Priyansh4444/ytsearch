@@ -17,7 +17,10 @@ The managed Typesense service is no longer part of this repo's active staging or
 
 ## Decision Status
 
-Typesense is now the active backend and `head.ytsearch-755.pages.dev` is its primary frontend. Meilisearch is deprecated and its Fly engine, API machine, queue worker, volume, and indexed data were destroyed after the preservation commit documented in `docs/legacy/meilisearch-retirement.md`.
+Typesense is now the active backend and `https://ytsearch-755.pages.dev` is its
+production frontend. Meilisearch is deprecated and its Fly engine, API machine,
+queue worker, volume, and indexed data were destroyed after the preservation
+commit documented in `docs/legacy/meilisearch-retirement.md`.
 
 The final idle resource snapshot was Meilisearch about 2.8 GB RSS versus Typesense about 1.9 GB RSS on identical `shared-cpu-2x` / 4 GB Fly Machines, with negligible CPU for both. Removing Meilisearch eliminates roughly $22.22/month of warm engine compute plus its volume and API/indexer overhead.
 

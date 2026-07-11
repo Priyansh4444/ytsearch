@@ -10,14 +10,14 @@ Active staging paths:
 
 | Surface | URL / App | Notes |
 | --- | --- | --- |
-| Main Meili frontend | `https://meili.ytsearch-755.pages.dev` | Preferred current UX path. |
-| Typesense Fly frontend | `https://typesense.ytsearch-755.pages.dev` | Kept for comparison/rollback. |
-| Meili API | `ytsearch-api-meili-staging` / `https://ytsearch-api-meili-staging.fly.dev` | Rust `youtube_api`, backend `meilisearch`. |
+| Frontend | `https://ytsearch-755.pages.dev` | Production Pages deployment, connected to Typesense. |
 | Typesense Fly API | `ytsearch-api-typesense-fly-staging` / `https://ytsearch-api-typesense-fly-staging.fly.dev` | Rust `youtube_api`, backend `typesense`. |
-| Meili engine | `ytsearch-meili-staging` | Self-hosted Meilisearch on Fly. |
 | Typesense engine | `ytsearch-typesense-staging` | Self-hosted Typesense on Fly. |
 | Queue API | `ytsearch-index-queue-staging` | Private JSONL-backed index request queue. |
-| Cloud indexer | `ytsearch-indexer-staging` | Detached Fly Machines for indexing/queue consumption. |
+| Cloud indexer | `ytsearch-indexer-staging` | One persistent Typesense queue worker. |
+
+Meilisearch is source-level legacy only; its Fly machines, volume, API, worker,
+and indexed data were destroyed. See `docs/legacy/meilisearch-retirement.md`.
 
 Managed Typesense Cloud is intentionally removed from active staging. Do not reintroduce it unless the user explicitly asks.
 
@@ -27,7 +27,7 @@ Use these docs before changing a subsystem:
 
 - [docs/architecture.md](docs/architecture.md): crate boundaries and data flow.
 - [docs/indexing-operations-guide.md](docs/indexing-operations-guide.md): indexing, queue, cloud indexer, repair commands.
-- [docs/staging-architecture.md](docs/staging-architecture.md): six Fly units, shared indexer model, reliability rules.
+- [docs/staging-architecture.md](docs/staging-architecture.md): active Fly units, indexer model, reliability rules.
 - [docs/staging-observability.md](docs/staging-observability.md): machine checks, channel checks, benchmarks, Axiom fields.
 - [docs/search-backend-comparison.md](docs/search-backend-comparison.md): Meili vs Typesense operational tradeoffs.
 - [docs/deploy.md](docs/deploy.md): deploy and environment notes.

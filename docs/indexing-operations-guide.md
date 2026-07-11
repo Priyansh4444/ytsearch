@@ -2,14 +2,16 @@
 
 ## Frontend URLs
 
-Each preview points search at a different backend API and posts `@handle` index requests to the central Fly queue.
+The active Pages deployment points search at the Typesense API and posts
+`@handle` index requests to the central Fly queue.
 
 | Frontend | Search API | Queue API |
 | --- | --- | --- |
-| https://meili.ytsearch-755.pages.dev | `ytsearch-api-meili-staging` | `ytsearch-index-queue-staging` |
-| https://typesense.ytsearch-755.pages.dev | `ytsearch-api-typesense-fly-staging` | `ytsearch-index-queue-staging` |
+| https://ytsearch-755.pages.dev | `ytsearch-api-typesense-fly-staging` | `ytsearch-index-queue-staging` |
 
-`head` is the active Typesense staging frontend. Meilisearch is retired; its machines and data were destroyed. Meilisearch scripts are legacy-only and fail closed.
+The Pages production deployment is the active Typesense frontend. Meilisearch is
+retired; its machines and data were destroyed. Meilisearch scripts are
+legacy-only and fail closed.
 
 ## One-Off Full Update
 
@@ -80,7 +82,7 @@ REPLACE=1 scripts/copy-meili-to-typesense.sh @t3dotgg
 
 The CLI command behind this wrapper is `ytsearch copy-youtuber-chunks`. It reads paginated canonical `TranscriptChunk` values through the `TranscriptChunkSource` port and writes through the existing backend sink. It also normalizes legacy creator IDs and refreshes target indexed video/chunk counts without contacting YouTube. Meilisearch and Typesense both implement the same export port, so either can repair or migrate the other without changing the copy workflow.
 
-Start a conservative cloud update across the active backends:
+Start a conservative cloud update against the active Typesense backend:
 
 ```bash
 JOBS=1 \
@@ -167,9 +169,8 @@ The active list includes Apple Developer (WWDC), DEF CON Conference, Google for 
 
 The default update script runs:
 
-1. Meilisearch update.
-2. Self-hosted Typesense-on-Fly update.
-3. Count refresh for active backends.
+1. Self-hosted Typesense-on-Fly update.
+2. Count refresh after the update.
 
 ## Queue Workflow
 
@@ -179,7 +180,10 @@ When someone enters `@somehandle` in any frontend, the app posts:
 POST https://ytsearch-index-queue-staging.fly.dev/api/index-requests
 ```
 
-The queue is a simple JSONL file on a Fly volume at `/data/index-requests.jsonl`. Frontend requests are expanded into one queued row per active backend (`meilisearch` and `typesense-fly`) and deduplicated by handle plus target backend.
+The queue is a simple JSONL file on a Fly volume at `/data/index-requests.jsonl`.
+Each frontend request creates one `typesense-fly` row and is deduplicated by
+handle plus target backend. Meilisearch rows are legacy data and are refused by
+the worker.
 
 The queue app should stay as one warm machine while it uses this JSONL volume. Multiple queue machines would need shared locking or a real queue/DB; otherwise two machines can race on the same request log. If this needs horizontal scale, move the queue storage to Cloudflare Queues plus D1/R2, Fly Postgres, or another single-writer service first.
 
