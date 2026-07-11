@@ -63,7 +63,11 @@ record() {
 summarize() {
   if [ "$SUMMARY" = "1" ]; then
     echo "summary_file=$RESULTS_FILE"
-    "$(dirname "$0")/summarize-benchmark-results.sh" "$RESULTS_FILE"
+    summary_file="$RESULTS_FILE.summary"
+    "$(dirname "$0")/summarize-benchmark-results.sh" "$RESULTS_FILE" | tee "$summary_file"
+    if awk -F '\t' 'NR > 1 && $NF != "yes" { changed = 1 } END { exit !changed }' "$summary_file"; then
+      echo "warning=corpus_changed_during_benchmark; do_not_compare_latency_until_writes_are_drained" >&2
+    fi
   fi
 }
 

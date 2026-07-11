@@ -81,21 +81,25 @@ awk '
     if (total_videos != "") {
       total_videos_sum[backend] += total_videos + 0
       total_videos_count[backend]++
+      if (!(backend in total_videos_min) || total_videos + 0 < total_videos_min[backend]) total_videos_min[backend] = total_videos + 0
+      if (!(backend in total_videos_max) || total_videos + 0 > total_videos_max[backend]) total_videos_max[backend] = total_videos + 0
     }
     if (total_moments != "") {
       total_moments_sum[backend] += total_moments + 0
       total_moments_count[backend]++
+      if (!(backend in total_moments_min) || total_moments + 0 < total_moments_min[backend]) total_moments_min[backend] = total_moments + 0
+      if (!(backend in total_moments_max) || total_moments + 0 > total_moments_max[backend]) total_moments_max[backend] = total_moments + 0
     }
     seen[backend] = 1
   }
 
   END {
-    printf "backend\tcount\terrors\tmin_ms\tavg_ms\tp50_ms\tp95_ms\tmax_ms\tavg_first_result_ms\tavg_total_videos\tavg_total_moments\n"
+    printf "backend\tcount\terrors\tmin_ms\tavg_ms\tp50_ms\tp95_ms\tmax_ms\tavg_first_result_ms\tavg_total_videos\tavg_total_moments\ttotal_videos_range\ttotal_moments_range\tcorpus_stable\n"
     for (backend in seen) {
       c = count[backend] + 0
       e = errors[backend] + 0
       if (c == 0) {
-        printf "%s\t0\t%d\t\t\t\t\t\t\t\t\n", backend, e
+        printf "%s\t0\t%d\t\t\t\t\t\t\t\t\t\t\t\n", backend, e
         continue
       }
       delete sorted
@@ -108,7 +112,8 @@ awk '
       first_result_avg = first_result_count[backend] ? first_result_sum[backend] / first_result_count[backend] : 0
       videos_avg = total_videos_count[backend] ? total_videos_sum[backend] / total_videos_count[backend] : 0
       moments_avg = total_moments_count[backend] ? total_moments_sum[backend] / total_moments_count[backend] : 0
-      printf "%s\t%d\t%d\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\n", backend, c, e, min, avg, p50, p95, max, first_result_avg, videos_avg, moments_avg
+      stable = (total_videos_min[backend] == total_videos_max[backend] && total_moments_min[backend] == total_moments_max[backend]) ? "yes" : "no"
+      printf "%s\t%d\t%d\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%d-%d\t%d-%d\t%s\n", backend, c, e, min, avg, p50, p95, max, first_result_avg, videos_avg, moments_avg, total_videos_min[backend], total_videos_max[backend], total_moments_min[backend], total_moments_max[backend], stable
     }
   }
 ' "$INPUT"

@@ -9,7 +9,7 @@ Each preview points search at a different backend API and posts `@handle` index 
 | https://meili.ytsearch-755.pages.dev | `ytsearch-api-meili-staging` | `ytsearch-index-queue-staging` |
 | https://typesense.ytsearch-755.pages.dev | `ytsearch-api-typesense-fly-staging` | `ytsearch-index-queue-staging` |
 
-`meili` is the preferred current staging frontend.
+`meili` is the current primary staging frontend. Do not switch the `head` preview to Typesense until both backends have equivalent creator coverage and a stable corpus-matched benchmark passes.
 
 ## One-Off Full Update
 
@@ -162,6 +162,8 @@ Update mode now does two layers of work avoidance:
 2. It caches fetched `yt-dlp` transcript segments under `data/transcript-cache`, so retrying after a backend import failure does not refetch captions.
 
 Use `--no-transcript-cache` when you need to force a fresh caption fetch.
+
+The active list includes Apple Developer (WWDC), DEF CON Conference, Google for Developers (Google I/O), NeetCode, Pawel Code Stuff, and Ryan Carniato. Apple Developer and Google for Developers are temporarily broad-channel sources; playlist-scoped ingestion is required before claiming conference-only coverage. Ryan's historical streams are not guaranteed by the `/videos` channel feed and need the same scoped source support.
 
 The default update script runs:
 

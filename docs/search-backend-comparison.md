@@ -1,9 +1,9 @@
 # Search Backend Comparison
 
-This project now compares two active search backends:
+This project compares two active search backends:
 
-1. Self-hosted Meilisearch on Fly.io, used by the main staging frontend.
-2. Self-hosted Typesense on Fly.io, kept as a benchmark and rollback path.
+1. Self-hosted Meilisearch on Fly.io, used by the current primary staging frontend.
+2. Self-hosted Typesense on Fly.io, kept warm as a benchmark and rollback path.
 
 The managed Typesense service is no longer part of this repo's active staging or benchmark setup.
 
@@ -15,11 +15,11 @@ The managed Typesense service is no longer part of this repo's active staging or
 - Typesense stores the whole search index in memory and raw data on disk. For keyword search, Typesense recommends RAM around 2x-3x the searchable dataset size. See `https://typesense.org/docs/guide/system-requirements.html`.
 - Typesense exposes `/health`, `/debug`, `/metrics.json`, and `/stats.json` for runtime checks. See `https://typesense.org/docs/30.2/api/cluster-operations.html`.
 
-## Recommendation
+## Decision Status
 
-Use Meilisearch on Fly for `meili.ytsearch-755.pages.dev` and normal staging. It is the fastest backend in the current public probes, has the cleaner operational path, and is already the default for frontend, API, CLI indexing, and cloud indexing.
+Do not deprecate either backend or switch `head.ytsearch-755.pages.dev` until a corpus-matched benchmark passes. The July 10 latency run showed Typesense returning substantially faster API responses, but it was **not** a valid backend decision: Meilisearch and Typesense had different indexed coverage, and Typesense totals changed during the sample while accepted writes drained.
 
-Keep self-hosted Typesense on Fly as a hot-swappable comparison path. It is useful for validating the backend abstraction and search quality, but the current single-node Fly setup is not a production HA cluster.
+The current idle resource snapshot also does not justify a deprecation: Meilisearch used about 2.8 GB RSS and Typesense about 1.9 GB RSS on identical `shared-cpu-2x` / 4 GB Fly Machines. Both had negligible CPU use. Compute is therefore the same roughly $22.22/month per warm engine in SJC, before storage and transfer; Meili has a 10 GB volume and Typesense a 3 GB volume. Keep both engines warm and make the primary decision only after count parity and stable repeated runs.
 
 ## Fly Runtime Shape
 
@@ -34,7 +34,9 @@ Current intended shape:
 
 This follows Fly's model: autostop/autostart starts and stops existing Machines based on requests, and stopped/suspended Machines do not bill CPU/RAM. It also follows Typesense's model: the search index is in memory, with raw data on disk, so keeping the engine warm is the correct latency tradeoff for search.
 
-## Current Benchmarks
+## Historical Benchmarks
+
+The following results are historical observations, not a current decision record. They predate the corpus-stability guard and must not be used to choose a primary backend.
 
 Measured on July 6, 2026 with:
 
@@ -94,8 +96,8 @@ Updated conclusion: Typesense Fly is now close locally, but Meilisearch remains 
 
 | Option | Base cost model | Current staging shape | Cost risk |
 | --- | --- | --- | --- |
-| Meilisearch on Fly | Fly Machine + Fly Volume + bandwidth/snapshots. | Engine VM, API VM, persistent Fly volume in `sjc`. | Low for staging. Production HA would add another engine/API shape and operational work. |
-| Typesense on Fly | Fly Machine + Fly Volume + bandwidth/snapshots. | Typesense VM, API VM, persistent Fly volume in `sjc`. | Similar baseline cost, but RAM pressure can rise faster as the indexed dataset grows. |
+| Meilisearch on Fly | Fly Machine + Fly Volume + bandwidth/snapshots. | `shared-cpu-2x`, 4 GB engine VM, 10 GB volume in `sjc`. | About $22.22/month for the warm engine compute, plus volume/transfer. |
+| Typesense on Fly | Fly Machine + Fly Volume + bandwidth/snapshots. | `shared-cpu-2x`, 4 GB engine VM, 3 GB volume in `sjc`. | About $22.22/month for the warm engine compute, plus volume/transfer. RAM must track its in-memory index. |
 
 ## Cluster Management
 
@@ -141,6 +143,8 @@ Benchmark active backends:
 QUERY=react YOUTUBER=@t3dotgg RUNS=10 scripts/benchmark-search-backends.sh
 GLOBALPING_COUNTRIES="US GB JP AU BR" QUERY=react YOUTUBER=@t3dotgg scripts/benchmark-search-globalping.sh
 ```
+
+The local benchmark summary now includes `total_videos_range`, `total_moments_range`, and `corpus_stable`. A `corpus_stable=no` row means writes were still draining: retain the raw timings for diagnosis but do not compare the backends or switch the primary frontend.
 
 Check machine and indexed-channel status:
 
