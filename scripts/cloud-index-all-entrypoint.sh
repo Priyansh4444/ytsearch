@@ -16,6 +16,11 @@ MEILI_WAIT_FOR_TASKS="${MEILI_WAIT_FOR_TASKS:-1}"
 export MEILI_WAIT_FOR_TASKS
 mkdir -p "$TRANSCRIPT_CACHE_DIR"
 
+if [ -n "${YOUTUBE_API_KEY_FILE:-}" ] && [ -f "$YOUTUBE_API_KEY_FILE" ]; then
+  YOUTUBE_API_KEY="$(cat "$YOUTUBE_API_KEY_FILE")"
+  export YOUTUBE_API_KEY
+fi
+
 REWIPE_ACK_ARG=""
 if [ "$MODE" = "rewipe" ]; then
   if [ "${ALLOW_DESTRUCTIVE_REWIPE:-0}" != "1" ]; then

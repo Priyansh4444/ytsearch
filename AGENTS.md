@@ -107,9 +107,10 @@ scripts/fly-run-queue-indexer.sh
 
 Cloud indexing:
 
-- Cloud image has `yt-dlp` and `ffmpeg`.
+- Cloud image has `yt-dlp`, its EJS solver package, Deno, and `ffmpeg`.
 - Cloud image does not have `voxtype`; missing-caption videos are skipped unless transcripts were cached locally and uploaded.
-- If YouTube needs auth/cookies, use `scripts/fly-set-indexer-secrets.sh` with `YT_DLP_COOKIES_FILE` pointing to a Netscape-format cookies file. Do not print cookie contents.
+- If YouTube needs auth/cookies, use `scripts/fly-set-indexer-secrets.sh` with `YT_DLP_COOKIES_FILE` pointing to a Netscape-format cookies file. The script stages raw-Machines secrets; recreate workers to consume them. Do not print cookie contents.
+- `YOUTUBE_API_FALLBACK=auto` stages the API key as a base64 file secret. Entrypoints load it only inside the process so `yt-dlp` remains primary and Machine config never exposes the key.
 - Transcript cache lives on the indexer volume at `/data/transcript-cache`.
 
 Observability:

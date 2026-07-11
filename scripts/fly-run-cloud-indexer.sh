@@ -37,6 +37,11 @@ if flyctl secrets list --app "$APP_NAME" | grep -q 'YT_DLP_COOKIES_FILE_B64'; th
   cookie_secret_args="--file-secret /run/secrets/yt-dlp-cookies.txt=YT_DLP_COOKIES_FILE_B64 --env YT_DLP_COOKIES_FILE=/run/secrets/yt-dlp-cookies.txt"
 fi
 
+youtube_secret_args=""
+if flyctl secrets list --app "$APP_NAME" | grep -q 'YOUTUBE_API_KEY_FILE_B64'; then
+  youtube_secret_args="--file-secret /run/secrets/youtube-api-key.txt=YOUTUBE_API_KEY_FILE_B64 --env YOUTUBE_API_KEY_FILE=/run/secrets/youtube-api-key.txt"
+fi
+
 echo "Starting cloud indexer machine: app=$APP_NAME name=$MACHINE_NAME region=$FLY_REGION"
 echo "Follow logs with: flyctl logs --app $APP_NAME"
 
@@ -75,6 +80,7 @@ exec flyctl machine run \
   --file-local "/tmp/indexed-channels.txt=$LIST_FILE" \
   --file-local "/usr/local/bin/cloud-index-all=$(dirname "$0")/cloud-index-all-entrypoint.sh" \
   $cookie_secret_args \
+  $youtube_secret_args \
   --env "LIST_FILE=/tmp/indexed-channels.txt" \
   --env "TRANSCRIPT_CACHE_DIR=$transcript_cache_dir" \
   --env "BACKENDS=${BACKENDS:-meilisearch typesense-fly}" \

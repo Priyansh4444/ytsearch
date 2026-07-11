@@ -2460,34 +2460,8 @@ async fn validate_youtuber(
 ) -> Result<ValidatedYoutuber, CliError> {
     let handle = normalize_handle(raw_handle)?;
     match validate_youtuber_with_ytdlp(ytdlp, &handle, max_videos).await {
-        Ok(mut youtuber) => {
+        Ok(youtuber) => {
             println!("  validation source: yt-dlp channel feed");
-            if let Some(youtube) = youtube {
-                match enrich_youtuber_channel_metadata(youtube, &youtuber.handle, max_videos).await
-                {
-                    Ok(enriched) => {
-                        println!("  channel metadata source: YouTube API (secondary enrichment)");
-                        youtuber = merge_youtuber_channel_metadata(youtuber, enriched);
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            handle = %youtuber.handle,
-                            %error,
-                            "YouTube API channel metadata enrichment failed; keeping yt-dlp metadata"
-                        );
-                        println!(
-                            "  YouTube API enrichment failed ({error}); keeping yt-dlp metadata"
-                        );
-                    }
-                }
-            } else if youtuber.avatar_url.is_none()
-                || youtuber.channel_id.trim().is_empty()
-                || youtuber.uploads_playlist.is_none()
-            {
-                println!(
-                    "  channel metadata incomplete; set YOUTUBE_API_KEY for avatar/channel_id enrichment"
-                );
-            }
             return Ok(youtuber);
         }
         Err(error) => {
@@ -2578,45 +2552,6 @@ async fn enrich_youtuber_channel_metadata(
     })
 }
 
-fn merge_youtuber_channel_metadata(
-    primary: ValidatedYoutuber,
-    enriched: ValidatedYoutuber,
-) -> ValidatedYoutuber {
-    let primary_handle_name = primary.handle.trim_start_matches('@').to_string();
-    ValidatedYoutuber {
-        handle: if enriched.handle.trim().is_empty() {
-            primary.handle
-        } else {
-            enriched.handle
-        },
-        channel_id: if enriched.channel_id.trim().is_empty() {
-            primary.channel_id
-        } else {
-            enriched.channel_id
-        },
-        title: {
-            if !enriched.title.trim().is_empty()
-                && !enriched.title.eq_ignore_ascii_case(&primary_handle_name)
-            {
-                enriched.title
-            } else if !primary.title.trim().is_empty() {
-                primary.title
-            } else {
-                enriched.title
-            }
-        },
-        uploads_playlist: enriched.uploads_playlist.or(primary.uploads_playlist),
-        // Prefer API channel avatar; yt-dlp flat-playlist often only has video thumbnails.
-        avatar_url: enriched.avatar_url.or(primary.avatar_url),
-        recent_uploads: if primary.recent_uploads.is_empty() {
-            enriched.recent_uploads
-        } else {
-            primary.recent_uploads
-        },
-        uploads_warning: primary.uploads_warning.or(enriched.uploads_warning),
-    }
-}
-
 async fn discover_videos_for_youtuber(
     youtube: Option<&YouTubeClient>,
     ytdlp: &YtDlpTranscriptSource,
@@ -2668,27 +2603,24 @@ async fn validate_youtuber_with_ytdlp(
     handle: &str,
     max_videos: u8,
 ) -> Result<ValidatedYoutuber, CliError> {
-    let videos = ytdlp
-        .channel_videos(handle, Some(usize::from(max_videos.max(1))))
+    let feed = ytdlp
+        .channel_feed(handle, Some(usize::from(max_videos.max(1))))
         .await?;
-    let first = videos.first().ok_or_else(|| {
-        CliError::Message(format!("No YouTube channel found for handle {handle}"))
-    })?;
+    if feed.videos.is_empty() {
+        return Err(CliError::Message(format!(
+            "No YouTube channel found for handle {handle}"
+        )));
+    }
+    let uploads_playlist = uploads_playlist_from_channel_id(&feed.channel_id);
 
     Ok(ValidatedYoutuber {
-        handle: first
-            .uploader_id
-            .clone()
-            .unwrap_or_else(|| handle.to_string()),
-        channel_id: first.channel_id.clone().unwrap_or_default(),
-        title: first
-            .channel
-            .clone()
-            .unwrap_or_else(|| handle.trim_start_matches('@').to_string()),
-        uploads_playlist: None,
-        // Flat playlist entries expose video thumbnails, not channel avatars.
-        avatar_url: None,
-        recent_uploads: videos
+        handle: feed.handle,
+        channel_id: feed.channel_id,
+        title: feed.title,
+        uploads_playlist,
+        avatar_url: feed.avatar_url,
+        recent_uploads: feed
+            .videos
             .into_iter()
             .take(usize::from(max_videos))
             .map(|video| UploadPreview {
@@ -2696,11 +2628,16 @@ async fn validate_youtuber_with_ytdlp(
                 title: video.title,
             })
             .collect(),
-        uploads_warning: Some(
-            "resolved via yt-dlp; set YOUTUBE_API_KEY for channel avatar/uploads playlist metadata"
-                .to_string(),
-        ),
+        uploads_warning: None,
     })
+}
+
+fn uploads_playlist_from_channel_id(channel_id: &str) -> Option<String> {
+    let suffix = channel_id.strip_prefix("UC")?;
+    if suffix.is_empty() {
+        return None;
+    }
+    Some(format!("UU{suffix}"))
 }
 
 async fn discover_videos_for_youtuber_with_ytdlp(
@@ -3190,5 +3127,14 @@ mod tests {
         assert!(validate_rewipe_safety(IndexMode::Rewipe, true, false).is_ok());
         assert!(validate_rewipe_safety(IndexMode::Rewipe, false, true).is_ok());
         assert!(validate_rewipe_safety(IndexMode::Rewipe, false, false).is_err());
+    }
+
+    #[test]
+    fn derives_uploads_playlist_from_canonical_channel_id() {
+        assert_eq!(
+            uploads_playlist_from_channel_id("UCbRP3c757lWg9M-U7TyEkXA").as_deref(),
+            Some("UUbRP3c757lWg9M-U7TyEkXA")
+        );
+        assert_eq!(uploads_playlist_from_channel_id("not-a-channel"), None);
     }
 }

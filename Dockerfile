@@ -3,11 +3,14 @@ WORKDIR /app
 COPY . .
 RUN cargo build --release -p youtube_api -p youtube_cli
 
+FROM denoland/deno:bin-2.8.1 AS deno
+
 FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates ffmpeg python3-pip \
-    && python3 -m pip install --no-cache-dir --break-system-packages --upgrade yt-dlp \
+    && python3 -m pip install --no-cache-dir --break-system-packages --upgrade 'yt-dlp[default]' \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=deno /deno /usr/local/bin/deno
 COPY --from=builder /app/target/release/youtube-api /usr/local/bin/youtube-api
 COPY --from=builder /app/target/release/ytsearch /usr/local/bin/ytsearch
 ENV YTSEARCH_API_ADDR=0.0.0.0:8787

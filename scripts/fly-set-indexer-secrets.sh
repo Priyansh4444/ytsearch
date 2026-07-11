@@ -27,18 +27,18 @@ require_env YTSEARCH_INDEX_QUEUE_TOKEN
 
 set_optional_ytdlp_secrets() {
   if [ -n "${YT_DLP_COOKIES_B64:-}" ]; then
-    flyctl secrets set --app "$APP_NAME" YT_DLP_COOKIES_FILE_B64="$YT_DLP_COOKIES_B64"
+    flyctl secrets set --stage --app "$APP_NAME" YT_DLP_COOKIES_FILE_B64="$YT_DLP_COOKIES_B64"
   elif [ -n "${YT_DLP_COOKIES_FILE:-}" ] && [ -f "$YT_DLP_COOKIES_FILE" ]; then
-    flyctl secrets set --app "$APP_NAME" \
+    flyctl secrets set --stage --app "$APP_NAME" \
       YT_DLP_COOKIES_FILE_B64="$(base64 < "$YT_DLP_COOKIES_FILE" | tr -d '\n')"
   fi
 
   if [ -n "${YT_DLP_EXTRACTOR_ARGS:-}" ]; then
-    flyctl secrets set --app "$APP_NAME" YT_DLP_EXTRACTOR_ARGS="$YT_DLP_EXTRACTOR_ARGS"
+    flyctl secrets set --stage --app "$APP_NAME" YT_DLP_EXTRACTOR_ARGS="$YT_DLP_EXTRACTOR_ARGS"
   fi
 
   if [ -n "${YT_DLP_USER_AGENT:-}" ]; then
-    flyctl secrets set --app "$APP_NAME" YT_DLP_USER_AGENT="$YT_DLP_USER_AGENT"
+    flyctl secrets set --stage --app "$APP_NAME" YT_DLP_USER_AGENT="$YT_DLP_USER_AGENT"
   fi
 }
 
@@ -48,14 +48,17 @@ configure_youtube_api_fallback() {
   case "${YOUTUBE_API_FALLBACK:-auto}" in
     1|true|yes)
       require_env YOUTUBE_API_KEY
-      flyctl secrets set --app "$APP_NAME" YOUTUBE_API_KEY="$YOUTUBE_API_KEY"
+      flyctl secrets set --stage --app "$APP_NAME" \
+        YOUTUBE_API_KEY_FILE_B64="$(printf '%s' "$YOUTUBE_API_KEY" | base64 | tr -d '\n')"
       ;;
     0|false|no)
-      flyctl secrets unset --app "$APP_NAME" YOUTUBE_API_KEY >/dev/null 2>&1 || true
+      flyctl secrets unset --stage --app "$APP_NAME" \
+        YOUTUBE_API_KEY YOUTUBE_API_KEY_FILE_B64 >/dev/null 2>&1 || true
       ;;
     auto)
       if [ -n "${YOUTUBE_API_KEY:-}" ]; then
-        flyctl secrets set --app "$APP_NAME" YOUTUBE_API_KEY="$YOUTUBE_API_KEY"
+        flyctl secrets set --stage --app "$APP_NAME" \
+          YOUTUBE_API_KEY_FILE_B64="$(printf '%s' "$YOUTUBE_API_KEY" | base64 | tr -d '\n')"
       fi
       ;;
     *)
@@ -66,7 +69,7 @@ configure_youtube_api_fallback() {
 }
 
 # Values are loaded from local env files and passed directly to Fly; they are not printed.
-flyctl secrets set \
+flyctl secrets set --stage \
   --app "$APP_NAME" \
   MEILI_HTTP_ADDR="$MEILI_HTTP_ADDR" \
   MEILI_MASTER_KEY="$MEILI_MASTER_KEY" \

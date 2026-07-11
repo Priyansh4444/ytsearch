@@ -24,6 +24,11 @@ ACK_FAILED_REQUESTS="${ACK_FAILED_REQUESTS:-1}"
 export MEILI_WAIT_FOR_TASKS
 mkdir -p "$TRANSCRIPT_CACHE_DIR"
 
+if [ -n "${YOUTUBE_API_KEY_FILE:-}" ] && [ -f "$YOUTUBE_API_KEY_FILE" ]; then
+  YOUTUBE_API_KEY="$(cat "$YOUTUBE_API_KEY_FILE")"
+  export YOUTUBE_API_KEY
+fi
+
 require_env() {
   name="$1"
   eval "value=\${$name:-}"

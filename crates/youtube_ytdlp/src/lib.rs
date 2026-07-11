@@ -173,17 +173,17 @@ impl YtDlpTranscriptSource {
         self.ytdlp_json(video_url(video_id)).await
     }
 
-    pub async fn channel_videos(
+    pub async fn channel_feed(
         &self,
         handle: &str,
         max_videos: Option<usize>,
-    ) -> youtube_ingest::Result<Vec<YtDlpVideo>> {
+    ) -> youtube_ingest::Result<YtDlpChannelFeed> {
         let handle = normalize_handle(handle);
         let url = format!("https://www.youtube.com/{handle}/videos");
         let mut command = Command::new(&self.binary);
         command
             .arg("--flat-playlist")
-            .arg("--dump-json")
+            .arg("--dump-single-json")
             .arg("--no-warnings");
 
         if let Some(max_videos) = max_videos {
@@ -225,17 +225,17 @@ impl YtDlpTranscriptSource {
             ));
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut videos = Vec::new();
-        for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
-            let value: Value = serde_json::from_str(line)
-                .map_err(|error| ytdlp_error(&url, format!("yt-dlp json parse failed: {error}")))?;
-            if let Some(video) = ytdlp_video_from_json(&value) {
-                videos.push(video);
-            }
-        }
+        let value: Value = serde_json::from_slice(&output.stdout)
+            .map_err(|error| ytdlp_error(&url, format!("yt-dlp json parse failed: {error}")))?;
+        Ok(ytdlp_channel_feed_from_json(&value, &handle))
+    }
 
-        Ok(videos)
+    pub async fn channel_videos(
+        &self,
+        handle: &str,
+        max_videos: Option<usize>,
+    ) -> youtube_ingest::Result<Vec<YtDlpVideo>> {
+        Ok(self.channel_feed(handle, max_videos).await?.videos)
     }
 
     async fn fetch_caption(
@@ -333,6 +333,62 @@ pub struct YtDlpVideo {
     pub channel: Option<String>,
     pub uploader_id: Option<String>,
     pub thumbnail: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct YtDlpChannelFeed {
+    pub handle: String,
+    pub channel_id: String,
+    pub title: String,
+    pub avatar_url: Option<String>,
+    pub videos: Vec<YtDlpVideo>,
+}
+
+fn ytdlp_channel_feed_from_json(value: &Value, fallback_handle: &str) -> YtDlpChannelFeed {
+    let videos = value
+        .get("entries")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(ytdlp_video_from_json)
+        .collect::<Vec<_>>();
+    let first = videos.first();
+    let handle = optional_string(value, "uploader_id")
+        .or_else(|| first.and_then(|video| video.uploader_id.clone()))
+        .unwrap_or_else(|| fallback_handle.to_string());
+    let channel_id = optional_string(value, "channel_id")
+        .or_else(|| optional_string(value, "id"))
+        .or_else(|| first.and_then(|video| video.channel_id.clone()))
+        .unwrap_or_default();
+    let title = optional_string(value, "channel")
+        .or_else(|| optional_string(value, "uploader"))
+        .or_else(|| first.and_then(|video| video.channel.clone()))
+        .unwrap_or_else(|| handle.trim_start_matches('@').to_string());
+
+    YtDlpChannelFeed {
+        handle,
+        channel_id,
+        title,
+        avatar_url: best_ytdlp_thumbnail(value),
+        videos,
+    }
+}
+
+fn best_ytdlp_thumbnail(value: &Value) -> Option<String> {
+    value
+        .get("thumbnails")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|thumbnail| {
+            let url = optional_string(thumbnail, "url")?;
+            let width = thumbnail.get("width").and_then(Value::as_u64).unwrap_or(0);
+            let height = thumbnail.get("height").and_then(Value::as_u64).unwrap_or(0);
+            Some((width.saturating_mul(height), url))
+        })
+        .max_by_key(|(area, _)| *area)
+        .map(|(_, url)| url)
+        .or_else(|| optional_string(value, "thumbnail"))
 }
 
 fn ytdlp_video_from_json(value: &Value) -> Option<YtDlpVideo> {
@@ -748,5 +804,37 @@ mod tests {
         assert_eq!(segments[0].start_ms, 1_000);
         assert_eq!(segments[0].end_ms, 3_500);
         assert_eq!(segments[0].text, "hello world");
+    }
+
+    #[test]
+    fn parses_channel_metadata_and_avatar_from_single_playlist_json() {
+        let value = serde_json::json!({
+            "id": "UCchannel",
+            "channel": "Example Creator",
+            "channel_id": "UCchannel",
+            "uploader_id": "@example",
+            "thumbnails": [
+                { "url": "https://example.com/avatar-small.jpg", "width": 100, "height": 100 },
+                { "url": "https://example.com/avatar-large.jpg", "width": 900, "height": 900 }
+            ],
+            "entries": [{
+                "id": "video-id",
+                "title": "Video title",
+                "channel_id": "UCchannel",
+                "channel": "Example Creator",
+                "uploader_id": "@example"
+            }]
+        });
+
+        let feed = ytdlp_channel_feed_from_json(&value, "@fallback");
+
+        assert_eq!(feed.handle, "@example");
+        assert_eq!(feed.channel_id, "UCchannel");
+        assert_eq!(feed.title, "Example Creator");
+        assert_eq!(
+            feed.avatar_url.as_deref(),
+            Some("https://example.com/avatar-large.jpg")
+        );
+        assert_eq!(feed.videos.len(), 1);
     }
 }

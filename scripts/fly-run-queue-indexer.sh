@@ -82,6 +82,11 @@ if flyctl secrets list --app "$APP_NAME" | grep -q 'YT_DLP_COOKIES_FILE_B64'; th
   cookie_secret_args="--file-secret /run/secrets/yt-dlp-cookies.txt=YT_DLP_COOKIES_FILE_B64 --env YT_DLP_COOKIES_FILE=/run/secrets/yt-dlp-cookies.txt"
 fi
 
+youtube_secret_args=""
+if flyctl secrets list --app "$APP_NAME" | grep -q 'YOUTUBE_API_KEY_FILE_B64'; then
+  youtube_secret_args="--file-secret /run/secrets/youtube-api-key.txt=YOUTUBE_API_KEY_FILE_B64 --env YOUTUBE_API_KEY_FILE=/run/secrets/youtube-api-key.txt"
+fi
+
 daily_update_file_args=""
 if [ -f "$DAILY_UPDATE_LIST_SOURCE" ]; then
   daily_update_file_args="--file-local /tmp/daily-indexed-channels.txt=$DAILY_UPDATE_LIST_SOURCE --env DAILY_UPDATE_LIST_FILE=/tmp/daily-indexed-channels.txt --env QUEUE_PRIORITY_LIST_FILE=/tmp/daily-indexed-channels.txt"
@@ -131,6 +136,7 @@ exec flyctl machine run \
   --volume "$VOLUME_NAME:/data" \
   --file-local "/usr/local/bin/cloud-index-queue=$(dirname "$0")/cloud-index-queue-entrypoint.sh" \
   $cookie_secret_args \
+  $youtube_secret_args \
   $daily_update_file_args \
   --env "BACKENDS=$BACKENDS" \
   --env "QUEUE_TARGET_BACKEND=$QUEUE_TARGET_BACKEND" \

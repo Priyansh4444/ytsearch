@@ -229,6 +229,8 @@ scripts/fly-run-queue-indexers.sh
 
 In the split daemon setup, each daily update runs `index-youtubers --mode update` and then `refresh-youtuber-counts-list` for its own backend. Count reconciliation reads only backend chunks and does not contact YouTube. Run `refresh-youtubers` separately when profile metadata, public counts, or avatars need enrichment. `DAILY_UPDATE_INITIAL_DELAY_SECONDS=86400` means the first daily update starts about one day after the daemon launches; set it to `0` only when you want an immediate catch-up run. `EXISTING_TAIL=0` scans the full channel list so older missing captions can eventually be repaired; use a positive value only for a faster newest-first pass.
 
+`scripts/fly-set-indexer-secrets.sh` uses Fly's staged-secret path because the indexers are raw Machines rather than a Fly Launch process group. Cookie and optional YouTube API values are stored as base64 file secrets. Recreate each worker deliberately after staging changes; launchers mount the files and entrypoints load the API key only into the child process environment. The cloud image includes Deno and `yt-dlp-ejs` for current YouTube JavaScript challenges.
+
 Index one request at your leisure:
 
 ```bash
