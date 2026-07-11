@@ -20,6 +20,7 @@
     "format:check": "oxfmt --check package.json index.html src .oxfmtrc.json .oxlintrc.json"
   },
   "dependencies": {
+    "lucide-solid": "^1.24.0",
     "solid-js": "^1.9.13"
   },
   "devDependencies": {

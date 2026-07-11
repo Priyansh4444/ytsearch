@@ -178,8 +178,29 @@ impl YtDlpTranscriptSource {
         handle: &str,
         max_videos: Option<usize>,
     ) -> youtube_ingest::Result<YtDlpChannelFeed> {
+        self.channel_feed_for_tab(handle, "videos", max_videos)
+            .await
+    }
+
+    pub async fn channel_streams(
+        &self,
+        handle: &str,
+        max_videos: Option<usize>,
+    ) -> youtube_ingest::Result<Vec<YtDlpVideo>> {
+        Ok(self
+            .channel_feed_for_tab(handle, "streams", max_videos)
+            .await?
+            .videos)
+    }
+
+    async fn channel_feed_for_tab(
+        &self,
+        handle: &str,
+        tab: &str,
+        max_videos: Option<usize>,
+    ) -> youtube_ingest::Result<YtDlpChannelFeed> {
         let handle = normalize_handle(handle);
-        let url = format!("https://www.youtube.com/{handle}/videos");
+        let url = channel_tab_url(&handle, tab)?;
         let mut command = Command::new(&self.binary);
         command
             .arg("--flat-playlist")
@@ -285,6 +306,16 @@ impl YtDlpTranscriptSource {
         }
 
         Ok(body)
+    }
+}
+
+fn channel_tab_url(handle: &str, tab: &str) -> youtube_ingest::Result<String> {
+    match tab {
+        "videos" | "streams" => Ok(format!("https://www.youtube.com/{handle}/{tab}")),
+        _ => Err(ytdlp_error(
+            handle,
+            format!("unsupported channel tab: {tab}"),
+        )),
     }
 }
 
@@ -836,5 +867,14 @@ mod tests {
             Some("https://example.com/avatar-large.jpg")
         );
         assert_eq!(feed.videos.len(), 1);
+    }
+
+    #[test]
+    fn builds_only_supported_channel_tab_urls() {
+        assert_eq!(
+            channel_tab_url("@example", "streams").unwrap(),
+            "https://www.youtube.com/@example/streams"
+        );
+        assert!(channel_tab_url("@example", "playlists").is_err());
     }
 }

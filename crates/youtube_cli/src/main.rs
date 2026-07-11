@@ -2644,14 +2644,28 @@ async fn discover_videos_for_youtuber_with_ytdlp(
     ytdlp: &YtDlpTranscriptSource,
     handle: &str,
 ) -> Result<Vec<DiscoveredVideo>, CliError> {
-    Ok(dedupe_discovered_videos(
-        ytdlp
-            .channel_videos(handle, None)
-            .await?
-            .into_iter()
-            .map(discovered_video_from_ytdlp_video)
-            .collect(),
-    ))
+    let mut videos = ytdlp
+        .channel_videos(handle, None)
+        .await?
+        .into_iter()
+        .map(discovered_video_from_ytdlp_video)
+        .collect::<Vec<_>>();
+
+    match ytdlp.channel_streams(handle, None).await {
+        Ok(streams) => {
+            println!(
+                "  discovery source: yt-dlp streams tab ({} entries)",
+                streams.len()
+            );
+            videos.extend(streams.into_iter().map(discovered_video_from_ytdlp_video));
+        }
+        Err(error) => {
+            tracing::warn!(handle = %handle, %error, "yt-dlp stream-tab discovery failed; continuing with uploads");
+            println!("  stream-tab discovery skipped ({error})");
+        }
+    }
+
+    Ok(dedupe_discovered_videos(videos))
 }
 
 async fn discover_upload_playlist_videos(

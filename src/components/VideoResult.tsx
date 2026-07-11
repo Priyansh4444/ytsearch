@@ -1,8 +1,9 @@
 import { For, Show, createSignal } from "solid-js";
 import type { Component } from "solid-js";
 import type { SearchHit, SearchVideoResult } from "../types";
-import { formatDate } from "../utils";
+import { copyToClipboard, formatDate } from "../utils";
 import { HighlightedText } from "./HighlightedText";
+import { CopyLinkButton } from "./ToolbarActions";
 
 export const VideoResult: Component<{ video: SearchVideoResult; query: string }> = (props) => {
   const visibleHits = () => props.video.hits.slice(0, 3);
@@ -11,6 +12,12 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string }>
     visibleHits().find((hit) => hit.id === selectedHitId()) ??
     visibleHits()[0] ??
     props.video.hits[0];
+  const [copied, setCopied] = createSignal(false);
+  const copyVideoLink = async () => {
+    await copyToClipboard(selectedHit()?.youtube_url ?? props.video.youtube_url);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1_500);
+  };
 
   return (
     <article class="border border-vesper-border bg-vesper-panel transition duration-300 hover:border-vesper-dim">
@@ -32,7 +39,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string }>
 
         <div class="flex flex-col gap-3 p-4">
           <div class="flex items-start justify-between gap-4">
-            <div>
+            <div class="min-w-0">
               <a
                 href={props.video.youtube_url}
                 target="_blank"
@@ -53,14 +60,21 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string }>
                 </Show>
               </p>
             </div>
-            <a
-              href={selectedHit()?.youtube_url ?? props.video.youtube_url}
-              target="_blank"
-              rel="noreferrer"
-              class="shrink-0 border border-vesper-border bg-vesper-bg px-3 py-1.5 text-sm font-medium text-vesper-green transition hover:border-vesper-green"
-            >
-              Open
-            </a>
+            <div class="flex shrink-0 items-center gap-2">
+              <CopyLinkButton
+                copied={copied()}
+                onClick={() => void copyVideoLink()}
+                label="Copy video link"
+              />
+              <a
+                href={selectedHit()?.youtube_url ?? props.video.youtube_url}
+                target="_blank"
+                rel="noreferrer"
+                class="inline-flex h-10 items-center border border-vesper-border bg-vesper-bg px-3 text-sm font-medium text-vesper-green transition hover:border-vesper-green"
+              >
+                Open
+              </a>
+            </div>
           </div>
 
           <div class="grid gap-2">
