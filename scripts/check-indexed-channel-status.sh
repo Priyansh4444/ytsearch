@@ -112,13 +112,14 @@ done
 if [ -n "${INDEX_QUEUE_API_BASE_URL:-}" ] && [ -n "${YTSEARCH_INDEX_QUEUE_TOKEN:-}" ]; then
   echo
   echo "queued_requests"
+  printf 'id\thandle\tstatus\ttarget_backend\trequested_at\tnote\n'
   curl -fsS \
     -H "Authorization: Bearer $YTSEARCH_INDEX_QUEUE_TOKEN" \
     "$INDEX_QUEUE_API_BASE_URL/api/index-requests?limit=1000" |
     jq -r --argjson handles "$(printf '%s\n' "$@" | jq -R 'if startswith("@") then . else "@" + . end' | jq -s 'map(ascii_downcase)')" '
       .requests[]
       | select((.handle | ascii_downcase) as $handle | $handles | index($handle))
-      | [.id, .handle, .status, .source_backend, .requested_at, (.note // "")] | @tsv'
+      | [.id, .handle, .status, (.target_backend // .source_backend), .requested_at, (.note // "")] | @tsv'
 else
   echo
   echo "queued_requests skipped: set INDEX_QUEUE_API_BASE_URL and YTSEARCH_INDEX_QUEUE_TOKEN to inspect the private queue" >&2
