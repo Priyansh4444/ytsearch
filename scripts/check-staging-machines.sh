@@ -3,7 +3,7 @@ set -eu
 
 # Summarize the Fly machines that make up staging without exposing secrets.
 
-APPS="${APPS:-ytsearch-api-typesense-fly-staging ytsearch-index-queue-staging ytsearch-typesense-staging ytsearch-indexer-staging}"
+APPS="${APPS:-ytsearch-api-typesense-fly-staging ytsearch-typesense-staging ytsearch-indexer-staging}"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -55,5 +55,5 @@ for app in $APPS; do
 done
 
 echo
-echo "summary started_machines=$started apps_with_machines=$apps_with_machines expected_staging_machines=4"
+echo "summary started_machines=$started apps_with_machines=$apps_with_machines expected_staging_machines=3"
 echo "see docs/staging-architecture.md for the active Typesense topology"

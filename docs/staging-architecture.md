@@ -1,13 +1,12 @@
 # Staging Architecture
 
-Typesense is the only active search backend. The four always-on Fly Machines
+Typesense is the only active search backend. The three always-on Fly Machines
 are deliberately separated so indexing load cannot take down public search.
 
 | Fly app | Purpose | Keeps running? |
 | --- | --- | --- |
-| `ytsearch-api-typesense-fly-staging` | Public search API | Yes |
+| `ytsearch-api-typesense-fly-staging` | Public search and queue API; owns the JSONL queue volume | Yes |
 | `ytsearch-typesense-staging` | Typesense engine and data volume | Yes |
-| `ytsearch-index-queue-staging` | Private JSONL queue API | Yes |
 | `ytsearch-indexer-staging` | One Typesense queue/indexing daemon and transcript cache | Yes while the queue or daily update is active |
 
 Cloudflare Pages is outside Fly and serves `https://ytsearch-755.pages.dev`.
@@ -17,8 +16,8 @@ flowchart LR
   Browser --> Pages[Cloudflare Pages]
   Pages --> API[Typesense search API]
   API --> Engine[Typesense engine]
-  Pages --> Queue[Queue API]
-  Queue --> Worker[Typesense queue worker]
+  Pages --> API
+  API --> Worker[Typesense queue worker]
   Worker --> YouTube[yt-dlp / YouTube]
   Worker --> Engine
 ```

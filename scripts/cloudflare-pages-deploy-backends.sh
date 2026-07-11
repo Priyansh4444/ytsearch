@@ -9,13 +9,11 @@ set -eu
 deploy_backend() {
   branch="$1"
   api_base_url="$2"
-  queue_api_base_url="${INDEX_QUEUE_API_BASE_URL:-}"
+  # The Typesense API owns the queue routes, so one public API origin serves
+  # search and queueing without a second always-on Fly machine.
+  queue_api_base_url="$api_base_url"
   if [ -z "$api_base_url" ]; then
     echo "Missing API base URL for Cloudflare Pages branch: $branch" >&2
-    exit 1
-  fi
-  if [ -z "$queue_api_base_url" ]; then
-    echo "Missing required environment variable: INDEX_QUEUE_API_BASE_URL" >&2
     exit 1
   fi
   echo "Deploying frontend branch=$branch api=$api_base_url"

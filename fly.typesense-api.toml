@@ -8,6 +8,7 @@ primary_region = 'sjc'
   YTSEARCH_API_ADDR = '0.0.0.0:8787'
   TYPESENSE_COLLECTION = 'youtube_transcript_chunks'
   YTSEARCH_SEARCH_BACKEND = 'typesense'
+  YTSEARCH_INDEX_QUEUE_PATH = '/data/index-requests.jsonl'
   RUST_LOG = 'youtube_api=info,tower_http=info'
   LOG_FORMAT = 'json'
 
@@ -23,6 +24,10 @@ primary_region = 'sjc'
   memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
+
+[[mounts]]
+  source = 'ytsearch_queue_data'
+  destination = '/data'
 
 [checks]
   [checks.health]
