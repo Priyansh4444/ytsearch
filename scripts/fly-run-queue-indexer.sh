@@ -129,9 +129,9 @@ exec flyctl machine run \
   $remove_arg \
   --restart "$restart_policy" \
   $build_args \
-  --vm-cpu-kind "${INDEXER_CPU_KIND:-shared}" \
-  --vm-cpus "${INDEXER_CPUS:-2}" \
-  --vm-memory "${INDEXER_MEMORY_MB:-4096}" \
+  --vm-cpu-kind "${INDEXER_CPU_KIND:-performance}" \
+  --vm-cpus "${INDEXER_CPUS:-4}" \
+  --vm-memory "${INDEXER_MEMORY_MB:-8192}" \
   --rootfs-size "${INDEXER_ROOTFS_SIZE_GB:-10}" \
   --swap-size "${INDEXER_SWAP_MB:-1024}" \
   --volume "$VOLUME_NAME:/data" \

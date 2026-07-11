@@ -26,9 +26,11 @@ flowchart LR
 ## Reliability And Cost Rules
 
 1. Keep exactly one persistent queue worker. JSONL has no distributed lock.
-2. The worker uses 2 shared CPUs and 4 GB RAM for sustained `yt-dlp` work, a
-   10 GB encrypted transcript-cache volume, and a one-request queue pass to
-   avoid a large creator starving later requests.
+2. The persistent worker uses 4 performance CPUs and 8 GB RAM for sustained
+   `yt-dlp` work, a 10 GB encrypted transcript-cache volume, and a one-request
+   queue pass to avoid a large creator starving later requests. This sizing is
+   required because the `yt-dlp` EJS/Deno helper previously OOM-killed on the
+   4 GB shared tier. One-off workers retain their lower-cost defaults.
 3. The worker uses `yt-dlp` first. A staged YouTube Data API key is a metadata
    discovery fallback only; it cannot retrieve transcript captions.
 4. Public search and Typesense stay warm. Stop the worker only after confirming
