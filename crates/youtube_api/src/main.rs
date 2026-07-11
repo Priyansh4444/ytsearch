@@ -606,7 +606,7 @@ fn is_searchable_channel(channel: &YoutuberDocument) -> bool {
 fn queue_target_backends(input: Option<&[String]>) -> Result<Vec<String>, ApiError> {
     let requested = input
         .map(|backends| backends.iter().map(String::as_str).collect::<Vec<_>>())
-        .unwrap_or_else(|| vec!["meilisearch", "typesense-fly"]);
+        .unwrap_or_else(|| vec!["typesense-fly"]);
     let mut normalized = Vec::new();
     for backend in requested {
         let backend = backend.trim();

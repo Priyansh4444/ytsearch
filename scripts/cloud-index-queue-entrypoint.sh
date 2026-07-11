@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-BACKENDS="${BACKENDS:-meilisearch typesense-fly}"
+BACKENDS="${BACKENDS:-typesense-fly}"
 QUEUE_TARGET_BACKEND="${QUEUE_TARGET_BACKEND:-}"
 JOBS="${JOBS:-1}"
 COLLECTION="${COLLECTION:-youtube_transcript_chunks}"
@@ -60,7 +60,11 @@ default_queue_target_backend() {
 validate_backend_scope() {
   target_backend="$(default_queue_target_backend)"
   case "$target_backend" in
-    meilisearch|typesense-fly) ;;
+    typesense-fly) ;;
+    meilisearch)
+      echo "cloud-queue-indexer: Meilisearch is retired; refusing legacy target" >&2
+      return 1
+      ;;
     *)
       echo "cloud-queue-indexer: QUEUE_TARGET_BACKEND must select exactly one active backend" >&2
       exit 1

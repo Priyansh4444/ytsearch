@@ -2,8 +2,8 @@
 
 This project compares two active search backends:
 
-1. Self-hosted Meilisearch on Fly.io, used by the current primary staging frontend.
-2. Self-hosted Typesense on Fly.io, kept warm as a benchmark and rollback path.
+1. Self-hosted Typesense on Fly.io, used by the primary staging frontend.
+2. Meilisearch, retained only as a source-level legacy crate and historical documentation.
 
 The managed Typesense service is no longer part of this repo's active staging or benchmark setup.
 
@@ -17,9 +17,9 @@ The managed Typesense service is no longer part of this repo's active staging or
 
 ## Decision Status
 
-Do not deprecate either backend or switch `head.ytsearch-755.pages.dev` until a corpus-matched benchmark passes. The July 10 latency run showed Typesense returning substantially faster API responses, but it was **not** a valid backend decision: Meilisearch and Typesense had different indexed coverage, and Typesense totals changed during the sample while accepted writes drained.
+Typesense is now the active backend and `head.ytsearch-755.pages.dev` is its primary frontend. Meilisearch is deprecated and its Fly engine, API machine, queue worker, volume, and indexed data were destroyed after the preservation commit documented in `docs/legacy/meilisearch-retirement.md`.
 
-The current idle resource snapshot also does not justify a deprecation: Meilisearch used about 2.8 GB RSS and Typesense about 1.9 GB RSS on identical `shared-cpu-2x` / 4 GB Fly Machines. Both had negligible CPU use. Compute is therefore the same roughly $22.22/month per warm engine in SJC, before storage and transfer; Meili has a 10 GB volume and Typesense a 3 GB volume. Keep both engines warm and make the primary decision only after count parity and stable repeated runs.
+The final idle resource snapshot was Meilisearch about 2.8 GB RSS versus Typesense about 1.9 GB RSS on identical `shared-cpu-2x` / 4 GB Fly Machines, with negligible CPU for both. Removing Meilisearch eliminates roughly $22.22/month of warm engine compute plus its volume and API/indexer overhead.
 
 ## Fly Runtime Shape
 
@@ -145,6 +145,23 @@ GLOBALPING_COUNTRIES="US GB JP AU BR" QUERY=react YOUTUBER=@t3dotgg scripts/benc
 ```
 
 The local benchmark summary now includes `total_videos_range`, `total_moments_range`, and `corpus_stable`. A `corpus_stable=no` row means writes were still draining: retain the raw timings for diagnosis but do not compare the backends or switch the primary frontend.
+
+## Serialization Experiment
+
+The experimental `youtube_serialization_bench` crate compares the current
+transcript-chunk shape encoded with `serde_json` and a generated `prost`
+protobuf schema:
+
+```bash
+cargo run -p youtube_serialization_bench --release -- 10000 10
+```
+
+On the July 11 sample, protobuf was about 53.4% of JSON size, with roughly
+2.6x faster encoding and 2.1x faster decoding. This is a wire-format benchmark,
+not a recommendation to change the public API: the schema currently carries
+`extra` as JSON and has no compatibility/versioning policy. Typesense's native
+HTTP JSON API remains the active integration; protobuf should only be adopted
+after a versioned export/import contract and cross-language fixtures exist.
 
 Check machine and indexed-channel status:
 

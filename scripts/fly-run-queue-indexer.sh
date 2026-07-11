@@ -10,9 +10,8 @@ DAILY_UPDATE_LIST_SOURCE="${DAILY_UPDATE_LIST_SOURCE:-scripts/indexed-channels.t
 
 case "$QUEUE_TARGET_BACKEND" in
   meilisearch)
-    EXPECTED_BACKENDS="meilisearch"
-    DEFAULT_MACHINE_NAME="ytsearch-queue-meili"
-    DEFAULT_VOLUME_NAME="ytsearch_indexer_data_meili"
+    echo "Meilisearch is retired; no queue machine may target it." >&2
+    exit 1
     ;;
   typesense-fly)
     EXPECTED_BACKENDS="typesense-fly"

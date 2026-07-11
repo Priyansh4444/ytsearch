@@ -9,7 +9,7 @@ Each preview points search at a different backend API and posts `@handle` index 
 | https://meili.ytsearch-755.pages.dev | `ytsearch-api-meili-staging` | `ytsearch-index-queue-staging` |
 | https://typesense.ytsearch-755.pages.dev | `ytsearch-api-typesense-fly-staging` | `ytsearch-index-queue-staging` |
 
-`meili` is the current primary staging frontend. Do not switch the `head` preview to Typesense until both backends have equivalent creator coverage and a stable corpus-matched benchmark passes.
+`head` is the active Typesense staging frontend. Meilisearch is retired; its machines and data were destroyed. Meilisearch scripts are legacy-only and fail closed.
 
 ## One-Off Full Update
 

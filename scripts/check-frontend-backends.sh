@@ -10,7 +10,6 @@ QUERY="${QUERY:-fable}"
 PER_PAGE="${PER_PAGE:-3}"
 CURL_MAX_TIME="${CURL_MAX_TIME:-15}"
 
-MEILI_FRONTEND_URL="${MEILI_FRONTEND_URL:-https://meili.ytsearch-755.pages.dev}"
 TYPESENSE_FRONTEND_URL="${TYPESENSE_FRONTEND_URL:-${TYPESENSE_FLY_FRONTEND_URL:-https://typesense.ytsearch-755.pages.dev}}"
 
 required_env() {
@@ -43,11 +42,7 @@ check_api() {
     /tmp/ytsearch-check-response.json >/dev/null
 }
 
-required_env MEILI_API_BASE_URL
 required_env TYPESENSE_FLY_API_BASE_URL
-
-check_url "frontend meilisearch" "$MEILI_FRONTEND_URL"
-check_api "frontend meilisearch" "$MEILI_API_BASE_URL"
 
 check_url "frontend typesense" "$TYPESENSE_FRONTEND_URL"
 check_api "frontend typesense" "$TYPESENSE_FLY_API_BASE_URL"

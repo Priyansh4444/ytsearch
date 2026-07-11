@@ -24,8 +24,5 @@ deploy_backend() {
     scripts/cloudflare-pages-deploy.sh "$branch"
 }
 
-deploy_backend "${MEILI_PAGES_BRANCH:-meili}" \
-  "${MEILI_API_BASE_URL:-}"
-
-deploy_backend "${TYPESENSE_PAGES_BRANCH:-${TYPESENSE_FLY_PAGES_BRANCH:-typesense}}" \
+deploy_backend "${TYPESENSE_PAGES_BRANCH:-${TYPESENSE_FLY_PAGES_BRANCH:-head}}" \
   "${TYPESENSE_FLY_API_BASE_URL:-}"

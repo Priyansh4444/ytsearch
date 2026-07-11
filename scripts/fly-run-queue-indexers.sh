@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-# Start the two persistent queue workers. Each worker consumes and acknowledges
-# only rows for its backend, which keeps the JSONL queue safe without a lock.
+# Start the active Typesense persistent queue worker. Meilisearch was retired;
+# its former machine and volume are intentionally gone.
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-staging}"
@@ -18,15 +18,7 @@ require_command flyctl
 require_command jq
 
 machines="$(flyctl machine list --app "$APP_NAME" --json)"
-legacy_count="$(printf '%s' "$machines" | jq '[
-  .[]
-  | select(
-      (.state == "started")
-      and ((.config.env.BACKENDS // "") | contains("meilisearch"))
-      and ((.config.env.BACKENDS // "") | contains("typesense-fly"))
-      and ((.config.env.QUEUE_TARGET_BACKEND // "") == "")
-    )
-] | length')"
+legacy_count="$(printf '%s' "$machines" | jq '[.[] | select(.state == "started" and ((.config.env.BACKENDS // "") | contains("meilisearch")))] | length')"
 if [ "$legacy_count" -ne 0 ]; then
   echo "Refusing to start split workers while $legacy_count legacy shared worker(s) are running." >&2
   echo "Confirm they are idle, stop them, then rerun this command." >&2
@@ -61,9 +53,6 @@ run_worker() {
   "$SCRIPT_DIR/fly-run-queue-indexer.sh"
 }
 
-run_worker meilisearch "${MEILI_INDEXER_MACHINE_NAME:-ytsearch-queue-meili}" \
-  "${MEILI_INDEXER_VOLUME_NAME:-ytsearch_indexer_data_meili}"
 run_worker typesense-fly "${TYPESENSE_INDEXER_MACHINE_NAME:-ytsearch-queue-typesense}" \
   "${TYPESENSE_INDEXER_VOLUME_NAME:-ytsearch_indexer_data_ts}"
-
-"$SCRIPT_DIR/check-queue-indexers.sh"
+echo "Active queue worker: backend=typesense-fly"

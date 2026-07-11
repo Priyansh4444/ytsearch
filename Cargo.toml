@@ -9,6 +9,7 @@ members = [
     "crates/youtube_semantic",
     "crates/youtube_search",
     "crates/youtube_sources",
+    "crates/youtube_serialization_bench",
     "crates/youtube_transcribe",
     "crates/youtube_meilisearch",
     "crates/youtube_typesense",

@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package ytsearch;
+
+message TranscriptChunk {
+  string id = 1;
+  string youtuber_id = 2;
+  string youtuber_handle = 3;
+  string youtuber_name = 4;
+  string channel_id = 5;
+  string video_id = 6;
+  string title = 7;
+  string text = 8;
+  optional string prev_text = 9;
+  optional string next_text = 10;
+  uint32 sequence = 11;
+  optional string chapter = 12;
+  optional uint32 chapter_index = 13;
+  optional uint32 duration = 14;
+  uint32 t_start_ms = 15;
+  uint32 t_end_ms = 16;
+  optional string thumbnail = 17;
+  optional string upload_date = 18;
+  optional string published_at = 19;
+  optional int64 published_at_timestamp = 20;
+  string uploader_id = 21;
+  bytes embedding_f32_le = 22;
+  string extra_json = 23;
+}

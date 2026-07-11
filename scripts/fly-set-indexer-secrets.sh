@@ -18,8 +18,6 @@ require_env() {
   fi
 }
 
-require_env MEILI_HTTP_ADDR
-require_env MEILI_MASTER_KEY
 require_env TYPESENSE_SELFHOST_API_URL
 require_env TYPESENSE_SELFHOST_API_KEY
 require_env INDEX_QUEUE_API_BASE_URL
@@ -71,8 +69,6 @@ configure_youtube_api_fallback() {
 # Values are loaded from local env files and passed directly to Fly; they are not printed.
 flyctl secrets set --stage \
   --app "$APP_NAME" \
-  MEILI_HTTP_ADDR="$MEILI_HTTP_ADDR" \
-  MEILI_MASTER_KEY="$MEILI_MASTER_KEY" \
   INDEX_QUEUE_API_BASE_URL="$INDEX_QUEUE_API_BASE_URL" \
   YTSEARCH_INDEX_QUEUE_TOKEN="$YTSEARCH_INDEX_QUEUE_TOKEN" \
   TYPESENSE_SELFHOST_API_URL="$TYPESENSE_SELFHOST_API_URL" \

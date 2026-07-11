@@ -1,8 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-# Check that exactly one started persistent queue worker exists for each active
-# backend and that no legacy shared worker can consume both kinds of queue row.
+# Check that exactly one started persistent Typesense queue worker exists.
 
 APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-staging}"
 
@@ -26,7 +25,7 @@ printf '%s' "$machines" | jq -r '
 '
 
 failed=0
-for backend in meilisearch typesense-fly; do
+for backend in typesense-fly; do
   count="$(printf '%s' "$machines" | jq --arg backend "$backend" '[.[] | select(.state == "started" and .config.env.QUEUE_TARGET_BACKEND == $backend)] | length')"
   if [ "$count" -ne 1 ]; then
     echo "Expected exactly one started $backend queue worker; found $count." >&2

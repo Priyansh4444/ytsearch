@@ -12,7 +12,7 @@
 | `youtube_transcribe` | Optional local audio fallback using `yt-dlp` audio extraction, `ffmpeg`, `ffprobe`, and `voxtype`. | Implements `TranscriptSource`; use only when captions are missing and you are allowed to transcribe. |
 | `youtube_ingest` | Core domain model, ports/traits, and transcript chunker. | Defines `VideoMetadataSource`, `TranscriptSource`, `TranscriptChunkSource`, `ChunkSink`, and `EmbeddingSource`. |
 | `youtube_search` | Shared query type, indexed creator document, and search backend trait. | API-facing hotswap boundary for search backends. |
-| `youtube_meilisearch` | Meilisearch settings, admin import/delete/upsert, and search client. | Preferred backend for new deployments; implements `ChunkSink` and `TranscriptSearchBackend`. |
+| `youtube_meilisearch` | Legacy Meilisearch settings, admin import/delete/upsert, and search client. | Deprecated after the 2026 retirement; retained for source compatibility only. |
 | `youtube_typesense` | Typesense schema, admin import/delete/upsert, and search client. | Secondary staging/rollback backend; implements `ChunkSink` and `TranscriptSearchBackend`. |
 | `youtube_cli` | Operator CLI for validation, indexing, direct video indexing, and CLI search. | Wires sources/sinks together; no core parsing logic should live here. |
 | `youtube_api` | Axum HTTP API for frontend search and indexed channel listing. | Uses `youtube_search::TranscriptSearchBackend`; keep admin actions out of this service. |

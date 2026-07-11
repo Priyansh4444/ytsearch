@@ -2,7 +2,7 @@
 set -eu
 
 LIST_FILE="${LIST_FILE:-/tmp/indexed-channels.txt}"
-BACKENDS="${BACKENDS:-meilisearch typesense-fly}"
+BACKENDS="${BACKENDS:-typesense-fly}"
 MODE="${MODE:-update}"
 JOBS="${JOBS:-2}"
 TYPESENSE_JOBS="${TYPESENSE_JOBS:-3}"

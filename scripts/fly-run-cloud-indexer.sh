@@ -83,7 +83,7 @@ exec flyctl machine run \
   $youtube_secret_args \
   --env "LIST_FILE=/tmp/indexed-channels.txt" \
   --env "TRANSCRIPT_CACHE_DIR=$transcript_cache_dir" \
-  --env "BACKENDS=${BACKENDS:-meilisearch typesense-fly}" \
+  --env "BACKENDS=${BACKENDS:-typesense-fly}" \
   --env "MODE=${MODE:-update}" \
   --env "JOBS=${JOBS:-3}" \
   --env "TYPESENSE_JOBS=${TYPESENSE_JOBS:-3}" \

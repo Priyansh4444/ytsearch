@@ -1,27 +1,11 @@
 #!/usr/bin/env sh
 set -eu
 
-# Full Meilisearch reindex: wipe existing transcript chunks before importing.
+# DEPRECATED: Meilisearch was retired and its data was destroyed. This wrapper
+# remains only as a historical migration reference and must not be used.
 
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
 
-if [ "$#" -lt 1 ]; then
-  echo "Usage: scripts/index-youtuber-meili-rewipe.sh @handle [extra args]" >&2
-  exit 1
-fi
-
-if [ "${ALLOW_DESTRUCTIVE_REWIPE:-0}" != "1" ]; then
-  echo "Refusing destructive rewipe. Verify a recoverable source, then set ALLOW_DESTRUCTIVE_REWIPE=1." >&2
-  exit 1
-fi
-
-handle="$1"
-shift
-
-exec cargo run --release -p youtube_cli -- \
-  index-youtuber "$handle" \
-  --backend meilisearch \
-  --mode rewipe \
-  --allow-destructive-rewipe \
-  "$@"
+echo "Meilisearch is retired and its data was destroyed. There is no rewipe target." >&2
+exit 1

@@ -8,7 +8,7 @@ set -eu
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
 
-BACKENDS="${BACKENDS:-meilisearch typesense-fly}"
+BACKENDS="${BACKENDS:-typesense-fly}"
 QUERY="${QUERY:-the}"
 PER_PAGE="${PER_PAGE:-3}"
 

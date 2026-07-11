@@ -9,7 +9,7 @@ fi
 MODE="${MODE:-update}"
 JOBS="${JOBS:-4}"
 if [ "${BACKENDS+x}" != "x" ]; then
-  BACKENDS="meilisearch typesense-fly"
+  BACKENDS="typesense-fly"
 fi
 COLLECTION="${COLLECTION:-youtube_transcript_chunks}"
 
@@ -94,6 +94,10 @@ has_backend() {
 }
 
 if has_backend meilisearch; then
+  if [ "${ALLOW_LEGACY_MEILI:-0}" != "1" ]; then
+    echo "Meilisearch is retired. Set ALLOW_LEGACY_MEILI=1 only for historical migration work." >&2
+    exit 1
+  fi
   run_index meilisearch meilisearch "$@"
   run_refresh meilisearch meilisearch
 fi
