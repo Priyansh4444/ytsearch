@@ -27,3 +27,32 @@ input {
 ::selection {
   background: rgba(255, 199, 153, 0.25);
 }
+
+::view-transition-old(root) {
+  animation: 140ms ease-out both fade-out;
+}
+
+::view-transition-new(root) {
+  animation: 220ms ease-out both fade-in;
+}
+
+@keyframes fade-out {
+  to {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+  }
+}

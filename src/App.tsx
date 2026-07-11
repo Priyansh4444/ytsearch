@@ -25,7 +25,13 @@ import {
 import { VideoResult } from "./components/VideoResult";
 import { BackButton, CopyLinkButton } from "./components/ToolbarActions";
 import type { SearchRequest, SearchSort, SearchVideoResult } from "./types";
-import { copyToClipboard, creatorFromPath, normalizeHandle, routeForHandle } from "./utils";
+import {
+  copyToClipboard,
+  creatorFromPath,
+  normalizeHandle,
+  routeForHandle,
+  withViewTransition,
+} from "./utils";
 
 const pluralize = (count: number, singular: string, plural = `${singular}s`) =>
   `${count} ${count === 1 ? singular : plural}`;
@@ -82,20 +88,22 @@ const App: Component = () => {
     return channels()?.find((channel) => normalizeHandle(channel.handle) === selectedHandle);
   });
   const hasChannel = () => youtuber().length > 0;
+  const hasSearchSurface = () => hasChannel() || submitted() !== undefined;
   const isIndexMode = () => query().trim().startsWith("@");
 
-  const syncRoute = () => {
-    const searchState = searchStateFromLocation();
-    const nextHandle = creatorFromPath();
-    setRouteHandle(searchState?.youtuber ? normalizeHandle(searchState.youtuber) : nextHandle);
-    setQuery(searchState?.query ?? "");
-    setYoutuber(searchState?.youtuber ?? nextHandle ?? "");
-    setSort(searchState?.sort ?? "relevance");
-    setPage(searchState?.page ?? 1);
-    setSubmitted(searchState);
-    setUnavailableIndexHandle(undefined);
-    setQueuedIndexRequest(undefined);
-  };
+  const syncRoute = () =>
+    withViewTransition(() => {
+      const searchState = searchStateFromLocation();
+      const nextHandle = creatorFromPath();
+      setRouteHandle(searchState?.youtuber ? normalizeHandle(searchState.youtuber) : nextHandle);
+      setQuery(searchState?.query ?? "");
+      setYoutuber(searchState?.youtuber ?? nextHandle ?? "");
+      setSort(searchState?.sort ?? "relevance");
+      setPage(searchState?.page ?? 1);
+      setSubmitted(searchState);
+      setUnavailableIndexHandle(undefined);
+      setQueuedIndexRequest(undefined);
+    });
 
   onMount(() => {
     window.addEventListener("popstate", syncRoute);
@@ -104,13 +112,15 @@ const App: Component = () => {
 
   const selectChannel = (handle: string) => {
     const normalized = normalizeHandle(handle);
-    setYoutuber(normalized);
-    setRouteHandle(normalized);
-    setSubmitted(undefined);
-    setUnavailableIndexHandle(undefined);
-    setQueuedIndexRequest(undefined);
-    setPage(1);
-    window.history.pushState({}, "", routeForHandle(normalized));
+    withViewTransition(() => {
+      setYoutuber(normalized);
+      setRouteHandle(normalized);
+      setSubmitted(undefined);
+      setUnavailableIndexHandle(undefined);
+      setQueuedIndexRequest(undefined);
+      setPage(1);
+      window.history.pushState({}, "", routeForHandle(normalized));
+    });
   };
 
   const queueIndexRequest = async () => {
@@ -133,27 +143,31 @@ const App: Component = () => {
       });
       return;
     }
-    setQuery(normalizedQuery);
-    setUnavailableIndexHandle(undefined);
-    setQueuedIndexRequest(undefined);
-    setPage(nextPage);
     const request = {
       query: normalizedQuery,
       youtuber: youtuber(),
       page: nextPage,
       sort: sort(),
     };
-    setSubmitted(request);
-    writeSearchUrl(request);
+    withViewTransition(() => {
+      setQuery(normalizedQuery);
+      setUnavailableIndexHandle(undefined);
+      setQueuedIndexRequest(undefined);
+      setPage(nextPage);
+      setSubmitted(request);
+      writeSearchUrl(request);
+    });
   };
 
   const goToPage = (nextPage: number) => {
     const current = submitted();
     if (!current) return;
     const request = { ...current, page: nextPage };
-    setPage(nextPage);
-    setSubmitted(request);
-    writeSearchUrl(request);
+    withViewTransition(() => {
+      setPage(nextPage);
+      setSubmitted(request);
+      writeSearchUrl(request);
+    });
   };
 
   const goBack = () => {
@@ -161,8 +175,16 @@ const App: Component = () => {
       window.history.back();
       return;
     }
-    window.history.pushState({}, "", "/");
-    syncRoute();
+    withViewTransition(() => {
+      window.history.pushState({}, "", "/");
+      const searchState = searchStateFromLocation();
+      setRouteHandle(creatorFromPath());
+      setQuery(searchState?.query ?? "");
+      setYoutuber(searchState?.youtuber ?? "");
+      setSort(searchState?.sort ?? "relevance");
+      setPage(searchState?.page ?? 1);
+      setSubmitted(searchState);
+    });
   };
 
   const [copiedSearchLink, setCopiedSearchLink] = createSignal(false);
@@ -214,7 +236,9 @@ const App: Component = () => {
       <div class="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
         <section
           class={`transition-all duration-300 ease-out ${
-            hasChannel() ? "flex flex-col gap-4" : "flex min-h-[42vh] flex-col justify-center gap-5"
+            hasSearchSurface()
+              ? "flex flex-col gap-4"
+              : "flex min-h-[42vh] flex-col justify-center gap-5"
           }`}
         >
           <Show when={hasChannel()}>

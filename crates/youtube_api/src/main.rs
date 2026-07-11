@@ -34,6 +34,7 @@ const MAX_SEARCH_PAGE_FETCHES: u32 = 10;
 const MAX_HITS_PER_VIDEO: usize = 5;
 const CACHE_YOUTUBERS: &str = "public, max-age=30, stale-while-revalidate=300";
 const CACHE_SEARCH: &str = "public, max-age=30, stale-while-revalidate=300";
+const CACHE_CHANNEL_IMAGE: &str = "public, max-age=86400, stale-while-revalidate=604800";
 const CACHE_NO_STORE: &str = "no-store";
 const DEFAULT_SEARCH_RATE_LIMIT_PER_MINUTE: usize = 120;
 
@@ -45,6 +46,7 @@ struct AppState {
     rate_limiter: Arc<Mutex<RateLimiter>>,
     search_rate_limit_per_minute: usize,
     index_queue: IndexQueue,
+    image_http: reqwest::Client,
 }
 
 #[derive(Clone, Debug)]
@@ -243,6 +245,8 @@ enum ApiError {
     InvalidHandle,
     #[error("queue failed: {0}")]
     Queue(String),
+    #[error("channel image failed: {0}")]
+    ChannelImage(String),
     #[error("search backend failed: {0}")]
     SearchBackend(#[from] SearchBackendError),
     #[error("search response had an unexpected shape")]
@@ -256,7 +260,7 @@ async fn main() -> Result<(), ApiError> {
     let _ = dotenvy::dotenv();
     init_tracing();
 
-    let backend = env::var("YTSEARCH_SEARCH_BACKEND").unwrap_or_else(|_| "meilisearch".to_string());
+    let backend = env::var("YTSEARCH_SEARCH_BACKEND").unwrap_or_else(|_| "typesense".to_string());
     let collection = collection_env(&backend);
     let bind_addr = env::var("YTSEARCH_API_ADDR").unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string());
     let bind_addr: SocketAddr = bind_addr
@@ -279,10 +283,18 @@ async fn main() -> Result<(), ApiError> {
                 .unwrap_or_else(|_| PathBuf::from("data/index-requests.jsonl")),
             token: env::var("YTSEARCH_INDEX_QUEUE_TOKEN").ok(),
         },
+        image_http: reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|error| ApiError::ChannelImage(format!("client setup failed: {error}")))?,
     });
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/youtubers", get(youtubers_handler))
+        .route(
+            "/api/channel-images/{channel_id}",
+            get(channel_image_handler),
+        )
         .route("/api/search", get(search_handler))
         .route(
             "/api/index-requests",
@@ -324,6 +336,66 @@ async fn youtubers_handler(State(state): State<Arc<AppState>>) -> Result<Respons
         CACHE_YOUTUBERS,
         Json(YoutubersResponse { channels }),
     ))
+}
+
+async fn channel_image_handler(
+    State(state): State<Arc<AppState>>,
+    Path(channel_id): Path<String>,
+) -> Result<Response, ApiError> {
+    if !is_valid_channel_id(&channel_id) {
+        return Err(ApiError::BadRequest("invalid channel image id".to_string()));
+    }
+
+    let avatar_url = state
+        .search
+        .list_youtubers()
+        .await?
+        .into_iter()
+        .find(|channel| channel.channel_id == channel_id)
+        .and_then(|channel| channel.avatar_url)
+        .filter(|url| is_allowed_youtube_image_url(url))
+        .ok_or_else(|| ApiError::BadRequest("channel image unavailable".to_string()))?;
+
+    let upstream = state
+        .image_http
+        .get(avatar_url)
+        .send()
+        .await
+        .map_err(|error| ApiError::ChannelImage(format!("request failed: {error}")))?
+        .error_for_status()
+        .map_err(|error| ApiError::ChannelImage(format!("response failed: {error}")))?;
+    let content_type = upstream
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| value.starts_with("image/"))
+        .unwrap_or("image/jpeg")
+        .to_string();
+    if upstream
+        .content_length()
+        .is_some_and(|length| length > 2_000_000)
+    {
+        return Err(ApiError::ChannelImage("image is too large".to_string()));
+    }
+    let bytes = upstream
+        .bytes()
+        .await
+        .map_err(|error| ApiError::ChannelImage(format!("body failed: {error}")))?;
+    if bytes.len() > 2_000_000 {
+        return Err(ApiError::ChannelImage("image is too large".to_string()));
+    }
+
+    let mut response = bytes.into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&content_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("image/jpeg")),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(CACHE_CHANNEL_IMAGE),
+    );
+    Ok(response)
 }
 
 async fn search_handler(
@@ -1146,6 +1218,24 @@ mod tests {
     }
 
     #[test]
+    fn only_proxies_canonical_youtube_channel_images() {
+        assert!(is_valid_channel_id("UC6nSFpj9HTCZ5t-N3Rm3-HA"));
+        assert!(!is_valid_channel_id("../etc/passwd"));
+        assert!(is_allowed_youtube_image_url(
+            "https://yt3.googleusercontent.com/channel-avatar=s800-c-k-c0x00ffffff-no-rj"
+        ));
+        assert!(is_allowed_youtube_image_url(
+            "https://yt3.ggpht.com/channel-avatar=s800-c-k-c0x00ffffff-no-rj"
+        ));
+        assert!(!is_allowed_youtube_image_url(
+            "https://example.com/avatar.png"
+        ));
+        assert!(!is_allowed_youtube_image_url(
+            "http://yt3.ggpht.com/avatar.png"
+        ));
+    }
+
+    #[test]
     fn parse_hits_flattens_typesense_grouped_hits() {
         let raw = json!({
             "grouped_hits": [
@@ -1518,6 +1608,25 @@ fn cache_response<T: IntoResponse>(cache_control: &'static str, response: T) -> 
     response
 }
 
+fn is_valid_channel_id(channel_id: &str) -> bool {
+    channel_id.starts_with("UC")
+        && (20..=30).contains(&channel_id.len())
+        && channel_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+fn is_allowed_youtube_image_url(url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    url.scheme() == "https"
+        && matches!(
+            url.host_str(),
+            Some("yt3.ggpht.com" | "yt3.googleusercontent.com")
+        )
+}
+
 fn env_usize(name: &str, default: usize) -> usize {
     env::var(name)
         .ok()
@@ -1642,7 +1751,9 @@ impl IntoResponse for ApiError {
             | Self::InvalidSearchBackend(_)
             | Self::Queue(_)
             | Self::Server(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            Self::SearchBackend(_) | Self::UnexpectedSearchShape => StatusCode::BAD_GATEWAY,
+            Self::SearchBackend(_) | Self::UnexpectedSearchShape | Self::ChannelImage(_) => {
+                StatusCode::BAD_GATEWAY
+            }
         };
 
         let retry_after = match &self {

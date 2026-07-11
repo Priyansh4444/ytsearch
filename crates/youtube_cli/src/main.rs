@@ -2460,8 +2460,28 @@ async fn validate_youtuber(
 ) -> Result<ValidatedYoutuber, CliError> {
     let handle = normalize_handle(raw_handle)?;
     match validate_youtuber_with_ytdlp(ytdlp, &handle, max_videos).await {
-        Ok(youtuber) => {
+        Ok(mut youtuber) => {
             println!("  validation source: yt-dlp channel feed");
+            if let Some(youtube) = youtube {
+                match enrich_youtuber_channel_metadata(youtube, &handle, 0).await {
+                    Ok(channel) => {
+                        // Keep yt-dlp as the discovery source, but persist the
+                        // canonical channel identity and image from YouTube's API.
+                        youtuber.handle = channel.handle;
+                        youtuber.channel_id = channel.channel_id;
+                        youtuber.title = channel.title;
+                        youtuber.uploads_playlist = channel.uploads_playlist;
+                        youtuber.avatar_url = channel.avatar_url;
+                        println!("  channel profile source: YouTube Data API");
+                    }
+                    Err(error) => {
+                        tracing::warn!(handle = %handle, %error, "YouTube API profile enrichment failed; retaining yt-dlp metadata");
+                        println!(
+                            "  YouTube API profile enrichment failed ({error}); retaining yt-dlp metadata"
+                        );
+                    }
+                }
+            }
             return Ok(youtuber);
         }
         Err(error) => {

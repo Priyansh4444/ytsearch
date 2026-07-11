@@ -1,5 +1,6 @@
 import { Show, createSignal } from "solid-js";
 import type { Component } from "solid-js";
+import { API_BASE_URL } from "../api";
 import type { IndexedChannel } from "../types";
 
 export const indexedCountLabel = (channel: IndexedChannel) => {
@@ -15,7 +16,10 @@ export const ChannelAvatar: Component<{
   const sizeClass = () => (props.size === "compact" ? "size-9" : "size-11");
   const initials = () =>
     (props.channel?.name ?? props.channel?.handle ?? "?").slice(0, 2).toUpperCase();
-  const avatarUrl = () => (imageFailed() ? undefined : props.channel?.avatar_url);
+  const avatarUrl = () => {
+    if (imageFailed() || !props.channel?.channel_id) return undefined;
+    return `${API_BASE_URL}/api/channel-images/${encodeURIComponent(props.channel.channel_id)}`;
+  };
 
   return (
     <Show
@@ -35,7 +39,6 @@ export const ChannelAvatar: Component<{
           alt={`${props.channel?.name ?? "Channel"} profile picture`}
           class={`${sizeClass()} shrink-0 border border-vesper-border object-cover`}
           loading={props.size === "compact" ? "lazy" : "eager"}
-          referrerpolicy="no-referrer"
           onError={() => setImageFailed(true)}
         />
       )}

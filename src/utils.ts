@@ -19,6 +19,22 @@ export function routeForHandle(handle: string): string {
   return `/${normalizeHandle(handle).slice(1)}`;
 }
 
+export function withViewTransition(update: () => void): void {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    update();
+    return;
+  }
+
+  const documentWithTransitions = document as Document & {
+    startViewTransition?: (callback: () => void) => unknown;
+  };
+  if (documentWithTransitions.startViewTransition) {
+    documentWithTransitions.startViewTransition(update);
+    return;
+  }
+  update();
+}
+
 export function formatDate(value: string | undefined): string {
   if (!value) return "";
   const date = new Date(value);

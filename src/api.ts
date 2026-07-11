@@ -1,7 +1,7 @@
 import type { IndexQueueRequest, IndexedChannel, SearchRequest, SearchResponse } from "./types";
 
 const DEFAULT_PER_PAGE = 12;
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 const INDEX_QUEUE_API_BASE_URL = (
   import.meta.env.VITE_INDEX_QUEUE_API_BASE_URL ?? API_BASE_URL
 ).replace(/\/$/, "");
