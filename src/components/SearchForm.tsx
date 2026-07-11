@@ -7,7 +7,7 @@ export const SearchForm: Component<{
   sort: SearchSort;
   onQueryInput: (query: string) => void;
   onSortChange: (sort: SearchSort) => void;
-  mode: "search" | "index";
+  mode: "search" | "index" | "channel";
   onSubmit: () => void;
 }> = (props) => (
   <form
@@ -53,7 +53,7 @@ export const SearchForm: Component<{
             : "border-vesper-yellow bg-vesper-yellow hover:bg-vesper-orange"
         }`}
       >
-        {props.mode === "index" ? "Index" : "Search"}
+        {props.mode === "index" ? "Index" : props.mode === "channel" ? "Open channel" : "Search"}
       </button>
     </div>
   </form>

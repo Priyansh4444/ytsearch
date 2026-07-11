@@ -17,8 +17,9 @@ export const ChannelAvatar: Component<{
   const initials = () =>
     (props.channel?.name ?? props.channel?.handle ?? "?").slice(0, 2).toUpperCase();
   const avatarUrl = () => {
-    if (imageFailed() || !props.channel?.channel_id) return undefined;
-    return `${API_BASE_URL}/api/channel-images/${encodeURIComponent(props.channel.channel_id)}`;
+    const channel = props.channel;
+    if (imageFailed() || !channel?.channel_id || !channel.avatar_url) return undefined;
+    return `${API_BASE_URL}/api/channel-images/${encodeURIComponent(channel.channel_id)}?v=${imageVersion(channel.avatar_url)}`;
   };
 
   return (
@@ -61,3 +62,12 @@ export const ChannelIdentity: Component<{
     </div>
   </div>
 );
+
+function imageVersion(url: string): string {
+  let hash = 2_166_136_261;
+  for (const character of url) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0).toString(36);
+}

@@ -5,6 +5,8 @@ export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\
 const INDEX_QUEUE_API_BASE_URL = (
   import.meta.env.VITE_INDEX_QUEUE_API_BASE_URL ?? API_BASE_URL
 ).replace(/\/$/, "");
+const SEARCH_CACHE_TTL_MS = 60_000;
+const searchCache = new Map<string, { expiresAt: number; response: SearchResponse }>();
 
 export async function searchTranscripts(
   request: SearchRequest,
@@ -18,11 +20,17 @@ export async function searchTranscripts(
   });
   if (request.youtuber) params.set("youtuber", request.youtuber);
 
-  const response = await fetch(`${API_BASE_URL}/api/search?${params.toString()}`, {
+  const url = `${API_BASE_URL}/api/search?${params.toString()}`;
+  const cached = searchCache.get(url);
+  if (cached && cached.expiresAt > Date.now()) return cached.response;
+
+  const response = await fetch(url, {
     signal: options.signal,
   });
   if (!response.ok) throw await apiError(response, "Search failed");
-  return response.json();
+  const body = (await response.json()) as SearchResponse;
+  searchCache.set(url, { response: body, expiresAt: Date.now() + SEARCH_CACHE_TTL_MS });
+  return body;
 }
 
 export async function indexedChannels(): Promise<IndexedChannel[]> {

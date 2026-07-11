@@ -89,7 +89,12 @@ const App: Component = () => {
   });
   const hasChannel = () => youtuber().length > 0;
   const hasSearchSurface = () => hasChannel() || submitted() !== undefined;
-  const isIndexMode = () => query().trim().startsWith("@");
+  const directChannel = createMemo(() => {
+    const handle = normalizeHandle(query());
+    return channels()?.find((channel) => normalizeHandle(channel.handle) === handle);
+  });
+  const isIndexMode = () => query().trim().startsWith("@") && !directChannel();
+  const formMode = () => (directChannel() ? "channel" : isIndexMode() ? "index" : "search");
 
   const syncRoute = () =>
     withViewTransition(() => {
@@ -136,6 +141,10 @@ const App: Component = () => {
   const runSearch = (nextPage = 1) => {
     const normalizedQuery = query().trim();
     if (!normalizedQuery) return;
+    if (directChannel()) {
+      selectChannel(directChannel()!.handle);
+      return;
+    }
     if (isIndexMode()) {
       void queueIndexRequest().catch((error) => {
         setQueuedIndexRequest(undefined);
@@ -149,6 +158,15 @@ const App: Component = () => {
       page: nextPage,
       sort: sort(),
     };
+    const current = submitted();
+    if (
+      current?.query === request.query &&
+      current.youtuber === request.youtuber &&
+      current.page === request.page &&
+      current.sort === request.sort
+    ) {
+      return;
+    }
     withViewTransition(() => {
       setQuery(normalizedQuery);
       setUnavailableIndexHandle(undefined);
@@ -171,19 +189,16 @@ const App: Component = () => {
   };
 
   const goBack = () => {
-    if (window.history.length > 1) {
-      window.history.back();
-      return;
-    }
     withViewTransition(() => {
       window.history.pushState({}, "", "/");
-      const searchState = searchStateFromLocation();
-      setRouteHandle(creatorFromPath());
-      setQuery(searchState?.query ?? "");
-      setYoutuber(searchState?.youtuber ?? "");
-      setSort(searchState?.sort ?? "relevance");
-      setPage(searchState?.page ?? 1);
-      setSubmitted(searchState);
+      setRouteHandle(null);
+      setQuery("");
+      setYoutuber("");
+      setSort("relevance");
+      setPage(1);
+      setSubmitted(undefined);
+      setUnavailableIndexHandle(undefined);
+      setQueuedIndexRequest(undefined);
     });
   };
 
@@ -254,7 +269,7 @@ const App: Component = () => {
           <SearchForm
             query={query()}
             sort={sort()}
-            mode={isIndexMode() ? "index" : "search"}
+            mode={formMode()}
             onQueryInput={setQuery}
             onSortChange={setSort}
             onSubmit={() => runSearch(1)}

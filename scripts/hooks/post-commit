@@ -6,4 +6,6 @@ if [ "${YTSEARCH_SKIP_DEPLOY_ON_COMMIT:-}" = "1" ]; then
   exit 0
 fi
 
-scripts/cloudflare-pages-deploy.sh
+# Keep a single public Pages surface. Preview branch aliases such as
+# master.ytsearch-755.pages.dev are intentionally not published from commits.
+CLOUDFLARE_PAGES_BRANCH=main scripts/cloudflare-pages-deploy.sh main
