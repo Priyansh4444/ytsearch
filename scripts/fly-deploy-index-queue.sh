@@ -37,21 +37,19 @@ if ! flyctl volumes list --app "$APP_NAME" | grep -q 'index_queue_data'; then
     --yes
 fi
 
-if [ -z "${MEILI_SEARCH_API_KEY:-}" ] && [ -n "${MEILI_MASTER_KEY:-}" ]; then
-  MEILI_SEARCH_API_KEY="$MEILI_MASTER_KEY"
-fi
-if [ -z "${MEILI_HTTP_ADDR:-}" ]; then
-  echo "Missing required environment variable: MEILI_HTTP_ADDR" >&2
+if [ -z "${TYPESENSE_SELFHOST_API_URL:-}" ]; then
+  echo "Missing required environment variable: TYPESENSE_SELFHOST_API_URL" >&2
   exit 1
 fi
-if [ -z "${MEILI_SEARCH_API_KEY:-}" ]; then
-  echo "Missing required environment variable: MEILI_SEARCH_API_KEY or MEILI_MASTER_KEY" >&2
+if [ -z "${TYPESENSE_SELFHOST_API_KEY:-}" ]; then
+  echo "Missing required environment variable: TYPESENSE_SELFHOST_API_KEY" >&2
   exit 1
 fi
 
 flyctl secrets set \
-  MEILI_HTTP_ADDR="$MEILI_HTTP_ADDR" \
-  MEILI_SEARCH_API_KEY="$MEILI_SEARCH_API_KEY" \
+  TYPESENSE_API_URL="$TYPESENSE_SELFHOST_API_URL" \
+  TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
+  TYPESENSE_ADMIN_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
   YTSEARCH_INDEX_QUEUE_TOKEN="$YTSEARCH_INDEX_QUEUE_TOKEN" \
   --app "$APP_NAME"
 
