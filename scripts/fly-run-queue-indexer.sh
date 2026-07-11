@@ -16,7 +16,9 @@ case "$QUEUE_TARGET_BACKEND" in
   typesense-fly)
     EXPECTED_BACKENDS="typesense-fly"
     DEFAULT_MACHINE_NAME="ytsearch-queue-typesense"
-    DEFAULT_VOLUME_NAME="ytsearch_indexer_data_typesense"
+    # Fly volume names are limited to 30 characters. Keep this aligned with the
+    # Typesense worker volume created by the multi-indexer launcher.
+    DEFAULT_VOLUME_NAME="ytsearch_indexer_data_ts"
     ;;
   *)
     echo "QUEUE_TARGET_BACKEND must be either meilisearch or typesense-fly." >&2
