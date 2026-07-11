@@ -63,6 +63,7 @@ Scripts:
 - `scripts/cloud-index-queue-entrypoint.sh`: queue daemon implementation.
 - `scripts/check-frontend-backends.sh`: frontend/API smoke check.
 - `scripts/check-indexed-channel-status.sh`: per-handle backend/queue status.
+- `scripts/check-channel-profile-images.sh`: concise audit of API-owned channel profile images.
 - `scripts/check-staging-machines.sh`: Fly machine inventory.
 - `scripts/benchmark-search-backends.sh`: local search benchmark.
 - `scripts/benchmark-search-globalping.sh`: public multi-location benchmark.
