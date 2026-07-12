@@ -177,6 +177,7 @@ const App: Component = () => {
       void indexStatus()
         .then((status) => {
           if (status.status !== previousStatus) void refreshChannels();
+          if (["running", "queued"].includes(status.status)) void refreshChannels();
           previousStatus = status.status;
           if (
             !["running", "queued"].includes(status.status) ||
