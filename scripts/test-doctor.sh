@@ -8,7 +8,17 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 cat > "$tmp/ok.json" <<'JSON'
 {"frontend_http":200,"engine_http":200,"search":{"http":200},"indexing":{"status":"running","handle":"@test","indexed":2,"public":3},"worker":{"state":"started"}}
 JSON
-SNAPSHOT_FILE="$tmp/ok.json" "$SCRIPT_DIR/doctor.sh" | grep -F 'OK serving; indexing @test 2/3' >/dev/null
+SNAPSHOT_FILE="$tmp/ok.json" DOCTOR_STATE_FILE="$tmp/state.json" "$SCRIPT_DIR/doctor.sh" | grep -F 'OK serving; indexing @test 2/3' >/dev/null
+
+jq -nc --argjson last_progress "$(( $(date +%s) - 3600 ))" \
+  '{handle:"@test",indexed:"2",last_progress:$last_progress}' > "$tmp/stalled-state.json"
+if SNAPSHOT_FILE="$tmp/ok.json" DOCTOR_STATE_FILE="$tmp/stalled-state.json" STALL_MINUTES=30 \
+  "$SCRIPT_DIR/doctor.sh" > "$tmp/output"; then
+  echo "doctor should fail when indexing has not advanced" >&2
+  exit 1
+fi
+grep -F 'FAIL indexing stalled @test at 2/3' "$tmp/output" >/dev/null
+grep -F 'summarize-indexer-logs.sh' "$tmp/output" >/dev/null
 
 cat > "$tmp/engine.json" <<'JSON'
 {"frontend_http":200,"engine_http":503,"search":{"http":200},"indexing":{"status":"idle"},"worker":{"state":"started"}}

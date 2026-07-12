@@ -3,6 +3,8 @@ set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 SNAPSHOT_FILE="${SNAPSHOT_FILE:-}"
+STATE_FILE="${DOCTOR_STATE_FILE:-${TMPDIR:-/tmp}/ytsearch-doctor-state.json}"
+STALL_MINUTES="${STALL_MINUTES:-30}"
 
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
@@ -55,6 +57,20 @@ fi
 
 case "$indexing" in
   running)
+    now="$(date +%s)"
+    if [ -f "$STATE_FILE" ] && jq -e --arg handle "$handle" --arg indexed "$indexed" \
+      '.handle == $handle and (.indexed | tostring) == $indexed' "$STATE_FILE" >/dev/null 2>&1; then
+      last_progress="$(jq -r '.last_progress // 0' "$STATE_FILE")"
+      stalled_seconds=$((now - last_progress))
+      if [ "$stalled_seconds" -ge $((STALL_MINUTES * 60)) ]; then
+        echo "FAIL indexing stalled ${handle:-unknown} at ${indexed:-?}/${public:-?} for $((stalled_seconds / 60))m"
+        echo "NEXT run: $SCRIPT_DIR/summarize-indexer-logs.sh"
+        exit 1
+      fi
+    else
+      jq -nc --arg handle "$handle" --arg indexed "$indexed" --argjson last_progress "$now" \
+        '{handle:$handle,indexed:$indexed,last_progress:$last_progress}' > "$STATE_FILE"
+    fi
     echo "OK serving; indexing ${handle:-unknown} ${indexed:-?}/${public:-?}"
     ;;
   queued)
