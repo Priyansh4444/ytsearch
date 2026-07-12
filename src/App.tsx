@@ -9,7 +9,7 @@ import {
   onMount,
 } from "solid-js";
 import type { Component } from "solid-js";
-import { indexStatus, indexedChannels, searchTranscripts } from "./api";
+import { indexStatus, indexedChannels, requestIndex, searchTranscripts } from "./api";
 import {
   capture,
   captureSearchLoaded,
@@ -17,16 +17,20 @@ import {
   initializeAnalytics,
 } from "./analytics";
 import { ChannelPicker } from "./components/ChannelPicker";
+import {
+  channelMentionQuery,
+  channelSuggestions as findChannelSuggestions,
+  resolveChannelMention,
+} from "./channel-query";
 import { ChannelIdentity } from "./components/ChannelProfile";
+import { IndexRequestDialog } from "./components/IndexRequestDialog";
 import { PaginationControls } from "./components/PaginationControls";
 import { SearchForm } from "./components/SearchForm";
 import {
   EmptyState,
   ErrorState,
   IndexQueuedState,
-  IndexUnavailableState,
   LoadingState,
-  NoChannelMatchState,
   WelcomeState,
 } from "./components/States";
 import { VideoResult } from "./components/VideoResult";
@@ -83,8 +87,9 @@ const App: Component = () => {
   const [page, setPage] = createSignal(initialSearch?.page ?? 1);
   const [sort, setSort] = createSignal<SearchSort>(initialSearch?.sort ?? "relevance");
   const [submitted, setSubmitted] = createSignal<SearchRequest | undefined>(initialSearch);
-  const [unavailableIndexHandle, setUnavailableIndexHandle] = createSignal<string>();
-  const [unmatchedChannelHandle, setUnmatchedChannelHandle] = createSignal<string>();
+  const [pendingIndexHandle, setPendingIndexHandle] = createSignal<string>();
+  const [indexRequestError, setIndexRequestError] = createSignal<string>();
+  const [indexRequestBusy, setIndexRequestBusy] = createSignal(false);
   const [queuedIndexRequest, setQueuedIndexRequest] = createSignal<{
     handle: string;
     requestId: string;
@@ -101,31 +106,14 @@ const App: Component = () => {
     const handle = normalizeHandle(query());
     return channels()?.find((channel) => normalizeHandle(channel.handle) === handle);
   });
-  const channelSuggestions = createMemo(() => {
-    const value = query().trim().toLowerCase();
-    if (!value.startsWith("@")) return [];
-    const needle = value.slice(1).split(/\s+/, 1)[0] ?? "";
-    return (channels() ?? []).filter(
-      (channel) =>
-        channel.handle.toLowerCase().includes(needle) ||
-        channel.name.toLowerCase().includes(needle),
-    );
-  });
-  const mentionedChannel = createMemo(() => {
-    const match = query()
-      .trim()
-      .match(/^(@[^\s]+)(?:\s+(.+))?$/);
-    if (!match) return undefined;
-    const token = normalizeHandle(match[1] ?? "");
-    return channels()?.find((channel) => normalizeHandle(channel.handle) === token);
-  });
-  const mentionQuery = () =>
-    query()
-      .trim()
-      .match(/^(@[^\s]+)(?:\s+(.+))?$/)?.[2]
-      ?.trim() ?? "";
+  const channelSuggestions = createMemo(() => findChannelSuggestions(channels() ?? [], query()));
+  const mentionedChannel = createMemo(() => resolveChannelMention(channels() ?? [], query()));
+  const mentionQuery = () => channelMentionQuery(query());
   const isIndexMode = () => query().trim().startsWith("@") && !mentionedChannel();
-  const formMode = () => (directChannel() ? "channel" : isIndexMode() ? "index" : "search");
+  const formMode = () => {
+    if (mentionedChannel() && !mentionQuery()) return "channel";
+    return isIndexMode() ? "request" : "search";
+  };
 
   const syncRoute = () =>
     withViewTransition(() => {
@@ -137,8 +125,8 @@ const App: Component = () => {
       setSort(searchState?.sort ?? "relevance");
       setPage(searchState?.page ?? 1);
       setSubmitted(searchState);
-      setUnavailableIndexHandle(undefined);
-      setUnmatchedChannelHandle(undefined);
+      setPendingIndexHandle(undefined);
+      setIndexRequestError(undefined);
       setQueuedIndexRequest(undefined);
     });
 
@@ -155,8 +143,8 @@ const App: Component = () => {
       setYoutuber(normalized);
       setRouteHandle(normalized);
       setSubmitted(undefined);
-      setUnavailableIndexHandle(undefined);
-      setUnmatchedChannelHandle(undefined);
+      setPendingIndexHandle(undefined);
+      setIndexRequestError(undefined);
       setQueuedIndexRequest(undefined);
       setPage(1);
       window.history.pushState({}, "", routeForHandle(normalized));
@@ -168,6 +156,25 @@ const App: Component = () => {
         }
       })
       .catch(() => undefined);
+  };
+
+  const confirmIndexRequest = async () => {
+    const handle = pendingIndexHandle();
+    if (!handle || indexRequestBusy()) return;
+    setIndexRequestBusy(true);
+    setIndexRequestError(undefined);
+    try {
+      const request = await requestIndex(handle);
+      capture("index_request_queued", { handle });
+      setQueuedIndexRequest({ handle, requestId: request.id });
+      setPendingIndexHandle(undefined);
+      setQuery(handle);
+      setSubmitted(undefined);
+    } catch (error) {
+      setIndexRequestError(error instanceof Error ? error.message : "Could not queue this channel");
+    } finally {
+      setIndexRequestBusy(false);
+    }
   };
 
   const runSearch = (nextPage = 1) => {
@@ -200,9 +207,8 @@ const App: Component = () => {
       return;
     }
     if (isIndexMode()) {
-      setUnmatchedChannelHandle(
-        normalizeHandle(normalizedQuery.split(/\s+/, 1)[0] ?? normalizedQuery),
-      );
+      setIndexRequestError(undefined);
+      setPendingIndexHandle(normalizeHandle(normalizedQuery.split(/\s+/, 1)[0] ?? normalizedQuery));
       return;
     }
     const request = {
@@ -211,7 +217,7 @@ const App: Component = () => {
       page: nextPage,
       sort: sort(),
     };
-    setUnmatchedChannelHandle(undefined);
+    setPendingIndexHandle(undefined);
     captureSearchSubmitted(request);
     const current = submitted();
     if (
@@ -224,7 +230,6 @@ const App: Component = () => {
     }
     withViewTransition(() => {
       setQuery(normalizedQuery);
-      setUnavailableIndexHandle(undefined);
       setQueuedIndexRequest(undefined);
       setPage(nextPage);
       setSubmitted(request);
@@ -253,8 +258,8 @@ const App: Component = () => {
       setSort("relevance");
       setPage(1);
       setSubmitted(undefined);
-      setUnavailableIndexHandle(undefined);
-      setUnmatchedChannelHandle(undefined);
+      setPendingIndexHandle(undefined);
+      setIndexRequestError(undefined);
       setQueuedIndexRequest(undefined);
     });
   };
@@ -360,36 +365,21 @@ const App: Component = () => {
         </section>
 
         <section class="min-h-[22rem]">
-          <Show when={unmatchedChannelHandle()}>
-            {(handle) => <NoChannelMatchState handle={handle()} />}
-          </Show>
-          <Show when={!unmatchedChannelHandle() && unavailableIndexHandle()}>
-            {(handle) => <IndexUnavailableState handle={handle()} />}
-          </Show>
-
-          <Show when={!unavailableIndexHandle() && queuedIndexRequest()}>
+          <Show when={queuedIndexRequest()}>
             {(request) => (
               <IndexQueuedState handle={request().handle} requestId={request().requestId} />
             )}
           </Show>
 
-          <Show when={!unavailableIndexHandle() && !queuedIndexRequest() && result.loading}>
+          <Show when={!queuedIndexRequest() && result.loading}>
             <LoadingState />
           </Show>
 
-          <Show when={!unavailableIndexHandle() && !queuedIndexRequest() && result.error}>
+          <Show when={!queuedIndexRequest() && result.error}>
             {(error) => <ErrorState message={String(error())} />}
           </Show>
 
-          <Show
-            when={
-              !unavailableIndexHandle() &&
-              !queuedIndexRequest() &&
-              !result.loading &&
-              !result.error &&
-              result()
-            }
-          >
+          <Show when={!queuedIndexRequest() && !result.loading && !result.error && result()}>
             {(response) => (
               <div class="flex flex-col gap-5">
                 <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-white/10 pb-3 text-sm text-vesper-muted">
@@ -433,19 +423,25 @@ const App: Component = () => {
             )}
           </Show>
 
-          <Show
-            when={
-              !unavailableIndexHandle() &&
-              !queuedIndexRequest() &&
-              !result.loading &&
-              !result.error &&
-              !result()
-            }
-          >
+          <Show when={!queuedIndexRequest() && !result.loading && !result.error && !result()}>
             <WelcomeState />
           </Show>
         </section>
       </div>
+      <Show when={pendingIndexHandle()}>
+        {(handle) => (
+          <IndexRequestDialog
+            handle={handle()}
+            busy={indexRequestBusy()}
+            error={indexRequestError()}
+            onCancel={() => {
+              setPendingIndexHandle(undefined);
+              setIndexRequestError(undefined);
+            }}
+            onConfirm={() => void confirmIndexRequest()}
+          />
+        )}
+      </Show>
       <footer class="border-t border-white/10 px-4 py-6 text-center text-sm text-vesper-muted sm:px-6 lg:px-8">
         <span>Support this project on </span>
         <a

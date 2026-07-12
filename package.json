@@ -9,6 +9,7 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
+    "test:frontend": "bun test ./src",
     "check:all": "scripts/check-all.sh",
     "frontend:check": "bun run typecheck && bun run format:check && bun run lint && bun run build",
     "deploy:frontend": "scripts/cloudflare-pages-deploy.sh",

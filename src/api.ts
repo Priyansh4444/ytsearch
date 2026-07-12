@@ -12,7 +12,9 @@ const INDEX_QUEUE_API_BASE_URL = (
   import.meta.env.VITE_INDEX_QUEUE_API_BASE_URL ?? API_BASE_URL
 ).replace(/\/$/, "");
 const SEARCH_CACHE_TTL_MS = 60_000;
+const INDEX_STATUS_CACHE_TTL_MS = 5_000;
 const searchCache = new Map<string, { expiresAt: number; response: SearchResponse }>();
+const indexStatusCache = new Map<string, { expiresAt: number; response: IndexStatus }>();
 
 export async function searchTranscripts(
   request: SearchRequest,
@@ -54,15 +56,19 @@ export async function requestIndex(handle: string): Promise<IndexQueueRequest> {
   });
   if (!response.ok) throw await apiError(response, "Could not queue index request");
   const body = (await response.json()) as { request: IndexQueueRequest };
+  indexStatusCache.clear();
   return body.request;
 }
 
 export async function indexStatus(handle: string): Promise<IndexStatus> {
-  const response = await fetch(
-    `${INDEX_QUEUE_API_BASE_URL}/api/index-status?handle=${encodeURIComponent(handle)}`,
-  );
+  const url = `${INDEX_QUEUE_API_BASE_URL}/api/index-status?handle=${encodeURIComponent(handle)}`;
+  const cached = indexStatusCache.get(url);
+  if (cached && cached.expiresAt > Date.now()) return cached.response;
+  const response = await fetch(url);
   if (!response.ok) throw await apiError(response, "Could not load indexing status");
-  return (await response.json()) as IndexStatus;
+  const body = (await response.json()) as IndexStatus;
+  indexStatusCache.set(url, { response: body, expiresAt: Date.now() + INDEX_STATUS_CACHE_TTL_MS });
+  return body;
 }
 
 async function apiError(response: Response, fallback: string): Promise<Error> {
