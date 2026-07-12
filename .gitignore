@@ -13,6 +13,8 @@ app.config.timestamp_*.js
 # dependencies
 /node_modules
 /target
+/coverage
+/autoresearch/runs
 
 # IDEs and editors
 /.idea

@@ -25,7 +25,7 @@ while IFS="$(printf '\t')" read -r label query youtuber; do
     exit 1
   fi
   echo "case=$label query=$query youtuber=$youtuber"
-  QUERY="$query" YOUTUBER="$youtuber" RUNS="$RUNS" SUMMARY=0 \
+  CASE_LABEL="$label" QUERY="$query" YOUTUBER="$youtuber" RUNS="$RUNS" SUMMARY=0 \
     RESULTS_FILE="$RESULTS_FILE" "$SCRIPT_DIR/benchmark-search-backends.sh"
 done < "$CASES_FILE"
 

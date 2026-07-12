@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{Arc, RwLock},
 };
 use thiserror::Error;
@@ -43,6 +43,70 @@ impl EmbeddingSource for StaticEmbeddingSource {
 pub struct SemanticMatch {
     pub chunk_id: String,
     pub score: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FusedMatch {
+    pub chunk_id: String,
+    pub score: f32,
+}
+
+/// Fuse independently ranked result lists without assuming comparable scores.
+///
+/// `rank_constant` controls how strongly the highest positions dominate. The
+/// conventional RRF default is 60. Each list can be weighted independently.
+pub fn reciprocal_rank_fusion(
+    rankings: &[(&[String], f32)],
+    rank_constant: u32,
+    limit: usize,
+) -> Vec<FusedMatch> {
+    let mut scores = HashMap::<String, f32>::new();
+    let rank_constant = rank_constant as f32;
+
+    for (ranking, weight) in rankings {
+        let mut seen = HashSet::new();
+        for (offset, chunk_id) in ranking.iter().enumerate() {
+            if !seen.insert(chunk_id) {
+                continue;
+            }
+            *scores.entry(chunk_id.clone()).or_default() +=
+                weight.max(0.0) / (rank_constant + offset as f32 + 1.0);
+        }
+    }
+
+    let mut matches = scores
+        .into_iter()
+        .map(|(chunk_id, score)| FusedMatch { chunk_id, score })
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left.chunk_id.cmp(&right.chunk_id))
+    });
+    matches.truncate(limit);
+    matches
+}
+
+pub fn reciprocal_rank(results: &[String], relevant: &HashSet<String>) -> f32 {
+    results
+        .iter()
+        .position(|chunk_id| relevant.contains(chunk_id))
+        .map(|offset| 1.0 / (offset as f32 + 1.0))
+        .unwrap_or(0.0)
+}
+
+pub fn recall_at_k(results: &[String], relevant: &HashSet<String>, k: usize) -> f32 {
+    if relevant.is_empty() {
+        return 0.0;
+    }
+    let found = results
+        .iter()
+        .take(k)
+        .filter(|chunk_id| relevant.contains(*chunk_id))
+        .collect::<HashSet<_>>()
+        .len();
+    found as f32 / relevant.len() as f32
 }
 
 #[async_trait]
@@ -211,5 +275,42 @@ mod tests {
 
         assert_eq!(matches[0].chunk_id, "near");
         assert!(matches[0].score > matches[1].score);
+    }
+
+    #[test]
+    fn reciprocal_rank_fusion_rewards_agreement_between_retrievers() {
+        let lexical = vec!["exact".to_string(), "shared".to_string()];
+        let semantic = vec!["concept".to_string(), "shared".to_string()];
+
+        let fused = reciprocal_rank_fusion(&[(&lexical, 1.0), (&semantic, 1.0)], 60, 3);
+
+        assert_eq!(fused[0].chunk_id, "shared");
+        assert_eq!(fused.len(), 3);
+    }
+
+    #[test]
+    fn reciprocal_rank_fusion_deduplicates_within_each_retriever() {
+        let repeated = vec!["same".to_string(), "same".to_string()];
+        let other = vec!["other".to_string()];
+
+        let fused = reciprocal_rank_fusion(&[(&repeated, 1.0), (&other, 1.0)], 60, 10);
+
+        assert_eq!(fused.len(), 2);
+        assert_eq!(fused[0].score, fused[1].score);
+        assert_eq!(fused[0].chunk_id, "other");
+    }
+
+    #[test]
+    fn retrieval_metrics_measure_first_hit_and_coverage() {
+        let results = vec![
+            "wrong".to_string(),
+            "right-1".to_string(),
+            "right-2".to_string(),
+        ];
+        let relevant = HashSet::from(["right-1".to_string(), "right-2".to_string()]);
+
+        assert_eq!(reciprocal_rank(&results, &relevant), 0.5);
+        assert_eq!(recall_at_k(&results, &relevant, 2), 0.5);
+        assert_eq!(recall_at_k(&results, &relevant, 3), 1.0);
     }
 }

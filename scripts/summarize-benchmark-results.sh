@@ -37,6 +37,7 @@ awk '
 
   {
     backend = ""
+    case_label = "default"
     total = ""
     http = ""
     first_result = ""
@@ -46,6 +47,8 @@ awk '
       split($i, pair, "=")
       if (pair[1] == "backend") {
         backend = pair[2]
+      } else if (pair[1] == "case") {
+        case_label = pair[2]
       } else if (pair[1] == "total") {
         total = pair[2]
       } else if (pair[1] == "http") {
@@ -62,6 +65,7 @@ awk '
     if (backend == "" || total == "") {
       next
     }
+    backend = case_label "/" backend
 
     if (http != "200") {
       errors[backend]++
@@ -94,7 +98,7 @@ awk '
   }
 
   END {
-    printf "backend\tcount\terrors\tmin_ms\tavg_ms\tp50_ms\tp95_ms\tmax_ms\tavg_first_result_ms\tavg_total_videos\tavg_total_moments\ttotal_videos_range\ttotal_moments_range\tcorpus_stable\n"
+    printf "case/backend\tcount\terrors\tmin_ms\tavg_ms\tp50_ms\tp95_ms\tmax_ms\tavg_first_result_ms\tavg_total_videos\tavg_total_moments\ttotal_videos_range\ttotal_moments_range\tcorpus_stable\n"
     for (backend in seen) {
       c = count[backend] + 0
       e = errors[backend] + 0

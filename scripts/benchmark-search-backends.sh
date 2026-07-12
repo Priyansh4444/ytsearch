@@ -1,153 +1,50 @@
 #!/usr/bin/env sh
 set -eu
 
-# Compare active search API endpoints.
-# Local run:
-#   scripts/benchmark-search-backends.sh
-#
-# Multi-region run through Fly SSH:
-#   FLY_REGIONS="sjc iad lhr nrt syd" \
-#   BENCH_FLY_APP=ytsearch-api-meili-staging \
-#   scripts/benchmark-search-backends.sh
+# Retains the historical command name while benchmarking the sole active API.
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+. "$SCRIPT_DIR/load-env.sh"
 
-# shellcheck disable=SC1091
-. "$(dirname "$0")/load-env.sh"
-
+API_BASE_URL="${API_BASE_URL:-${TYPESENSE_FLY_API_BASE_URL:-}}"
 QUERY="${QUERY:-react}"
 YOUTUBER="${YOUTUBER:-}"
-RUNS="${RUNS:-20}"
-PER_PAGE="${PER_PAGE:-10}"
-MEILI_API_BASE_URL="${MEILI_API_BASE_URL:-}"
-TYPESENSE_FLY_API_BASE_URL="${TYPESENSE_FLY_API_BASE_URL:-}"
-BACKENDS="${BACKENDS:-typesense-fly}"
-FLY_REGIONS="${FLY_REGIONS:-}"
-BENCH_FLY_APP="${BENCH_FLY_APP:-ytsearch-api-meili-staging}"
-BENCH_FLY_ORG="${BENCH_FLY_ORG:-pronsh-sandbox}"
-SUMMARY="${SUMMARY:-1}"
-RESULTS_FILE="${RESULTS_FILE:-/tmp/ytsearch-benchmark-backends.$$.log}"
+RUNS="${RUNS:-10}"
+RESULTS_FILE="${RESULTS_FILE:-}"
+CASE_LABEL="${CASE_LABEL:-default}"
 
-required_env() {
-  name="$1"
-  eval "value=\${$name:-}"
-  if [ -z "$value" ]; then
-    echo "Missing required environment variable: $name" >&2
-    exit 1
-  fi
-}
-
-has_backend() {
-  case " $BACKENDS " in
-    *" $1 "*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-if has_backend meilisearch; then
-  required_env MEILI_API_BASE_URL
-fi
-if has_backend typesense-fly; then
-  required_env TYPESENSE_FLY_API_BASE_URL
-fi
-
-bench_one() {
-  label="$1"
-  base_url="$2"
-  API_BASE_URL="$base_url" QUERY="$QUERY" YOUTUBER="$YOUTUBER" RUNS="$RUNS" PER_PAGE="$PER_PAGE" \
-    sh "$(dirname "$0")/benchmark-search.sh" | sed "s/^/backend=$label /"
-}
-
-record() {
-  tee -a "$RESULTS_FILE"
-}
-
-summarize() {
-  if [ "$SUMMARY" = "1" ]; then
-    echo "summary_file=$RESULTS_FILE"
-    summary_file="$RESULTS_FILE.summary"
-    "$(dirname "$0")/summarize-benchmark-results.sh" "$RESULTS_FILE" | tee "$summary_file"
-    if awk -F '\t' 'NR > 1 && $NF != "yes" { changed = 1 } END { exit !changed }' "$summary_file"; then
-      echo "warning=corpus_changed_during_benchmark; do_not_compare_latency_until_writes_are_drained" >&2
-    fi
-  fi
-}
-
-bench_local() {
-  echo "location=local"
-  if has_backend meilisearch; then
-    bench_one meilisearch "$MEILI_API_BASE_URL" | record
-  fi
-  if has_backend typesense-fly; then
-    bench_one typesense-fly "$TYPESENSE_FLY_API_BASE_URL" | record
-  fi
-}
-
-quote_remote() {
-  printf "%s" "$1" | sed "s/'/'\\\\''/g"
-}
-
-remote_command() {
-  cat <<EOF
-QUERY='$(quote_remote "$QUERY")'
-YOUTUBER='$(quote_remote "$YOUTUBER")'
-RUNS='$RUNS'
-PER_PAGE='$PER_PAGE'
-CURL_MAX_TIME='${CURL_MAX_TIME:-15}'
-MEILI_API_BASE_URL='$(quote_remote "$MEILI_API_BASE_URL")'
-TYPESENSE_FLY_API_BASE_URL='$(quote_remote "$TYPESENSE_FLY_API_BASE_URL")'
-BACKENDS='$(quote_remote "$BACKENDS")'
-has_backend() {
-  case " \$BACKENDS " in
-    *" \$1 "*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-bench() {
-  label="\$1"
-  base_url="\$2"
-  query=\$(printf '%s' "\$QUERY" | jq -sRr @uri)
-  url="\$base_url/api/search?q=\$query&per_page=\$PER_PAGE"
-  if [ -n "\$YOUTUBER" ]; then
-    yt=\$(printf '%s' "\$YOUTUBER" | jq -sRr @uri)
-    url="\$url&youtuber=\$yt"
-  fi
-  i=1
-  while [ "\$i" -le "\$RUNS" ]; do
-    curl -sS -o /tmp/ytsearch-benchmark-response.json \
-      --max-time "\$CURL_MAX_TIME" \
-      -w "backend=\$label run=\$i http=%{http_code} dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s ttfb=%{time_starttransfer}s total=%{time_total}s\n" \
-      "\$url" || true
-    i=\$((i + 1))
-  done
-}
-if has_backend meilisearch; then
-  bench meilisearch "\$MEILI_API_BASE_URL"
-fi
-if has_backend typesense-fly; then
-  bench typesense-fly "\$TYPESENSE_FLY_API_BASE_URL"
-fi
-EOF
-}
-
-if [ -z "$FLY_REGIONS" ]; then
-  bench_local
-  summarize
-  exit 0
-fi
-
-if [ -n "${FLYIO_TOKEN:-}" ]; then
-  export FLY_ACCESS_TOKEN="$FLYIO_TOKEN"
-elif [ -z "${FLY_ACCESS_TOKEN:-}" ]; then
-  echo "Set FLYIO_TOKEN or FLY_ACCESS_TOKEN for Fly multi-region benchmarks." >&2
+if [ -z "$API_BASE_URL" ]; then
+  echo "API_BASE_URL or TYPESENSE_FLY_API_BASE_URL is required" >&2
   exit 1
 fi
 
-for region in $FLY_REGIONS; do
-  echo "location=fly:$region"
-  flyctl ssh console \
-    --app "$BENCH_FLY_APP" \
-    --org "$BENCH_FLY_ORG" \
-    --region "$region" \
-    --command "sh -lc $(printf '%s' "$(remote_command)" | jq -sRr @sh)" | record
-done
+encode() { printf '%s' "$1" | jq -sRr @uri; }
+url="${API_BASE_URL%/}/api/search?q=$(encode "$QUERY")&per_page=10"
+if [ -n "$YOUTUBER" ]; then
+  url="$url&youtuber=$(encode "$YOUTUBER")"
+fi
 
-summarize
+run=1
+while [ "$run" -le "$RUNS" ]; do
+  response_file="$(mktemp)"
+  trap 'rm -f "$response_file"' EXIT INT TERM
+  timing="$(curl -sS -o "$response_file" -w '%{http_code}\t%{time_total}' "$url")"
+  http="$(printf '%s' "$timing" | cut -f1)"
+  total="$(printf '%s' "$timing" | cut -f2)"
+  if [ "$http" = "200" ] && jq -e . "$response_file" >/dev/null 2>&1; then
+    first_result_ms="$(jq -r '.time_to_first_result_ms // 0' "$response_file")"
+    total_videos="$(jq -r '.total_videos // 0' "$response_file")"
+    total_moments="$(jq -r '.total_moments // .total_found // 0' "$response_file")"
+  else
+    first_result_ms=0
+    total_videos=0
+    total_moments=0
+  fi
+  row="case=$CASE_LABEL backend=typesense http=$http total=${total}s first_result_ms=$first_result_ms total_videos=$total_videos total_moments=$total_moments"
+  printf '%s\n' "$row"
+  if [ -n "$RESULTS_FILE" ]; then
+    printf '%s\n' "$row" >> "$RESULTS_FILE"
+  fi
+  rm -f "$response_file"
+  trap - EXIT INT TERM
+  run=$((run + 1))
+done

@@ -1,0 +1,6 @@
+timestamp	commit	track	metric	value	status	description
+2026-07-12T22:06:28Z	e6890cb	search	stopword_phrase_p95_ms	121	keep	baseline; 5 runs; stable counts
+2026-07-12T22:06:28Z	e6890cb	search	battery_gate_p95_ms	359	keep	baseline; 5 runs; stable counts
+2026-07-12T22:06:28Z	e6890cb	search	linux_exploit_p95_ms	168	keep	baseline; 5 runs; stable counts
+2026-07-12T22:06:28Z	e6890cb	search	low_signal_p95_ms	185	keep	baseline; 5 runs; stable counts
+2026-07-12T22:06:28Z	e6890cb	serialization	protobuf_size_ratio	0.534	keep	baseline; representative chunks
