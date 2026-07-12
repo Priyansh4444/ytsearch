@@ -7,7 +7,7 @@ The active Pages deployment points search at the Typesense API and posts
 
 | Frontend | Search API | Queue API |
 | --- | --- | --- |
-| https://ytsearch-755.pages.dev | `ytsearch-api-typesense-fly-staging` | `ytsearch-index-queue-staging` |
+| https://ytsearch-755.pages.dev | `ytsearch-api-typesense-fly-staging` | `ytsearch-api-typesense-fly-staging` |
 
 The Pages production deployment is the active Typesense frontend. Meilisearch is
 retired; its machines and data were destroyed. Meilisearch scripts are
@@ -15,17 +15,17 @@ legacy-only and fail closed.
 
 ## One-Off Full Update
 
-Run this in a terminal or background job. It updates every configured backend, then refreshes profile counts:
+Run this in a terminal or background job. It updates the active Typesense backend, then refreshes profile counts. Keep a single writer while staging uses one Typesense node:
 
 ```bash
-JOBS=4 nohup scripts/index-all-backends-update.sh scripts/indexed-channels.txt \
+JOBS=1 nohup scripts/index-all-backends-update.sh scripts/indexed-channels.txt \
   > /tmp/ytsearch-index-all.log 2>&1 &
 ```
 
 Quiet mode, which only prints on failure:
 
 ```bash
-JOBS=4 nohup scripts/run-index-all-quiet.sh scripts/indexed-channels.txt \
+JOBS=1 nohup scripts/run-index-all-quiet.sh scripts/indexed-channels.txt \
   > /tmp/ytsearch-index-all.quiet.out 2>&1 &
 ```
 
@@ -35,7 +35,9 @@ Tail it:
 tail -f /tmp/ytsearch-index-all.log
 ```
 
-For Meilisearch, prefer `JOBS=3` or `JOBS=4` on the current Fly staging VM. Higher concurrency can create large update temp files and trigger disk pressure.
+Raise indexing concurrency only after adding an ingest replica or proving the
+engine has write headroom under production searches. The current single-node
+Typesense engine became unavailable when three concurrent writers accumulated.
 
 ## Cloud Indexing
 
@@ -70,17 +72,10 @@ You can also set `YT_DLP_EXTRACTOR_ARGS` or `YT_DLP_USER_AGENT` locally before r
 
 Do not attempt to generate or fabricate a YouTube login cookie in cloud infrastructure. A valid cookie represents an authenticated browser session and is subject to YouTube's controls. The supported recovery paths are: use public captions without cookies, mount an existing authorized-session export through the secret script, or seed `/data/transcript-cache` from a permitted local run. The YouTube Data API fallback supplies discovery and metadata only; it does not provide transcript access.
 
-When one search backend already has canonical transcript chunks, copy them directly instead of downloading captions again:
-
-```bash
-# Idempotent upsert; safe to repeat while repairing a partial target.
-scripts/copy-meili-to-typesense.sh @t3dotgg
-
-# Deliberately clear this creator from Typesense before copying.
-REPLACE=1 scripts/copy-meili-to-typesense.sh @t3dotgg
-```
-
-The CLI command behind this wrapper is `ytsearch copy-youtuber-chunks`. It reads paginated canonical `TranscriptChunk` values through the `TranscriptChunkSource` port and writes through the existing backend sink. It also normalizes legacy creator IDs and refreshes target indexed video/chunk counts without contacting YouTube. Meilisearch and Typesense both implement the same export port, so either can repair or migrate the other without changing the copy workflow.
+The shared `TranscriptChunkSource` and sink ports remain available for a future
+backend migration. The old Meilisearch copy scripts are legacy-only because
+the Meilisearch data was intentionally destroyed; repair Typesense from the
+transcript cache or a permitted YouTube re-fetch instead.
 
 Start a conservative cloud update against the active Typesense backend:
 
@@ -89,13 +84,10 @@ JOBS=1 \
 scripts/fly-run-cloud-indexer.sh scripts/indexed-channels.txt
 ```
 
-For an overnight full rewipe, start one isolated Machine per backend so Meilisearch and Typesense rebuild in parallel. Keep `JOBS=1` per machine unless engine metrics demonstrate more write headroom:
+For an overnight full rewipe, keep `JOBS=1` and stop the persistent worker
+first. Rewipes are destructive and should not compete with public search:
 
 ```bash
-ALLOW_DESTRUCTIVE_REWIPE=1 ONE_OFF_NO_VOLUME=1 BACKENDS=meilisearch MODE=rewipe JOBS=1 MEILI_JOBS=1 \
-  INDEXER_MACHINE_NAME=ytsearch-rewipe-meili-$(date +%Y%m%d) \
-  scripts/fly-run-cloud-indexer.sh scripts/indexed-channels.txt
-
 ALLOW_DESTRUCTIVE_REWIPE=1 ONE_OFF_NO_VOLUME=1 BACKENDS=typesense-fly MODE=rewipe JOBS=1 TYPESENSE_JOBS=1 \
   INDEXER_MACHINE_NAME=ytsearch-rewipe-typesense-$(date +%Y%m%d) \
   scripts/fly-run-cloud-indexer.sh scripts/indexed-channels.txt
@@ -128,7 +120,7 @@ Use local Voxtype only when you explicitly need audio transcription fallback:
 
 ```bash
 cargo run --release -p youtube_cli -- index-youtuber @somehandle \
-  --backend meilisearch --mode update --jobs 1 --transcribe-missing
+  --backend typesense --mode update --jobs 1 --transcribe-missing
 scripts/fly-upload-transcript-cache.sh data/transcript-cache
 ```
 
@@ -143,11 +135,11 @@ ALLOW_DESTRUCTIVE_REWIPE=1 scripts/index-all-backends-rewipe.sh scripts/indexed-
 
 `index-all-backends-update.sh` scans the full channel by default so older holes are eventually repaired. Use `EXISTING_TAIL=50` or `STOP_AFTER_EXISTING=50` only when you intentionally want a faster newest-first check, and `MAX_VIDEOS=10` to cap a test run.
 
-By default it attempts `meilisearch typesense-fly`. Scope a run with `BACKENDS`:
+The active wrapper targets `typesense-fly`. Keep the explicit backend when
+running it from an operator shell:
 
 ```bash
-BACKENDS="meilisearch" scripts/index-all-backends-update.sh scripts/indexed-channels.txt
-BACKENDS="meilisearch typesense-fly" scripts/index-all-backends-update.sh scripts/indexed-channels.txt
+BACKENDS="typesense-fly" scripts/index-all-backends-update.sh scripts/indexed-channels.txt
 ```
 
 Run the full local validation suite before a deploy or long index run:
@@ -174,10 +166,10 @@ The default update script runs:
 
 ## Queue Workflow
 
-When someone enters `@somehandle` in any frontend, the app posts:
+When someone enters `@somehandle` in the frontend, the app posts:
 
 ```http
-POST https://ytsearch-index-queue-staging.fly.dev/api/index-requests
+POST https://ytsearch-api-typesense-fly-staging.fly.dev/api/index-requests
 ```
 
 The queue is a simple JSONL file on a Fly volume at `/data/index-requests.jsonl`.
@@ -185,7 +177,10 @@ Each frontend request creates one `typesense-fly` row and is deduplicated by
 handle plus target backend. Meilisearch rows are legacy data and are refused by
 the worker.
 
-The queue app should stay as one warm machine while it uses this JSONL volume. Multiple queue machines would need shared locking or a real queue/DB; otherwise two machines can race on the same request log. If this needs horizontal scale, move the queue storage to Cloudflare Queues plus D1/R2, Fly Postgres, or another single-writer service first.
+The API machine owns this JSONL volume. Multiple queue consumers would need
+shared locking or a real queue/DB; otherwise two machines can race on the same
+request log. If this needs horizontal scale, move queue storage to Cloudflare
+Queues plus D1/R2, Fly Postgres, or another single-writer service first.
 
 Pull queued requests locally:
 
@@ -197,11 +192,12 @@ Drain queued requests on a one-off Fly indexer Machine. Scope the worker to one 
 
 ```bash
 scripts/fly-set-indexer-secrets.sh
-BACKENDS="meilisearch" QUEUE_TARGET_BACKEND=meilisearch JOBS=1 LIMIT=5 scripts/fly-run-queue-indexer.sh
+BACKENDS="typesense-fly" QUEUE_TARGET_BACKEND=typesense-fly JOBS=1 LIMIT=5 scripts/fly-run-queue-indexer.sh
 flyctl logs --app ytsearch-indexer-staging
 ```
 
-Keep both indexes building automatically with two persistent polling Machines. The launcher is idempotent: it verifies healthy named workers, starts only missing workers, and refuses to overlap a legacy shared worker:
+Keep the active index building with one persistent polling Machine. The launcher
+is idempotent: it verifies the named worker and starts it only when missing:
 
 ```bash
 scripts/check-queue-indexers.sh

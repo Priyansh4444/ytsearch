@@ -116,13 +116,13 @@ Updated conclusion: Typesense Fly is now close locally, but Meilisearch remains 
 
 ## Commands
 
-Active all-backend update:
+Active Typesense update:
 
 ```bash
 scripts/index-all-backends-update.sh scripts/indexed-channels.txt
 ```
 
-Meilisearch-only update:
+Retired Meilisearch update (source-level legacy; do not run against staging):
 
 ```bash
 BACKENDS="meilisearch" scripts/index-all-backends-update.sh scripts/indexed-channels.txt

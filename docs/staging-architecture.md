@@ -29,7 +29,10 @@ flowchart LR
    `yt-dlp` work, a 10 GB encrypted transcript-cache volume, and a one-request
    queue pass to avoid a large creator starving later requests. This sizing is
    required because the `yt-dlp` EJS/Deno helper previously OOM-killed on the
-   4 GB shared tier. One-off workers retain their lower-cost defaults.
+   4 GB shared tier. It deliberately uses `JOBS=1` and `TYPESENSE_JOBS=1`:
+   this is write backpressure for the single 4 GB Typesense node, not a limit
+   on future horizontally scalable ingestion. One-off workers retain their
+   lower-cost defaults.
 3. The worker uses `yt-dlp` first. A staged YouTube Data API key is a metadata
    discovery fallback only; it cannot retrieve transcript captions.
 4. Public search and Typesense stay warm. Stop the worker only after confirming
@@ -37,6 +40,9 @@ flowchart LR
    as a cost-saving measure while the frontend is expected to serve traffic.
 5. Update mode preserves existing chunks. Refresh indexed-count documents after
    a completed bulk pass so the frontend's `indexed / public` count stays true.
+6. `TYPESENSE_RESET_PEERS_ON_ERROR=true` is enabled only to recover the
+   single-node Raft metadata after an unclean failure. It is not high
+   availability; investigate and reduce write pressure if it is ever used.
 
 ## Operator Surfaces
 

@@ -7,7 +7,10 @@ if [ "$#" -gt 0 ]; then
 fi
 
 MODE="${MODE:-update}"
-JOBS="${JOBS:-4}"
+# The active staging engine is a single Typesense node. Keep local bulk runs
+# serialized unless an operator has provisioned and measured separate ingest
+# capacity.
+JOBS="${JOBS:-1}"
 if [ "${BACKENDS+x}" != "x" ]; then
   BACKENDS="typesense-fly"
 fi

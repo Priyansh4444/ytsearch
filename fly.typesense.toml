@@ -11,6 +11,8 @@ primary_region = 'sjc'
   TYPESENSE_ENABLE_CORS = 'false'
   TYPESENSE_ENABLE_SEARCH_ANALYTICS = 'false'
   TYPESENSE_LOG_SLOW_REQUESTS_TIME_MS = '1000'
+  # Single-node recovery after an unclean shutdown or stale peer address.
+  TYPESENSE_RESET_PEERS_ON_ERROR = 'true'
 
 [mounts]
   source = 'typesense_data'

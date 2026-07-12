@@ -33,21 +33,18 @@ disk_used_gb=0.76 disk_total_gb=2.87
 indexed @t3dotgg: videos=1080 chunks=271033
 ```
 
-The report is tab-separated:
+This is a historical pre-retirement sample, not the current topology:
 
 ```text
 app	machine	state	region	size	image	volume
-ytsearch-api-meili-staging	e826333f254408	started	sjc	shared/1/512	registry.fly.io	-
-ytsearch-api-typesense-fly-staging	287265da42e778	started	sjc	shared/1/512	registry.fly.io	-
-ytsearch-index-queue-staging	863793be220218	started	sjc	shared/1/512	registry.fly.io	vol_rkg5d3j5yp8o0564//data
-ytsearch-meili-staging	2862d23f624098	started	sjc	shared/2/2048	docker-hub-mirror.fly.io	vol_vxm6pxw08endwz84//meili_data
-ytsearch-typesense-staging	8147deb94937e8	started	sjc	shared/1/1024	docker-hub-mirror.fly.io	vol_v8e6yy17jo63nplv//typesense-data
-ytsearch-indexer-staging	78451ddfe07d78	started	sjc	shared/2/4096	registry.fly.io	vol_v8e6wk3g1l6kj15v//data
+ytsearch-api-typesense-fly-staging	1855eddf654298	started	sjc	shared/1/512	registry.fly.io	queue volume
+ytsearch-typesense-staging	8147deb94937e8	started	sjc	shared/2/4096	docker-hub-mirror.fly.io	Typesense data volume
+ytsearch-indexer-staging	781e414be41208	started	sjc	performance/4/8192	registry.fly.io	transcript cache
 ```
 
-The script prints `summary started_machines=7 apps_with_machines=6 expected_staging_machines=7` when healthy. The two indexers share an app but are separate Machines.
+The script prints `summary started_machines=3 apps_with_machines=3 expected_staging_machines=3` when healthy.
 
-Verify that the workers cannot acknowledge each other's queue rows:
+Verify the one Typesense worker invariant:
 
 ```bash
 scripts/check-queue-indexers.sh
@@ -120,6 +117,10 @@ search_query
 | where backend_search_calls > 1
 | project _time, backend, query, youtuber, backend_search_calls, backend_search_ms, duration_ms
 ```
+
+Use `scripts/axiom-search-report.sh` for a redacted aggregate report. The
+ingestion token needs Axiom `query:read` in addition to write access; a
+write-only token correctly receives HTTP 403 and cannot be used for analysis.
 
 ## Local Benchmark
 

@@ -141,8 +141,10 @@ exec flyctl machine run \
   $daily_update_file_args \
   --env "BACKENDS=$BACKENDS" \
   --env "QUEUE_TARGET_BACKEND=$QUEUE_TARGET_BACKEND" \
-  --env "JOBS=${JOBS:-2}" \
-  --env "TYPESENSE_JOBS=${TYPESENSE_JOBS:-3}" \
+  # A single Typesense node must have bounded write pressure. The CLI can
+  # parallelize caption work later once a separate ingest replica exists.
+  --env "JOBS=${JOBS:-1}" \
+  --env "TYPESENSE_JOBS=${TYPESENSE_JOBS:-1}" \
   --env "MEILI_JOBS=${MEILI_JOBS:-2}" \
   --env "LIMIT=$queue_limit" \
   --env "QUEUE_ONE_REQUEST_PER_PASS=$queue_one_request_per_pass" \
