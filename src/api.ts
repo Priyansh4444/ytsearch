@@ -32,11 +32,13 @@ export async function searchTranscripts(
   const cached = searchCache.get(url);
   if (cached && cached.expiresAt > Date.now()) return cached.response;
 
-  const response = await fetch(url, {
-    signal: options.signal,
-  });
+  let response = await fetch(url, { signal: options.signal });
+  if (response.status === 502 || response.status === 503 || response.status === 504) {
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    response = await fetch(url, { signal: options.signal });
+  }
   if (!response.ok) throw await apiError(response, "Search failed");
-  const body = (await response.json()) as SearchResponse;
+  const body = await responseJson<SearchResponse>(response, "Search returned an invalid response");
   searchCache.set(url, { response: body, expiresAt: Date.now() + SEARCH_CACHE_TTL_MS });
   return body;
 }
@@ -44,7 +46,10 @@ export async function searchTranscripts(
 export async function indexedChannels(): Promise<IndexedChannel[]> {
   const response = await fetch(`${API_BASE_URL}/api/youtubers`);
   if (!response.ok) throw await apiError(response, "Could not load indexed channels");
-  const body = (await response.json()) as { channels: IndexedChannel[] };
+  const body = await responseJson<{ channels: IndexedChannel[] }>(
+    response,
+    "Channel list returned an invalid response",
+  );
   return body.channels;
 }
 
@@ -55,7 +60,10 @@ export async function requestIndex(handle: string): Promise<IndexQueueRequest> {
     body: JSON.stringify({ handle }),
   });
   if (!response.ok) throw await apiError(response, "Could not queue index request");
-  const body = (await response.json()) as { request: IndexQueueRequest };
+  const body = await responseJson<{ request: IndexQueueRequest }>(
+    response,
+    "Queue returned an invalid response",
+  );
   indexStatusCache.clear();
   return body.request;
 }
@@ -67,7 +75,10 @@ export async function indexStatus(handle?: string): Promise<IndexStatus> {
   if (cached && cached.expiresAt > Date.now()) return cached.response;
   const response = await fetch(url);
   if (!response.ok) throw await apiError(response, "Could not load indexing status");
-  const body = (await response.json()) as IndexStatus;
+  const body = await responseJson<IndexStatus>(
+    response,
+    "Index status returned an invalid response",
+  );
   indexStatusCache.set(url, { response: body, expiresAt: Date.now() + INDEX_STATUS_CACHE_TTL_MS });
   return body;
 }
@@ -77,8 +88,20 @@ export function clearIndexStatusCache(): void {
 }
 
 async function apiError(response: Response, fallback: string): Promise<Error> {
-  const body = (await response.json().catch(() => null)) as {
-    error?: string;
-  } | null;
-  return new Error(body?.error ?? `${fallback} with HTTP ${response.status}`);
+  const body = await response.text().catch(() => "");
+  try {
+    const parsed = JSON.parse(body) as { error?: string };
+    return new Error(parsed.error ?? `${fallback} with HTTP ${response.status}`);
+  } catch {
+    return new Error(`${fallback} with HTTP ${response.status}`);
+  }
+}
+
+async function responseJson<T>(response: Response, message: string): Promise<T> {
+  const body = await response.text();
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error(`${message} (HTTP ${response.status})`);
+  }
 }
