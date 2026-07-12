@@ -112,7 +112,7 @@ struct IndexQueueParams {
 
 #[derive(Debug, Deserialize)]
 struct IndexStatusParams {
-    handle: String,
+    handle: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -672,19 +672,26 @@ async fn index_status(
     State(state): State<Arc<AppState>>,
     Query(params): Query<IndexStatusParams>,
 ) -> Result<Response, ApiError> {
-    let handle = normalize_handle_checked(&params.handle)?;
+    let handle = params
+        .handle
+        .as_deref()
+        .map(normalize_handle_checked)
+        .transpose()?;
     let request = state
         .index_queue
         .list(usize::MAX)
         .await?
         .into_iter()
         .find(|request| {
-            request.handle == handle && matches!(request.status.as_str(), "running" | "queued")
+            matches!(request.status.as_str(), "running" | "queued")
+                && handle
+                    .as_ref()
+                    .is_none_or(|handle| request.handle == *handle)
         });
     Ok(cache_response(
         CACHE_NO_STORE,
         Json(serde_json::json!({
-            "handle": handle,
+            "handle": request.as_ref().map(|item| item.handle.as_str()).unwrap_or(""),
             "status": request.as_ref().map(|item| item.status.as_str()).unwrap_or("idle"),
             "request_id": request.as_ref().map(|item| item.id.clone()),
             "target_backend": request.and_then(|item| item.target_backend),

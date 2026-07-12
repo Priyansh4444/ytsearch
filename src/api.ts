@@ -60,8 +60,9 @@ export async function requestIndex(handle: string): Promise<IndexQueueRequest> {
   return body.request;
 }
 
-export async function indexStatus(handle: string): Promise<IndexStatus> {
-  const url = `${INDEX_QUEUE_API_BASE_URL}/api/index-status?handle=${encodeURIComponent(handle)}`;
+export async function indexStatus(handle?: string): Promise<IndexStatus> {
+  const params = handle ? `?handle=${encodeURIComponent(handle)}` : "";
+  const url = `${INDEX_QUEUE_API_BASE_URL}/api/index-status${params}`;
   const cached = indexStatusCache.get(url);
   if (cached && cached.expiresAt > Date.now()) return cached.response;
   const response = await fetch(url);

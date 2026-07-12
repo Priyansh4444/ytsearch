@@ -17,7 +17,10 @@ This file tracks the current requested work and end-to-end verification. Mark an
 
 ## Product/UI Behavior
 
+- [ ] Verify browser Back and toolbar Back clear the submitted result surface after a channel-scoped search on the deployed frontend.
+- [ ] Verify the global "Currently indexing @handle" toast appears for five seconds while a queue worker is actively adding that channel's videos.
 - [x] Results header shows total matching moments across the full result set, not just moments returned on the current page.
+- [ ] I want to be able to learn from posthog + axiom data based on the videos people click on and stuff to help my aglorithm learn from the user which results are better and stuff like that to help people get better results and based on things like the meta data of the video and stuff also help learn from the user
 - [x] Results header shows total matching videos across the full result set, not just videos returned on the current page.
 - [x] Results header shows time to first result.
 - [x] Videos and Shorts are displayed as separate result categories.
@@ -32,6 +35,7 @@ This file tracks the current requested work and end-to-end verification. Mark an
 - [ ] Measure current request volume impact after deployment.
   - [x] Cancel stale prewarm requests.
   - [x] Do not prewarm index-request mode queries that start with `@`.
+- [ ] Big task to also add semantic search.
 
 ## API/Search Behavior
 
@@ -88,7 +92,6 @@ This file tracks the current requested work and end-to-end verification. Mark an
 - [ ] Google I/O videos researched, scoped, and queued/indexed without adding unrelated Google uploads. Researched Google I/O playlist sources; current queue cannot express scoped playlist/video-set indexing.
 - [ ] Apple WWDC videos researched, scoped, and queued/indexed without adding unrelated Apple uploads. Researched Apple/Apple Developer sources; current queue cannot express scoped playlist/video-set indexing.
 
-
 ## Live Frontend Verification
 
 - [x] `https://head.ytsearch-755.pages.dev` points at the intended Meilisearch API.
@@ -100,6 +103,7 @@ This file tracks the current requested work and end-to-end verification. Mark an
 - [ ] Frontend indexed/public counts update correctly after queue/indexing runs.
 - [ ] Frontend shows all the channels indexed and not only a subset. And you can filter them using the @ keyword (if none you can index them)
 - [x] Search URL query parameters work on deployed frontends.
+- [ ] Make sure that the posthog integration is also working and collects data we can learn on.
 
 ## Required Local Verification
 
@@ -122,6 +126,9 @@ This file tracks the current requested work and end-to-end verification. Mark an
 
 ## Deployment/Operations
 
+- [ ] Finish the portable self-hosting guide: local Typesense, API, frontend, queue worker, required public environment variables, and a minimal non-Fly deployment path.
+- [ ] Remove legacy Meilisearch source, deploy configuration, scripts, and non-historical documentation; retain only a README pointer to the retirement commit and a legacy migration note.
+- [ ] Complete the environment-key audit across local `.env`, Fly apps, Pages, and scripts; delete only unused credentials after confirming each active deployment's secret dependencies.
 - [x] Deploy API changes to `ytsearch-api-meili-staging` if backend response changes.
 - [x] Deploy API changes to `ytsearch-api-typesense-fly-staging` if backend response changes.
 - [x] Deploy frontend variants with `scripts/cloudflare-pages-deploy-backends.sh` after frontend changes.

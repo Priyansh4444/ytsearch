@@ -169,13 +169,11 @@ const App: Component = () => {
   };
 
   createEffect(() => {
-    const handle = youtuber();
-    if (!handle) return;
     let shownRequestId = "";
     let toastTimeout: number | undefined;
     const checkStatus = () => {
       clearIndexStatusCache();
-      void indexStatus(handle)
+      void indexStatus()
         .then((status) => {
           if (
             status.status !== "running" ||
@@ -184,7 +182,7 @@ const App: Component = () => {
           )
             return;
           shownRequestId = status.request_id;
-          setIndexingToast(handle);
+          setIndexingToast(status.handle);
           if (toastTimeout) window.clearTimeout(toastTimeout);
           toastTimeout = window.setTimeout(() => setIndexingToast(undefined), 5_000);
         })
@@ -419,7 +417,11 @@ const App: Component = () => {
             {(error) => <ErrorState message={String(error())} />}
           </Show>
 
-          <Show when={!queuedIndexRequest() && !result.loading && !result.error && result()}>
+          <Show
+            when={
+              !queuedIndexRequest() && submitted() && !result.loading && !result.error && result()
+            }
+          >
             {(response) => (
               <div class="flex flex-col gap-5">
                 <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-white/10 pb-3 text-sm text-vesper-muted">
@@ -463,7 +465,7 @@ const App: Component = () => {
             )}
           </Show>
 
-          <Show when={!queuedIndexRequest() && !result.loading && !result.error && !result()}>
+          <Show when={!queuedIndexRequest() && !submitted() && !result.loading && !result.error}>
             <WelcomeState />
           </Show>
         </section>
