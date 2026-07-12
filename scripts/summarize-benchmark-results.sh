@@ -43,6 +43,7 @@ awk '
     first_result = ""
     total_videos = ""
     total_moments = ""
+    bytes = ""
     for (i = 1; i <= NF; i++) {
       split($i, pair, "=")
       if (pair[1] == "backend") {
@@ -59,6 +60,8 @@ awk '
         total_videos = pair[2]
       } else if (pair[1] == "total_moments") {
         total_moments = pair[2]
+      } else if (pair[1] == "bytes") {
+        bytes = pair[2]
       }
     }
 
@@ -78,6 +81,7 @@ awk '
     value = seconds(total)
     values[backend, n] = value
     sum[backend] += value
+    bytes_sum[backend] += bytes + 0
     if (first_result != "") {
       first_result_sum[backend] += first_result + 0
       first_result_count[backend]++
@@ -98,12 +102,12 @@ awk '
   }
 
   END {
-    printf "case/backend\tcount\terrors\tmin_ms\tavg_ms\tp50_ms\tp95_ms\tmax_ms\tavg_first_result_ms\tavg_total_videos\tavg_total_moments\ttotal_videos_range\ttotal_moments_range\tcorpus_stable\n"
+    printf "case/backend\tcount\terrors\tmin_ms\tavg_ms\tp50_ms\tp95_ms\tmax_ms\tavg_bytes\tavg_first_result_ms\tavg_total_videos\tavg_total_moments\ttotal_videos_range\ttotal_moments_range\tcorpus_stable\n"
     for (backend in seen) {
       c = count[backend] + 0
       e = errors[backend] + 0
       if (c == 0) {
-        printf "%s\t0\t%d\t\t\t\t\t\t\t\t\t\t\t\n", backend, e
+        printf "%s\t0\t%d\t\t\t\t\t\t\t\t\t\t\t\t\n", backend, e
         continue
       }
       delete sorted
@@ -117,7 +121,7 @@ awk '
       videos_avg = total_videos_count[backend] ? total_videos_sum[backend] / total_videos_count[backend] : 0
       moments_avg = total_moments_count[backend] ? total_moments_sum[backend] / total_moments_count[backend] : 0
       stable = (total_videos_min[backend] == total_videos_max[backend] && total_moments_min[backend] == total_moments_max[backend]) ? "yes" : "no"
-      printf "%s\t%d\t%d\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%d-%d\t%d-%d\t%s\n", backend, c, e, min, avg, p50, p95, max, first_result_avg, videos_avg, moments_avg, total_videos_min[backend], total_videos_max[backend], total_moments_min[backend], total_moments_max[backend], stable
+      printf "%s\t%d\t%d\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\t%d-%d\t%d-%d\t%s\n", backend, c, e, min, avg, p50, p95, max, bytes_sum[backend] / c, first_result_avg, videos_avg, moments_avg, total_videos_min[backend], total_videos_max[backend], total_moments_min[backend], total_moments_max[backend], stable
     }
   }
 ' "$INPUT"

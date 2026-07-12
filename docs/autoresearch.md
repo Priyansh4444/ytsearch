@@ -50,6 +50,15 @@ query time, API processing, and network latency dominate that decision.
    candidates. Background indexers must never use proxy-driven autostop because
    Fly can stop them after the triggering request closes.
 
+## Kept experiment: browser gzip
+
+On 2026-07-12, ten production requests for `linux exploit` were run with each
+transport mode against the same corpus. Identity responses averaged 46,620
+bytes with 147 ms p95. Gzip responses averaged 5,520 bytes with 109 ms p95.
+Both modes returned 116 videos and 468 moments with zero errors. Production
+already enabled gzip, so the result confirms the current configuration and does
+not require an API deployment.
+
 ## Fly isolation contract
 
 An infrastructure experiment must use a new app name and, when stateful, a new
