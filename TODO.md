@@ -39,6 +39,8 @@ This file tracks the current requested work and end-to-end verification. Mark an
 
 ## API/Search Behavior
 
+- [x] Benchmark the public search response before changing wire formats: JSON was approximately 116 KB for `react/@t3dotgg`, with 20-run end-to-end latency dominated by API/search/network work rather than serialization.
+- [x] Keep JSON as the browser API format and enable transparent gzip compression at the API boundary; retain protobuf only for the internal chunk serialization benchmark until a versioned public schema and browser compatibility fixture exist.
 - [x] API response exposes full-result moment totals from the backend.
 - [x] API response exposes full-result grouped video totals, or a defensible approximation with clear naming.
 - [ ] API response exposes full-result video/short totals if category counts need to be accurate globally.

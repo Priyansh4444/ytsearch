@@ -151,6 +151,14 @@ compatibility fixtures.
 
 ## Current Decision
 
+The July 12 public benchmark measured a 116 KB JSON search response for
+`react/@t3dotgg` across 20 requests. End-to-end latency varied roughly from
+0.22 s to 0.79 s while backend/search timing dominated; the chunk serializer
+microbenchmark cannot predict a user-visible protobuf win. The public API
+therefore remains JSON with transparent gzip compression, preserving browser
+and curl compatibility while reducing transfer size. Protobuf remains useful
+for internal chunk export experiments, not as an unversioned public API.
+
 Typesense is the only active backend. Meilisearch is a source-level legacy
 implementation only; its Fly runtime and indexed data no longer exist. The
 retirement record is `docs/legacy/meilisearch-retirement.md`.

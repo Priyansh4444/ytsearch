@@ -18,7 +18,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use youtube_meilisearch::{MeilisearchSearchClient, MeilisearchSearchConfig};
 use youtube_search::{
     DEFAULT_COLLECTION, SearchBackendError, TextSearchQuery, TranscriptSearchBackend,
@@ -312,6 +312,7 @@ async fn main() -> Result<(), ApiError> {
             axum::routing::patch(update_index_request_status),
         )
         .layer(CorsLayer::permissive())
+        .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
