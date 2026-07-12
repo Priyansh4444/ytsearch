@@ -38,7 +38,15 @@ if [ -n "${CF_API_TOKEN:-}" ] && [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
 fi
 
 if [ -z "${VITE_API_BASE_URL:-}" ]; then
-  echo "Missing required environment variable: VITE_API_BASE_URL" >&2
+  VITE_API_BASE_URL="${TYPESENSE_FLY_API_BASE_URL:-}"
+  export VITE_API_BASE_URL
+fi
+if [ -z "${VITE_INDEX_QUEUE_API_BASE_URL:-}" ]; then
+  VITE_INDEX_QUEUE_API_BASE_URL="${VITE_API_BASE_URL:-}"
+  export VITE_INDEX_QUEUE_API_BASE_URL
+fi
+if [ -z "${VITE_API_BASE_URL:-}" ]; then
+  echo "Missing required environment variable: VITE_API_BASE_URL or TYPESENSE_FLY_API_BASE_URL" >&2
   exit 1
 fi
 
