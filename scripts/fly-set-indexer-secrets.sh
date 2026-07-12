@@ -6,6 +6,9 @@ FLY_ORG="${FLY_ORG:-pronsh-sandbox}"
 
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
+. "$(dirname "$0")/queue-api-url.sh"
+
+INDEX_QUEUE_API_BASE_URL="$(normalize_queue_api_url "${INDEX_QUEUE_API_BASE_URL:-}")"
 
 flyctl apps create "$APP_NAME" --org "$FLY_ORG" >/dev/null 2>&1 || true
 
@@ -20,7 +23,6 @@ require_env() {
 
 require_env TYPESENSE_SELFHOST_API_URL
 require_env TYPESENSE_SELFHOST_API_KEY
-require_env INDEX_QUEUE_API_BASE_URL
 require_env YTSEARCH_INDEX_QUEUE_TOKEN
 
 set_optional_ytdlp_secrets() {

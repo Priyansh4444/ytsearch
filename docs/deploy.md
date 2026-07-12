@@ -1,4 +1,13 @@
-# Deployment guide
+# Deployment Guide
+
+> **Historical notice:** this document retains prior Meilisearch deployment
+> examples for source migration reference. They are not runnable staging
+> instructions: every Meilisearch Fly app, volume, and data set was destroyed.
+> The active deployment is Typesense-only: deploy
+> `ytsearch-api-typesense-fly-staging` with `fly.typesense-api.toml`, the
+> engine with `fly.typesense.toml`, and Pages at `ytsearch-755.pages.dev`.
+> Use [staging architecture](staging-architecture.md) and
+> [indexing operations](indexing-operations-guide.md) for current commands.
 
 This project has three deployable concerns:
 

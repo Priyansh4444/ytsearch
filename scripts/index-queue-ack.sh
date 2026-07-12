@@ -8,8 +8,9 @@ fi
 
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
+. "$(dirname "$0")/queue-api-url.sh"
 
-QUEUE_URL="${INDEX_QUEUE_API_BASE_URL:-}"
+QUEUE_URL="$(normalize_queue_api_url "${INDEX_QUEUE_API_BASE_URL:-}")"
 
 if [ -z "$QUEUE_URL" ]; then
   echo "Missing required environment variable: INDEX_QUEUE_API_BASE_URL" >&2

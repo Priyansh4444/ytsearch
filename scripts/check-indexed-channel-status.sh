@@ -7,6 +7,9 @@ set -eu
 
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
+. "$(dirname "$0")/queue-api-url.sh"
+
+INDEX_QUEUE_API_BASE_URL="$(normalize_queue_api_url "${INDEX_QUEUE_API_BASE_URL:-}")"
 
 BACKENDS="${BACKENDS:-typesense-fly}"
 QUERY="${QUERY:-the}"

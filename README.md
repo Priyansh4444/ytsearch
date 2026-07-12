@@ -1,12 +1,18 @@
 # ytsearch
 
-A Rust + SolidJS workspace for indexing YouTube creator transcripts into Meilisearch and searching exact timestamped moments.
+A Rust + SolidJS workspace for indexing YouTube creator transcripts into Typesense and searching exact timestamped moments.
+
+Staging runs one public Pages site (`https://ytsearch-755.pages.dev`), one
+Typesense API/queue machine, one Typesense engine, and one bounded-concurrency
+indexer. Meilisearch is source-level legacy only; do not follow historical
+Meilisearch commands below. See `docs/staging-architecture.md` for the live
+topology and `docs/legacy/meilisearch-retirement.md` for the retirement record.
 
 The current stack:
 
-- Rust workspace for YouTube metadata, transcript ingestion, Meilisearch indexing/search, and a small HTTP API.
+- Rust workspace for YouTube metadata, transcript ingestion, Typesense indexing/search, and a small HTTP API.
 - SolidJS + Vite + TypeScript + Tailwind frontend using Bun.
-- Self-hosted Meilisearch-compatible search storage.
+- Self-hosted Typesense search storage.
 - `yt-dlp` caption extraction and creator discovery as the primary source, with an optional YouTube Data API fallback.
 - Optional local audio transcription fallback through `voxtype` when captions are unavailable.
 
@@ -35,18 +41,16 @@ src/                        SolidJS frontend
 Create a local `.env` file from `.env.example`. It is intentionally gitignored.
 
 ```env
-# Optional yt-dlp fallback for metadata/discovery only.
+# Optional YouTube Data API fallback for metadata/discovery only.
 YOUTUBE_API_KEY=...
-MEILI_HTTP_ADDR=...
-MEILI_MASTER_KEY=...
-MEILI_SEARCH_API_KEY=...
-YTSEARCH_SEARCH_BACKEND=meilisearch
+YTSEARCH_SEARCH_BACKEND=typesense
+TYPESENSE_API_URL=https://ytsearch-typesense-staging.fly.dev
+TYPESENSE_SEARCH_API_KEY=...
 ```
 
 Optional:
 
 ```env
-MEILI_TRANSCRIPTS_INDEX=youtube_transcript_chunks
 TYPESENSE_SELFHOST_API_URL=https://ytsearch-typesense-staging.fly.dev
 TYPESENSE_SELFHOST_API_KEY=...
 TYPESENSE_COLLECTION=youtube_transcript_chunks
@@ -77,7 +81,8 @@ The hooks and deploy scripts read `.env` automatically. For Cloudflare Pages dep
 CLOUDFLARE_API_TOKEN=...
 CLOUDFLARE_PAGES_PROJECT=ytsearch
 CLOUDFLARE_PAGES_BRANCH=main
-VITE_API_BASE_URL=https://ytsearch-api-meili-staging.fly.dev
+VITE_API_BASE_URL=https://ytsearch-api-typesense-fly-staging.fly.dev
+VITE_INDEX_QUEUE_API_BASE_URL=https://ytsearch-api-typesense-fly-staging.fly.dev
 ```
 
 Set `YTSEARCH_SKIP_DEPLOY_ON_COMMIT=1` to skip a post-commit deploy.
