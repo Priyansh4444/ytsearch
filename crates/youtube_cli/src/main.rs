@@ -666,6 +666,13 @@ struct BackendChunkStats {
 }
 
 impl SearchAdminClient {
+    async fn wait_until_ready(&self) -> Result<(), CliError> {
+        match self {
+            Self::Meilisearch(_) => Ok(()),
+            Self::Typesense(client) => client.wait_until_ready().await.map_err(CliError::from),
+        }
+    }
+
     async fn create_collection_if_missing(&self) -> Result<CollectionOutcome, CliError> {
         match self {
             Self::Meilisearch(client) => Ok(match client.create_collection_if_missing().await? {
@@ -1386,6 +1393,10 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         command.no_wipe,
         command.allow_destructive_rewipe,
     )?;
+    let collection = command.collection.collection.clone();
+    let transcript_search = command.search.client(collection.clone())?;
+    transcript_search.wait_until_ready().await?;
+
     let youtube = command.youtube.optional_client()?;
     let caption_source = transcript_source(
         command.no_transcript_cache,
@@ -1413,8 +1424,6 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         println!("    - {} {}", video.video_id, video.title);
     }
 
-    let collection = command.collection.collection;
-    let transcript_search = command.search.client(collection.clone())?;
     match transcript_search.create_collection_if_missing().await? {
         CollectionOutcome::Created => {
             println!("Created search backend collection: {collection}")

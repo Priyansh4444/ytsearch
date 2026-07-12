@@ -28,6 +28,8 @@ const DELETE_ATTEMPTS: u8 = 3;
 const DELETE_BATCH_SIZE: &str = "1000";
 const DELETE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const CONTROL_PLANE_ATTEMPTS: u8 = 3;
+const READINESS_ATTEMPTS: u8 = 60;
+const READINESS_DELAY: Duration = Duration::from_secs(10);
 const EXPORT_PAGE_SIZE_MAX: usize = 250;
 const EXPORT_QUERY_BY: &str = "text";
 
@@ -117,6 +119,38 @@ impl TypesenseAdminClient {
 
     pub fn config(&self) -> &TypesenseAdminConfig {
         &self.config
+    }
+
+    pub async fn wait_until_ready(&self) -> Result<()> {
+        self.wait_until_ready_with(READINESS_ATTEMPTS, READINESS_DELAY)
+            .await
+    }
+
+    async fn wait_until_ready_with(&self, attempts: u8, delay: Duration) -> Result<()> {
+        let url = endpoint(&self.config.api_url, "health")?;
+        let mut last_error = "Typesense health check did not run".to_string();
+        for attempt in 1..=attempts.max(1) {
+            match self.http.get(url.clone()).send().await {
+                Ok(response) => {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    if status.is_success()
+                        && serde_json::from_str::<Value>(&body)
+                            .ok()
+                            .and_then(|value| value.get("ok").and_then(Value::as_bool))
+                            == Some(true)
+                    {
+                        return Ok(());
+                    }
+                    last_error = format!("HTTP {status}: {body}");
+                }
+                Err(error) => last_error = error.to_string(),
+            }
+            if attempt < attempts {
+                sleep(delay).await;
+            }
+        }
+        Err(TypesenseError::Unavailable(last_error))
     }
 
     pub async fn create_collection(&self) -> Result<Value> {
@@ -497,7 +531,7 @@ impl TypesenseAdminClient {
                 Ok(result) => return Ok(result),
                 Err(error) if attempt < IMPORT_ATTEMPTS && error.is_transient() => {
                     last_error = Some(error);
-                    sleep(Duration::from_millis(u64::from(attempt) * 500)).await;
+                    sleep(retry_delay(attempt)).await;
                 }
                 Err(error) => return Err(error),
             }
@@ -883,6 +917,8 @@ pub enum TypesenseError {
     ImportFailures { failed: usize, sample: String },
     #[error("typesense import retry attempts exhausted")]
     RetryExhausted,
+    #[error("typesense is unavailable: {0}")]
+    Unavailable(String),
 }
 
 impl TypesenseError {
@@ -897,12 +933,17 @@ impl TypesenseError {
             Self::InvalidUrl(_)
             | Self::Json(_)
             | Self::ImportFailures { .. }
-            | Self::RetryExhausted => false,
+            | Self::RetryExhausted
+            | Self::Unavailable(_) => false,
         }
     }
 }
 
 pub type Result<T> = std::result::Result<T, TypesenseError>;
+
+fn retry_delay(attempt: u8) -> Duration {
+    Duration::from_secs((1_u64 << attempt.min(5)).min(30))
+}
 
 fn missing_schema_fields(existing: &Value, desired_schema: &Value) -> Vec<Value> {
     let existing_names = existing
@@ -1091,6 +1132,48 @@ fn validate_import_body(body: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    #[tokio::test]
+    async fn readiness_retries_until_mock_server_is_healthy() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for healthy in [false, true] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 1024];
+                let _ = socket.read(&mut request).await.unwrap();
+                let body = if healthy {
+                    r#"{"ok":true}"#
+                } else {
+                    r#"{"ok":false}"#
+                };
+                let status = if healthy {
+                    "200 OK"
+                } else {
+                    "503 Service Unavailable"
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let client = TypesenseAdminClient::new(TypesenseAdminConfig::new(
+            format!("http://{address}"),
+            "test-key",
+        ));
+
+        client
+            .wait_until_ready_with(2, Duration::ZERO)
+            .await
+            .unwrap();
+        server.await.unwrap();
+    }
 
     #[test]
     fn admin_config_debug_redacts_api_key() {

@@ -12,3 +12,6 @@ thiserror = "2.0"
 tokio = { version = "1.37", features = ["time"] }
 youtube_ingest = { path = "../youtube_ingest" }
 youtube_search = { path = "../youtube_search" }
+
+[dev-dependencies]
+tokio = { version = "1.37", features = ["io-util", "macros", "net", "rt-multi-thread"] }
