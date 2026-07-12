@@ -1,11 +1,15 @@
 import { For, Show, createSignal } from "solid-js";
 import type { Component } from "solid-js";
+import { ThumbsDown, ThumbsUp } from "lucide-solid";
+import { capture } from "../analytics";
 import type { SearchHit, SearchVideoResult } from "../types";
 import { copyToClipboard, formatDate } from "../utils";
 import { HighlightedText } from "./HighlightedText";
 import { CopyLinkButton } from "./ToolbarActions";
 
-export const VideoResult: Component<{ video: SearchVideoResult; query: string }> = (props) => {
+export const VideoResult: Component<{ video: SearchVideoResult; query: string; rank: number }> = (
+  props,
+) => {
   const visibleHits = () => props.video.hits.slice(0, 3);
   const [selectedHitId, setSelectedHitId] = createSignal<string>();
   const selectedHit = () =>
@@ -15,6 +19,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string }>
   const [copied, setCopied] = createSignal(false);
   const copyVideoLink = async () => {
     await copyToClipboard(selectedHit()?.youtube_url ?? props.video.youtube_url);
+    capture("result_link_copied", resultProperties(props));
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1_500);
   };
@@ -45,6 +50,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string }>
                 target="_blank"
                 rel="noreferrer"
                 class="text-lg font-semibold leading-snug text-white transition hover:text-vesper-yellow"
+                onClick={() => capture("result_opened", resultProperties(props))}
               >
                 <HighlightedText
                   text={props.video.title}
@@ -71,6 +77,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string }>
                 target="_blank"
                 rel="noreferrer"
                 class="inline-flex h-10 items-center border border-vesper-border bg-vesper-bg px-3 text-sm font-medium text-vesper-green transition hover:border-vesper-green"
+                onClick={() => capture("result_opened", resultProperties(props))}
               >
                 Open
               </a>
@@ -84,11 +91,18 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string }>
                   hit={hit}
                   query={props.query}
                   selected={hit.id === selectedHit()?.id}
-                  onSelect={() => setSelectedHitId(hit.id)}
+                  onSelect={() => {
+                    setSelectedHitId(hit.id);
+                    capture("result_timestamp_selected", {
+                      ...resultProperties(props),
+                      match_kind: hit.match_kind,
+                    });
+                  }}
                 />
               )}
             </For>
           </div>
+          <RelevanceFeedback video={props.video} rank={props.rank} />
         </div>
       </div>
     </article>
@@ -136,3 +150,41 @@ const TranscriptExcerpt: Component<{
     </Show>
   </button>
 );
+
+const resultProperties = (props: { video: SearchVideoResult; rank: number }) => ({
+  video_id: props.video.video_id,
+  creator_handle: props.video.youtuber_handle,
+  content_kind: props.video.content_kind,
+  rank: props.rank,
+});
+
+const RelevanceFeedback: Component<{ video: SearchVideoResult; rank: number }> = (props) => {
+  const [feedback, setFeedback] = createSignal<"useful" | "not_useful">();
+  const submit = (value: "useful" | "not_useful") => {
+    setFeedback(value);
+    capture("result_relevance_feedback", { ...resultProperties(props), value });
+  };
+
+  return (
+    <div class="flex items-center gap-1 border-t border-vesper-border pt-3">
+      <button
+        type="button"
+        onClick={() => submit("useful")}
+        class={`inline-flex size-8 items-center justify-center border transition ${feedback() === "useful" ? "border-vesper-green bg-vesper-green/15 text-vesper-green" : "border-vesper-border text-vesper-muted hover:border-vesper-green hover:text-vesper-green"}`}
+        aria-label="Mark result useful"
+        title="Useful result"
+      >
+        <ThumbsUp size={15} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        onClick={() => submit("not_useful")}
+        class={`inline-flex size-8 items-center justify-center border transition ${feedback() === "not_useful" ? "border-red-400 bg-red-400/15 text-red-300" : "border-vesper-border text-vesper-muted hover:border-red-400 hover:text-red-300"}`}
+        aria-label="Mark result not useful"
+        title="Not useful result"
+      >
+        <ThumbsDown size={15} aria-hidden="true" />
+      </button>
+    </div>
+  );
+};

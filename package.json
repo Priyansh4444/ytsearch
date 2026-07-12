@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "lucide-solid": "^1.24.0",
+    "posthog-js": "^1.399.2",
     "solid-js": "^1.9.13"
   },
   "devDependencies": {

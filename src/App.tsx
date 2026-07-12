@@ -10,6 +10,12 @@ import {
 } from "solid-js";
 import type { Component } from "solid-js";
 import { indexedChannels, requestIndex, searchTranscripts } from "./api";
+import {
+  capture,
+  captureSearchLoaded,
+  captureSearchSubmitted,
+  initializeAnalytics,
+} from "./analytics";
 import { ChannelPicker } from "./components/ChannelPicker";
 import { ChannelIdentity } from "./components/ChannelProfile";
 import { PaginationControls } from "./components/PaginationControls";
@@ -111,12 +117,14 @@ const App: Component = () => {
     });
 
   onMount(() => {
+    initializeAnalytics();
     window.addEventListener("popstate", syncRoute);
     onCleanup(() => window.removeEventListener("popstate", syncRoute));
   });
 
   const selectChannel = (handle: string) => {
     const normalized = normalizeHandle(handle);
+    capture("channel_opened", { handle: normalized, source: "channel_picker" });
     withViewTransition(() => {
       setYoutuber(normalized);
       setRouteHandle(normalized);
@@ -135,6 +143,7 @@ const App: Component = () => {
     setSubmitted(undefined);
     setUnavailableIndexHandle(undefined);
     const request = await requestIndex(handle);
+    capture("index_request_queued", { handle });
     setQueuedIndexRequest({ handle, requestId: request.id });
   };
 
@@ -158,6 +167,7 @@ const App: Component = () => {
       page: nextPage,
       sort: sort(),
     };
+    captureSearchSubmitted(request);
     const current = submitted();
     if (
       current?.query === request.query &&
@@ -181,6 +191,7 @@ const App: Component = () => {
     const current = submitted();
     if (!current) return;
     const request = { ...current, page: nextPage };
+    captureSearchSubmitted(request);
     withViewTransition(() => {
       setPage(nextPage);
       setSubmitted(request);
@@ -205,6 +216,7 @@ const App: Component = () => {
   const [copiedSearchLink, setCopiedSearchLink] = createSignal(false);
   const copySearchLink = async () => {
     await copyToClipboard(window.location.href);
+    capture("search_link_copied", { has_query: Boolean(submitted()), has_channel: hasChannel() });
     setCopiedSearchLink(true);
     window.setTimeout(() => setCopiedSearchLink(false), 1_500);
   };
@@ -244,6 +256,17 @@ const App: Component = () => {
       window.clearTimeout(timeout);
       controller.abort();
     });
+  });
+
+  let lastTrackedResponse = "";
+  createEffect(() => {
+    const request = submitted();
+    const response = result();
+    if (!request || !response) return;
+    const key = `${request.query}\u0000${request.youtuber}\u0000${request.sort}\u0000${request.page}`;
+    if (key === lastTrackedResponse) return;
+    lastTrackedResponse = key;
+    captureSearchLoaded(request, response);
   });
 
   return (
@@ -401,7 +424,7 @@ const ResultSection: Component<{
       </div>
       <div class="grid gap-2">
         <For each={props.videos}>
-          {(video) => <VideoResult video={video} query={props.query} />}
+          {(video, index) => <VideoResult video={video} query={props.query} rank={index() + 1} />}
         </For>
       </div>
     </section>
