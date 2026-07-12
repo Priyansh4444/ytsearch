@@ -82,6 +82,7 @@ export type IndexQueueRequest = {
 
 export type IndexStatus = {
   handle: string;
-  status: "queued" | "idle";
+  status: "queued" | "running" | "idle";
   request_id?: string;
+  target_backend?: string;
 };

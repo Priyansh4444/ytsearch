@@ -38,7 +38,7 @@ export const IndexUnavailableState: Component<{ handle: string }> = (props) => {
 };
 
 export const IndexQueuedState: Component<{ handle: string; requestId: string }> = (props) => {
-  const [status, setStatus] = createSignal<"queued" | "idle">("queued");
+  const [status, setStatus] = createSignal<"queued" | "running" | "idle">("queued");
   const refresh = () => void indexStatus(props.handle).then((value) => setStatus(value.status));
   onMount(() => {
     refresh();
@@ -48,12 +48,12 @@ export const IndexQueuedState: Component<{ handle: string; requestId: string }> 
   return (
     <div class="border border-vesper-green/30 bg-vesper-panel p-5 shadow-2xl shadow-vesper-green/5">
       <p class="text-sm uppercase tracking-[0.18em] text-vesper-green">
-        {status() === "queued" ? "Currently indexing" : "Index request completed"}
+        {status() === "idle" ? "Index request completed" : "Currently indexing"}
       </p>
       <p class="mt-2 text-xl font-semibold text-white">{props.handle}</p>
       <p class="mt-2 max-w-2xl text-sm text-vesper-muted">
         Request {props.requestId} is{" "}
-        {status() === "queued" ? "being handled by the index worker" : "no longer queued"}.
+        {status() === "idle" ? "no longer queued" : "being handled by the index worker"}.
       </p>
     </div>
   );

@@ -9,10 +9,6 @@ VOLUME_SIZE_GB="${INDEXER_VOLUME_SIZE_GB:-10}"
 DAILY_UPDATE_LIST_SOURCE="${DAILY_UPDATE_LIST_SOURCE:-scripts/indexed-channels.txt}"
 
 case "$QUEUE_TARGET_BACKEND" in
-  meilisearch)
-    echo "Meilisearch is retired; no queue machine may target it." >&2
-    exit 1
-    ;;
   typesense-fly)
     EXPECTED_BACKENDS="typesense-fly"
     DEFAULT_MACHINE_NAME="ytsearch-queue-typesense"
@@ -21,7 +17,7 @@ case "$QUEUE_TARGET_BACKEND" in
     DEFAULT_VOLUME_NAME="ytsearch_indexer_data_ts"
     ;;
   *)
-    echo "QUEUE_TARGET_BACKEND must be either meilisearch or typesense-fly." >&2
+    echo "QUEUE_TARGET_BACKEND must be typesense-fly." >&2
     echo "Use scripts/fly-run-queue-indexers.sh to start the active Typesense worker." >&2
     exit 1
     ;;
@@ -67,8 +63,8 @@ fi
 daily_update_interval_seconds="${DAILY_UPDATE_INTERVAL_SECONDS:-86400}"
 daily_update_initial_delay_seconds="${DAILY_UPDATE_INITIAL_DELAY_SECONDS:-}"
 if [ -z "$daily_update_initial_delay_seconds" ]; then
-  # Defer the first bulk daily pass so queue catch-up is not blocked on daemon restart.
-  daily_update_initial_delay_seconds="86400"
+  # Start a complete update after deployment, then repeat on the normal cadence.
+  daily_update_initial_delay_seconds="0"
 fi
 
 restart_policy="no"
@@ -141,11 +137,8 @@ exec flyctl machine run \
   $daily_update_file_args \
   --env "BACKENDS=$BACKENDS" \
   --env "QUEUE_TARGET_BACKEND=$QUEUE_TARGET_BACKEND" \
-  # A single Typesense node must have bounded write pressure. The CLI can
-  # parallelize caption work later once a separate ingest replica exists.
   --env "JOBS=${JOBS:-1}" \
   --env "TYPESENSE_JOBS=${TYPESENSE_JOBS:-1}" \
-  --env "MEILI_JOBS=${MEILI_JOBS:-2}" \
   --env "LIMIT=$queue_limit" \
   --env "QUEUE_ONE_REQUEST_PER_PASS=$queue_one_request_per_pass" \
   --env "MAX_VIDEOS_PER_PASS=${MAX_VIDEOS_PER_PASS:-0}" \
@@ -157,7 +150,6 @@ exec flyctl machine run \
   --env "DAILY_UPDATE_INITIAL_DELAY_SECONDS=$daily_update_initial_delay_seconds" \
   --env "EXISTING_TAIL=${EXISTING_TAIL:-0}" \
   --env "VIDEO_TIMEOUT_SECONDS=${VIDEO_TIMEOUT_SECONDS:-300}" \
-  --env "MEILI_WAIT_FOR_TASKS=${MEILI_WAIT_FOR_TASKS:-1}" \
   --env "RUST_LOG=${RUST_LOG:-youtube_cli=info,youtube_sources=info,youtube_ytdlp=warn}" \
   ${image_ref:-.} \
   /bin/sh /usr/local/bin/cloud-index-queue "$@"

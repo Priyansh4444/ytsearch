@@ -307,6 +307,10 @@ async fn main() -> Result<(), ApiError> {
         )
         .route("/api/index-status", get(index_status))
         .route("/api/index-requests/{id}", delete(ack_index_request))
+        .route(
+            "/api/index-requests/{id}/status",
+            axum::routing::patch(update_index_request_status),
+        )
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -674,13 +678,16 @@ async fn index_status(
         .list(usize::MAX)
         .await?
         .into_iter()
-        .find(|request| request.handle == handle && request.status == "queued");
+        .find(|request| {
+            request.handle == handle && matches!(request.status.as_str(), "running" | "queued")
+        });
     Ok(cache_response(
         CACHE_NO_STORE,
         Json(serde_json::json!({
             "handle": handle,
             "status": request.as_ref().map(|item| item.status.as_str()).unwrap_or("idle"),
-            "request_id": request.map(|item| item.id),
+            "request_id": request.as_ref().map(|item| item.id.clone()),
+            "target_backend": request.and_then(|item| item.target_backend),
         })),
     ))
 }
@@ -695,6 +702,30 @@ async fn ack_index_request(
     Ok(cache_response(
         CACHE_NO_STORE,
         Json(serde_json::json!({ "ok": true })),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct IndexRequestStatusInput {
+    status: String,
+}
+
+async fn update_index_request_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(input): Json<IndexRequestStatusInput>,
+) -> Result<Response, ApiError> {
+    state.index_queue.authorize(&headers)?;
+    if !matches!(input.status.as_str(), "queued" | "running") {
+        return Err(ApiError::BadRequest(
+            "invalid index request status".to_string(),
+        ));
+    }
+    let request = state.index_queue.set_status(&id, &input.status).await?;
+    Ok(cache_response(
+        CACHE_NO_STORE,
+        Json(serde_json::json!({ "request": request })),
     ))
 }
 
@@ -822,6 +853,24 @@ impl IndexQueue {
         }
         tokio::fs::write(&self.path, body).await?;
         Ok(())
+    }
+
+    async fn set_status(&self, id: &str, status: &str) -> Result<IndexQueueItem, ApiError> {
+        let mut requests = self.list(usize::MAX).await?;
+        let request = requests
+            .iter_mut()
+            .find(|request| request.id == id)
+            .ok_or_else(|| ApiError::BadRequest("unknown index request".to_string()))?;
+        request.status = status.to_string();
+        let updated = request.clone();
+        let body = requests
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| ApiError::Queue(error.to_string()))?
+            .join("\n");
+        tokio::fs::write(&self.path, format!("{body}\n")).await?;
+        Ok(updated)
     }
 
     fn authorize(&self, headers: &HeaderMap) -> Result<(), ApiError> {

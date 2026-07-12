@@ -9,7 +9,13 @@ import {
   onMount,
 } from "solid-js";
 import type { Component } from "solid-js";
-import { indexStatus, indexedChannels, requestIndex, searchTranscripts } from "./api";
+import {
+  clearIndexStatusCache,
+  indexStatus,
+  indexedChannels,
+  requestIndex,
+  searchTranscripts,
+} from "./api";
 import {
   capture,
   captureSearchLoaded,
@@ -94,6 +100,7 @@ const App: Component = () => {
     handle: string;
     requestId: string;
   }>();
+  const [indexingToast, setIndexingToast] = createSignal<string>();
   const [result] = createResource(submitted, (request) => searchTranscripts(request));
 
   const selectedChannel = createMemo(() => {
@@ -128,6 +135,7 @@ const App: Component = () => {
       setPendingIndexHandle(undefined);
       setIndexRequestError(undefined);
       setQueuedIndexRequest(undefined);
+      setIndexingToast(undefined);
     });
 
   onMount(() => {
@@ -142,10 +150,12 @@ const App: Component = () => {
     withViewTransition(() => {
       setYoutuber(normalized);
       setRouteHandle(normalized);
+      setQuery("");
       setSubmitted(undefined);
       setPendingIndexHandle(undefined);
       setIndexRequestError(undefined);
       setQueuedIndexRequest(undefined);
+      setIndexingToast(undefined);
       setPage(1);
       window.history.pushState({}, "", routeForHandle(normalized));
     });
@@ -157,6 +167,36 @@ const App: Component = () => {
       })
       .catch(() => undefined);
   };
+
+  createEffect(() => {
+    const handle = youtuber();
+    if (!handle) return;
+    let shownRequestId = "";
+    let toastTimeout: number | undefined;
+    const checkStatus = () => {
+      clearIndexStatusCache();
+      void indexStatus(handle)
+        .then((status) => {
+          if (
+            status.status !== "running" ||
+            !status.request_id ||
+            status.request_id === shownRequestId
+          )
+            return;
+          shownRequestId = status.request_id;
+          setIndexingToast(handle);
+          if (toastTimeout) window.clearTimeout(toastTimeout);
+          toastTimeout = window.setTimeout(() => setIndexingToast(undefined), 5_000);
+        })
+        .catch(() => undefined);
+    };
+    checkStatus();
+    const interval = window.setInterval(checkStatus, 15_000);
+    onCleanup(() => {
+      window.clearInterval(interval);
+      if (toastTimeout) window.clearTimeout(toastTimeout);
+    });
+  });
 
   const confirmIndexRequest = async () => {
     const handle = pendingIndexHandle();
@@ -440,6 +480,16 @@ const App: Component = () => {
             }}
             onConfirm={() => void confirmIndexRequest()}
           />
+        )}
+      </Show>
+      <Show when={indexingToast()}>
+        {(handle) => (
+          <div
+            class="fixed bottom-5 right-5 z-50 border border-vesper-green bg-vesper-panel px-4 py-3 text-sm text-white shadow-xl"
+            role="status"
+          >
+            Currently indexing {handle()}
+          </div>
         )}
       </Show>
       <footer class="border-t border-white/10 px-4 py-6 text-center text-sm text-vesper-muted sm:px-6 lg:px-8">

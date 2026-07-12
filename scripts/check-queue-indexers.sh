@@ -33,18 +33,4 @@ for backend in typesense-fly; do
   fi
 done
 
-legacy="$(printf '%s' "$machines" | jq '[
-  .[]
-  | select(
-      (.state == "started")
-      and ((.config.env.BACKENDS // "") | contains("meilisearch"))
-      and ((.config.env.BACKENDS // "") | contains("typesense-fly"))
-      and ((.config.env.QUEUE_TARGET_BACKEND // "") == "")
-    )
-] | length')"
-if [ "$legacy" -ne 0 ]; then
-  echo "Found $legacy unsafe shared queue worker(s) with no QUEUE_TARGET_BACKEND." >&2
-  failed=1
-fi
-
 exit "$failed"

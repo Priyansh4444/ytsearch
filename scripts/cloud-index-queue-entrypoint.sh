@@ -11,7 +11,6 @@ LIMIT="${LIMIT:-10}"
 QUEUE_ONE_REQUEST_PER_PASS="${QUEUE_ONE_REQUEST_PER_PASS:-0}"
 QUEUE_PRIORITY_LIST_FILE="${QUEUE_PRIORITY_LIST_FILE:-$DAILY_UPDATE_LIST_FILE}"
 MAX_VIDEOS_PER_PASS="${MAX_VIDEOS_PER_PASS:-0}"
-MEILI_WAIT_FOR_TASKS="${MEILI_WAIT_FOR_TASKS:-1}"
 QUEUE_POLL_INTERVAL_SECONDS="${QUEUE_POLL_INTERVAL_SECONDS:-60}"
 QUEUE_LOOP="${QUEUE_LOOP:-0}"
 DAILY_UPDATE_ENABLED="${DAILY_UPDATE_ENABLED:-0}"
@@ -21,7 +20,6 @@ DAILY_UPDATE_LIST_FILE="${DAILY_UPDATE_LIST_FILE:-/tmp/daily-indexed-channels.tx
 EXISTING_TAIL="${EXISTING_TAIL:-0}"
 ACK_FAILED_REQUESTS="${ACK_FAILED_REQUESTS:-1}"
 
-export MEILI_WAIT_FOR_TASKS
 mkdir -p "$TRANSCRIPT_CACHE_DIR"
 
 if [ -n "${YOUTUBE_API_KEY_FILE:-}" ] && [ -f "$YOUTUBE_API_KEY_FILE" ]; then
@@ -61,10 +59,6 @@ validate_backend_scope() {
   target_backend="$(default_queue_target_backend)"
   case "$target_backend" in
     typesense-fly) ;;
-    meilisearch)
-      echo "cloud-queue-indexer: Meilisearch is retired; refusing legacy target" >&2
-      return 1
-      ;;
     *)
       echo "cloud-queue-indexer: QUEUE_TARGET_BACKEND must select exactly one active backend" >&2
       exit 1
@@ -160,6 +154,30 @@ request = urllib.request.Request(
 )
 with urllib.request.urlopen(request, timeout=30) as response:
     sys.stdout.write(response.read().decode())
+PY
+}
+
+set_queue_status() {
+  request_id="$1"
+  status="$2"
+  python3 - "$request_id" "$status" <<'PY'
+import json
+import os
+import sys
+import urllib.request
+
+request_id, status = sys.argv[1:]
+request = urllib.request.Request(
+    f"{os.environ['INDEX_QUEUE_API_BASE_URL'].rstrip('/')}/api/index-requests/{request_id}/status",
+    data=json.dumps({"status": status}).encode(),
+    method="PATCH",
+    headers={
+        "Authorization": f"Bearer {os.environ['YTSEARCH_INDEX_QUEUE_TOKEN']}",
+        "Content-Type": "application/json",
+    },
+)
+with urllib.request.urlopen(request, timeout=30):
+    pass
 PY
 }
 
@@ -280,7 +298,6 @@ index_youtuber_for_backends() {
   handle="$1"
   failed=0
   typesense_jobs="${TYPESENSE_JOBS:-$JOBS}"
-  meili_jobs="${MEILI_JOBS:-$JOBS}"
 
   # Typesense first so long Meili jobs do not starve the Typesense frontend counts.
   if has_backend typesense-fly; then
@@ -297,13 +314,6 @@ index_youtuber_for_backends() {
     fi
   fi
 
-  if has_backend meilisearch; then
-    if ! index_one_backend meilisearch meilisearch "$meili_jobs" "$handle"; then
-      failed=1
-      echo "cloud-queue-indexer: backend failed handle=$handle backend=meilisearch" >&2
-    fi
-  fi
-
   return "$failed"
 }
 
@@ -317,9 +327,6 @@ index_youtuber_for_queue_target() {
   fi
 
   case "$target_backend" in
-    meilisearch)
-      BACKENDS="meilisearch" index_youtuber_for_backends "$handle"
-      ;;
     typesense-fly)
       BACKENDS="typesense-fly" index_youtuber_for_backends "$handle"
       ;;
@@ -363,7 +370,6 @@ index_daily_update_for_backends() {
 
   failed=0
   typesense_jobs="${TYPESENSE_JOBS:-$JOBS}"
-  meili_jobs="${MEILI_JOBS:-$JOBS}"
 
   if has_backend typesense-fly; then
     if [ -z "${TYPESENSE_SELFHOST_API_URL:-}" ] || [ -z "${TYPESENSE_SELFHOST_API_KEY:-}" ]; then
@@ -376,13 +382,6 @@ index_daily_update_for_backends() {
         failed=1
         log_queue_event error daily_update_backend_failed "" "" "" "typesense-fly" "failed"
       fi
-    fi
-  fi
-
-  if has_backend meilisearch; then
-    if ! index_list_backend meilisearch meilisearch "$meili_jobs"; then
-      failed=1
-      log_queue_event error daily_update_backend_failed "" "" "" "meilisearch" "failed"
     fi
   fi
 
@@ -417,6 +416,10 @@ process_queue_once() {
       active_backends="$BACKENDS"
     fi
     echo "cloud-queue-indexer: processing request=$request_id handle=$handle source_backend=$source_backend target_backend=$target_backend"
+    if ! set_queue_status "$request_id" running; then
+      echo "cloud-queue-indexer: could not claim request=$request_id" >&2
+      continue
+    fi
     log_queue_event info index_request_started "$request_id" "$handle" "$source_backend" "$active_backends" "running"
     if index_youtuber_for_queue_target "$handle" "$target_backend"; then
       queue_request DELETE "/api/index-requests/$request_id" >/dev/null
@@ -434,6 +437,7 @@ process_queue_once() {
           log_queue_event error index_request_failed_ack_error "$request_id" "$handle" "$source_backend" "$active_backends" "queued"
         fi
       else
+        set_queue_status "$request_id" queued || true
         log_queue_event warn index_request_failed_left_queued "$request_id" "$handle" "$source_backend" "$active_backends" "queued"
       fi
     fi

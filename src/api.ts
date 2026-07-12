@@ -71,6 +71,10 @@ export async function indexStatus(handle: string): Promise<IndexStatus> {
   return body;
 }
 
+export function clearIndexStatusCache(): void {
+  indexStatusCache.clear();
+}
+
 async function apiError(response: Response, fallback: string): Promise<Error> {
   const body = (await response.json().catch(() => null)) as {
     error?: string;
