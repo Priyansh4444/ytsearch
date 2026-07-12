@@ -87,7 +87,7 @@ const App: Component = () => {
   const [routeHandle, setRouteHandle] = createSignal(
     initialSearch?.youtuber ? normalizeHandle(initialSearch.youtuber) : creatorFromPath(),
   );
-  const [channels] = createResource(indexedChannels);
+  const [channels, { refetch: refreshChannels }] = createResource(indexedChannels);
   const [query, setQuery] = createSignal(initialSearch?.query ?? "");
   const [youtuber, setYoutuber] = createSignal(initialSearch?.youtuber ?? routeHandle() ?? "");
   const [page, setPage] = createSignal(initialSearch?.page ?? 1);
@@ -170,11 +170,14 @@ const App: Component = () => {
 
   createEffect(() => {
     let shownRequestId = "";
+    let previousStatus = "idle";
     let toastTimeout: number | undefined;
     const checkStatus = () => {
       clearIndexStatusCache();
       void indexStatus()
         .then((status) => {
+          if (status.status !== previousStatus) void refreshChannels();
+          previousStatus = status.status;
           if (
             !["running", "queued"].includes(status.status) ||
             !status.request_id ||
