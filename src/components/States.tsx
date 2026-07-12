@@ -1,5 +1,6 @@
-import { For } from "solid-js";
+import { For, createSignal, onCleanup, onMount } from "solid-js";
 import type { Component } from "solid-js";
+import { indexStatus } from "../api";
 
 export const LoadingState: Component = () => (
   <div class="grid gap-2">
@@ -36,12 +37,33 @@ export const IndexUnavailableState: Component<{ handle: string }> = (props) => {
   );
 };
 
-export const IndexQueuedState: Component<{ handle: string; requestId: string }> = (props) => (
-  <div class="border border-vesper-green/30 bg-vesper-panel p-5 shadow-2xl shadow-vesper-green/5">
-    <p class="text-sm uppercase tracking-[0.18em] text-vesper-green">Index request queued</p>
-    <p class="mt-2 text-xl font-semibold text-white">{props.handle}</p>
-    <p class="mt-2 max-w-2xl text-sm text-vesper-muted">
-      Request {props.requestId} is waiting for the local index worker.
+export const IndexQueuedState: Component<{ handle: string; requestId: string }> = (props) => {
+  const [status, setStatus] = createSignal<"queued" | "idle">("queued");
+  const refresh = () => void indexStatus(props.handle).then((value) => setStatus(value.status));
+  onMount(() => {
+    refresh();
+    const timer = window.setInterval(refresh, 10_000);
+    onCleanup(() => window.clearInterval(timer));
+  });
+  return (
+    <div class="border border-vesper-green/30 bg-vesper-panel p-5 shadow-2xl shadow-vesper-green/5">
+      <p class="text-sm uppercase tracking-[0.18em] text-vesper-green">
+        {status() === "queued" ? "Currently indexing" : "Index request completed"}
+      </p>
+      <p class="mt-2 text-xl font-semibold text-white">{props.handle}</p>
+      <p class="mt-2 max-w-2xl text-sm text-vesper-muted">
+        Request {props.requestId} is{" "}
+        {status() === "queued" ? "being handled by the index worker" : "no longer queued"}.
+      </p>
+    </div>
+  );
+};
+
+export const NoChannelMatchState: Component<{ handle: string }> = (props) => (
+  <div class="border border-vesper-border bg-vesper-panel p-5">
+    <p class="font-semibold text-white">No indexed channel matches {props.handle}</p>
+    <p class="mt-2 text-sm text-vesper-muted">
+      Choose a channel from the suggestions or search without an @ filter.
     </p>
   </div>
 );

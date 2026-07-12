@@ -9,7 +9,7 @@ import {
   onMount,
 } from "solid-js";
 import type { Component } from "solid-js";
-import { indexedChannels, requestIndex, searchTranscripts } from "./api";
+import { indexStatus, indexedChannels, searchTranscripts } from "./api";
 import {
   capture,
   captureSearchLoaded,
@@ -26,6 +26,7 @@ import {
   IndexQueuedState,
   IndexUnavailableState,
   LoadingState,
+  NoChannelMatchState,
   WelcomeState,
 } from "./components/States";
 import { VideoResult } from "./components/VideoResult";
@@ -83,6 +84,7 @@ const App: Component = () => {
   const [sort, setSort] = createSignal<SearchSort>(initialSearch?.sort ?? "relevance");
   const [submitted, setSubmitted] = createSignal<SearchRequest | undefined>(initialSearch);
   const [unavailableIndexHandle, setUnavailableIndexHandle] = createSignal<string>();
+  const [unmatchedChannelHandle, setUnmatchedChannelHandle] = createSignal<string>();
   const [queuedIndexRequest, setQueuedIndexRequest] = createSignal<{
     handle: string;
     requestId: string;
@@ -99,7 +101,30 @@ const App: Component = () => {
     const handle = normalizeHandle(query());
     return channels()?.find((channel) => normalizeHandle(channel.handle) === handle);
   });
-  const isIndexMode = () => query().trim().startsWith("@") && !directChannel();
+  const channelSuggestions = createMemo(() => {
+    const value = query().trim().toLowerCase();
+    if (!value.startsWith("@")) return [];
+    const needle = value.slice(1).split(/\s+/, 1)[0] ?? "";
+    return (channels() ?? []).filter(
+      (channel) =>
+        channel.handle.toLowerCase().includes(needle) ||
+        channel.name.toLowerCase().includes(needle),
+    );
+  });
+  const mentionedChannel = createMemo(() => {
+    const match = query()
+      .trim()
+      .match(/^(@[^\s]+)(?:\s+(.+))?$/);
+    if (!match) return undefined;
+    const token = normalizeHandle(match[1] ?? "");
+    return channels()?.find((channel) => normalizeHandle(channel.handle) === token);
+  });
+  const mentionQuery = () =>
+    query()
+      .trim()
+      .match(/^(@[^\s]+)(?:\s+(.+))?$/)?.[2]
+      ?.trim() ?? "";
+  const isIndexMode = () => query().trim().startsWith("@") && !mentionedChannel();
   const formMode = () => (directChannel() ? "channel" : isIndexMode() ? "index" : "search");
 
   const syncRoute = () =>
@@ -113,6 +138,7 @@ const App: Component = () => {
       setPage(searchState?.page ?? 1);
       setSubmitted(searchState);
       setUnavailableIndexHandle(undefined);
+      setUnmatchedChannelHandle(undefined);
       setQueuedIndexRequest(undefined);
     });
 
@@ -130,21 +156,18 @@ const App: Component = () => {
       setRouteHandle(normalized);
       setSubmitted(undefined);
       setUnavailableIndexHandle(undefined);
+      setUnmatchedChannelHandle(undefined);
       setQueuedIndexRequest(undefined);
       setPage(1);
       window.history.pushState({}, "", routeForHandle(normalized));
     });
-  };
-
-  const queueIndexRequest = async () => {
-    const handle = normalizeHandle(query());
-    if (!handle) return;
-    setQuery(handle);
-    setSubmitted(undefined);
-    setUnavailableIndexHandle(undefined);
-    const request = await requestIndex(handle);
-    capture("index_request_queued", { handle });
-    setQueuedIndexRequest({ handle, requestId: request.id });
+    void indexStatus(normalized)
+      .then((status) => {
+        if (status.status === "queued" && status.request_id) {
+          setQueuedIndexRequest({ handle: normalized, requestId: status.request_id });
+        }
+      })
+      .catch(() => undefined);
   };
 
   const runSearch = (nextPage = 1) => {
@@ -154,11 +177,32 @@ const App: Component = () => {
       selectChannel(directChannel()!.handle);
       return;
     }
-    if (isIndexMode()) {
-      void queueIndexRequest().catch((error) => {
-        setQueuedIndexRequest(undefined);
-        setUnavailableIndexHandle(String(error));
+    if (mentionedChannel()) {
+      const suffix = mentionQuery();
+      if (!suffix) {
+        selectChannel(mentionedChannel()!.handle);
+        return;
+      }
+      const request = {
+        query: suffix,
+        youtuber: mentionedChannel()!.handle,
+        page: nextPage,
+        sort: sort(),
+      };
+      captureSearchSubmitted(request);
+      withViewTransition(() => {
+        setYoutuber(request.youtuber);
+        setQuery(request.query);
+        setPage(nextPage);
+        setSubmitted(request);
+        writeSearchUrl(request);
       });
+      return;
+    }
+    if (isIndexMode()) {
+      setUnmatchedChannelHandle(
+        normalizeHandle(normalizedQuery.split(/\s+/, 1)[0] ?? normalizedQuery),
+      );
       return;
     }
     const request = {
@@ -167,6 +211,7 @@ const App: Component = () => {
       page: nextPage,
       sort: sort(),
     };
+    setUnmatchedChannelHandle(undefined);
     captureSearchSubmitted(request);
     const current = submitted();
     if (
@@ -209,6 +254,7 @@ const App: Component = () => {
       setPage(1);
       setSubmitted(undefined);
       setUnavailableIndexHandle(undefined);
+      setUnmatchedChannelHandle(undefined);
       setQueuedIndexRequest(undefined);
     });
   };
@@ -223,13 +269,14 @@ const App: Component = () => {
 
   createEffect(() => {
     const normalizedQuery = query().trim();
-    const currentMode = normalizedQuery.startsWith("@") ? "index" : "search";
-    const currentYoutuber = youtuber();
+    const searchQuery = mentionedChannel() ? mentionQuery() : normalizedQuery;
+    const currentMode = normalizedQuery.startsWith("@") && !mentionedChannel() ? "index" : "search";
+    const currentYoutuber = mentionedChannel()?.handle ?? youtuber();
     const currentSort = sort();
     const currentSubmitted = submitted();
-    if (currentMode !== "search" || normalizedQuery.length < 2) return;
+    if (currentMode !== "search" || searchQuery.length < 2) return;
     if (
-      currentSubmitted?.query === normalizedQuery &&
+      currentSubmitted?.query === searchQuery &&
       currentSubmitted.youtuber === currentYoutuber &&
       currentSubmitted.sort === currentSort &&
       currentSubmitted.page === 1
@@ -241,7 +288,7 @@ const App: Component = () => {
     const timeout = window.setTimeout(() => {
       void searchTranscripts(
         {
-          query: normalizedQuery,
+          query: searchQuery,
           youtuber: currentYoutuber,
           page: 1,
           sort: currentSort,
@@ -250,7 +297,7 @@ const App: Component = () => {
       ).catch((error) => {
         if (error instanceof DOMException && error.name === "AbortError") return;
       });
-    }, 450);
+    }, 900);
 
     onCleanup(() => {
       window.clearTimeout(timeout);
@@ -296,6 +343,8 @@ const App: Component = () => {
             onQueryInput={setQuery}
             onSortChange={setSort}
             onSubmit={() => runSearch(1)}
+            channelSuggestions={channelSuggestions()}
+            onChannelSelect={selectChannel}
           />
 
           <Show when={!hasChannel()}>
@@ -311,7 +360,10 @@ const App: Component = () => {
         </section>
 
         <section class="min-h-[22rem]">
-          <Show when={unavailableIndexHandle()}>
+          <Show when={unmatchedChannelHandle()}>
+            {(handle) => <NoChannelMatchState handle={handle()} />}
+          </Show>
+          <Show when={!unmatchedChannelHandle() && unavailableIndexHandle()}>
             {(handle) => <IndexUnavailableState handle={handle()} />}
           </Show>
 

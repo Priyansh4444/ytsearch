@@ -1,4 +1,10 @@
-import type { IndexQueueRequest, IndexedChannel, SearchRequest, SearchResponse } from "./types";
+import type {
+  IndexQueueRequest,
+  IndexStatus,
+  IndexedChannel,
+  SearchRequest,
+  SearchResponse,
+} from "./types";
 
 const DEFAULT_PER_PAGE = 12;
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
@@ -49,6 +55,14 @@ export async function requestIndex(handle: string): Promise<IndexQueueRequest> {
   if (!response.ok) throw await apiError(response, "Could not queue index request");
   const body = (await response.json()) as { request: IndexQueueRequest };
   return body.request;
+}
+
+export async function indexStatus(handle: string): Promise<IndexStatus> {
+  const response = await fetch(
+    `${INDEX_QUEUE_API_BASE_URL}/api/index-status?handle=${encodeURIComponent(handle)}`,
+  );
+  if (!response.ok) throw await apiError(response, "Could not load indexing status");
+  return (await response.json()) as IndexStatus;
 }
 
 async function apiError(response: Response, fallback: string): Promise<Error> {

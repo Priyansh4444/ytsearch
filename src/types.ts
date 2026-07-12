@@ -79,3 +79,9 @@ export type IndexQueueRequest = {
   source_backend: string;
   status: string;
 };
+
+export type IndexStatus = {
+  handle: string;
+  status: "queued" | "idle";
+  request_id?: string;
+};

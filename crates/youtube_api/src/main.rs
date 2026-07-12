@@ -110,6 +110,11 @@ struct IndexQueueParams {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct IndexStatusParams {
+    handle: String,
+}
+
 #[derive(Debug, Serialize)]
 struct IndexQueueListResponse {
     requests: Vec<IndexQueueItem>,
@@ -300,6 +305,7 @@ async fn main() -> Result<(), ApiError> {
             "/api/index-requests",
             post(create_index_request).get(list_index_requests),
         )
+        .route("/api/index-status", get(index_status))
         .route("/api/index-requests/{id}", delete(ack_index_request))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -655,6 +661,27 @@ async fn list_index_requests(
     Ok(cache_response(
         CACHE_NO_STORE,
         Json(IndexQueueListResponse { requests }),
+    ))
+}
+
+async fn index_status(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<IndexStatusParams>,
+) -> Result<Response, ApiError> {
+    let handle = normalize_handle_checked(&params.handle)?;
+    let request = state
+        .index_queue
+        .list(usize::MAX)
+        .await?
+        .into_iter()
+        .find(|request| request.handle == handle && request.status == "queued");
+    Ok(cache_response(
+        CACHE_NO_STORE,
+        Json(serde_json::json!({
+            "handle": handle,
+            "status": request.as_ref().map(|item| item.status.as_str()).unwrap_or("idle"),
+            "request_id": request.map(|item| item.id),
+        })),
     ))
 }
 
