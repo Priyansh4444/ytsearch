@@ -246,7 +246,7 @@ if priority_file and os.path.isfile(priority_file):
 
 requests = []
 for request in body.get("requests", []):
-    if request.get("status") != "queued":
+    if request.get("status") not in {"queued", "running"}:
         continue
     request_id = request.get("id", "")
     handle = request.get("handle", "")

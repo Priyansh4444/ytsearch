@@ -30,6 +30,7 @@ const DELETE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const CONTROL_PLANE_ATTEMPTS: u8 = 3;
 const READINESS_ATTEMPTS: u8 = 60;
 const READINESS_DELAY: Duration = Duration::from_secs(10);
+const REQUIRED_HEALTHY_CHECKS: u8 = 3;
 const EXPORT_PAGE_SIZE_MAX: usize = 250;
 const EXPORT_QUERY_BY: &str = "text";
 
@@ -129,6 +130,7 @@ impl TypesenseAdminClient {
     async fn wait_until_ready_with(&self, attempts: u8, delay: Duration) -> Result<()> {
         let url = endpoint(&self.config.api_url, "health")?;
         let mut last_error = "Typesense health check did not run".to_string();
+        let mut consecutive_healthy = 0_u8;
         for attempt in 1..=attempts.max(1) {
             match self.http.get(url.clone()).send().await {
                 Ok(response) => {
@@ -140,11 +142,19 @@ impl TypesenseAdminClient {
                             .and_then(|value| value.get("ok").and_then(Value::as_bool))
                             == Some(true)
                     {
-                        return Ok(());
+                        consecutive_healthy = consecutive_healthy.saturating_add(1);
+                        if consecutive_healthy >= REQUIRED_HEALTHY_CHECKS.min(attempts.max(1)) {
+                            return Ok(());
+                        }
+                    } else {
+                        consecutive_healthy = 0;
+                        last_error = format!("HTTP {status}: {body}");
                     }
-                    last_error = format!("HTTP {status}: {body}");
                 }
-                Err(error) => last_error = error.to_string(),
+                Err(error) => {
+                    consecutive_healthy = 0;
+                    last_error = error.to_string();
+                }
             }
             if attempt < attempts {
                 sleep(delay).await;
@@ -1142,7 +1152,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            for healthy in [false, true] {
+            for healthy in [false, true, true, true] {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut request = [0_u8; 1024];
                 let _ = socket.read(&mut request).await.unwrap();
@@ -1169,7 +1179,7 @@ mod tests {
         ));
 
         client
-            .wait_until_ready_with(2, Duration::ZERO)
+            .wait_until_ready_with(4, Duration::ZERO)
             .await
             .unwrap();
         server.await.unwrap();
