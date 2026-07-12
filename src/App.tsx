@@ -176,7 +176,7 @@ const App: Component = () => {
       void indexStatus()
         .then((status) => {
           if (
-            status.status !== "running" ||
+            !["running", "queued"].includes(status.status) ||
             !status.request_id ||
             status.request_id === shownRequestId
           )
