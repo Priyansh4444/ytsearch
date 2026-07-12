@@ -7,6 +7,7 @@ Typesense API/queue machine, one Typesense engine, and one bounded-concurrency
 indexer. Meilisearch is source-level legacy only; do not follow historical
 Meilisearch commands below. See `docs/staging-architecture.md` for the live
 topology and `docs/legacy/meilisearch-retirement.md` for the retirement record.
+See `docs/self-hosting.md` for a provider-neutral local deployment.
 
 The current stack:
 
