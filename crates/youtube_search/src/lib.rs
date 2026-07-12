@@ -126,3 +126,51 @@ pub trait TranscriptSearchBackend: Send + Sync {
     ) -> Result<u64, SearchBackendError>;
     async fn list_youtubers(&self) -> Result<Vec<YoutuberDocument>, SearchBackendError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_defaults_match_the_public_search_contract() {
+        let query = TextSearchQuery::new("rust testing");
+
+        assert_eq!(query.q, "rust testing");
+        assert_eq!(query.query_by, "text,title,youtuber_name,youtuber_handle");
+        assert_eq!(query.group_by.as_deref(), Some("video_id"));
+        assert_eq!(query.group_limit, Some(5));
+        assert_eq!(query.highlight_fields.as_deref(), Some("text,title"));
+    }
+
+    #[test]
+    fn query_builder_normalizes_pages_and_can_disable_grouping() {
+        let query = TextSearchQuery::new("captions")
+            .youtuber_handle("@marimo-team")
+            .page(0)
+            .per_page(20)
+            .sort_by("published_at_timestamp:desc")
+            .without_grouping();
+
+        assert_eq!(
+            query.filter_by.as_deref(),
+            Some("youtuber_handle:=@marimo-team")
+        );
+        assert_eq!(query.page, Some(1));
+        assert_eq!(query.per_page, Some(20));
+        assert_eq!(
+            query.sort_by.as_deref(),
+            Some("published_at_timestamp:desc")
+        );
+        assert_eq!(query.group_by, None);
+        assert_eq!(query.group_limit, None);
+    }
+
+    #[test]
+    fn backend_errors_include_actionable_context() {
+        let error = SearchBackendError::new("typesense", "connection refused");
+        assert_eq!(
+            error.to_string(),
+            "typesense backend failed: connection refused"
+        );
+    }
+}

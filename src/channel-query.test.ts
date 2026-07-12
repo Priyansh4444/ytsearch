@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vitest";
 import { channelMentionQuery, channelSuggestions, resolveChannelMention } from "./channel-query";
 import type { IndexedChannel } from "./types";
 

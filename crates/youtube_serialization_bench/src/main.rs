@@ -161,3 +161,41 @@ fn main() {
         proto_bytes as f64 / json_bytes as f64
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn representative_json_and_protobuf_chunks_have_matching_fields() {
+        let (json, proto) = chunk(7);
+
+        assert_eq!(json.id, proto.id);
+        assert_eq!(json.video_id, proto.video_id);
+        assert_eq!(json.text, proto.text);
+        assert_eq!(json.sequence, proto.sequence);
+        assert_eq!(json.t_start_ms, proto.t_start_ms);
+        assert_eq!(json.published_at_timestamp, proto.published_at_timestamp);
+    }
+
+    #[test]
+    fn representative_chunks_round_trip_in_both_formats() {
+        let (json, proto) = chunk(2);
+
+        let json_encoded = serde_json::to_vec(&json).expect("encode JSON fixture");
+        let json_decoded: JsonChunk =
+            serde_json::from_slice(&json_encoded).expect("decode JSON fixture");
+        assert_eq!(json_decoded.id, json.id);
+        assert_eq!(json_decoded.extra, json.extra);
+
+        let proto_encoded = proto.encode_to_vec();
+        let proto_decoded =
+            TranscriptChunk::decode(proto_encoded.as_slice()).expect("decode protobuf fixture");
+        assert_eq!(proto_decoded, proto);
+    }
+
+    #[test]
+    fn elapsed_per_round_reports_milliseconds() {
+        assert_eq!(elapsed_per_round(Duration::from_millis(25), 5), 5.0);
+    }
+}

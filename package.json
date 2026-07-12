@@ -9,7 +9,11 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test:frontend": "bun test ./src",
+    "test": "bun run test:rust && bun run test:frontend",
+    "test:rust": "cargo test --workspace",
+    "test:frontend": "vitest run",
+    "test:frontend:watch": "vitest",
+    "test:frontend:coverage": "vitest run --coverage",
     "check:all": "scripts/check-all.sh",
     "frontend:check": "bun run typecheck && bun run format:check && bun run lint && bun run build",
     "deploy:frontend": "scripts/cloudflare-pages-deploy.sh",
@@ -26,8 +30,12 @@
     "solid-js": "^1.9.13"
   },
   "devDependencies": {
+    "@solidjs/testing-library": "^0.8.10",
+    "@testing-library/jest-dom": "^6.9.1",
     "@types/node": "^26.1.0",
+    "@vitest/coverage-v8": "^4.1.10",
     "autoprefixer": "^10.4.22",
+    "jsdom": "^29.1.1",
     "oxfmt": "^0.57.0",
     "oxlint": "^1.72.0",
     "postcss": "^8.5.6",
@@ -36,6 +44,7 @@
     "typescript": "^6.0.3",
     "vite": "^8.0.16",
     "vite-plugin-solid": "^2.11.12",
+    "vitest": "^4.1.10",
     "wrangler": "^4.107.0"
   }
 }
