@@ -18,7 +18,7 @@ DAILY_UPDATE_INTERVAL_SECONDS="${DAILY_UPDATE_INTERVAL_SECONDS:-86400}"
 DAILY_UPDATE_INITIAL_DELAY_SECONDS="${DAILY_UPDATE_INITIAL_DELAY_SECONDS:-86400}"
 DAILY_UPDATE_LIST_FILE="${DAILY_UPDATE_LIST_FILE:-/tmp/daily-indexed-channels.txt}"
 EXISTING_TAIL="${EXISTING_TAIL:-0}"
-ACK_FAILED_REQUESTS="${ACK_FAILED_REQUESTS:-1}"
+ACK_FAILED_REQUESTS="${ACK_FAILED_REQUESTS:-0}"
 
 mkdir -p "$TRANSCRIPT_CACHE_DIR"
 
@@ -179,6 +179,37 @@ request = urllib.request.Request(
 with urllib.request.urlopen(request, timeout=30):
     pass
 PY
+}
+
+set_index_activity() {
+  handle="${1:-}"
+  attempt=1
+  while [ "$attempt" -le 3 ]; do
+    if HANDLE="$handle" python3 <<'PY'
+import json
+import os
+import urllib.request
+
+handle = os.environ.get("HANDLE", "")
+request = urllib.request.Request(
+    os.environ["INDEX_QUEUE_API_BASE_URL"].rstrip("/") + "/api/index-activity",
+    data=json.dumps({"handle": handle or None, "target_backend": "typesense-fly"}).encode(),
+    method="POST",
+    headers={
+        "Authorization": f"Bearer {os.environ['YTSEARCH_INDEX_QUEUE_TOKEN']}",
+        "Content-Type": "application/json",
+    },
+)
+with urllib.request.urlopen(request, timeout=30):
+    pass
+PY
+    then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+  return 1
 }
 
 pull_queue_tsv() {
@@ -343,23 +374,18 @@ index_list_backend() {
   jobs="$3"
   shift 3
 
-  echo "cloud-queue-indexer: daily indexing backend=$label jobs=$jobs list=$DAILY_UPDATE_LIST_FILE"
-  ytsearch index-youtubers "$DAILY_UPDATE_LIST_FILE" \
-    --backend "$backend" \
-    --mode update \
-    --collection "$COLLECTION" \
-    --jobs "$jobs" \
-    --video-timeout-seconds "$VIDEO_TIMEOUT_SECONDS" \
-    --stop-after-existing "$EXISTING_TAIL" \
-    --transcript-cache-dir "$TRANSCRIPT_CACHE_DIR" \
-    "$@"
-
-  echo "cloud-queue-indexer: daily refreshing backend=$label"
-  if ! ytsearch refresh-youtuber-counts-list "$DAILY_UPDATE_LIST_FILE" \
-    --backend "$backend" \
-    --collection "$COLLECTION"; then
-    echo "cloud-queue-indexer: daily refresh failed backend=$label (indexed data kept)" >&2
-  fi
+  failed=0
+  while IFS='|' read -r raw_handle _; do
+    handle="$(printf '%s' "$raw_handle" | tr -d '[:space:]')"
+    case "$handle" in ''|'#'*) continue ;; esac
+    set_index_activity "$handle" || true
+    if ! index_one_backend "$label" "$backend" "$jobs" "$handle" \
+      --stop-after-existing "$EXISTING_TAIL" "$@"; then
+      failed=1
+    fi
+    process_queue_once || true
+  done < "$DAILY_UPDATE_LIST_FILE"
+  return "$failed"
 }
 
 index_daily_update_for_backends() {
@@ -393,6 +419,7 @@ require_env YTSEARCH_INDEX_QUEUE_TOKEN
 validate_backend_scope
 
 process_queue_once() {
+  QUEUE_HAD_WORK=0
   processed=0
   failed=0
   failed_acked=0
@@ -410,12 +437,14 @@ process_queue_once() {
 
   while IFS="$(printf '\t')" read -r request_id handle source_backend target_backend; do
     [ -n "$request_id" ] || continue
+    QUEUE_HAD_WORK=1
     if [ -n "$target_backend" ]; then
       active_backends="$target_backend"
     else
       active_backends="$BACKENDS"
     fi
     echo "cloud-queue-indexer: processing request=$request_id handle=$handle source_backend=$source_backend target_backend=$target_backend"
+    set_index_activity "$handle" || true
     if ! set_queue_status "$request_id" running; then
       echo "cloud-queue-indexer: could not claim request=$request_id" >&2
       continue
@@ -447,6 +476,8 @@ process_queue_once() {
     fi
   done < "$tmp_queue"
 
+  set_index_activity "" || true
+
   echo "cloud-queue-indexer: pass complete processed=$processed failed=$failed failed_acked=$failed_acked"
 }
 
@@ -459,7 +490,8 @@ if [ "$QUEUE_LOOP" = "1" ]; then
     echo "cloud-queue-indexer: daily update disabled"
   fi
   while :; do
-    if [ "$DAILY_UPDATE_ENABLED" = "1" ]; then
+    process_queue_once || echo "cloud-queue-indexer: queue pass failed; continuing after poll interval" >&2
+    if [ "$DAILY_UPDATE_ENABLED" = "1" ] && [ "$QUEUE_HAD_WORK" = "0" ]; then
       now="$(date +%s)"
       if [ "$now" -ge "$next_daily_update" ]; then
         echo "cloud-queue-indexer: running scheduled daily update before queue pass"
@@ -472,7 +504,6 @@ if [ "$QUEUE_LOOP" = "1" ]; then
         fi
       fi
     fi
-    process_queue_once || echo "cloud-queue-indexer: queue pass failed; continuing after poll interval" >&2
     sleep "$QUEUE_POLL_INTERVAL_SECONDS"
   done
 fi

@@ -23,6 +23,7 @@ import {
   initializeAnalytics,
 } from "./analytics";
 import { ChannelPicker } from "./components/ChannelPicker";
+import { ChannelAvatar } from "./components/ChannelProfile";
 import {
   channelMentionQuery,
   channelSuggestions as findChannelSuggestions,
@@ -107,6 +108,11 @@ const App: Component = () => {
     const selectedHandle = normalizeHandle(youtuber());
     return channels()?.find((channel) => normalizeHandle(channel.handle) === selectedHandle);
   });
+  const indexingChannel = createMemo(() =>
+    channels()?.find(
+      (channel) => normalizeHandle(channel.handle) === normalizeHandle(indexingToast() ?? ""),
+    ),
+  );
   const hasChannel = () => youtuber().length > 0;
   const hasSearchSurface = () => hasChannel() || submitted() !== undefined;
   const directChannel = createMemo(() => {
@@ -162,7 +168,10 @@ const App: Component = () => {
     void indexStatus(normalized)
       .then((status) => {
         if (status.status === "queued" && status.request_id) {
-          setQueuedIndexRequest({ handle: normalized, requestId: status.request_id });
+          setQueuedIndexRequest({
+            handle: normalized,
+            requestId: status.request_id,
+          });
         }
       })
       .catch(() => undefined);
@@ -309,7 +318,10 @@ const App: Component = () => {
   const [copiedSearchLink, setCopiedSearchLink] = createSignal(false);
   const copySearchLink = async () => {
     await copyToClipboard(window.location.href);
-    capture("search_link_copied", { has_query: Boolean(submitted()), has_channel: hasChannel() });
+    capture("search_link_copied", {
+      has_query: Boolean(submitted()),
+      has_channel: hasChannel(),
+    });
     setCopiedSearchLink(true);
     window.setTimeout(() => setCopiedSearchLink(false), 1_500);
   };
@@ -491,10 +503,16 @@ const App: Component = () => {
       <Show when={indexingToast()}>
         {(handle) => (
           <div
-            class="fixed bottom-5 right-5 z-50 border border-vesper-green bg-vesper-panel px-4 py-3 text-sm text-white shadow-xl"
+            class="fixed bottom-5 right-5 z-50 flex max-w-[calc(100vw-2.5rem)] items-center gap-3 border border-vesper-green bg-vesper-panel px-4 py-3 text-sm text-white shadow-xl"
             role="status"
           >
-            Currently indexing {handle()}
+            <ChannelAvatar channel={indexingChannel()} size="compact" />
+            <span class="min-w-0">
+              <span class="block text-xs uppercase tracking-[0.12em] text-vesper-green">
+                Currently indexing
+              </span>
+              <span class="block truncate font-medium">{indexingChannel()?.name ?? handle()}</span>
+            </span>
           </div>
         )}
       </Show>

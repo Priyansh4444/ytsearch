@@ -144,7 +144,7 @@ exec flyctl machine run \
   --env "MAX_VIDEOS_PER_PASS=${MAX_VIDEOS_PER_PASS:-0}" \
   --env "QUEUE_LOOP=${QUEUE_LOOP:-$QUEUE_DAEMON}" \
   --env "QUEUE_POLL_INTERVAL_SECONDS=${QUEUE_POLL_INTERVAL_SECONDS:-30}" \
-  --env "ACK_FAILED_REQUESTS=${ACK_FAILED_REQUESTS:-1}" \
+  --env "ACK_FAILED_REQUESTS=${ACK_FAILED_REQUESTS:-0}" \
   --env "DAILY_UPDATE_ENABLED=$daily_update_enabled" \
   --env "DAILY_UPDATE_INTERVAL_SECONDS=$daily_update_interval_seconds" \
   --env "DAILY_UPDATE_INITIAL_DELAY_SECONDS=$daily_update_initial_delay_seconds" \

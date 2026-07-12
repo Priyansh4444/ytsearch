@@ -4,6 +4,7 @@ This file tracks the current requested work and end-to-end verification. Mark an
 
 ## Regression Log
 
+- [x] Queue worker was polling the retired queue API URL while frontend requests were stored by the active Typesense API, so it reported an empty queue and left `@marimo` frozen. Corrected the worker secret, canonicalized the request to `@marimo-team`, prioritized queue work, and retained failed rows for retry.
 - [ ] None currently introduced by this TODO-only change.
 - [ ] Potential latency regression: adding true full-result video totals currently requires an extra grouped backend query per search. Benchmark Meilisearch and Typesense before deploying.
 - [x] Regression found in deployed API: Meilisearch grouped count returned raw hit/document count semantics instead of distinct video count for `total_videos` (`react/@t3dotgg` returned 12635 videos). Fixed with backend distinct-count trait, Meili facet counts, and live Meili `faceting.maxValuesPerFacet=100000`.

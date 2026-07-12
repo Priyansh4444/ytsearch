@@ -99,6 +99,19 @@ struct IndexQueueItem {
     status: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct IndexActivity {
+    handle: String,
+    started_at: u64,
+    target_backend: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct IndexActivityInput {
+    handle: Option<String>,
+    target_backend: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct IndexQueueResponse {
     request: IndexQueueItem,
@@ -306,6 +319,7 @@ async fn main() -> Result<(), ApiError> {
             post(create_index_request).get(list_index_requests),
         )
         .route("/api/index-status", get(index_status))
+        .route("/api/index-activity", post(update_index_activity))
         .route("/api/index-requests/{id}", delete(ack_index_request))
         .route(
             "/api/index-requests/{id}/status",
@@ -678,6 +692,22 @@ async fn index_status(
         .as_deref()
         .map(normalize_handle_checked)
         .transpose()?;
+    let activity = state.index_queue.activity().await?;
+    if let Some(activity) = activity.filter(|activity| {
+        handle
+            .as_ref()
+            .is_none_or(|handle| activity.handle == *handle)
+    }) {
+        return Ok(cache_response(
+            CACHE_NO_STORE,
+            Json(serde_json::json!({
+                "handle": activity.handle,
+                "status": "running",
+                "request_id": format!("active-{}", activity.started_at),
+                "target_backend": activity.target_backend,
+            })),
+        ));
+    }
     let request = state
         .index_queue
         .list(usize::MAX)
@@ -697,6 +727,29 @@ async fn index_status(
             "request_id": request.as_ref().map(|item| item.id.clone()),
             "target_backend": request.and_then(|item| item.target_backend),
         })),
+    ))
+}
+
+async fn update_index_activity(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<IndexActivityInput>,
+) -> Result<Response, ApiError> {
+    state.index_queue.authorize(&headers)?;
+    let activity = match input.handle {
+        Some(handle) => Some(IndexActivity {
+            handle: normalize_handle_checked(&handle)?,
+            started_at: epoch_seconds(),
+            target_backend: input
+                .target_backend
+                .unwrap_or_else(|| "typesense-fly".to_string()),
+        }),
+        None => None,
+    };
+    state.index_queue.set_activity(activity).await?;
+    Ok(cache_response(
+        CACHE_NO_STORE,
+        Json(serde_json::json!({ "ok": true })),
     ))
 }
 
@@ -799,6 +852,36 @@ impl RateLimiter {
 }
 
 impl IndexQueue {
+    fn activity_path(&self) -> PathBuf {
+        self.path.with_extension("activity.json")
+    }
+
+    async fn activity(&self) -> Result<Option<IndexActivity>, ApiError> {
+        let path = self.activity_path();
+        let activity = match tokio::fs::read_to_string(path).await {
+            Ok(body) => serde_json::from_str::<IndexActivity>(&body).ok(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(ApiError::Server(error)),
+        };
+        Ok(activity.filter(|activity| epoch_seconds().saturating_sub(activity.started_at) <= 900))
+    }
+
+    async fn set_activity(&self, activity: Option<IndexActivity>) -> Result<(), ApiError> {
+        let path = self.activity_path();
+        match activity {
+            Some(activity) => {
+                let body = serde_json::to_string(&activity)
+                    .map_err(|error| ApiError::Queue(error.to_string()))?;
+                tokio::fs::write(path, body).await?;
+            }
+            None => match tokio::fs::remove_file(path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(ApiError::Server(error)),
+            },
+        }
+        Ok(())
+    }
     async fn enqueue(&self, request: IndexQueueItem) -> Result<IndexQueueItem, ApiError> {
         if let Some(existing) = self.list(usize::MAX).await?.into_iter().find(|queued| {
             queued.handle == request.handle
