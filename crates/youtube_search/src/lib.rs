@@ -31,6 +31,8 @@ pub struct TextSearchQuery {
     pub page: Option<u32>,
     pub highlight_fields: Option<String>,
     pub sort_by: Option<String>,
+    pub vector_query: Option<String>,
+    pub rerank_hybrid_matches: bool,
 }
 
 impl TextSearchQuery {
@@ -45,6 +47,8 @@ impl TextSearchQuery {
             page: None,
             highlight_fields: Some("text,title".to_string()),
             sort_by: None,
+            vector_query: None,
+            rerank_hybrid_matches: false,
         }
     }
 
@@ -96,6 +100,12 @@ impl TextSearchQuery {
 
     pub fn sort_by(mut self, sort_by: impl Into<String>) -> Self {
         self.sort_by = Some(sort_by.into());
+        self
+    }
+
+    pub fn hybrid(mut self, vector_query: impl Into<String>, rerank: bool) -> Self {
+        self.vector_query = Some(vector_query.into());
+        self.rerank_hybrid_matches = rerank;
         self
     }
 }

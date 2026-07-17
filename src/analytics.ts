@@ -16,6 +16,11 @@ export function initializeAnalytics(): void {
       autocapture: false,
       capture_pageview: false,
       capture_pageleave: false,
+      capture_exceptions: true,
+      capture_performance: {
+        web_vitals: true,
+        web_vitals_allowed_metrics: ["CLS", "FCP", "INP", "LCP"],
+      },
       disable_session_recording: true,
       person_profiles: "identified_only",
     });

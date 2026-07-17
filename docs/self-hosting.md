@@ -24,6 +24,32 @@ only when YouTube Data API fallback is desired. Cookies can be supplied with
 
 ## Run locally
 
+### Docker Compose
+
+The smallest complete deployment uses the checked-in Compose file. Set two
+private values and start all four services:
+
+```bash
+export TYPESENSE_SELFHOST_API_KEY="$(openssl rand -hex 24)"
+export YTSEARCH_INDEX_QUEUE_TOKEN="$(openssl rand -hex 24)"
+export PUBLIC_API_BASE_URL=http://localhost:8787
+docker compose up -d --build
+docker compose ps
+curl -fsS http://localhost:8108/health
+curl -fsS http://localhost:8787/api/health
+```
+
+Open `http://localhost:3000`. Persistent named volumes retain Typesense data,
+the JSONL queue, and transcript cache. Only the frontend and API ports need to
+be public; keep Typesense private outside local development.
+
+Set `PUBLIC_API_BASE_URL` to the browser-reachable HTTPS API origin before
+building on a remote host. Optional `YOUTUBE_API_KEY`, `YT_DLP_COOKIES_FILE`,
+`VITE_POSTHOG_KEY`, and `VITE_POSTHOG_HOST` values pass through without being
+required.
+
+### Bare processes
+
 Start Typesense, then run the API and frontend in separate terminals:
 
 ```bash

@@ -52,12 +52,12 @@ query time, API processing, and network latency dominate that decision.
 
 ## Kept experiment: browser gzip
 
-On 2026-07-12, ten production requests for `linux exploit` were run with each
-transport mode against the same corpus. Identity responses averaged 46,620
-bytes with 147 ms p95. Gzip responses averaged 5,520 bytes with 109 ms p95.
-Both modes returned 116 videos and 468 moments with zero errors. Production
-already enabled gzip, so the result confirms the current configuration and does
-not require an API deployment.
+On 2026-07-15, 20 alternating production request pairs for `linux exploit` were
+run against the same corpus. Identity responses averaged 90,461 bytes, 479 ms
+overall, 338 ms p50, and 980 ms p95. Gzip responses averaged 17,351 bytes,
+263 ms overall, 212 ms p50, and 566 ms p95. Both modes returned 131 videos and
+583 moments with zero errors and stable counts. Gzip cut transfer by 80.8% and
+was faster at every summarized latency measure, so it remains enabled.
 
 ## Fly isolation contract
 

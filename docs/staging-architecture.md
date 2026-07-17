@@ -1,59 +1,63 @@
-# Staging Architecture
+# Production Architecture
 
-Typesense is the only active search backend. The three always-on Fly Machines
-are deliberately separated so indexing load cannot take down public search.
+Typesense remains the search backend. Cloudflare serves the application and
+uses a Queue message to wake the Fly indexer only after an operator approves a
+frontend request.
 
-| Fly app | Purpose | Keeps running? |
+| Service | Purpose | Keeps running? |
 | --- | --- | --- |
-| `ytsearch-api-typesense-fly-staging` | Public search and queue API; owns the JSONL queue volume | Yes |
+| Cloudflare Worker | Static application, queue/status proxy, and approved-request wake producer | Yes |
+| Cloudflare Queue | Durable, retryable indexer wake signal | Managed |
+| `ytsearch-api-typesense-fly-staging` | Public search API and authoritative JSONL request queue | Yes |
 | `ytsearch-typesense-staging` | Typesense engine and data volume | Yes |
-| `ytsearch-indexer-staging` | One Typesense queue/indexing daemon and transcript cache | Yes while the queue or daily update is active |
+| `ytsearch-indexer-staging` | Queue/indexing daemon and transcript cache | Only while work is active |
 
-Cloudflare Pages is outside Fly and serves `https://ytsearch-755.pages.dev`.
+Production is served at `https://search.pronsh.dev`.
 
 ```mermaid
 flowchart LR
-  Browser --> Pages[Cloudflare Pages]
-  Pages --> API[Typesense search API]
-  API --> Engine[Typesense engine]
-  Pages --> API
-  API --> Worker[Typesense queue worker]
-  Worker --> YouTube[yt-dlp / YouTube]
-  Worker --> Engine
+  Browser --> Edge[Cloudflare Worker]
+  Edge --> API[Fly search and pending-request API]
+  API --> Engine[Typesense]
+  Operator[Approval CLI] --> Edge
+  Edge -->|approved only| Wake[Cloudflare Queue]
+  Wake --> Machine[Fly Machines API]
+  Machine --> Indexer[On-demand indexer]
+  Indexer --> YouTube[yt-dlp / YouTube]
+  Indexer --> Engine
+  Indexer --> API
 ```
 
 ## Reliability And Cost Rules
 
-1. Keep exactly one persistent queue worker. JSONL has no distributed lock.
-2. The persistent worker uses 4 performance CPUs and 8 GB RAM for sustained
-   `yt-dlp` work, a 10 GB encrypted transcript-cache volume, and a one-request
-   queue pass to avoid a large creator starving later requests. This sizing is
-   required because the `yt-dlp` EJS/Deno helper previously OOM-killed on the
-   4 GB shared tier. It deliberately uses `JOBS=1` and `TYPESENSE_JOBS=1`:
-   this is write backpressure for the single 4 GB Typesense node, not a limit
-   on future horizontally scalable ingestion. One-off workers retain their
-   lower-cost defaults.
-3. The worker uses `yt-dlp` first. A staged YouTube Data API key is a metadata
-   discovery fallback only; it cannot retrieve transcript captions.
-4. Public search and Typesense stay warm. Stop the worker only after confirming
-   the queue is empty and pausing daily updates; never stop the API or engine
-   as a cost-saving measure while the frontend is expected to serve traffic.
-5. Update mode preserves existing chunks. Refresh indexed-count documents after
+1. The JSONL request log remains authoritative. Cloudflare Queue is only a wake
+   signal, so duplicate delivery is harmless and losing an individual signal
+   does not lose a request.
+2. Keep exactly one persistent indexer Machine because JSONL has no distributed
+   lock. It uses shared CPU with 8 GB RAM, `JOBS=1`, and `TYPESENSE_JOBS=1`.
+3. The indexer has restart policy `no`, disables the legacy daily full refresh,
+   and exits after five idle minutes. The Cloudflare consumer restarts it when
+   a new request is accepted.
+4. Public search and Typesense stay warm. Typesense uses four performance CPUs
+   and 8 GB RAM: a live shared-CPU trial made cold-start recovery too slow. Keep
+   the API separate because combining it saves very little while coupling public
+   availability to Typesense restarts and memory pressure.
+5. The indexer uses `yt-dlp` first. A YouTube Data API key is metadata discovery
+   fallback only; it cannot retrieve transcript captions.
+6. Update mode preserves existing chunks. Refresh indexed-count documents after
    a completed bulk pass so the frontend's `indexed / public` count stays true.
-6. `TYPESENSE_RESET_PEERS_ON_ERROR=true` is enabled only to recover the
-   single-node Raft metadata after an unclean failure. It is not high
-   availability; investigate and reduce write pressure if it is ever used.
+7. `TYPESENSE_RESET_PEERS_ON_ERROR=true` is single-node recovery behavior, not
+   high availability. Investigate write pressure whenever it is needed.
 
 ## Operator Surfaces
 
 | Task | Command |
 | --- | --- |
+| Deploy the edge application | `bun run deploy:frontend` |
+| Review index requests | `scripts/review-index-requests.sh` |
 | Machine inventory | `scripts/check-staging-machines.sh` |
 | Queue-worker invariant | `scripts/check-queue-indexers.sh` |
-| Start the worker | `scripts/fly-run-queue-indexers.sh` |
+| Recreate/start the indexer | `ON_DEMAND=1 scripts/fly-run-queue-indexer.sh` |
 | Per-channel status | `scripts/check-indexed-channel-status.sh @handle` |
 | Refresh channel counts | `scripts/refresh-all-backend-counts.sh` |
-| Search benchmark | `QUERY=react RUNS=10 scripts/benchmark-search-backends.sh` |
-
-Meilisearch is source-level legacy only. Its Fly engine, API, worker, volume,
-and indexed data were destroyed; see `docs/legacy/meilisearch-retirement.md`.
+| Search benchmark | `RUNS=10 scripts/benchmark-search-cases.sh` |

@@ -1,11 +1,15 @@
 #!/usr/bin/env sh
 set -eu
 
-APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-staging}"
-FLY_ORG="${FLY_ORG:-pronsh-sandbox}"
+APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer}"
 FLY_REGION="${FLY_REGION:-sjc}"
 VOLUME_NAME="${INDEXER_VOLUME_NAME:-ytsearch_indexer_data}"
 LOCAL_CACHE_DIR="${1:-data/transcript-cache}"
+
+if [ -z "${FLY_ORG:-}" ]; then
+  echo "Set FLY_ORG to the Fly.io organization that owns the indexer app." >&2
+  exit 1
+fi
 
 if [ ! -d "$LOCAL_CACHE_DIR" ]; then
   echo "Transcript cache directory not found: $LOCAL_CACHE_DIR" >&2

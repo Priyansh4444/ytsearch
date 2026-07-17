@@ -38,10 +38,6 @@ required_env() {
 
 backend_url() {
   case "$1" in
-    meilisearch)
-      required_env MEILI_API_BASE_URL
-      printf '%s' "$MEILI_API_BASE_URL"
-      ;;
     typesense-fly)
       required_env TYPESENSE_FLY_API_BASE_URL
       printf '%s' "$TYPESENSE_FLY_API_BASE_URL"

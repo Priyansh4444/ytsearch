@@ -101,16 +101,6 @@ Responsibilities:
 This crate may later split into provider-specific crates, such as
 `youtube_source_ytdlp` or `youtube_source_whisper`, if the adapters grow large.
 
-### `youtube_jsonl`
-
-Owns stable local JSONL export/import of `TranscriptChunk` documents.
-
-Responsibilities:
-
-- Write newline-delimited `TranscriptChunk` records.
-- Read chunks back for reproducible imports and migrations.
-- Provide a `ChunkSink` implementation for backup-first ingestion.
-
 ### `youtube_typesense`
 
 Owns Typesense collection creation, document import, and grouped text queries.
@@ -292,7 +282,6 @@ The workspace is split into focused crates:
 - `youtube_client`: internal YouTube Data API v3 wrapper.
 - `youtube_ingest`: stable document model, 5-second chunker, ingest orchestration, and ports.
 - `youtube_sources`: concrete metadata source using `youtube_client`, fallback source composition, and in-memory transcript source for tests/dev.
-- `youtube_jsonl`: JSONL writer/reader plus `JsonlSink`.
 - `youtube_typesense`: Typesense schema, document import, grouped text query helper, and `ChunkSink` implementation.
 - `youtube_semantic`: embedding source helpers plus an in-memory vector store boundary.
 

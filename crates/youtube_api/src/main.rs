@@ -19,7 +19,6 @@ use std::{
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
-use youtube_meilisearch::{MeilisearchSearchClient, MeilisearchSearchConfig};
 use youtube_search::{
     DEFAULT_COLLECTION, SearchBackendError, TextSearchQuery, TranscriptSearchBackend,
     YoutuberDocument,
@@ -31,7 +30,6 @@ const DEFAULT_PER_PAGE: u8 = 20;
 const MAX_PER_PAGE: u8 = 100;
 const MERGE_TRANSCRIPT_HIT_WINDOW_MS: u32 = 20_000;
 const MAX_SEARCH_PAGE_FETCHES: u32 = 10;
-const MAX_HITS_PER_VIDEO: usize = 5;
 const CACHE_YOUTUBERS: &str = "public, max-age=30, stale-while-revalidate=300";
 const CACHE_SEARCH: &str = "public, max-age=30, stale-while-revalidate=300";
 const CACHE_CHANNEL_IMAGE: &str = "public, max-age=86400, stale-while-revalidate=604800";
@@ -47,6 +45,9 @@ struct AppState {
     search_rate_limit_per_minute: usize,
     index_queue: IndexQueue,
     image_http: reqwest::Client,
+    semantic_search_enabled: bool,
+    semantic_embedding_field: String,
+    semantic_lexical_api_url: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,9 +71,11 @@ struct RateLimiter {
 struct SearchParams {
     q: String,
     youtuber: Option<String>,
+    video_id: Option<String>,
     per_page: Option<u8>,
     page: Option<u32>,
     sort: Option<SearchSort>,
+    mode: Option<SearchMode>,
 }
 
 #[derive(Debug, Serialize)]
@@ -133,7 +136,7 @@ struct IndexQueueListResponse {
     requests: Vec<IndexQueueItem>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct SearchResponse {
     query: String,
     total_moments: u64,
@@ -144,6 +147,8 @@ struct SearchResponse {
     page: u32,
     per_page: u8,
     sort: SearchSort,
+    #[serde(default)]
+    mode: SearchMode,
     has_next_page: bool,
     hits: Vec<SearchHit>,
     videos: Vec<SearchVideoResult>,
@@ -158,7 +163,15 @@ enum SearchSort {
     PublishedAsc,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SearchMode {
+    #[default]
+    Lexical,
+    Semantic,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct SearchHit {
     id: String,
     video_id: String,
@@ -181,7 +194,7 @@ struct SearchHit {
     embed_url: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct SearchVideoResult {
     video_id: String,
     title: String,
@@ -228,14 +241,14 @@ struct SearchLogEvent {
     cache_control: &'static str,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum MatchKind {
     Transcript,
     Title,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ContentKind {
     Video,
@@ -305,6 +318,14 @@ async fn main() -> Result<(), ApiError> {
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|error| ApiError::ChannelImage(format!("client setup failed: {error}")))?,
+        semantic_search_enabled: env::var("YTSEARCH_SEMANTIC_SEARCH_ENABLED")
+            .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes")),
+        semantic_embedding_field: env::var("YTSEARCH_SEMANTIC_EMBEDDING_FIELD")
+            .unwrap_or_else(|_| "embedding".to_string()),
+        semantic_lexical_api_url: env::var("YTSEARCH_SEMANTIC_LEXICAL_API_URL")
+            .ok()
+            .map(|value| value.trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty()),
     });
     let app = Router::new()
         .route("/api/health", get(health))
@@ -321,6 +342,14 @@ async fn main() -> Result<(), ApiError> {
         .route("/api/index-status", get(index_status))
         .route("/api/index-activity", post(update_index_activity))
         .route("/api/index-requests/{id}", delete(ack_index_request))
+        .route(
+            "/api/index-requests/{id}/approve",
+            post(approve_index_request),
+        )
+        .route(
+            "/api/index-requests/{id}/reject",
+            post(reject_index_request),
+        )
         .route(
             "/api/index-requests/{id}/status",
             axum::routing::patch(update_index_request_status),
@@ -440,6 +469,12 @@ async fn search_handler(
     if query.is_empty() {
         return Err(ApiError::EmptyQuery);
     }
+    let mode = params.mode.unwrap_or_default();
+    if mode == SearchMode::Semantic && !state.semantic_search_enabled {
+        return Err(ApiError::BadRequest(
+            "semantic search is not enabled on this deployment".to_string(),
+        ));
+    }
 
     let per_page = params
         .per_page
@@ -452,10 +487,13 @@ async fn search_handler(
         sort = SearchSort::PublishedDesc;
     }
     let search_started = Instant::now();
+    let video_scope = params.video_id.is_some();
     // Fetch raw transcript hits so a single video can return multiple matching
     // moments. The API groups those hits into video cards after retrieval.
     let use_backend_grouping = false;
-    let search_page_size = if use_backend_grouping {
+    let search_page_size = if video_scope {
+        250
+    } else if use_backend_grouping {
         per_page.saturating_add(1).min(MAX_PER_PAGE)
     } else {
         per_page.saturating_mul(8).min(MAX_PER_PAGE)
@@ -467,27 +505,24 @@ async fn search_handler(
     } else {
         requested_offset as usize
     };
-    let backend_query = if low_signal_query {
-        if state.search_backend.eq_ignore_ascii_case("meilisearch") {
-            ""
-        } else {
-            "*"
-        }
-    } else {
-        query
-    };
+    let backend_query = if low_signal_query { "*" } else { query };
     let mut search_query = TextSearchQuery::new(backend_query)
         .query_by("text,title")
         .highlight_fields("text,title")
         .per_page(search_page_size)
         .page(search_backend_page);
+    if mode == SearchMode::Semantic {
+        search_query = search_query
+            .query_by(format!("text,title,{}", state.semantic_embedding_field))
+            .hybrid(
+                format!(
+                    "{}:([], alpha: 0.3, k: 200)",
+                    state.semantic_embedding_field
+                ),
+                false,
+            );
+    }
     search_query = match sort {
-        SearchSort::PublishedDesc if state.search_backend.eq_ignore_ascii_case("meilisearch") => {
-            search_query.sort_by("published_at:desc")
-        }
-        SearchSort::PublishedAsc if state.search_backend.eq_ignore_ascii_case("meilisearch") => {
-            search_query.sort_by("published_at:asc")
-        }
         SearchSort::PublishedDesc => search_query.sort_by("published_at_timestamp:desc"),
         SearchSort::PublishedAsc => search_query.sort_by("published_at_timestamp:asc"),
         SearchSort::Relevance => search_query,
@@ -502,6 +537,7 @@ async fn search_handler(
         per_page,
         page,
         ?sort,
+        ?mode,
         search_page = search_backend_page,
         search_page_size,
         youtuber = params.youtuber.as_deref().unwrap_or(""),
@@ -516,6 +552,20 @@ async fn search_handler(
     {
         search_query = search_query.youtuber_handle(normalize_handle(youtuber));
     }
+    if let Some(video_id) = params
+        .video_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if !video_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        {
+            return Err(ApiError::BadRequest("invalid video id".to_string()));
+        }
+        search_query = search_query.filter_by(format!("video_id:={video_id}"));
+    }
 
     let first_search = async {
         let first_backend_started = Instant::now();
@@ -524,7 +574,7 @@ async fn search_handler(
     };
     let ((first_raw, first_backend_search_ms), total_videos) = tokio::try_join!(
         first_search,
-        grouped_total_count(state.search.as_ref(), &search_query)
+        grouped_total_count(state.search.as_ref(), &search_query),
     )?;
     let found = first_raw
         .get("estimatedTotalHits")
@@ -550,6 +600,11 @@ async fn search_handler(
         sort,
         query,
         first_backend_search_ms,
+        if video_scope {
+            100
+        } else {
+            MAX_SEARCH_PAGE_FETCHES
+        },
     )
     .await?;
     let result_processing_ms = processing_started.elapsed().as_millis() as u64;
@@ -558,7 +613,7 @@ async fn search_handler(
         .iter()
         .flat_map(|video| video.hits.iter().cloned())
         .collect::<Vec<_>>();
-    let response = SearchResponse {
+    let mut response = SearchResponse {
         query: query.to_string(),
         total_moments: found.max(hits.len() as u64),
         total_videos: total_videos.max(videos.len() as u64),
@@ -568,10 +623,29 @@ async fn search_handler(
         page,
         per_page,
         sort,
+        mode,
         has_next_page: page_result.has_next_page,
         hits,
         videos,
     };
+    if mode == SearchMode::Semantic
+        && let Some(base_url) = &state.semantic_lexical_api_url
+    {
+        match fetch_lexical_fallback(
+            &state.image_http,
+            base_url,
+            query,
+            params.youtuber.as_deref(),
+            page,
+            per_page,
+            sort,
+        )
+        .await
+        {
+            Ok(lexical) => response = fuse_search_responses(lexical, response),
+            Err(error) => tracing::warn!(%error, "semantic lexical fallback failed"),
+        }
+    }
     let response_body_bytes = serde_json::to_vec(&response).map_or(0, |body| body.len());
     tracing::info!(
         query,
@@ -618,6 +692,91 @@ async fn search_handler(
     Ok(cache_response(CACHE_SEARCH, Json(response)))
 }
 
+async fn fetch_lexical_fallback(
+    client: &reqwest::Client,
+    base_url: &str,
+    query: &str,
+    youtuber: Option<&str>,
+    page: u32,
+    per_page: u8,
+    sort: SearchSort,
+) -> Result<SearchResponse, String> {
+    let mut url = reqwest::Url::parse(&format!("{base_url}/api/search"))
+        .map_err(|error| error.to_string())?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("q", query);
+        pairs.append_pair("page", &page.to_string());
+        pairs.append_pair("per_page", &per_page.to_string());
+        pairs.append_pair("mode", "lexical");
+        pairs.append_pair(
+            "sort",
+            match sort {
+                SearchSort::Relevance => "relevance",
+                SearchSort::PublishedDesc => "published_desc",
+                SearchSort::PublishedAsc => "published_asc",
+            },
+        );
+        if let Some(youtuber) = youtuber.filter(|value| !value.trim().is_empty()) {
+            pairs.append_pair("youtuber", youtuber);
+        }
+    }
+    client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?
+        .error_for_status()
+        .map_err(|error| error.to_string())?
+        .json()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn fuse_search_responses(lexical: SearchResponse, semantic: SearchResponse) -> SearchResponse {
+    const RANK_CONSTANT: f64 = 60.0;
+    let mut scores = HashMap::<String, f64>::new();
+    let mut videos = HashMap::<String, SearchVideoResult>::new();
+    for (weight, response) in [(0.7, &lexical), (0.3, &semantic)] {
+        for (offset, video) in response.videos.iter().enumerate() {
+            *scores.entry(video.video_id.clone()).or_default() +=
+                weight / (RANK_CONSTANT + offset as f64 + 1.0);
+            videos
+                .entry(video.video_id.clone())
+                .or_insert_with(|| video.clone());
+        }
+    }
+    let mut ranked = videos.into_values().collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        scores[&right.video_id]
+            .total_cmp(&scores[&left.video_id])
+            .then_with(|| left.video_id.cmp(&right.video_id))
+    });
+    ranked.truncate(usize::from(semantic.per_page));
+    let hits = ranked
+        .iter()
+        .flat_map(|video| video.hits.iter().cloned())
+        .collect::<Vec<_>>();
+
+    SearchResponse {
+        query: semantic.query,
+        total_moments: lexical.total_moments.max(semantic.total_moments),
+        total_videos: lexical.total_videos.max(semantic.total_videos),
+        total_found: lexical.total_found.max(semantic.total_found),
+        out_of: lexical.out_of.max(semantic.out_of),
+        time_to_first_result_ms: lexical
+            .time_to_first_result_ms
+            .min(semantic.time_to_first_result_ms),
+        page: semantic.page,
+        per_page: semantic.per_page,
+        sort: semantic.sort,
+        mode: SearchMode::Semantic,
+        has_next_page: lexical.has_next_page || semantic.has_next_page,
+        hits,
+        videos: ranked,
+    }
+}
+
 async fn grouped_total_count(
     search: &dyn TranscriptSearchBackend,
     base_query: &TextSearchQuery,
@@ -650,7 +809,7 @@ async fn create_index_request(
             requested_at,
             source_backend: state.search_backend.clone(),
             target_backend: Some(target_backend),
-            status: "queued".to_string(),
+            status: "pending".to_string(),
         };
         requests.push(state.index_queue.enqueue(request).await?);
     }
@@ -698,6 +857,12 @@ async fn index_status(
             .as_ref()
             .is_none_or(|handle| activity.handle == *handle)
     }) {
+        let channel = state
+            .search
+            .list_youtubers()
+            .await?
+            .into_iter()
+            .find(|channel| channel.handle.eq_ignore_ascii_case(&activity.handle));
         return Ok(cache_response(
             CACHE_NO_STORE,
             Json(serde_json::json!({
@@ -705,6 +870,7 @@ async fn index_status(
                 "status": "running",
                 "request_id": format!("active-{}", activity.started_at),
                 "target_backend": activity.target_backend,
+                "channel": channel,
             })),
         ));
     }
@@ -714,11 +880,22 @@ async fn index_status(
         .await?
         .into_iter()
         .find(|request| {
-            matches!(request.status.as_str(), "running" | "queued")
+            (matches!(request.status.as_str(), "running" | "queued")
+                || (handle.is_some()
+                    && matches!(request.status.as_str(), "pending" | "failed" | "rejected")))
                 && handle
                     .as_ref()
                     .is_none_or(|handle| request.handle == *handle)
         });
+    let channel = match request.as_ref() {
+        Some(request) => state
+            .search
+            .list_youtubers()
+            .await?
+            .into_iter()
+            .find(|channel| channel.handle.eq_ignore_ascii_case(&request.handle)),
+        None => None,
+    };
     Ok(cache_response(
         CACHE_NO_STORE,
         Json(serde_json::json!({
@@ -726,6 +903,7 @@ async fn index_status(
             "status": request.as_ref().map(|item| item.status.as_str()).unwrap_or("idle"),
             "request_id": request.as_ref().map(|item| item.id.clone()),
             "target_backend": request.and_then(|item| item.target_backend),
+            "channel": channel,
         })),
     ))
 }
@@ -766,6 +944,38 @@ async fn ack_index_request(
     ))
 }
 
+async fn approve_index_request(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    state.index_queue.authorize(&headers)?;
+    let request = state
+        .index_queue
+        .set_status_from(&id, "queued", &["pending", "rejected", "failed"])
+        .await?;
+    Ok(cache_response(
+        CACHE_NO_STORE,
+        Json(serde_json::json!({ "request": request })),
+    ))
+}
+
+async fn reject_index_request(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    state.index_queue.authorize(&headers)?;
+    let request = state
+        .index_queue
+        .set_status_from(&id, "rejected", &["pending"])
+        .await?;
+    Ok(cache_response(
+        CACHE_NO_STORE,
+        Json(serde_json::json!({ "request": request })),
+    ))
+}
+
 #[derive(Debug, Deserialize)]
 struct IndexRequestStatusInput {
     status: String,
@@ -778,7 +988,7 @@ async fn update_index_request_status(
     Json(input): Json<IndexRequestStatusInput>,
 ) -> Result<Response, ApiError> {
     state.index_queue.authorize(&headers)?;
-    if !matches!(input.status.as_str(), "queued" | "running") {
+    if !is_valid_index_request_status(&input.status) {
         return Err(ApiError::BadRequest(
             "invalid index request status".to_string(),
         ));
@@ -788,6 +998,13 @@ async fn update_index_request_status(
         CACHE_NO_STORE,
         Json(serde_json::json!({ "request": request })),
     ))
+}
+
+fn is_valid_index_request_status(status: &str) -> bool {
+    matches!(
+        status,
+        "pending" | "queued" | "running" | "failed" | "rejected"
+    )
 }
 
 fn is_searchable_channel(channel: &YoutuberDocument) -> bool {
@@ -805,7 +1022,6 @@ fn queue_target_backends(input: Option<&[String]>) -> Result<Vec<String>, ApiErr
             continue;
         }
         let backend = match backend {
-            "meilisearch" | "meili" => "meilisearch",
             "typesense-fly" | "typesense" => "typesense-fly",
             other => {
                 return Err(ApiError::BadRequest(format!(
@@ -885,7 +1101,7 @@ impl IndexQueue {
     async fn enqueue(&self, request: IndexQueueItem) -> Result<IndexQueueItem, ApiError> {
         if let Some(existing) = self.list(usize::MAX).await?.into_iter().find(|queued| {
             queued.handle == request.handle
-                && queued.status == "queued"
+                && matches!(queued.status.as_str(), "pending" | "queued" | "running")
                 && queued.target_backend == request.target_backend
         }) {
             return Ok(existing);
@@ -964,6 +1180,38 @@ impl IndexQueue {
         Ok(updated)
     }
 
+    async fn set_status_from(
+        &self,
+        id: &str,
+        status: &str,
+        allowed_statuses: &[&str],
+    ) -> Result<IndexQueueItem, ApiError> {
+        let mut requests = self.list(usize::MAX).await?;
+        let request = requests
+            .iter_mut()
+            .find(|request| request.id == id)
+            .ok_or_else(|| ApiError::BadRequest("unknown index request".to_string()))?;
+        if request.status == status {
+            return Ok(request.clone());
+        }
+        if !allowed_statuses.contains(&request.status.as_str()) {
+            return Err(ApiError::BadRequest(format!(
+                "cannot change index request from {} to {status}",
+                request.status
+            )));
+        }
+        request.status = status.to_string();
+        let updated = request.clone();
+        let body = requests
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| ApiError::Queue(error.to_string()))?
+            .join("\n");
+        tokio::fs::write(&self.path, format!("{body}\n")).await?;
+        Ok(updated)
+    }
+
     fn authorize(&self, headers: &HeaderMap) -> Result<(), ApiError> {
         let Some(expected) = &self.token else {
             return Err(ApiError::Unauthorized);
@@ -1009,6 +1257,7 @@ async fn collect_visible_videos(
     sort: SearchSort,
     query: &str,
     first_backend_search_ms: u64,
+    max_page_fetches: u32,
 ) -> Result<SearchPageResult, ApiError> {
     let required_videos = local_offset
         .saturating_add(usize::from(per_page))
@@ -1022,7 +1271,7 @@ async fn collect_visible_videos(
         ..SearchCollectionTimings::default()
     };
 
-    for fetch_index in 0..MAX_SEARCH_PAGE_FETCHES {
+    for fetch_index in 0..max_page_fetches {
         timings.backend_raw_hits = timings
             .backend_raw_hits
             .saturating_add(raw_hits_count(&raw));
@@ -1033,7 +1282,8 @@ async fn collect_visible_videos(
         let is_empty = page_hits.is_empty();
         combined.extend(page_hits);
         combined = merge_nearby_transcript_hits(dedupe_title_only_hits(combined));
-        let videos = video_results_from_hits(&combined, sort, query);
+        let videos =
+            video_results_from_hits(&combined, sort, query, base_query.vector_query.is_some());
 
         if videos.len() >= required_videos || is_empty {
             return Ok(page_result_from_videos(
@@ -1052,7 +1302,7 @@ async fn collect_visible_videos(
             break;
         }
 
-        if fetch_index + 1 == MAX_SEARCH_PAGE_FETCHES {
+        if fetch_index + 1 == max_page_fetches {
             break;
         }
 
@@ -1068,7 +1318,7 @@ async fn collect_visible_videos(
     }
 
     Ok(page_result_from_videos(
-        video_results_from_hits(&combined, sort, query),
+        video_results_from_hits(&combined, sort, query, base_query.vector_query.is_some()),
         local_offset,
         per_page,
         timings,
@@ -1098,6 +1348,7 @@ fn video_results_from_hits(
     hits: &[SearchHit],
     sort: SearchSort,
     query: &str,
+    preserve_backend_order: bool,
 ) -> Vec<SearchVideoResult> {
     let terms = searchable_terms(query);
     let mut order = Vec::new();
@@ -1115,6 +1366,15 @@ fn video_results_from_hits(
         .into_iter()
         .filter_map(|video_id| by_video.remove(&video_id))
         .map(|mut video| {
+            if video
+                .hits
+                .iter()
+                .any(|hit| hit.match_kind == MatchKind::Transcript)
+            {
+                video
+                    .hits
+                    .retain(|hit| hit.match_kind == MatchKind::Transcript);
+            }
             video.match_count = video.hits.len();
             match sort {
                 SearchSort::Relevance => video.hits.sort_by(|left, right| {
@@ -1126,7 +1386,6 @@ fn video_results_from_hits(
                     video.hits.sort_by_key(|hit| hit.t_start_ms);
                 }
             }
-            video.hits.truncate(MAX_HITS_PER_VIDEO);
             if let Some(best_hit) = video
                 .hits
                 .iter()
@@ -1140,6 +1399,10 @@ fn video_results_from_hits(
             video
         })
         .collect::<Vec<_>>();
+
+    if preserve_backend_order {
+        return videos;
+    }
 
     match sort {
         SearchSort::Relevance => videos.sort_by(|left, right| {
@@ -1352,6 +1615,7 @@ fn grouped_hits_count(raw: &Value) -> usize {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -1442,6 +1706,86 @@ mod tests {
     }
 
     #[test]
+    fn index_request_statuses_include_review_states() {
+        assert!(is_valid_index_request_status("pending"));
+        assert!(is_valid_index_request_status("queued"));
+        assert!(is_valid_index_request_status("running"));
+        assert!(is_valid_index_request_status("failed"));
+        assert!(is_valid_index_request_status("rejected"));
+        assert!(!is_valid_index_request_status("complete"));
+    }
+
+    #[tokio::test]
+    async fn pending_requests_require_approval_before_becoming_queueable() {
+        let queue = test_index_queue("approval");
+        let request = test_index_request("approval-request", "pending");
+        queue
+            .append(&request)
+            .await
+            .expect("append pending request");
+
+        let approved = queue
+            .set_status_from(&request.id, "queued", &["pending", "rejected", "failed"])
+            .await
+            .expect("approve pending request");
+        assert_eq!(approved.status, "queued");
+
+        let approved_again = queue
+            .set_status_from(&request.id, "queued", &["pending", "rejected", "failed"])
+            .await
+            .expect("approval is idempotent");
+        assert_eq!(approved_again.status, "queued");
+
+        let rejection = queue
+            .set_status_from(&request.id, "rejected", &["pending"])
+            .await;
+        assert!(rejection.is_err());
+        let _ = tokio::fs::remove_file(queue.path).await;
+    }
+
+    #[tokio::test]
+    async fn enqueue_deduplicates_pending_requests() {
+        let queue = test_index_queue("dedupe");
+        let first = test_index_request("first-request", "pending");
+        let duplicate = IndexQueueItem {
+            id: "duplicate-request".to_string(),
+            ..first.clone()
+        };
+
+        queue.enqueue(first.clone()).await.expect("enqueue first");
+        let returned = queue.enqueue(duplicate).await.expect("dedupe request");
+        assert_eq!(returned.id, first.id);
+        assert_eq!(queue.list(usize::MAX).await.expect("list queue").len(), 1);
+        let _ = tokio::fs::remove_file(queue.path).await;
+    }
+
+    fn test_index_queue(label: &str) -> IndexQueue {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        IndexQueue {
+            path: std::env::temp_dir().join(format!(
+                "ytsearch-{label}-{}-{nonce}.jsonl",
+                std::process::id()
+            )),
+            token: None,
+        }
+    }
+
+    fn test_index_request(id: &str, status: &str) -> IndexQueueItem {
+        IndexQueueItem {
+            id: id.to_string(),
+            handle: "@test".to_string(),
+            note: None,
+            requested_at: 1,
+            source_backend: "typesense".to_string(),
+            target_backend: Some("typesense-fly".to_string()),
+            status: status.to_string(),
+        }
+    }
+
+    #[test]
     fn searchable_terms_ignore_short_terms_and_stopwords() {
         assert_eq!(searchable_terms("fable on high"), vec!["fable", "high"]);
         assert!(searchable_terms("I").is_empty());
@@ -1475,6 +1819,24 @@ mod tests {
     }
 
     #[test]
+    fn video_results_keep_every_collected_moment() {
+        let hits = (0..12)
+            .map(|index| {
+                let mut hit = test_hit("same-video", "Complete result", "matching moment");
+                hit.id = format!("moment-{index}");
+                hit.t_start_ms = index * 30_000;
+                hit
+            })
+            .collect::<Vec<_>>();
+
+        let videos =
+            video_results_from_hits(&hits, SearchSort::Relevance, "matching moment", false);
+
+        assert_eq!(videos[0].match_count, 12);
+        assert_eq!(videos[0].hits.len(), 12);
+    }
+
+    #[test]
     fn relevance_reranker_promotes_batterygate_over_generic_battery_mentions() {
         let videos = video_results_from_hits(
             &[
@@ -1491,6 +1853,7 @@ mod tests {
             ],
             SearchSort::Relevance,
             "battery gate incident",
+            false,
         );
 
         assert_eq!(
@@ -1516,12 +1879,91 @@ mod tests {
             ],
             SearchSort::Relevance,
             "linux exploit",
+            false,
         );
 
         assert_eq!(
             videos.first().map(|video| video.video_id.as_str()),
             Some("exploit")
         );
+    }
+
+    #[test]
+    fn semantic_grouping_preserves_title_hit_video_rank() {
+        let mut ranked_title = test_hit("ranked", "C Programming Language", "title match");
+        ranked_title.match_kind = MatchKind::Title;
+        let videos = video_results_from_hits(
+            &dedupe_title_only_hits(vec![
+                ranked_title,
+                test_hit("other", "Generic result", "semantic candidate"),
+                test_hit("ranked", "C Programming Language", "arrays and pointers"),
+            ]),
+            SearchSort::Relevance,
+            "c programming arrays",
+            true,
+        );
+
+        assert_eq!(videos[0].video_id, "ranked");
+        assert!(
+            videos[0]
+                .hits
+                .iter()
+                .all(|hit| hit.match_kind == MatchKind::Transcript)
+        );
+    }
+
+    #[test]
+    fn semantic_fusion_keeps_full_corpus_lexical_results() {
+        let response = |mode, hits: Vec<SearchHit>| {
+            let videos = video_results_from_hits(
+                &hits,
+                SearchSort::Relevance,
+                "react server components",
+                mode == SearchMode::Semantic,
+            );
+            SearchResponse {
+                query: "react server components".to_string(),
+                total_moments: videos.len() as u64,
+                total_videos: videos.len() as u64,
+                total_found: videos.len() as u64,
+                out_of: videos.len() as u64,
+                time_to_first_result_ms: 10,
+                page: 1,
+                per_page: 3,
+                sort: SearchSort::Relevance,
+                mode,
+                has_next_page: false,
+                hits,
+                videos,
+            }
+        };
+        let lexical = response(
+            SearchMode::Lexical,
+            vec![test_hit(
+                "react",
+                "React Server Components: A Comprehensive Breakdown",
+                "How server components work.",
+            )],
+        );
+        let semantic = response(
+            SearchMode::Semantic,
+            vec![test_hit(
+                "unrelated",
+                "Generic systems talk",
+                "A loosely related software discussion.",
+            )],
+        );
+
+        let fused = fuse_search_responses(lexical, semantic);
+
+        assert_eq!(fused.videos[0].video_id, "react");
+        assert!(
+            fused
+                .videos
+                .iter()
+                .any(|video| video.video_id == "unrelated")
+        );
+        assert_eq!(fused.mode, SearchMode::Semantic);
     }
 }
 
@@ -1558,11 +2000,6 @@ fn is_same_transcript_moment(left: &SearchHit, right: &SearchHit) -> bool {
 }
 
 fn dedupe_title_only_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
-    let transcript_videos = hits
-        .iter()
-        .filter(|hit| hit.match_kind == MatchKind::Transcript)
-        .map(|hit| hit.video_id.clone())
-        .collect::<std::collections::HashSet<_>>();
     let mut seen_title_videos = std::collections::HashSet::new();
     let mut deduped = Vec::with_capacity(hits.len());
 
@@ -1570,9 +2007,6 @@ fn dedupe_title_only_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
         match hit.match_kind {
             MatchKind::Transcript => deduped.push(hit),
             MatchKind::Title => {
-                if transcript_videos.contains(&hit.video_id) {
-                    continue;
-                }
                 if seen_title_videos.insert(hit.video_id.clone()) {
                     deduped.push(hit);
                 }
@@ -1801,12 +2235,8 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-fn collection_env(backend: &str) -> String {
-    match backend {
-        "typesense" => env::var("TYPESENSE_COLLECTION"),
-        _ => env::var("MEILI_TRANSCRIPTS_INDEX").or_else(|_| env::var("TYPESENSE_COLLECTION")),
-    }
-    .unwrap_or_else(|_| DEFAULT_COLLECTION.to_string())
+fn collection_env(_backend: &str) -> String {
+    env::var("TYPESENSE_COLLECTION").unwrap_or_else(|_| DEFAULT_COLLECTION.to_string())
 }
 
 fn search_backend(
@@ -1819,13 +2249,6 @@ fn search_backend(
             let search_api_key = required_env("TYPESENSE_SEARCH_API_KEY")?;
             Ok(Arc::new(TypesenseSearchClient::new(
                 TypesenseSearchConfig::new(api_url, search_api_key).with_collection(collection),
-            )))
-        }
-        "meilisearch" | "meili" => {
-            let api_url = required_env("MEILI_HTTP_ADDR")?;
-            let search_api_key = required_env("MEILI_SEARCH_API_KEY")?;
-            Ok(Arc::new(MeilisearchSearchClient::new(
-                MeilisearchSearchConfig::new(api_url, search_api_key).with_collection(collection),
             )))
         }
         _ => Err(ApiError::InvalidSearchBackend(backend.to_string())),
@@ -1933,10 +2356,10 @@ impl IntoResponse for ApiError {
             header::CACHE_CONTROL,
             HeaderValue::from_static(CACHE_NO_STORE),
         );
-        if let Some(seconds) = retry_after {
-            if let Ok(value) = HeaderValue::from_str(&seconds.to_string()) {
-                response.headers_mut().insert(header::RETRY_AFTER, value);
-            }
+        if let Some(seconds) = retry_after
+            && let Ok(value) = HeaderValue::from_str(&seconds.to_string())
+        {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
         }
         response
     }

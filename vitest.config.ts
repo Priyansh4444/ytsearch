@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [solidPlugin()],
   test: {
     environment: "jsdom",
+    exclude: ["tests/e2e/**", "node_modules/**", "dist/**"],
     setupFiles: ["./src/test/setup.ts"],
     clearMocks: true,
     restoreMocks: true,

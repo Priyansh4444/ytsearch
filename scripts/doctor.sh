@@ -33,7 +33,7 @@ public="$(value '.indexing.public')"
 
 if [ "$frontend" != "200" ]; then
   echo "FAIL frontend HTTP ${frontend:-unknown}"
-  echo "NEXT run: TYPESENSE_FRONTEND_URL=https://ytsearch-755.pages.dev $SCRIPT_DIR/check-frontend-backends.sh"
+  echo "NEXT run: TYPESENSE_FRONTEND_URL=https://search.pronsh.dev $SCRIPT_DIR/check-frontend-backends.sh"
   exit 1
 fi
 
@@ -49,7 +49,7 @@ if [ "$search" != "200" ]; then
   exit 1
 fi
 
-if [ "$worker" != "started" ]; then
+if { [ "$indexing" = "running" ] || [ "$indexing" = "queued" ]; } && [ "$worker" != "started" ]; then
   echo "FAIL queue worker state ${worker:-missing}"
   echo "NEXT run: $SCRIPT_DIR/check-queue-indexers.sh"
   exit 1

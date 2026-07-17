@@ -36,6 +36,169 @@ input {
   animation: 220ms ease-out both fade-in;
 }
 
+::view-transition-group(search-controls) {
+  animation-duration: 520ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+::view-transition-group(selected-channel-identity) {
+  animation-duration: 620ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.search-form-grid {
+  display: grid;
+  grid-template-areas:
+    "query"
+    "options"
+    "submit";
+  gap: 0.5rem;
+}
+
+.search-query {
+  grid-area: query;
+}
+
+.search-options {
+  grid-area: options;
+}
+
+.search-submit {
+  grid-area: submit;
+}
+
+@media (min-width: 640px) {
+  .search-form-grid {
+    grid-template-areas:
+      "query query"
+      "options submit";
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .search-form-grid:not(:has(.search-options)) {
+    grid-template-areas: "query submit";
+  }
+}
+
+@media (min-width: 1024px) {
+  .search-form-grid {
+    grid-template-areas: "query options submit";
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+}
+
+.channel-swarm {
+  position: absolute;
+  inset: 1rem 0;
+  z-index: 0;
+  transition:
+    opacity 320ms ease,
+    transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.channel-swarm::before {
+  position: absolute;
+  inset: -10rem 0;
+  background: radial-gradient(
+    160px circle at var(--cursor-x, 50%) calc(var(--cursor-y, 50%) + 10rem),
+    rgb(255 199 153 / 7%),
+    transparent 72%
+  );
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 240ms ease;
+}
+
+.channel-swarm:hover::before {
+  opacity: 1;
+}
+
+.channel-swarm-visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.channel-swarm-hidden {
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(1.03);
+}
+
+.channel-swarm-item {
+  position: absolute;
+  left: var(--swarm-x);
+  top: var(--swarm-y);
+  display: grid;
+  place-items: center;
+  color: #a0a0a0;
+  text-decoration: none;
+  transform: translate(calc(-50% + var(--magnet-x, 0px)), calc(-50% + var(--magnet-y, 0px)));
+  transition:
+    transform 120ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 180ms ease,
+    filter 180ms ease;
+  will-change: transform;
+}
+
+.channel-swarm-item img,
+.channel-swarm-item > div {
+  border-radius: 9999px;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 8%),
+    0 8px 30px rgb(0 0 0 / 55%);
+  opacity: 0.76;
+  transition:
+    opacity 180ms ease,
+    scale 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.channel-swarm-item:hover,
+.channel-swarm-item:focus-visible {
+  z-index: 5;
+  color: #fff;
+  outline: none;
+}
+
+.channel-swarm-item:hover img,
+.channel-swarm-item:hover > div,
+.channel-swarm-item:focus-visible img,
+.channel-swarm-item:focus-visible > div {
+  border-color: #ffc799;
+  box-shadow: 0 0 28px rgb(255 199 153 / 28%);
+  opacity: 1;
+  scale: 1.14;
+}
+
+.channel-swarm-label {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  width: max-content;
+  max-width: 9rem;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 10%);
+  background: rgb(10 10 10 / 92%);
+  padding: 0.25rem 0.5rem;
+  font-size: 0.7rem;
+  line-height: 1rem;
+  opacity: 0;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  transform: translateY(-0.25rem);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+  white-space: nowrap;
+}
+
+.channel-swarm-item:hover .channel-swarm-label,
+.channel-swarm-item:focus-visible .channel-swarm-label {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 @keyframes fade-out {
   to {
     opacity: 0;
@@ -54,5 +217,39 @@ input {
   ::view-transition-old(root),
   ::view-transition-new(root) {
     animation: none;
+  }
+
+  .channel-swarm-item {
+    transform: translate(-50%, -50%);
+  }
+
+  .channel-swarm,
+  .channel-swarm-item,
+  .channel-swarm-item img,
+  .channel-swarm-item > div {
+    transition: none;
+  }
+}
+
+@media (max-width: 639px) {
+  .channel-swarm {
+    inset: 2rem 0;
+  }
+
+  .channel-swarm-item img,
+  .channel-swarm-item > div {
+    width: 2rem;
+    height: 2rem;
+  }
+
+  .channel-swarm-item {
+    left: var(--swarm-mobile-x);
+    top: var(--swarm-mobile-y);
+  }
+
+  .channel-swarm-hint {
+    top: 66%;
+    bottom: auto;
+    font-size: 0.6rem;
   }
 }

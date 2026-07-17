@@ -1,14 +1,17 @@
 #!/usr/bin/env sh
 set -eu
 
-APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-staging}"
-FLY_ORG="${FLY_ORG:-pronsh-sandbox}"
-
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
 . "$(dirname "$0")/queue-api-url.sh"
 
+APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer}"
 INDEX_QUEUE_API_BASE_URL="$(normalize_queue_api_url "${INDEX_QUEUE_API_BASE_URL:-}")"
+
+if [ -z "${FLY_ORG:-}" ]; then
+  echo "Set FLY_ORG to the Fly.io organization that should own the indexer." >&2
+  exit 1
+fi
 
 flyctl apps create "$APP_NAME" --org "$FLY_ORG" >/dev/null 2>&1 || true
 

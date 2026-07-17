@@ -15,9 +15,15 @@ app.config.timestamp_*.js
 /target
 /coverage
 /autoresearch/runs
+/test-results
+/playwright-report
+/temp_research
+/.posthog-events.json
 
 # IDEs and editors
 /.idea
+/.cursor
+/.vscode
 .project
 .classpath
 *.launch
@@ -25,6 +31,7 @@ app.config.timestamp_*.js
 
 # generated search/transcription data
 data/
+backups/
 
 # Temp
 gitignore

@@ -14,11 +14,12 @@ MAX_VIDEOS_PER_PASS="${MAX_VIDEOS_PER_PASS:-0}"
 QUEUE_POLL_INTERVAL_SECONDS="${QUEUE_POLL_INTERVAL_SECONDS:-60}"
 QUEUE_LOOP="${QUEUE_LOOP:-0}"
 DAILY_UPDATE_ENABLED="${DAILY_UPDATE_ENABLED:-0}"
-DAILY_UPDATE_INTERVAL_SECONDS="${DAILY_UPDATE_INTERVAL_SECONDS:-86400}"
+DAILY_UPDATE_INTERVAL_SECONDS="${DAILY_UPDATE_INTERVAL_SECONDS:-300}"
 DAILY_UPDATE_INITIAL_DELAY_SECONDS="${DAILY_UPDATE_INITIAL_DELAY_SECONDS:-86400}"
 DAILY_UPDATE_LIST_FILE="${DAILY_UPDATE_LIST_FILE:-/tmp/daily-indexed-channels.txt}"
 EXISTING_TAIL="${EXISTING_TAIL:-0}"
 ACK_FAILED_REQUESTS="${ACK_FAILED_REQUESTS:-0}"
+IDLE_EXIT_AFTER_SECONDS="${IDLE_EXIT_AFTER_SECONDS:-0}"
 
 mkdir -p "$TRANSCRIPT_CACHE_DIR"
 
@@ -34,6 +35,28 @@ require_env() {
     echo "cloud-queue-indexer: missing required environment variable: $name" >&2
     exit 1
   fi
+}
+
+validate_update_schedule() {
+  case "$DAILY_UPDATE_INTERVAL_SECONDS" in
+    ''|*[!0-9]*)
+      echo "cloud-queue-indexer: DAILY_UPDATE_INTERVAL_SECONDS must be an integer" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$DAILY_UPDATE_ENABLED" = "1" ] && [ "$DAILY_UPDATE_INTERVAL_SECONDS" -lt 60 ]; then
+    echo "cloud-queue-indexer: DAILY_UPDATE_INTERVAL_SECONDS must be at least 60" >&2
+    exit 1
+  fi
+}
+
+validate_idle_exit() {
+  case "$IDLE_EXIT_AFTER_SECONDS" in
+    ''|*[!0-9]*)
+      echo "cloud-queue-indexer: IDLE_EXIT_AFTER_SECONDS must be an integer" >&2
+      exit 1
+      ;;
+  esac
 }
 
 has_backend() {
@@ -330,7 +353,6 @@ index_youtuber_for_backends() {
   failed=0
   typesense_jobs="${TYPESENSE_JOBS:-$JOBS}"
 
-  # Typesense first so long Meili jobs do not starve the Typesense frontend counts.
   if has_backend typesense-fly; then
     if [ -z "${TYPESENSE_SELFHOST_API_URL:-}" ] || [ -z "${TYPESENSE_SELFHOST_API_KEY:-}" ]; then
       echo "cloud-queue-indexer: skipping typesense-fly; missing TYPESENSE_SELFHOST_API_URL or TYPESENSE_SELFHOST_API_KEY" >&2
@@ -417,6 +439,8 @@ index_daily_update_for_backends() {
 require_env INDEX_QUEUE_API_BASE_URL
 require_env YTSEARCH_INDEX_QUEUE_TOKEN
 validate_backend_scope
+validate_update_schedule
+validate_idle_exit
 
 process_queue_once() {
   QUEUE_HAD_WORK=0
@@ -466,8 +490,10 @@ process_queue_once() {
           log_queue_event error index_request_failed_ack_error "$request_id" "$handle" "$source_backend" "$active_backends" "queued"
         fi
       else
-        set_queue_status "$request_id" queued || true
-        log_queue_event warn index_request_failed_left_queued "$request_id" "$handle" "$source_backend" "$active_backends" "queued"
+        # Retain the failure for inspection without letting one invalid or
+        # unavailable channel starve every newer request in the queue.
+        set_queue_status "$request_id" failed || true
+        log_queue_event warn index_request_failed_retained "$request_id" "$handle" "$source_backend" "$active_backends" "failed"
       fi
     fi
     if [ "$QUEUE_ONE_REQUEST_PER_PASS" = "1" ]; then
@@ -483,6 +509,7 @@ process_queue_once() {
 
 if [ "$QUEUE_LOOP" = "1" ]; then
   echo "cloud-queue-indexer: daemon mode enabled poll_interval=${QUEUE_POLL_INTERVAL_SECONDS}s"
+  idle_since="$(date +%s)"
   next_daily_update=$(( $(date +%s) + DAILY_UPDATE_INITIAL_DELAY_SECONDS ))
   if [ "$DAILY_UPDATE_ENABLED" = "1" ]; then
     echo "cloud-queue-indexer: daily update enabled initial_delay=${DAILY_UPDATE_INITIAL_DELAY_SECONDS}s interval=${DAILY_UPDATE_INTERVAL_SECONDS}s next_after_epoch=$next_daily_update"
@@ -491,18 +518,27 @@ if [ "$QUEUE_LOOP" = "1" ]; then
   fi
   while :; do
     process_queue_once || echo "cloud-queue-indexer: queue pass failed; continuing after poll interval" >&2
+    if [ "$QUEUE_HAD_WORK" = "1" ]; then
+      idle_since="$(date +%s)"
+    fi
     if [ "$DAILY_UPDATE_ENABLED" = "1" ] && [ "$QUEUE_HAD_WORK" = "0" ]; then
       now="$(date +%s)"
       if [ "$now" -ge "$next_daily_update" ]; then
         echo "cloud-queue-indexer: running scheduled daily update before queue pass"
         if index_daily_update_for_backends; then
           next_daily_update=$(( now + DAILY_UPDATE_INTERVAL_SECONDS ))
+          idle_since="$now"
           echo "cloud-queue-indexer: next daily update after epoch=$next_daily_update"
         else
           next_daily_update=$(( now + QUEUE_POLL_INTERVAL_SECONDS ))
           echo "cloud-queue-indexer: daily update failed; retry_after=${QUEUE_POLL_INTERVAL_SECONDS}s" >&2
         fi
       fi
+    fi
+    now="$(date +%s)"
+    if [ "$IDLE_EXIT_AFTER_SECONDS" -gt 0 ] && [ $(( now - idle_since )) -ge "$IDLE_EXIT_AFTER_SECONDS" ]; then
+      echo "cloud-queue-indexer: idle timeout reached; stopping machine"
+      exit 0
     fi
     sleep "$QUEUE_POLL_INTERVAL_SECONDS"
   done

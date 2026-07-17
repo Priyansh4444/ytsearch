@@ -1,0 +1,269 @@
+import { For, Show, createSignal } from "solid-js";
+import type { Component } from "solid-js";
+import { ChevronDown, LoaderCircle, ThumbsDown, ThumbsUp } from "lucide-solid";
+import { searchVideoMoments } from "../api";
+import { capture } from "../analytics";
+import type { SearchHit, SearchVideoResult } from "../types";
+import { copyToClipboard, formatDate } from "../utils";
+import { HighlightedText } from "./highlighted-text";
+import { CopyLinkButton } from "./toolbar-actions";
+
+export const VideoResult: Component<{ video: SearchVideoResult; query: string; rank: number }> = (
+  props,
+) => {
+  const [allHits, setAllHits] = createSignal(props.video.hits);
+  const [showAllMoments, setShowAllMoments] = createSignal(false);
+  const [momentsLoading, setMomentsLoading] = createSignal(false);
+  const [momentsError, setMomentsError] = createSignal<string>();
+  const visibleHits = () => (showAllMoments() ? allHits() : allHits().slice(0, 3));
+  const [selectedHitId, setSelectedHitId] = createSignal<string>();
+  const selectedHit = () =>
+    visibleHits().find((hit) => hit.id === selectedHitId()) ??
+    visibleHits()[0] ??
+    props.video.hits[0];
+  const [copied, setCopied] = createSignal(false);
+  const expandMoments = async () => {
+    if (momentsLoading()) return;
+    setMomentsLoading(true);
+    setMomentsError(undefined);
+    try {
+      const response = await searchVideoMoments(props.query, props.video.video_id);
+      const completeVideo = response.videos.find(
+        (video) => video.video_id === props.video.video_id,
+      );
+      if (completeVideo) setAllHits(completeVideo.hits);
+      setShowAllMoments(true);
+      capture("result_moments_expanded", {
+        ...resultProperties(props),
+        visible_moments: completeVideo?.hits.length ?? allHits().length,
+        total_returned_moments: completeVideo?.hits.length ?? allHits().length,
+      });
+    } catch (error) {
+      setMomentsError(error instanceof Error ? error.message : "Could not load every moment");
+    } finally {
+      setMomentsLoading(false);
+    }
+  };
+  const copyVideoLink = async () => {
+    await copyToClipboard(selectedHit()?.youtube_url ?? props.video.youtube_url);
+    capture("result_link_copied", resultProperties(props));
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1_500);
+  };
+
+  return (
+    <article class="border border-vesper-border bg-vesper-panel transition duration-300 hover:border-vesper-dim">
+      <div class="grid gap-0 xl:grid-cols-[minmax(32rem,40rem)_1fr]">
+        <div class="relative bg-vesper-bg">
+          <iframe
+            class="aspect-video w-full"
+            src={selectedHit()?.embed_url ?? props.video.embed_url}
+            title={`YouTube player for ${props.video.title}`}
+            loading="lazy"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerpolicy="strict-origin-when-cross-origin"
+            allowfullscreen
+          />
+          <span class="absolute bottom-2 left-2 bg-vesper-bg/90 px-2 py-1 text-xs font-semibold text-vesper-yellow ring-1 ring-vesper-border">
+            {selectedHit()?.timestamp ?? "title"}
+          </span>
+        </div>
+
+        <div class="flex flex-col gap-3 p-4">
+          <div class="flex items-start justify-between gap-4">
+            <div class="min-w-0">
+              <a
+                href={props.video.youtube_url}
+                target="_blank"
+                rel="noreferrer"
+                class="text-lg font-semibold leading-snug text-white transition hover:text-vesper-yellow"
+                onClick={() => capture("result_opened", resultProperties(props))}
+              >
+                <HighlightedText
+                  text={props.video.title}
+                  highlight={props.video.title_highlight}
+                  query={props.query}
+                />
+              </a>
+              <p class="mt-1 text-sm text-vesper-muted">
+                {props.video.youtuber_name} · {props.video.youtuber_handle}
+                <Show when={props.video.published_at}>
+                  {" "}
+                  · {formatDate(props.video.published_at)}
+                </Show>
+              </p>
+            </div>
+            <div class="flex shrink-0 items-center gap-2">
+              <CopyLinkButton
+                copied={copied()}
+                onClick={() => void copyVideoLink()}
+                label="Copy video link"
+              />
+              <a
+                href={selectedHit()?.youtube_url ?? props.video.youtube_url}
+                target="_blank"
+                rel="noreferrer"
+                class="inline-flex h-10 items-center border border-vesper-border bg-vesper-bg px-3 text-sm font-medium text-vesper-green transition hover:border-vesper-green"
+                onClick={() => capture("result_opened", resultProperties(props))}
+              >
+                Open
+              </a>
+            </div>
+          </div>
+
+          <div class="grid gap-2">
+            <For each={visibleHits()}>
+              {(hit) => (
+                <TranscriptExcerpt
+                  hit={hit}
+                  query={props.query}
+                  video={props.video}
+                  rank={props.rank}
+                  selected={hit.id === selectedHit()?.id}
+                  onSelect={() => {
+                    setSelectedHitId(hit.id);
+                    capture("result_timestamp_selected", {
+                      ...resultProperties(props),
+                      match_kind: hit.match_kind,
+                    });
+                  }}
+                />
+              )}
+            </For>
+            <Show when={!showAllMoments()}>
+              <button
+                type="button"
+                onClick={() => void expandMoments()}
+                disabled={momentsLoading()}
+                class="inline-flex h-9 items-center justify-center gap-2 border border-vesper-border bg-vesper-bg px-3 text-sm font-medium text-vesper-muted transition hover:border-vesper-yellow hover:text-vesper-yellow"
+              >
+                <Show
+                  when={!momentsLoading()}
+                  fallback={<LoaderCircle class="animate-spin" size={16} aria-hidden="true" />}
+                >
+                  <ChevronDown size={16} aria-hidden="true" />
+                </Show>
+                {momentsLoading() ? "Loading every moment…" : "Show all moments"}
+              </button>
+            </Show>
+            <Show when={momentsError()}>
+              {(message) => <p class="text-sm text-red-300">{message()}</p>}
+            </Show>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+};
+
+const TranscriptExcerpt: Component<{
+  hit: SearchHit;
+  query: string;
+  video: SearchVideoResult;
+  rank: number;
+  selected?: boolean;
+  onSelect?: () => void;
+}> = (props) => {
+  const [feedback, setFeedback] = createSignal<"useful" | "not_useful">();
+  const submitFeedback = (value: "useful" | "not_useful") => {
+    setFeedback(value);
+    capture("result_moment_feedback", {
+      ...resultProperties(props),
+      moment_id: props.hit.id,
+      moment_start_ms: props.hit.t_start_ms,
+      match_kind: props.hit.match_kind,
+      value,
+    });
+  };
+
+  return (
+    <div
+      class={`grid grid-cols-[1fr_auto] items-stretch border bg-vesper-bg transition ${
+        props.selected
+          ? "border-vesper-yellow"
+          : "border-vesper-border hover:border-vesper-yellow/70"
+      }`}
+    >
+      <button
+        type="button"
+        onClick={props.onSelect}
+        class="min-w-0 p-3 text-left text-sm leading-6 text-white"
+      >
+        <Show
+          when={props.hit.match_kind === "transcript"}
+          fallback={
+            <p class="text-vesper-muted">
+              <HighlightedText
+                text={props.hit.title}
+                highlight={props.hit.title_highlight}
+                query={props.query}
+              />
+            </p>
+          }
+        >
+          <Show when={props.hit.prev_text}>
+            <span class="text-vesper-muted">{props.hit.prev_text} </span>
+          </Show>
+          <span class="text-white">
+            <HighlightedText
+              text={props.hit.text}
+              highlight={props.hit.text_highlight}
+              query={props.query}
+            />
+          </span>
+          <Show when={props.hit.next_text}>
+            <span class="text-vesper-muted"> {props.hit.next_text}</span>
+          </Show>
+        </Show>
+      </button>
+      <div class="flex w-10 flex-col border-l border-vesper-border">
+        <MomentFeedbackButton
+          value="useful"
+          selected={feedback() === "useful"}
+          onSelect={submitFeedback}
+        />
+        <MomentFeedbackButton
+          value="not_useful"
+          selected={feedback() === "not_useful"}
+          onSelect={submitFeedback}
+        />
+      </div>
+    </div>
+  );
+};
+
+const resultProperties = (props: { video: SearchVideoResult; rank: number }) => ({
+  video_id: props.video.video_id,
+  creator_handle: props.video.youtuber_handle,
+  content_kind: props.video.content_kind,
+  rank: props.rank,
+});
+
+const MomentFeedbackButton: Component<{
+  value: "useful" | "not_useful";
+  selected: boolean;
+  onSelect: (value: "useful" | "not_useful") => void;
+}> = (props) => {
+  const useful = () => props.value === "useful";
+  return (
+    <button
+      type="button"
+      onClick={() => props.onSelect(props.value)}
+      class={`grid min-h-10 flex-1 place-items-center transition ${
+        props.selected
+          ? useful()
+            ? "bg-vesper-green/15 text-vesper-green"
+            : "bg-red-400/15 text-red-300"
+          : useful()
+            ? "text-vesper-muted hover:text-vesper-green"
+            : "border-t border-vesper-border text-vesper-muted hover:text-red-300"
+      }`}
+      aria-label={useful() ? "Mark moment useful" : "Mark moment not useful"}
+      title={useful() ? "Useful moment" : "Not useful moment"}
+    >
+      <Show when={useful()} fallback={<ThumbsDown size={15} aria-hidden="true" />}>
+        <ThumbsUp size={15} aria-hidden="true" />
+      </Show>
+    </button>
+  );
+};

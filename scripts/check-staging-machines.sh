@@ -15,22 +15,43 @@ require_command() {
 require_command flyctl
 require_command jq
 
-printf 'app\tmachine\tstate\tregion\tsize\timage\tvolume\n'
+if [ "${DETAILS:-0}" = "1" ]; then
+  printf 'app\tmachine\tstate\tregion\tsize\timage\tvolume\n'
+fi
 
-started=0
 apps_with_machines=0
+always_on_ok=true
+indexer_ok=true
 
 for app in $APPS; do
   json="$(flyctl machine list --app "$app" --json 2>/dev/null || printf '[]')"
   if [ "$(printf '%s' "$json" | jq 'length')" -eq 0 ]; then
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$app" "-" "no-machines" "-" "-" "-" "-"
+    if [ "${DETAILS:-0}" = "1" ]; then
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$app" "-" "no-machines" "-" "-" "-" "-"
+    fi
     continue
   fi
 
   apps_with_machines=$((apps_with_machines + 1))
 
-  printf '%s' "$json" |
-    jq -r --arg app "$app" '
+  started_for_app="$(printf '%s' "$json" | jq '[.[] | select(.state == "started")] | length')"
+  case "$app" in
+    ytsearch-indexer-staging)
+      machine_count="$(printf '%s' "$json" | jq 'length')"
+      if [ "$machine_count" -ne 1 ]; then
+        indexer_ok=false
+      fi
+      ;;
+    *)
+      if [ "$started_for_app" -ne 1 ]; then
+        always_on_ok=false
+      fi
+      ;;
+  esac
+
+  if [ "${DETAILS:-0}" = "1" ]; then
+    printf '%s' "$json" |
+      jq -r --arg app "$app" '
       .[] |
       [
         $app,
@@ -50,10 +71,12 @@ for app in $APPS; do
           if length == 0 then "-" else join(",") end
         )
       ] | @tsv'
-
-  started=$((started + $(printf '%s' "$json" | jq '[.[] | select(.state == "started")] | length')))
+  fi
 done
 
-echo
-echo "summary started_machines=$started apps_with_machines=$apps_with_machines expected_staging_machines=3"
-echo "see docs/staging-architecture.md for the active Typesense topology"
+ok=false
+if [ "$apps_with_machines" -eq 3 ] && [ "$always_on_ok" = true ] && [ "$indexer_ok" = true ]; then
+  ok=true
+fi
+
+echo "apps=$apps_with_machines always_on_ok=$always_on_ok one_indexer=$indexer_ok ok=$ok"

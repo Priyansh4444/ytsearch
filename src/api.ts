@@ -8,6 +8,10 @@ import type {
 
 const DEFAULT_PER_PAGE = 12;
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+const SEMANTIC_API_BASE_URL = (import.meta.env.VITE_SEMANTIC_API_BASE_URL ?? API_BASE_URL).replace(
+  /\/$/,
+  "",
+);
 const INDEX_QUEUE_API_BASE_URL = (
   import.meta.env.VITE_INDEX_QUEUE_API_BASE_URL ?? API_BASE_URL
 ).replace(/\/$/, "");
@@ -25,10 +29,12 @@ export async function searchTranscripts(
     per_page: String(DEFAULT_PER_PAGE),
     page: String(request.page),
     sort: request.sort,
+    mode: request.mode,
   });
   if (request.youtuber) params.set("youtuber", request.youtuber);
 
-  const url = `${API_BASE_URL}/api/search?${params.toString()}`;
+  const searchBaseUrl = request.mode === "semantic" ? SEMANTIC_API_BASE_URL : API_BASE_URL;
+  const url = `${searchBaseUrl}/api/search?${params.toString()}`;
   const cached = searchCache.get(url);
   if (cached && cached.expiresAt > Date.now()) return cached.response;
 
@@ -41,6 +47,17 @@ export async function searchTranscripts(
   const body = await responseJson<SearchResponse>(response, "Search returned an invalid response");
   searchCache.set(url, { response: body, expiresAt: Date.now() + SEARCH_CACHE_TTL_MS });
   return body;
+}
+
+export async function searchVideoMoments(query: string, videoId: string): Promise<SearchResponse> {
+  const params = new URLSearchParams({
+    q: query,
+    video_id: videoId,
+    per_page: "100",
+  });
+  const response = await fetch(`${API_BASE_URL}/api/search?${params.toString()}`);
+  if (!response.ok) throw await apiError(response, "Could not load every matching moment");
+  return responseJson<SearchResponse>(response, "Moment search returned an invalid response");
 }
 
 export async function indexedChannels(): Promise<IndexedChannel[]> {

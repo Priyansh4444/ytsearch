@@ -7,8 +7,6 @@ if [ ! -d .git ]; then
 fi
 
 cp scripts/hooks/pre-commit .git/hooks/pre-commit
-cp scripts/hooks/post-commit .git/hooks/post-commit
-chmod +x .git/hooks/pre-commit .git/hooks/post-commit
+chmod +x .git/hooks/pre-commit
 
-echo "Installed git hooks: pre-commit frontend checks, post-commit Cloudflare Pages deploy."
-echo "Set YTSEARCH_SKIP_DEPLOY_ON_COMMIT=1 to skip deploys for a commit."
+echo "Installed pre-commit frontend checks."

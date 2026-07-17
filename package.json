@@ -1,28 +1,30 @@
 {
-  "name": "vite-template-solid",
-  "version": "0.0.0",
-  "description": "",
+  "name": "ytsearch",
+  "version": "0.1.0",
+  "description": "Self-hosted YouTube transcript search",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "start": "vite",
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --project worker/tsconfig.json",
     "test": "bun run test:rust && bun run test:frontend",
     "test:rust": "cargo test --workspace",
     "test:frontend": "vitest run",
     "test:frontend:watch": "vitest",
     "test:frontend:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "perf:frontend": "bun run build && bun scripts/check-frontend-performance.ts",
     "check:all": "scripts/check-all.sh",
     "frontend:check": "bun run typecheck && bun run format:check && bun run lint && bun run build",
-    "deploy:frontend": "scripts/cloudflare-pages-deploy.sh",
+    "deploy:frontend": "scripts/cloudflare-worker-deploy.sh",
     "hooks:install": "scripts/install-git-hooks.sh",
     "serve": "vite preview",
     "api": "cargo run --release -p youtube_api",
     "lint": "oxlint .",
-    "format": "oxfmt --write package.json index.html src .oxfmtrc.json .oxlintrc.json",
-    "format:check": "oxfmt --check package.json index.html src .oxfmtrc.json .oxlintrc.json"
+    "format": "oxfmt --write package.json index.html src worker .oxfmtrc.json .oxlintrc.json",
+    "format:check": "oxfmt --check package.json index.html src worker .oxfmtrc.json .oxlintrc.json"
   },
   "dependencies": {
     "lucide-solid": "^1.24.0",
@@ -30,6 +32,7 @@
     "solid-js": "^1.9.13"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@solidjs/testing-library": "^0.8.10",
     "@testing-library/jest-dom": "^6.9.1",
     "@types/node": "^26.1.0",

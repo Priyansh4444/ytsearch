@@ -28,6 +28,7 @@ primary_region = 'sjc'
 [[mounts]]
   source = 'ytsearch_queue_data'
   destination = '/data'
+  snapshot_retention = 30
 
 [checks]
   [checks.health]

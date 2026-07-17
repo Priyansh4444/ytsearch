@@ -1,0 +1,83 @@
+services:
+  typesense:
+    image: typesense/typesense:30.2
+    command: --data-dir=/data --api-key=${TYPESENSE_SELFHOST_API_KEY:?set TYPESENSE_SELFHOST_API_KEY}
+    restart: unless-stopped
+    ports:
+      - "8108:8108"
+    volumes:
+      - typesense-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8108/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      typesense:
+        condition: service_healthy
+    ports:
+      - "8787:8787"
+    environment: &backend-environment
+      YTSEARCH_API_ADDR: 0.0.0.0:8787
+      YTSEARCH_SEARCH_BACKEND: typesense
+      TYPESENSE_API_URL: http://typesense:8108
+      TYPESENSE_SELFHOST_API_URL: http://typesense:8108
+      TYPESENSE_SEARCH_API_KEY: ${TYPESENSE_SELFHOST_API_KEY}
+      TYPESENSE_ADMIN_API_KEY: ${TYPESENSE_SELFHOST_API_KEY}
+      TYPESENSE_SELFHOST_API_KEY: ${TYPESENSE_SELFHOST_API_KEY}
+      TYPESENSE_COLLECTION: youtube_transcript_chunks
+      YTSEARCH_INDEX_QUEUE_PATH: /queue/index-requests.jsonl
+      YTSEARCH_INDEX_QUEUE_TOKEN: ${YTSEARCH_INDEX_QUEUE_TOKEN:?set YTSEARCH_INDEX_QUEUE_TOKEN}
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      YT_DLP_COOKIES_FILE: ${YT_DLP_COOKIES_FILE:-}
+    volumes:
+      - queue-data:/queue
+
+  worker:
+    build: .
+    command: ["/bin/sh", "/usr/local/bin/cloud-index-queue"]
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      <<: *backend-environment
+      INDEX_QUEUE_API_BASE_URL: http://api:8787
+      BACKENDS: typesense-fly
+      QUEUE_TARGET_BACKEND: typesense-fly
+      QUEUE_LOOP: "1"
+      QUEUE_POLL_INTERVAL_SECONDS: "30"
+      QUEUE_ONE_REQUEST_PER_PASS: "1"
+      DAILY_UPDATE_ENABLED: "1"
+      DAILY_UPDATE_INTERVAL_SECONDS: "86400"
+      DAILY_UPDATE_INITIAL_DELAY_SECONDS: "0"
+      DAILY_UPDATE_LIST_FILE: /app/indexed-channels.txt
+      TRANSCRIPT_CACHE_DIR: /data/transcript-cache
+      JOBS: "1"
+      TYPESENSE_JOBS: "1"
+      ACK_FAILED_REQUESTS: "0"
+    volumes:
+      - transcript-cache:/data
+      - ./scripts/indexed-channels.txt:/app/indexed-channels.txt:ro
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8787}
+        VITE_INDEX_QUEUE_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8787}
+        VITE_POSTHOG_KEY: ${VITE_POSTHOG_KEY:-}
+        VITE_POSTHOG_HOST: ${VITE_POSTHOG_HOST:-https://us.i.posthog.com}
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+
+volumes:
+  typesense-data:
+  queue-data:
+  transcript-cache:

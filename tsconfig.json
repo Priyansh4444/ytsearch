@@ -17,5 +17,5 @@
     "strict": true,
     "types": ["vite/client", "node"],
   },
-  "exclude": ["src/**/*.test.ts"],
+  "exclude": ["src/**/*.test.ts", "worker", "worker-configuration.d.ts"],
 }

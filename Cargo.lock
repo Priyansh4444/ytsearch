@@ -2430,7 +2430,6 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
- "youtube_meilisearch",
  "youtube_search",
  "youtube_typesense",
 ]
@@ -2448,7 +2447,6 @@ dependencies = [
  "tracing-subscriber",
  "youtube_client",
  "youtube_ingest",
- "youtube_meilisearch",
  "youtube_search",
  "youtube_sources",
  "youtube_transcribe",
@@ -2479,32 +2477,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
-]
-
-[[package]]
-name = "youtube_jsonl"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "youtube_ingest",
-]
-
-[[package]]
-name = "youtube_meilisearch"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "youtube_ingest",
- "youtube_search",
 ]
 
 [[package]]

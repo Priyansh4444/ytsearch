@@ -10,6 +10,11 @@ cat > "$tmp/ok.json" <<'JSON'
 JSON
 SNAPSHOT_FILE="$tmp/ok.json" DOCTOR_STATE_FILE="$tmp/state.json" "$SCRIPT_DIR/doctor.sh" | grep -F 'OK serving; indexing @test 2/3' >/dev/null
 
+cat > "$tmp/idle.json" <<'JSON'
+{"frontend_http":200,"engine_http":200,"search":{"http":200},"indexing":{"status":"idle"},"worker":{"state":"stopped"}}
+JSON
+SNAPSHOT_FILE="$tmp/idle.json" "$SCRIPT_DIR/doctor.sh" | grep -F 'OK serving; indexer idle' >/dev/null
+
 jq -nc --argjson last_progress "$(( $(date +%s) - 3600 ))" \
   '{handle:"@test",indexed:"2",last_progress:$last_progress}' > "$tmp/stalled-state.json"
 if SNAPSHOT_FILE="$tmp/ok.json" DOCTOR_STATE_FILE="$tmp/stalled-state.json" STALL_MINUTES=30 \

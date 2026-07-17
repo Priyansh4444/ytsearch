@@ -128,20 +128,20 @@ impl YtDlpTranscriptSource {
             .arg("--dump-json")
             .arg("--no-warnings");
 
-        if let Ok(cookies_file) = env::var(YT_DLP_COOKIES_FILE_ENV) {
-            if !cookies_file.trim().is_empty() {
-                command.arg("--cookies").arg(cookies_file);
-            }
+        if let Ok(cookies_file) = env::var(YT_DLP_COOKIES_FILE_ENV)
+            && !cookies_file.trim().is_empty()
+        {
+            command.arg("--cookies").arg(cookies_file);
         }
-        if let Ok(extractor_args) = env::var(YT_DLP_EXTRACTOR_ARGS_ENV) {
-            if !extractor_args.trim().is_empty() {
-                command.arg("--extractor-args").arg(extractor_args);
-            }
+        if let Ok(extractor_args) = env::var(YT_DLP_EXTRACTOR_ARGS_ENV)
+            && !extractor_args.trim().is_empty()
+        {
+            command.arg("--extractor-args").arg(extractor_args);
         }
-        if let Ok(user_agent) = env::var(YT_DLP_USER_AGENT_ENV) {
-            if !user_agent.trim().is_empty() {
-                command.arg("--user-agent").arg(user_agent);
-            }
+        if let Ok(user_agent) = env::var(YT_DLP_USER_AGENT_ENV)
+            && !user_agent.trim().is_empty()
+        {
+            command.arg("--user-agent").arg(user_agent);
         }
 
         let output = timeout(
@@ -210,20 +210,20 @@ impl YtDlpTranscriptSource {
         if let Some(max_videos) = max_videos {
             command.arg("--playlist-end").arg(max_videos.to_string());
         }
-        if let Ok(cookies_file) = env::var(YT_DLP_COOKIES_FILE_ENV) {
-            if !cookies_file.trim().is_empty() {
-                command.arg("--cookies").arg(cookies_file);
-            }
+        if let Ok(cookies_file) = env::var(YT_DLP_COOKIES_FILE_ENV)
+            && !cookies_file.trim().is_empty()
+        {
+            command.arg("--cookies").arg(cookies_file);
         }
-        if let Ok(extractor_args) = env::var(YT_DLP_EXTRACTOR_ARGS_ENV) {
-            if !extractor_args.trim().is_empty() {
-                command.arg("--extractor-args").arg(extractor_args);
-            }
+        if let Ok(extractor_args) = env::var(YT_DLP_EXTRACTOR_ARGS_ENV)
+            && !extractor_args.trim().is_empty()
+        {
+            command.arg("--extractor-args").arg(extractor_args);
         }
-        if let Ok(user_agent) = env::var(YT_DLP_USER_AGENT_ENV) {
-            if !user_agent.trim().is_empty() {
-                command.arg("--user-agent").arg(user_agent);
-            }
+        if let Ok(user_agent) = env::var(YT_DLP_USER_AGENT_ENV)
+            && !user_agent.trim().is_empty()
+        {
+            command.arg("--user-agent").arg(user_agent);
         }
 
         let output = timeout(

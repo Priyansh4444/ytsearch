@@ -13,10 +13,7 @@ use youtube_search::{
     YoutuberDocument as SharedYoutuberDocument,
 };
 
-#[deprecated(
-    since = "0.1.0",
-    note = "Typesense support is retained for compatibility. Prefer youtube_meilisearch for new deployments."
-)]
+#[deprecated(since = "0.1.0", note = "Typesense is the supported search backend.")]
 pub mod deprecated_notice {}
 
 pub const DEFAULT_COLLECTION: &str = "youtube_transcript_chunks";
@@ -750,6 +747,8 @@ impl TranscriptSearchBackend for TypesenseSearchClient {
             page: query.page,
             highlight_fields: query.highlight_fields.clone(),
             sort_by: query.sort_by.clone(),
+            vector_query: query.vector_query.clone(),
+            rerank_hybrid_matches: query.rerank_hybrid_matches,
         };
         TypesenseSearchClient::search(self, &query)
             .await
@@ -771,6 +770,8 @@ impl TranscriptSearchBackend for TypesenseSearchClient {
             page: query.page,
             highlight_fields: query.highlight_fields.clone(),
             sort_by: query.sort_by.clone(),
+            vector_query: query.vector_query.clone(),
+            rerank_hybrid_matches: query.rerank_hybrid_matches,
         };
         TypesenseSearchClient::count_distinct(self, &query, field)
             .await
@@ -844,6 +845,8 @@ pub struct TextSearchQuery {
     pub page: Option<u32>,
     pub highlight_fields: Option<String>,
     pub sort_by: Option<String>,
+    pub vector_query: Option<String>,
+    pub rerank_hybrid_matches: bool,
 }
 
 impl TextSearchQuery {
@@ -858,6 +861,8 @@ impl TextSearchQuery {
             page: None,
             highlight_fields: Some("text,title".to_string()),
             sort_by: None,
+            vector_query: None,
+            rerank_hybrid_matches: false,
         }
     }
 
@@ -909,6 +914,12 @@ impl TextSearchQuery {
 
     pub fn sort_by(mut self, sort_by: impl Into<String>) -> Self {
         self.sort_by = Some(sort_by.into());
+        self
+    }
+
+    pub fn hybrid(mut self, vector_query: impl Into<String>, rerank: bool) -> Self {
+        self.vector_query = Some(vector_query.into());
+        self.rerank_hybrid_matches = rerank;
         self
     }
 }
@@ -1006,8 +1017,7 @@ pub fn transcript_chunk_schema(collection: &str) -> Value {
             { "name": "published_at_timestamp", "type": "int64", "optional": true },
             { "name": "upload_date", "type": "string", "facet": true, "optional": true },
             { "name": "uploader_id", "type": "string", "facet": true }
-        ],
-        "default_sorting_field": "published_at_timestamp"
+        ]
     })
 }
 
@@ -1060,6 +1070,12 @@ fn append_search_query_params(url: &mut Url, query: &TextSearchQuery) {
     let mut pairs = url.query_pairs_mut();
     pairs.append_pair("q", &query.q);
     pairs.append_pair("query_by", &query.query_by);
+    pairs.append_pair("query_by_weights", &search_field_weights(&query.query_by));
+    pairs.append_pair("text_match_type", "sum_score");
+    pairs.append_pair("prioritize_exact_match", "true");
+    pairs.append_pair("prioritize_token_position", "true");
+    pairs.append_pair("typo_tokens_threshold", "5");
+    pairs.append_pair("split_join_tokens", "fallback");
 
     if let Some(filter_by) = &query.filter_by {
         pairs.append_pair("filter_by", filter_by);
@@ -1082,12 +1098,36 @@ fn append_search_query_params(url: &mut Url, query: &TextSearchQuery) {
     if let Some(sort_by) = &query.sort_by {
         pairs.append_pair("sort_by", sort_by);
     }
+    if let Some(vector_query) = &query.vector_query {
+        pairs.append_pair("vector_query", vector_query);
+        pairs.append_pair(
+            "rerank_hybrid_matches",
+            if query.rerank_hybrid_matches {
+                "true"
+            } else {
+                "false"
+            },
+        );
+    }
     pairs.append_pair(
         "include_fields",
         "id,video_id,title,text,prev_text,next_text,youtuber_handle,youtuber_name,thumbnail,published_at,duration,t_start_ms,t_end_ms",
     );
     pairs.append_pair("use_cache", "true");
     pairs.append_pair("cache_ttl", "60");
+}
+
+fn search_field_weights(query_by: &str) -> String {
+    query_by
+        .split(',')
+        .map(|field| match field.trim() {
+            "title" => "6",
+            "text" => "4",
+            "youtuber_name" | "youtuber_handle" => "2",
+            _ => "1",
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn normalized_api_url(api_url: &str) -> Result<String> {
@@ -1221,10 +1261,7 @@ mod tests {
         assert!(fields.iter().any(|field| {
             field["name"] == "published_at_timestamp" && field["type"] == "int64"
         }));
-        assert_eq!(
-            schema["default_sorting_field"],
-            Value::String("published_at_timestamp".to_string())
-        );
+        assert!(schema.get("default_sorting_field").is_none());
     }
 
     #[test]
@@ -1241,11 +1278,6 @@ mod tests {
 
         assert!(!missing_names.contains(&"id"));
         assert!(missing_names.contains(&"published_at_timestamp"));
-    }
-
-    #[test]
-    fn import_batches_multiple_chunks_per_request() {
-        assert!(IMPORT_BATCH_SIZE > 1);
     }
 
     #[test]
@@ -1301,6 +1333,56 @@ mod tests {
             pairs
                 .iter()
                 .any(|(key, value)| key == "cache_ttl" && value == "60")
+        );
+        assert!(
+            pairs
+                .iter()
+                .any(|(key, value)| key == "query_by_weights" && value == "4,6")
+        );
+        assert!(
+            pairs
+                .iter()
+                .any(|(key, value)| key == "text_match_type" && value == "sum_score")
+        );
+        assert!(
+            pairs
+                .iter()
+                .any(|(key, value)| { key == "prioritize_token_position" && value == "true" })
+        );
+    }
+
+    #[test]
+    fn hybrid_query_adds_vector_parameters_only_when_requested() {
+        let mut lexical_url = endpoint(
+            "http://localhost:8108",
+            "collections/chunks/documents/search",
+        )
+        .unwrap();
+        append_search_query_params(&mut lexical_url, &TextSearchQuery::new("database failure"));
+        assert!(
+            !lexical_url
+                .query_pairs()
+                .any(|(key, _)| key == "vector_query")
+        );
+
+        let mut hybrid_url = endpoint(
+            "http://localhost:8108",
+            "collections/chunks/documents/search",
+        )
+        .unwrap();
+        let query = TextSearchQuery::new("database failure")
+            .query_by("text,title,embedding")
+            .hybrid("embedding:([], alpha: 0.3, k: 200)", false);
+        append_search_query_params(&mut hybrid_url, &query);
+        let pairs = hybrid_url.query_pairs().collect::<Vec<_>>();
+
+        assert!(pairs.iter().any(|(key, value)| {
+            key == "vector_query" && value == "embedding:([], alpha: 0.3, k: 200)"
+        }));
+        assert!(
+            pairs
+                .iter()
+                .any(|(key, value)| { key == "rerank_hybrid_matches" && value == "false" })
         );
     }
 

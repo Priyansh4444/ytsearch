@@ -6,14 +6,10 @@ BACKENDS="${BACKENDS:-typesense-fly}"
 MODE="${MODE:-update}"
 JOBS="${JOBS:-2}"
 TYPESENSE_JOBS="${TYPESENSE_JOBS:-3}"
-MEILI_JOBS="${MEILI_JOBS:-2}"
 COLLECTION="${COLLECTION:-youtube_transcript_chunks}"
 VIDEO_TIMEOUT_SECONDS="${VIDEO_TIMEOUT_SECONDS:-300}"
 EXISTING_TAIL="${EXISTING_TAIL:-0}"
 TRANSCRIPT_CACHE_DIR="${TRANSCRIPT_CACHE_DIR:-/data/transcript-cache}"
-MEILI_WAIT_FOR_TASKS="${MEILI_WAIT_FOR_TASKS:-1}"
-
-export MEILI_WAIT_FOR_TASKS
 mkdir -p "$TRANSCRIPT_CACHE_DIR"
 
 if [ -n "${YOUTUBE_API_KEY_FILE:-}" ] && [ -f "$YOUTUBE_API_KEY_FILE" ]; then
@@ -71,10 +67,6 @@ if has_backend typesense-fly; then
     export TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SELFHOST_API_KEY"
     index_backend typesense-fly typesense "${TYPESENSE_JOBS:-$JOBS}"
   fi
-fi
-
-if has_backend meilisearch; then
-  index_backend meilisearch meilisearch "${MEILI_JOBS:-$JOBS}"
 fi
 
 echo "cloud-indexer: done"

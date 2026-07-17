@@ -3,6 +3,10 @@ set -eu
 
 # Confirm the self-hosted Typesense Fly path is healthy and benchmarkable.
 
+if [ "${VERBOSE:-0}" != "1" ]; then
+  FORMAT="${FORMAT:-json}" exec "$(dirname "$0")/agent-status.sh"
+fi
+
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
 

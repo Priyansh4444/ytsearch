@@ -1,11 +1,6 @@
 #!/usr/bin/env sh
 set -eu
 
-APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-staging}"
-FLY_ORG="${FLY_ORG:-pronsh-sandbox}"
-FLY_REGION="${FLY_REGION:-sjc}"
-VOLUME_NAME="${INDEXER_VOLUME_NAME:-ytsearch_indexer_data}"
-VOLUME_SIZE_GB="${INDEXER_VOLUME_SIZE_GB:-10}"
 LIST_FILE="${1:-scripts/indexed-channels.txt}"
 
 if [ "$#" -gt 0 ]; then
@@ -19,6 +14,16 @@ fi
 
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
+
+APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer}"
+FLY_REGION="${FLY_REGION:-sjc}"
+VOLUME_NAME="${INDEXER_VOLUME_NAME:-ytsearch_indexer_data}"
+VOLUME_SIZE_GB="${INDEXER_VOLUME_SIZE_GB:-10}"
+
+if [ -z "${FLY_ORG:-}" ]; then
+  echo "Set FLY_ORG to the Fly.io organization that should own the indexer." >&2
+  exit 1
+fi
 
 flyctl apps create "$APP_NAME" --org "$FLY_ORG" >/dev/null 2>&1 || true
 
@@ -87,10 +92,8 @@ exec flyctl machine run \
   --env "MODE=${MODE:-update}" \
   --env "JOBS=${JOBS:-3}" \
   --env "TYPESENSE_JOBS=${TYPESENSE_JOBS:-3}" \
-  --env "MEILI_JOBS=${MEILI_JOBS:-2}" \
   --env "EXISTING_TAIL=${EXISTING_TAIL:-0}" \
   --env "VIDEO_TIMEOUT_SECONDS=${VIDEO_TIMEOUT_SECONDS:-300}" \
-  --env "MEILI_WAIT_FOR_TASKS=${MEILI_WAIT_FOR_TASKS:-1}" \
   --env "RUST_LOG=${RUST_LOG:-youtube_cli=info,youtube_sources=info,youtube_ytdlp=warn}" \
   ${image_ref:-.} \
   /bin/sh /usr/local/bin/cloud-index-all "$@"

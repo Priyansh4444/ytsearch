@@ -20,15 +20,6 @@ has_backend() {
   esac
 }
 
-if has_backend meilisearch; then
-  if [ "${ALLOW_LEGACY_MEILI:-0}" != "1" ]; then
-    echo "Meilisearch is retired. Set ALLOW_LEGACY_MEILI=1 only for historical migration work." >&2
-    exit 1
-  fi
-  cargo run --release -p youtube_cli -- \
-    refresh-youtuber-counts-list "$LIST_FILE" --backend meilisearch
-fi
-
 if has_backend typesense-fly; then
   if [ -z "${TYPESENSE_SELFHOST_API_KEY:-}" ] || [ -z "${TYPESENSE_SELFHOST_API_URL:-}" ]; then
     echo "Skipping typesense-fly: missing TYPESENSE_SELFHOST_API_KEY or TYPESENSE_SELFHOST_API_URL" >&2

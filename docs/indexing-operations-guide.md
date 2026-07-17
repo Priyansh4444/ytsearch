@@ -9,9 +9,7 @@ The active Pages deployment points search at the Typesense API and posts
 | --- | --- | --- |
 | https://ytsearch-755.pages.dev | `ytsearch-api-typesense-fly-staging` | `ytsearch-api-typesense-fly-staging` |
 
-The Pages production deployment is the active Typesense frontend. Meilisearch is
-retired; its machines and data were destroyed. Meilisearch scripts are
-legacy-only and fail closed.
+The Pages production deployment is the active Typesense frontend.
 
 ## One-Off Full Update
 
@@ -38,6 +36,21 @@ tail -f /tmp/ytsearch-index-all.log
 Raise indexing concurrency only after adding an ingest replica or proving the
 engine has write headroom under production searches. The current single-node
 Typesense engine became unavailable when three concurrent writers accumulated.
+
+## Scoped Conference Playlists
+
+`scripts/conference-playlists.tsv` contains official, event-only playlists for
+NVIDIA GTC 2026, Google I/O 2026 All Sessions, and Apple WWDC26 Sessions. Run
+the resumable single-writer importer with:
+
+```bash
+BACKEND=typesense scripts/index-conference-playlists.sh
+```
+
+Completed video IDs are recorded under `data/conference-index-state`, and
+captions use the normal transcript cache. Failures are logged and do not stop
+later videos. Update the manifest deliberately for a new conference year; do
+not replace these scopes with broad channel handles.
 
 ## Cloud Indexing
 
@@ -73,9 +86,8 @@ You can also set `YT_DLP_EXTRACTOR_ARGS` or `YT_DLP_USER_AGENT` locally before r
 Do not attempt to generate or fabricate a YouTube login cookie in cloud infrastructure. A valid cookie represents an authenticated browser session and is subject to YouTube's controls. The supported recovery paths are: use public captions without cookies, mount an existing authorized-session export through the secret script, or seed `/data/transcript-cache` from a permitted local run. The YouTube Data API fallback supplies discovery and metadata only; it does not provide transcript access.
 
 The shared `TranscriptChunkSource` and sink ports remain available for a future
-backend migration. The old Meilisearch copy scripts are legacy-only because
-the Meilisearch data was intentionally destroyed; repair Typesense from the
-transcript cache or a permitted YouTube re-fetch instead.
+backend migration. Repair Typesense from the transcript cache or a permitted
+YouTube re-fetch.
 
 Start a conservative cloud update against the active Typesense backend:
 
@@ -173,16 +185,40 @@ POST https://ytsearch-api-typesense-fly-staging.fly.dev/api/index-requests
 ```
 
 The queue is a simple JSONL file on a Fly volume at `/data/index-requests.jsonl`.
-Each frontend request creates one `typesense-fly` row and is deduplicated by
-handle plus target backend. Meilisearch rows are legacy data and are refused by
-the worker.
+Each frontend request creates one `typesense-fly` row with `pending` status and
+is deduplicated by handle plus target backend. Pending requests are inert: the
+indexer only reads `queued` and `running` rows.
+
+Review pending requests interactively:
+
+```bash
+scripts/review-index-requests.sh
+```
+
+The CLI shows each handle, request ID, backend, request time, and note. Choose
+`a` to approve, `r` to reject, `s` to leave the row pending, or `q` to stop.
+Approving changes the row to `queued` and sends the Cloudflare wake message that
+starts the on-demand indexer. Rejecting retains a terminal `rejected` row for
+the frontend and operator audit without starting a Machine.
+
+Non-interactive forms are available for automation and direct review:
+
+```bash
+scripts/review-index-requests.sh list
+scripts/review-index-requests.sh approve REQUEST_ID
+scripts/review-index-requests.sh reject REQUEST_ID
+```
+
+The review CLI defaults to `https://search.pronsh.dev` so approval passes
+through the Worker wake producer. Override `INDEX_REVIEW_API_BASE_URL` only with
+another deployment that implements the same approval-and-wake route.
 
 The API machine owns this JSONL volume. Multiple queue consumers would need
 shared locking or a real queue/DB; otherwise two machines can race on the same
 request log. If this needs horizontal scale, move queue storage to Cloudflare
 Queues plus D1/R2, Fly Postgres, or another single-writer service first.
 
-Pull queued requests locally:
+Pull all retained request rows locally, including pending and terminal rows:
 
 ```bash
 scripts/index-queue-pull.sh
@@ -205,43 +241,66 @@ JOBS=1 QUEUE_POLL_INTERVAL_SECONDS=30 scripts/fly-run-queue-indexers.sh
 scripts/check-queue-indexers.sh
 ```
 
-`fly-run-queue-indexer.sh` refuses a missing target or a multi-backend scope. Do not run two daemons with the same `QUEUE_TARGET_BACKEND`. If a backend fails, only that backend's request remains queued and is retried on a later pass.
+After the request queue empties, the persistent worker immediately runs the
+non-destructive update list. A completed list pass has a five-minute cooldown
+before the next repair pass, so incomplete or newly published videos are
+continuously revisited without a tight loop. Queue requests are checked between
+channels and retain priority over the background repair pass.
+
+`fly-run-queue-indexer.sh` refuses a missing target or a multi-backend scope. Do not run two daemons with the same `QUEUE_TARGET_BACKEND`. If channel validation or indexing fails, the row is retained with `failed` status and no longer blocks newer work. Re-submit the handle after correcting the spelling, cookies, or upstream issue to create a fresh retry row.
 
 ### Typesense publication-sort migration
 
-Typesense now uses the numeric `published_at_timestamp` field for newest and oldest results. Adding the field to an existing collection is additive, but old chunks do not acquire a value automatically. Prefer non-destructive Meilisearch-to-Typesense chunk copies to backfill existing creators. The upserted canonical chunks include the derived timestamp without deleting the Typesense copy first:
+Typesense uses the numeric `published_at_timestamp` field for newest and oldest
+results. Existing chunks acquire it through non-destructive update ingestion.
+A destructive source re-extraction remains available only with both
+`--allow-destructive-rewipe` and `ALLOW_DESTRUCTIVE_REWIPE=1` in the wrappers.
 
-```bash
-ytsearch copy-youtuber-chunks @t3dotgg \
-  --source-backend meilisearch --target-backend typesense --batch-size 5000
-```
-
-Run large copies during lower write load. A destructive source re-extraction remains available only with both `--allow-destructive-rewipe` and `ALLOW_DESTRUCTIVE_REWIPE=1` in the wrappers.
-
-Enable a daily caption/video update pass from YouTube for the indexed-channel list on the same daemon:
+Enable the continuous caption/video repair pass used by staging:
 
 ```bash
 DAILY_UPDATE_ENABLED=1 \
-DAILY_UPDATE_INITIAL_DELAY_SECONDS=86400 \
-DAILY_UPDATE_INTERVAL_SECONDS=86400 \
+DAILY_UPDATE_INITIAL_DELAY_SECONDS=0 \
+DAILY_UPDATE_INTERVAL_SECONDS=300 \
 DAILY_UPDATE_LIST_SOURCE=scripts/indexed-channels.txt \
 JOBS=1 \
 scripts/fly-run-queue-indexers.sh
 ```
 
-In the split daemon setup, each daily update runs `index-youtubers --mode update` and then `refresh-youtuber-counts-list` for its own backend. Count reconciliation reads only backend chunks and does not contact YouTube. Run `refresh-youtubers` separately when profile metadata, public counts, or avatars need enrichment. `DAILY_UPDATE_INITIAL_DELAY_SECONDS=86400` means the first daily update starts about one day after the daemon launches; set it to `0` only when you want an immediate catch-up run. `EXISTING_TAIL=0` scans the full channel list so older missing captions can eventually be repaired; use a positive value only for a faster newest-first pass.
+Each repair pass runs `index-youtubers --mode update` and then
+`refresh-youtuber-counts-list`. Count reconciliation reads only backend chunks
+and does not contact YouTube. Run `refresh-youtubers` separately when profile
+metadata, public counts, or avatars need enrichment. `EXISTING_TAIL=0` scans the
+full channel list so older missing captions can eventually be repaired; use a
+positive value only for a faster newest-first pass. The interval is a cooldown
+after a complete pass, not a timer that interrupts active indexing.
 
 `scripts/fly-set-indexer-secrets.sh` uses Fly's staged-secret path because the indexers are raw Machines rather than a Fly Launch process group. Cookie and optional YouTube API values are stored as base64 file secrets. Recreate each worker deliberately after staging changes; launchers mount the files and entrypoints load the API key only into the child process environment. The cloud image includes Deno and `yt-dlp-ejs` for current YouTube JavaScript challenges.
 
 Index one request at your leisure:
 
 ```bash
-cargo run --release -p youtube_cli -- index-youtuber @somehandle --backend meilisearch --mode update --jobs 8
+cargo run --release -p youtube_cli -- index-youtuber @somehandle --backend typesense --mode update --jobs 1
 TYPESENSE_API_URL=https://ytsearch-typesense-staging.fly.dev \
 TYPESENSE_ADMIN_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
 TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
 cargo run --release -p youtube_cli -- index-youtuber @somehandle --backend typesense --mode update --jobs 8
 ```
+
+Cancel the queue row first if the channel is currently running, then explicitly
+remove its profile and transcript chunks:
+
+```bash
+scripts/index-queue-ack.sh REQUEST_ID
+TYPESENSE_API_URL="$TYPESENSE_SELFHOST_API_URL" \
+TYPESENSE_ADMIN_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
+cargo run --release -p youtube_cli -- remove-youtuber @somehandle \
+  --backend typesense --allow-destructive-remove
+```
+
+The acknowledgement flag is mandatory. Stop or restart the single worker before
+removing a currently active channel so it cannot continue writing after the
+deletion.
 
 Ack the request after the indexes are updated:
 
@@ -262,7 +321,6 @@ scripts/refresh-all-backend-counts.sh scripts/indexed-channels.txt
 Quickly check what each frontend/API currently reports:
 
 ```bash
-API_BASE_URL="$MEILI_API_BASE_URL" scripts/export-indexed-channels-list.sh /tmp/meili-channels.txt
 API_BASE_URL="$TYPESENSE_FLY_API_BASE_URL" scripts/export-indexed-channels-list.sh /tmp/typesense-fly-channels.txt
 cat /tmp/*-channels.txt
 ```
@@ -274,12 +332,6 @@ scripts/check-frontend-backends.sh
 ```
 
 ## Deploys
-
-Queue app:
-
-```bash
-scripts/fly-deploy-index-queue.sh
-```
 
 Self-hosted Typesense engine and API:
 
@@ -315,10 +367,4 @@ For the representative query suite, including BatteryGate, Linux exploit, stopwo
 
 ```bash
 RUNS=10 scripts/benchmark-search-cases.sh
-```
-
-Global:
-
-```bash
-QUERY=fable YOUTUBER=@t3dotgg scripts/benchmark-search-globalping.sh
 ```

@@ -36,6 +36,7 @@ export type SearchVideoResult = {
 };
 
 export type SearchSort = "relevance" | "published_desc" | "published_asc";
+export type SearchMode = "lexical" | "semantic";
 
 export type SearchResponse = {
   query: string;
@@ -47,6 +48,7 @@ export type SearchResponse = {
   page: number;
   per_page: number;
   sort: SearchSort;
+  mode: SearchMode;
   has_next_page: boolean;
   hits: SearchHit[];
   videos: SearchVideoResult[];
@@ -57,6 +59,7 @@ export type SearchRequest = {
   youtuber: string;
   page: number;
   sort: SearchSort;
+  mode: SearchMode;
 };
 
 export type IndexedChannel = {
@@ -77,12 +80,15 @@ export type IndexQueueRequest = {
   note?: string;
   requested_at: number;
   source_backend: string;
-  status: string;
+  status: IndexRequestStatus;
 };
+
+export type IndexRequestStatus = "pending" | "queued" | "running" | "failed" | "rejected" | "idle";
 
 export type IndexStatus = {
   handle: string;
-  status: "queued" | "running" | "idle";
+  status: IndexRequestStatus;
+  channel?: IndexedChannel;
   request_id?: string;
   target_backend?: string;
 };

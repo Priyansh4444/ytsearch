@@ -1,16 +1,16 @@
 #!/usr/bin/env sh
 set -eu
 
-APP_NAME="${TYPESENSE_APP_NAME:-ytsearch-typesense-staging}"
-FLY_ORG="${FLY_ORG:-pronsh-sandbox}"
-FLY_REGION="${FLY_REGION:-sjc}"
-
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
 
-APP_NAME="${TYPESENSE_APP_NAME:-$APP_NAME}"
-FLY_ORG="${FLY_ORG:-pronsh-sandbox}"
+APP_NAME="${TYPESENSE_APP_NAME:-ytsearch-typesense}"
 FLY_REGION="${FLY_REGION:-sjc}"
+
+if [ -z "${FLY_ORG:-}" ]; then
+  echo "Set FLY_ORG to the Fly.io organization that should own the app." >&2
+  exit 1
+fi
 
 if [ -n "${FLYIO_TOKEN:-}" ]; then
   export FLY_ACCESS_TOKEN="$FLYIO_TOKEN"

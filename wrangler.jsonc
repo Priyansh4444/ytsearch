@@ -1,6 +1,37 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "ytsearch",
-  "compatibility_date": "2026-07-04",
-  "pages_build_output_dir": "dist",
+  "name": "ytsearch-search",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-07-14",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"],
+  },
+  "routes": [{ "pattern": "search.pronsh.dev", "custom_domain": true }],
+  "vars": {
+    "API_BASE_URL": "https://ytsearch-api-typesense-fly-staging.fly.dev",
+    "FLY_API_BASE_URL": "https://api.machines.dev",
+    "FLY_APP_NAME": "ytsearch-indexer-staging",
+    "FLY_MACHINE_ID": "78410e0f165138",
+  },
+  "queues": {
+    "producers": [{ "binding": "INDEX_WAKE_QUEUE", "queue": "ytsearch-indexer-wake" }],
+    "consumers": [
+      {
+        "queue": "ytsearch-indexer-wake",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "retry_delay": 30,
+      },
+    ],
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 },
+  },
 }

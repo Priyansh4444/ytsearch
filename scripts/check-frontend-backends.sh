@@ -42,7 +42,35 @@ check_api() {
     /tmp/ytsearch-check-response.json >/dev/null
 }
 
+check_frontend_config() {
+  label="$1"
+  frontend_url="$2"
+  expected_api_url="$3"
+  html_file="/tmp/ytsearch-check-frontend.html"
+  bundle_file="/tmp/ytsearch-check-frontend.js"
+
+  curl -fsS --max-time "$CURL_MAX_TIME" "$frontend_url" >"$html_file"
+  asset_path="$(sed -n 's/.*src="\([^"?]*assets\/index-[^"]*\.js\)".*/\1/p' "$html_file" | head -n 1)"
+  if [ -z "$asset_path" ]; then
+    echo "$label failed: could not find the frontend entry bundle" >&2
+    exit 1
+  fi
+
+  curl -fsS --max-time "$CURL_MAX_TIME" "${frontend_url%/}/$asset_path" >"$bundle_file"
+  if grep -q 'ytsearch-index-queue-staging.fly.dev' "$bundle_file"; then
+    echo "$label failed: bundle still references the retired queue API" >&2
+    exit 1
+  fi
+  if ! grep -q "${expected_api_url#https://}" "$bundle_file"; then
+    echo "$label failed: expected API origin is missing from the bundle" >&2
+    exit 1
+  fi
+  echo "$label config ok: active API owns search and queue routes"
+}
+
 required_env TYPESENSE_FLY_API_BASE_URL
 
 check_url "frontend typesense" "$TYPESENSE_FRONTEND_URL"
+check_frontend_config "frontend typesense" "$TYPESENSE_FRONTEND_URL" "$TYPESENSE_FLY_API_BASE_URL"
 check_api "frontend typesense" "$TYPESENSE_FLY_API_BASE_URL"
+check_url "frontend typesense queue" "$TYPESENSE_FLY_API_BASE_URL/api/index-status"

@@ -17,6 +17,7 @@ primary_region = 'sjc'
 [mounts]
   source = 'typesense_data'
   destination = '/typesense-data'
+  snapshot_retention = 30
 
 [http_service]
   internal_port = 8108
@@ -27,9 +28,11 @@ primary_region = 'sjc'
   processes = ['app']
 
 [[vm]]
-  memory = '4096mb'
-  cpu_kind = 'shared'
-  cpus = 2
+  # The active corpus uses more than 3.3 GB resident memory. Fly shared CPU
+  # Machines cap out at 4 GB, leaving too little headroom for indexing bursts.
+  memory = '8192mb'
+  cpu_kind = 'performance'
+  cpus = 4
 
 [checks]
   [checks.health]

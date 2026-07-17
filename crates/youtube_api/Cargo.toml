@@ -19,6 +19,5 @@ tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "signal", "
 tower-http = { version = "0.6", features = ["compression-gzip", "cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-youtube_meilisearch = { path = "../youtube_meilisearch" }
 youtube_search = { path = "../youtube_search" }
 youtube_typesense = { path = "../youtube_typesense" }

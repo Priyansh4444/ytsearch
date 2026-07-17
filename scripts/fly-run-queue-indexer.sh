@@ -1,12 +1,20 @@
 #!/usr/bin/env sh
 set -eu
 
-APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-staging}"
-FLY_ORG="${FLY_ORG:-pronsh-sandbox}"
+# shellcheck disable=SC1091
+. "$(dirname "$0")/load-env.sh"
+
+APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer}"
 FLY_REGION="${FLY_REGION:-sjc}"
 QUEUE_TARGET_BACKEND="${QUEUE_TARGET_BACKEND:-}"
+ON_DEMAND="${ON_DEMAND:-0}"
 VOLUME_SIZE_GB="${INDEXER_VOLUME_SIZE_GB:-10}"
 DAILY_UPDATE_LIST_SOURCE="${DAILY_UPDATE_LIST_SOURCE:-scripts/indexed-channels.txt}"
+
+if [ -z "${FLY_ORG:-}" ]; then
+  echo "Set FLY_ORG to the Fly.io organization that should own the indexer." >&2
+  exit 1
+fi
 
 case "$QUEUE_TARGET_BACKEND" in
   typesense-fly)
@@ -31,9 +39,6 @@ fi
 
 VOLUME_NAME="${INDEXER_VOLUME_NAME:-$DEFAULT_VOLUME_NAME}"
 
-# shellcheck disable=SC1091
-. "$(dirname "$0")/load-env.sh"
-
 flyctl apps create "$APP_NAME" --org "$FLY_ORG" >/dev/null 2>&1 || true
 
 if ! flyctl volumes list --app "$APP_NAME" | grep -q "$VOLUME_NAME"; then
@@ -53,18 +58,28 @@ fi
 
 daily_update_enabled="${DAILY_UPDATE_ENABLED:-}"
 if [ -z "$daily_update_enabled" ]; then
-  if [ "$QUEUE_DAEMON" = "1" ]; then
+  if [ "$QUEUE_DAEMON" = "1" ] && [ "$ON_DEMAND" != "1" ]; then
     daily_update_enabled="1"
   else
     daily_update_enabled="0"
   fi
 fi
 
-daily_update_interval_seconds="${DAILY_UPDATE_INTERVAL_SECONDS:-86400}"
+daily_update_interval_seconds="${DAILY_UPDATE_INTERVAL_SECONDS:-300}"
 daily_update_initial_delay_seconds="${DAILY_UPDATE_INITIAL_DELAY_SECONDS:-}"
 if [ -z "$daily_update_initial_delay_seconds" ]; then
   # Start a complete update after deployment, then repeat on the normal cadence.
   daily_update_initial_delay_seconds="0"
+fi
+case "$daily_update_interval_seconds" in
+  ''|*[!0-9]*)
+    echo "DAILY_UPDATE_INTERVAL_SECONDS must be an integer" >&2
+    exit 1
+    ;;
+esac
+if [ "$daily_update_enabled" = "1" ] && [ "$daily_update_interval_seconds" -lt 60 ]; then
+  echo "DAILY_UPDATE_INTERVAL_SECONDS must be at least 60" >&2
+  exit 1
 fi
 
 restart_policy="no"
@@ -72,6 +87,19 @@ remove_arg="--rm"
 if [ "$QUEUE_DAEMON" = "1" ]; then
   restart_policy="always"
   remove_arg=""
+fi
+if [ "$ON_DEMAND" = "1" ]; then
+  restart_policy="no"
+  remove_arg=""
+fi
+
+indexer_cpu_kind="${INDEXER_CPU_KIND:-performance}"
+indexer_cpus="${INDEXER_CPUS:-2}"
+idle_exit_after_seconds="${IDLE_EXIT_AFTER_SECONDS:-0}"
+if [ "$ON_DEMAND" = "1" ]; then
+  indexer_cpu_kind="${INDEXER_CPU_KIND:-shared}"
+  indexer_cpus="${INDEXER_CPUS:-4}"
+  idle_exit_after_seconds="${IDLE_EXIT_AFTER_SECONDS:-300}"
 fi
 
 cookie_secret_args=""
@@ -105,6 +133,9 @@ if [ "$QUEUE_DAEMON" = "1" ]; then
   echo "Queue daemon mode enabled; machine will poll until stopped."
   echo "Daily update enabled=$daily_update_enabled initial_delay=${daily_update_initial_delay_seconds}s interval=${daily_update_interval_seconds}s"
 fi
+if [ "$ON_DEMAND" = "1" ]; then
+  echo "On-demand mode enabled; machine exits after an idle window and is restarted by the queue wake Worker."
+fi
 echo "Follow logs with: flyctl logs --app $APP_NAME"
 
 build_args=""
@@ -125,8 +156,8 @@ exec flyctl machine run \
   $remove_arg \
   --restart "$restart_policy" \
   $build_args \
-  --vm-cpu-kind "${INDEXER_CPU_KIND:-performance}" \
-  --vm-cpus "${INDEXER_CPUS:-4}" \
+  --vm-cpu-kind "$indexer_cpu_kind" \
+  --vm-cpus "$indexer_cpus" \
   --vm-memory "${INDEXER_MEMORY_MB:-8192}" \
   --rootfs-size "${INDEXER_ROOTFS_SIZE_GB:-10}" \
   --swap-size "${INDEXER_SWAP_MB:-1024}" \
@@ -144,6 +175,7 @@ exec flyctl machine run \
   --env "MAX_VIDEOS_PER_PASS=${MAX_VIDEOS_PER_PASS:-0}" \
   --env "QUEUE_LOOP=${QUEUE_LOOP:-$QUEUE_DAEMON}" \
   --env "QUEUE_POLL_INTERVAL_SECONDS=${QUEUE_POLL_INTERVAL_SECONDS:-30}" \
+  --env "IDLE_EXIT_AFTER_SECONDS=$idle_exit_after_seconds" \
   --env "ACK_FAILED_REQUESTS=${ACK_FAILED_REQUESTS:-0}" \
   --env "DAILY_UPDATE_ENABLED=$daily_update_enabled" \
   --env "DAILY_UPDATE_INTERVAL_SECONDS=$daily_update_interval_seconds" \
