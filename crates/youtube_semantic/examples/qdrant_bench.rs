@@ -17,6 +17,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let query_count = number("QUERY_COUNT", 100);
     let warmups = number("WARMUP_QUERIES", 10);
     let top_k = number("TOP_K", 10);
+    let hnsw_ef = number("HNSW_EF", 64);
     let client = Client::new();
 
     let _ = client
@@ -72,7 +73,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     wait_for_index(&client, &endpoint, count).await?;
 
     println!(
-        "engine=qdrant vectors={count} dimensions={dimensions} queries={query_count} top_k={top_k} ingest_ms={}",
+        "engine=qdrant vectors={count} dimensions={dimensions} queries={query_count} top_k={top_k} hnsw_ef={hnsw_ef} ingest_ms={}",
         ingest_started.elapsed().as_millis()
     );
     run_case(
@@ -83,6 +84,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         query_count,
         warmups,
         top_k,
+        hnsw_ef,
         false,
     )
     .await?;
@@ -94,6 +96,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         query_count,
         warmups,
         top_k,
+        hnsw_ef,
         true,
     )
     .await?;
@@ -108,6 +111,7 @@ async fn run_case(
     query_count: usize,
     warmups: usize,
     top_k: usize,
+    hnsw_ef: usize,
     filtered: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut exact_latency = Vec::with_capacity(query_count);
@@ -127,9 +131,26 @@ async fn run_case(
             json!({"must": [{"key": "creator", "match": {"value": format!("creator-{}", id % 100)}}]})
         });
 
-        let (exact, exact_ms) =
-            search(client, endpoint, &query, top_k, true, filter.as_ref()).await?;
-        let (ann, ann_ms) = search(client, endpoint, &query, top_k, false, filter.as_ref()).await?;
+        let (exact, exact_ms) = search(
+            client,
+            endpoint,
+            &query,
+            top_k,
+            hnsw_ef,
+            true,
+            filter.as_ref(),
+        )
+        .await?;
+        let (ann, ann_ms) = search(
+            client,
+            endpoint,
+            &query,
+            top_k,
+            hnsw_ef,
+            false,
+            filter.as_ref(),
+        )
+        .await?;
         if query_index >= warmups {
             exact_latency.push(exact_ms);
             ann_latency.push(ann_ms);
@@ -161,13 +182,14 @@ async fn search(
     endpoint: &str,
     query: &[f32],
     limit: usize,
+    hnsw_ef: usize,
     exact: bool,
     filter: Option<&Value>,
 ) -> Result<(Vec<u64>, u128), Box<dyn Error>> {
     let mut body = json!({
         "query": query,
         "limit": limit,
-        "params": {"exact": exact, "hnsw_ef": 64},
+        "params": {"exact": exact, "hnsw_ef": hnsw_ef},
         "with_payload": false,
         "with_vector": false
     });

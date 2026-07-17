@@ -6,7 +6,33 @@ and retains only improvements. ytsearch applies the same discipline with
 separate tracks because latency, relevance, indexing reliability, and cost are
 not interchangeable.
 
+The upstream project is a research protocol rather than a general-purpose
+runner: an agent edits only `train.py`, `prepare.py` remains the fixed evaluator,
+each training attempt has a five-minute budget, and `val_bpb` decides whether a
+commit is kept or discarded. See the [official repository](https://github.com/karpathy/autoresearch)
+and [official agent program](https://github.com/karpathy/autoresearch/blob/master/program.md).
+
 The executable protocol is in [`../autoresearch/program.md`](../autoresearch/program.md).
+
+## Mechanical vector-search adaptation
+
+The experimental vector track now enforces the same separation instead of only
+describing it:
+
+| Upstream autoresearch | ytsearch vector experiment |
+| --- | --- |
+| agent edits `train.py` | agent edits only `autoresearch/vector.env` |
+| fixed `prepare.py` evaluation | fixed Rust Qdrant benchmark and shell evaluator |
+| fixed five-minute training budget | three identical 20k-vector trials |
+| minimize validation bits/byte | minimize median unfiltered ANN p95 |
+| VRAM is a soft guardrail | minimum observed recall@10 must be at least 0.95 |
+| dedicated `autoresearch/<tag>` branch | isolated worktree created by `scripts/autoresearch-init.sh` |
+| `results.tsv` keep/discard log | ignored `autoresearch/vector-results.tsv` |
+
+Initialize with `scripts/autoresearch-init.sh <tag>` and evaluate a committed
+configuration with `scripts/autoresearch-vector-experiment.sh "description"`.
+This experiment deliberately tunes only `HNSW_EF`; expanding the search space
+requires a reviewed evaluator change before a fresh run, never during one.
 
 ## 2026-07-12 baseline
 

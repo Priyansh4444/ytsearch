@@ -126,6 +126,10 @@ serialization, and live-search baseline with:
 RUNS=10 scripts/autoresearch-baseline.sh
 ```
 
+The isolated Karpathy-style vector experiment can be initialized with
+`scripts/autoresearch-init.sh <tag>`; its fixed evaluator is described in
+[`autoresearch/program.md`](autoresearch/program.md).
+
 Measured baselines and the isolated infrastructure experiment queue are in
 [`docs/autoresearch.md`](docs/autoresearch.md).
 The research-backed retrieval and performance review, including current
