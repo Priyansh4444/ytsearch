@@ -3,6 +3,10 @@
 Last audited: 2026-07-14. Prices vary by region and can change; verify the
 linked provider pages before resizing or migrating.
 
+Concrete scale-to-zero, practical economy, warm concurrent, and three-node HA
+budgets are in
+[cold-warm-concurrency-costs-2026-07-17.md](cold-warm-concurrency-costs-2026-07-17.md).
+
 ## Current Production Shape
 
 | Service | Current shape | Runtime policy | Main constraint |

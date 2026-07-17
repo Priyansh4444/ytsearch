@@ -138,6 +138,9 @@ measurements and the promotion roadmap, is in
 Vector-store alternatives, the local Qdrant recall/latency benchmark, and the
 video-frame embedding research are in
 [`docs/vector-search-and-multimodal-research-2026-07-17.md`](docs/vector-search-and-multimodal-research-2026-07-17.md).
+Cold-start, warm concurrent, highly available, and semantic-service cost models
+are in
+[`docs/cold-warm-concurrency-costs-2026-07-17.md`](docs/cold-warm-concurrency-costs-2026-07-17.md).
 
 Operational details are in
 [`docs/indexing-operations-guide.md`](docs/indexing-operations-guide.md),
