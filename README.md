@@ -118,6 +118,9 @@ FORMAT=pretty scripts/agent-status.sh   # human-readable when needed
 VERBOSE=1 scripts/check-typesense-fly.sh
 ```
 
+Agent shell output can be filtered and benchmarked with RTK; see
+[docs/agent-output-budget.md](docs/agent-output-budget.md).
+
 Reproducible optimization experiments use the bounded protocol in
 [`autoresearch/program.md`](autoresearch/program.md). Establish a correctness,
 serialization, and live-search baseline with:
