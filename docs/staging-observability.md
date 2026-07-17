@@ -38,6 +38,10 @@ Aggregate them without printing raw queries or credentials:
 scripts/axiom-search-report.sh
 ```
 
+For agent-safe credential checks, the aggregate report, and official hosted MCP
+setup, see [Axiom access for agents](axiom-agent-guide.md) or run
+`scripts/axiom-agent.sh --help`.
+
 The token needs Axiom query/read permission; ingest-only tokens correctly
 receive HTTP 403 from the report script.
 

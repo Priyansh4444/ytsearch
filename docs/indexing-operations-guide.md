@@ -341,10 +341,10 @@ scripts/fly-set-typesense-selfhost-api-secrets.sh
 scripts/fly-deploy-typesense-api.sh
 ```
 
-All frontend variants:
+Canonical frontend Worker:
 
 ```bash
-scripts/cloudflare-pages-deploy-backends.sh
+scripts/cloudflare-worker-deploy.sh
 ```
 
 ## Benchmarks

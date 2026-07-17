@@ -135,10 +135,10 @@ Rust API deploys:
 flyctl deploy --config fly.typesense-api.toml --app ytsearch-api-typesense-fly-staging --primary-region sjc
 ```
 
-Frontend aliases:
+Frontend Worker:
 
 ```bash
-scripts/cloudflare-pages-deploy-backends.sh
+scripts/cloudflare-worker-deploy.sh
 ```
 
 Cloud indexer/queue daemon:

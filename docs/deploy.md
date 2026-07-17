@@ -51,9 +51,7 @@ add Pages preview or `workers.dev` origins to production.
 Deploy the production branch:
 
 ```bash
-TYPESENSE_PAGES_BRANCH=main \
-TYPESENSE_FLY_API_BASE_URL=https://ytsearch-api-typesense-fly-staging.fly.dev \
-scripts/cloudflare-pages-deploy-backends.sh
+scripts/cloudflare-worker-deploy.sh
 ```
 
 Never expose Typesense admin keys, queue tokens, YouTube keys, cookies, or
