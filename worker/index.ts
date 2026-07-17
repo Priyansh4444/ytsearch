@@ -1,4 +1,5 @@
 import { shouldWakeIndexer } from "./wake-policy";
+import { requestOriginAllowed } from "./origin-policy";
 
 type WakeMessage = {
   reason: "index-request";
@@ -6,6 +7,13 @@ type WakeMessage = {
 
 export default {
   async fetch(request, env): Promise<Response> {
+    const publicAppOrigin = (env as Env & { PUBLIC_APP_ORIGIN?: string }).PUBLIC_APP_ORIGIN;
+    if (!requestOriginAllowed(request.url, publicAppOrigin)) {
+      return new Response("Forbidden", {
+        status: 403,
+        headers: { "Cache-Control": "no-store" },
+      });
+    }
     const url = new URL(request.url);
     const isApiRequest = url.pathname === "/api" || url.pathname.startsWith("/api/");
 

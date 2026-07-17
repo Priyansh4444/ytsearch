@@ -2,7 +2,7 @@ use axiom_rs::Client as AxiomClient;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
@@ -19,7 +19,11 @@ use std::{
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
-use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+    compression::CompressionLayer,
+    cors::{AllowOrigin, CorsLayer},
+    trace::TraceLayer,
+};
 use youtube_search::{
     DEFAULT_COLLECTION, SearchBackendError, TextSearchQuery, TranscriptSearchBackend,
     YoutuberDocument,
@@ -300,6 +304,7 @@ async fn main() -> Result<(), ApiError> {
         .map_err(|error: AddrParseError| ApiError::InvalidBindAddress(error.to_string()))?;
 
     let search_client = search_backend(&backend, collection)?;
+    let allowed_origins = allowed_browser_origins();
     let state = Arc::new(AppState {
         search: search_client,
         search_backend: backend,
@@ -355,7 +360,14 @@ async fn main() -> Result<(), ApiError> {
             "/api/index-requests/{id}/status",
             axum::routing::patch(update_index_request_status),
         )
-        .layer(CorsLayer::permissive())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::predicate(move |origin, _| {
+                    browser_origin_allowed(origin, &allowed_origins)
+                }))
+                .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+                .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]),
+        )
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -367,6 +379,33 @@ async fn main() -> Result<(), ApiError> {
         .await?;
 
     Ok(())
+}
+
+fn allowed_browser_origins() -> Vec<String> {
+    env::var("YTSEARCH_ALLOWED_ORIGINS")
+        .unwrap_or_else(|_| "https://search.pronsh.dev".to_string())
+        .split(',')
+        .map(str::trim)
+        .filter(|origin| !origin.is_empty())
+        .map(|origin| origin.trim_end_matches('/').to_string())
+        .collect()
+}
+
+fn browser_origin_allowed(origin: &HeaderValue, configured: &[String]) -> bool {
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    if configured.iter().any(|allowed| allowed == origin) {
+        return true;
+    }
+    let Ok(url) = reqwest::Url::parse(origin) else {
+        return false;
+    };
+    matches!(url.scheme(), "http" | "https")
+        && matches!(
+            url.host_str(),
+            Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+        )
 }
 
 async fn health() -> Response {
@@ -1619,6 +1658,34 @@ fn grouped_hits_count(raw: &Value) -> usize {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn browser_origins_allow_only_configured_and_local_development() {
+        let configured = vec!["https://search.pronsh.dev".to_string()];
+
+        for allowed in [
+            "https://search.pronsh.dev",
+            "http://localhost:5173",
+            "http://127.0.0.1:3000",
+            "http://[::1]:8787",
+        ] {
+            assert!(browser_origin_allowed(
+                &HeaderValue::from_str(allowed).unwrap(),
+                &configured
+            ));
+        }
+        for rejected in [
+            "https://ytsearch-755.pages.dev",
+            "https://search.pronsh.dev.evil.example",
+            "https://evil.example",
+            "null",
+        ] {
+            assert!(!browser_origin_allowed(
+                &HeaderValue::from_str(rejected).unwrap(),
+                &configured
+            ));
+        }
+    }
 
     fn test_document(id: &str, video_id: &str, text: &str) -> Value {
         json!({

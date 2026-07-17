@@ -11,6 +11,7 @@ primary_region = 'sjc'
   YTSEARCH_INDEX_QUEUE_PATH = '/data/index-requests.jsonl'
   RUST_LOG = 'youtube_api=info,tower_http=info'
   LOG_FORMAT = 'json'
+  YTSEARCH_ALLOWED_ORIGINS = 'https://search.pronsh.dev'
 
 [http_service]
   internal_port = 8787

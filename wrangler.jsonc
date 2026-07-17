@@ -12,6 +12,7 @@
   },
   "routes": [{ "pattern": "search.pronsh.dev", "custom_domain": true }],
   "vars": {
+    "PUBLIC_APP_ORIGIN": "https://search.pronsh.dev",
     "API_BASE_URL": "https://ytsearch-api-typesense-fly-staging.fly.dev",
     "FLY_API_BASE_URL": "https://api.machines.dev",
     "FLY_APP_NAME": "ytsearch-indexer-staging",

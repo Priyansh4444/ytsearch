@@ -42,6 +42,12 @@ VITE_POSTHOG_KEY=
 VITE_POSTHOG_HOST=https://us.i.posthog.com
 ```
 
+The public Worker only serves `PUBLIC_APP_ORIGIN` (configured as
+`https://search.pronsh.dev`) and localhost development hosts. The Rust API CORS
+allowlist is controlled by comma-separated `YTSEARCH_ALLOWED_ORIGINS` and also
+always permits `localhost`, `127.0.0.1`, and `::1` for local development. Do not
+add Pages preview or `workers.dev` origins to production.
+
 Deploy the production branch:
 
 ```bash
