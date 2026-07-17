@@ -3,6 +3,7 @@ set -eu
 
 bun run test
 bun run frontend:check
+scripts/check-rust-dependency-policy.sh
 scripts/test-doctor.sh
 scripts/test-compare-autoresearch-search.sh
 

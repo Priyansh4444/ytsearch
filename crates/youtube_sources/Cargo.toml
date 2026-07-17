@@ -8,6 +8,7 @@ async-trait = "0.1"
 serde_json = "1.0"
 youtube_client = { path = "../youtube_client" }
 youtube_ingest = { path = "../youtube_ingest" }
+youtube_time = { path = "../youtube_time" }
 
 [dev-dependencies]
 tokio = { version = "1.37", features = ["macros", "rt-multi-thread"] }

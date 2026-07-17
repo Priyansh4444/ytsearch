@@ -8,10 +8,10 @@ name = "youtube-api"
 path = "src/main.rs"
 
 [dependencies]
-axiom-rs = "0.11.0"
+axiom-rs = { version = "0.11.0", default-features = false, features = ["tokio", "rustls-tls"] }
 axum = "0.8"
 dotenvy = "0.15"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"

@@ -3,9 +3,9 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use youtube_client::{ListResource, Page, Query, YouTubeClient};
 use youtube_ingest::{
-    DurationMs, IngestError, TranscriptSegment, TranscriptSource, VideoMetadata,
-    VideoMetadataSource, Youtuber,
+    IngestError, TranscriptSegment, TranscriptSource, VideoMetadata, VideoMetadataSource, Youtuber,
 };
+use youtube_time::parse_duration_ms as parse_youtube_duration_ms;
 
 #[derive(Clone, Debug)]
 pub struct YouTubeMetadataSource {
@@ -331,39 +331,6 @@ fn compact_upload_date(published_at: &str) -> Option<String> {
     compact.push_str(&date[5..7]);
     compact.push_str(&date[8..10]);
     Some(compact)
-}
-
-fn parse_youtube_duration_ms(duration: &str) -> Option<DurationMs> {
-    let value = duration.strip_prefix("PT")?;
-    let mut amount: u32 = 0;
-    let mut has_amount = false;
-    let mut millis: DurationMs = 0;
-
-    for byte in value.bytes() {
-        if byte.is_ascii_digit() {
-            has_amount = true;
-            amount = amount
-                .checked_mul(10)?
-                .checked_add(u32::from(byte - b'0'))?;
-            continue;
-        }
-
-        if !has_amount {
-            return None;
-        }
-
-        let unit_millis = match byte {
-            b'H' => 60 * 60 * 1000,
-            b'M' => 60 * 1000,
-            b'S' => 1000,
-            _ => return None,
-        };
-        millis = millis.checked_add(amount.checked_mul(unit_millis)?)?;
-        amount = 0;
-        has_amount = false;
-    }
-
-    (!has_amount).then_some(millis)
 }
 
 #[cfg(test)]

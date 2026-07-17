@@ -1,6 +1,6 @@
 use crate::{IngestError, Result, TimestampMs, TranscriptChunk, TranscriptSegment, VideoMetadata};
-use chrono::DateTime;
 use std::{collections::BTreeMap, fmt::Write};
+use youtube_time::parse_rfc3339_timestamp;
 
 pub const DEFAULT_CHUNK_SECONDS: u32 = 5;
 
@@ -127,7 +127,7 @@ fn build_chunks(metadata: &VideoMetadata, grouped_text: &[GroupedText]) -> Vec<T
             published_at_timestamp: metadata
                 .published_at
                 .as_deref()
-                .and_then(parse_published_at_timestamp),
+                .and_then(parse_rfc3339_timestamp),
             uploader_id: metadata.youtuber.handle.clone(),
             embedding: None,
             extra: BTreeMap::new(),
@@ -135,12 +135,6 @@ fn build_chunks(metadata: &VideoMetadata, grouped_text: &[GroupedText]) -> Vec<T
     }
 
     chunks
-}
-
-fn parse_published_at_timestamp(published_at: &str) -> Option<i64> {
-    DateTime::parse_from_rfc3339(published_at)
-        .ok()
-        .map(|value| value.timestamp())
 }
 
 fn previous_text(grouped_text: &[GroupedText], sequence: usize) -> Option<String> {

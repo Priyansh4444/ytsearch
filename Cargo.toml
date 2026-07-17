@@ -5,11 +5,15 @@ members = [
     "crates/youtube_cli",
     "crates/youtube_client",
     "crates/youtube_ingest",
-    "crates/youtube_semantic",
     "crates/youtube_search",
-    "crates/youtube_sources",
+    "crates/youtube_semantic",
     "crates/youtube_serialization_bench",
+    "crates/youtube_sources",
+    "crates/youtube_time",
     "crates/youtube_transcribe",
     "crates/youtube_typesense",
     "crates/youtube_ytdlp",
 ]
+
+[workspace.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

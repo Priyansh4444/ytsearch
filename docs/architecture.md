@@ -11,6 +11,7 @@
 | `youtube_ytdlp` | `yt-dlp` backed public caption transcript source. Parses `json3`/`vtt` into timestamped segments. | Implements `TranscriptSource`; can be replaced by any captions provider. |
 | `youtube_transcribe` | Optional local audio fallback using `yt-dlp` audio extraction, `ffmpeg`, `ffprobe`, and `voxtype`. | Implements `TranscriptSource`; use only when captions are missing and you are allowed to transcribe. |
 | `youtube_ingest` | Core domain model, ports/traits, and transcript chunker. | Defines `VideoMetadataSource`, `TranscriptSource`, `TranscriptChunkSource`, `ChunkSink`, and `EmbeddingSource`. |
+| `youtube_time` | Dependency-free parsing for RFC 3339 publication timestamps and YouTube durations. | Keeps narrow time conversion logic shared without a general-purpose date-time dependency. |
 | `youtube_search` | Shared query type, indexed creator document, and search backend trait. | API-facing hotswap boundary for search backends. |
 | `youtube_typesense` | Typesense schema, admin import/delete/upsert, and search client. | Active backend; implements `ChunkSink` and `TranscriptSearchBackend`. |
 | `youtube_cli` | Operator CLI for validation, indexing, direct video indexing, and CLI search. | Wires sources/sinks together; no core parsing logic should live here. |

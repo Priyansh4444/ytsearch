@@ -103,6 +103,7 @@ bun run test:frontend:watch  # focused frontend development
 bun run test:frontend:coverage
 bun run frontend:check
 bun run check:responsive       # mocked browser flows at phone/tablet/desktop widths
+scripts/check-rust-dependency-policy.sh # reject duplicate native TLS/OpenSSL clients
 sh -n scripts/cloud-index-queue-entrypoint.sh scripts/fly-run-queue-indexer.sh
 ```
 
