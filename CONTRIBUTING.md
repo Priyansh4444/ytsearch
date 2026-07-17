@@ -32,6 +32,14 @@ Run the complete repository check before opening a pull request:
 bun run check:all
 ```
 
+Browser-level core-flow and responsive checks use mocked API responses, so they
+are deterministic and do not require staging access:
+
+```bash
+bunx playwright install chromium # first run only
+bun run check:responsive
+```
+
 For changes to local deployment, also verify the clean Compose path:
 
 ```bash
@@ -50,4 +58,3 @@ docker compose down
 Explain the user-visible outcome, tests performed, and any migration or
 operational impact. Do not include secrets or production log data in issues,
 commits, screenshots, or pull requests.
-

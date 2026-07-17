@@ -1705,6 +1705,65 @@ mod tests {
         assert!(!is_low_signal_query("fable"));
     }
 
+    #[tokio::test]
+    async fn health_response_is_successful_and_not_cached() {
+        let response = health().await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static(CACHE_NO_STORE))
+        );
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("application/json"))
+        );
+    }
+
+    #[test]
+    fn api_errors_use_stable_http_statuses_and_json_content_type() {
+        let cases = [
+            (ApiError::EmptyQuery, StatusCode::BAD_REQUEST),
+            (ApiError::InvalidHandle, StatusCode::BAD_REQUEST),
+            (ApiError::Unauthorized, StatusCode::UNAUTHORIZED),
+            (ApiError::RateLimited(10), StatusCode::TOO_MANY_REQUESTS),
+            (
+                ApiError::BadRequest("bad input".to_string()),
+                StatusCode::BAD_REQUEST,
+            ),
+        ];
+
+        for (error, expected_status) in cases {
+            let response = error.into_response();
+            assert_eq!(response.status(), expected_status);
+            assert_eq!(
+                response.headers().get(header::CONTENT_TYPE),
+                Some(&HeaderValue::from_static("application/json"))
+            );
+        }
+    }
+
+    #[test]
+    fn search_page_slicing_reports_next_page_without_leaking_extra_result() {
+        let videos: Vec<SearchVideoResult> = (0..4)
+            .map(|index| {
+                SearchVideoResult::from_hit(&test_hit(
+                    &format!("video-{index}"),
+                    "Result",
+                    "matching moment",
+                ))
+            })
+            .collect();
+
+        let first = page_result_from_videos(videos.clone(), 0, 3, Default::default());
+        assert_eq!(first.videos.len(), 3);
+        assert!(first.has_next_page);
+
+        let second = page_result_from_videos(videos, 3, 3, Default::default());
+        assert_eq!(second.videos.len(), 1);
+        assert!(!second.has_next_page);
+    }
+
     #[test]
     fn index_request_statuses_include_review_states() {
         assert!(is_valid_index_request_status("pending"));
