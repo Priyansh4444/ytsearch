@@ -128,6 +128,9 @@ RUNS=10 scripts/autoresearch-baseline.sh
 
 Measured baselines and the isolated infrastructure experiment queue are in
 [`docs/autoresearch.md`](docs/autoresearch.md).
+The research-backed retrieval and performance review, including current
+measurements and the promotion roadmap, is in
+[`docs/performance-research.md`](docs/performance-research.md).
 
 Operational details are in
 [`docs/indexing-operations-guide.md`](docs/indexing-operations-guide.md),

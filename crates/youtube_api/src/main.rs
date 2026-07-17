@@ -9,6 +9,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    cmp::Reverse,
     collections::{HashMap, VecDeque},
     env,
     net::{AddrParseError, SocketAddr},
@@ -1377,10 +1378,8 @@ fn video_results_from_hits(
             }
             video.match_count = video.hits.len();
             match sort {
-                SearchSort::Relevance => video.hits.sort_by(|left, right| {
-                    hit_relevance_score(right, &terms)
-                        .cmp(&hit_relevance_score(left, &terms))
-                        .then_with(|| left.t_start_ms.cmp(&right.t_start_ms))
+                SearchSort::Relevance => video.hits.sort_by_cached_key(|hit| {
+                    (Reverse(hit_relevance_score(hit, &terms)), hit.t_start_ms)
                 }),
                 SearchSort::PublishedDesc | SearchSort::PublishedAsc => {
                     video.hits.sort_by_key(|hit| hit.t_start_ms);
@@ -1405,12 +1404,13 @@ fn video_results_from_hits(
     }
 
     match sort {
-        SearchSort::Relevance => videos.sort_by(|left, right| {
-            video_relevance_score(right, &terms)
-                .cmp(&video_relevance_score(left, &terms))
-                .then_with(|| right.match_count.cmp(&left.match_count))
-                .then_with(|| right.published_at.cmp(&left.published_at))
-                .then_with(|| left.title.cmp(&right.title))
+        SearchSort::Relevance => videos.sort_by_cached_key(|video| {
+            (
+                Reverse(video_relevance_score(video, &terms)),
+                Reverse(video.match_count),
+                Reverse(video.published_at.clone()),
+                video.title.clone(),
+            )
         }),
         SearchSort::PublishedDesc => videos.sort_by(|left, right| {
             right
@@ -2023,6 +2023,63 @@ mod tests {
                 .any(|video| video.video_id == "unrelated")
         );
         assert_eq!(fused.mode, SearchMode::Semantic);
+    }
+
+    #[test]
+    #[ignore = "manual performance comparison; run with --release --ignored --nocapture"]
+    fn cached_relevance_keys_avoid_repeated_normalization() {
+        const HITS: usize = 4_096;
+        const ROUNDS: usize = 40;
+        let terms = searchable_terms("rust memory safety compiler performance");
+        let hits = (0..HITS)
+            .map(|index| {
+                test_hit(
+                    &format!("video-{index}"),
+                    if index % 3 == 0 {
+                        "Rust compiler memory safety"
+                    } else {
+                        "A general software discussion"
+                    },
+                    if index % 5 == 0 {
+                        "compiler performance and memory safety in Rust"
+                    } else {
+                        "software engineering conversation"
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let comparison_started = Instant::now();
+        let mut comparison_ids = Vec::new();
+        for _ in 0..ROUNDS {
+            let mut candidate = hits.clone();
+            candidate.sort_by(|left, right| {
+                hit_relevance_score(right, &terms)
+                    .cmp(&hit_relevance_score(left, &terms))
+                    .then_with(|| left.t_start_ms.cmp(&right.t_start_ms))
+            });
+            comparison_ids = candidate.into_iter().map(|hit| hit.id).collect();
+        }
+        let comparison_elapsed = comparison_started.elapsed();
+
+        let cached_started = Instant::now();
+        let mut cached_ids = Vec::new();
+        for _ in 0..ROUNDS {
+            let mut candidate = hits.clone();
+            candidate.sort_by_cached_key(|hit| {
+                (Reverse(hit_relevance_score(hit, &terms)), hit.t_start_ms)
+            });
+            cached_ids = candidate.into_iter().map(|hit| hit.id).collect();
+        }
+        let cached_elapsed = cached_started.elapsed();
+
+        assert_eq!(comparison_ids, cached_ids);
+        println!(
+            "hits={HITS} rounds={ROUNDS} comparison_ms={:.2} cached_ms={:.2} speedup={:.2}",
+            comparison_elapsed.as_secs_f64() * 1_000.0,
+            cached_elapsed.as_secs_f64() * 1_000.0,
+            comparison_elapsed.as_secs_f64() / cached_elapsed.as_secs_f64()
+        );
     }
 }
 
