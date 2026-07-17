@@ -131,6 +131,9 @@ Measured baselines and the isolated infrastructure experiment queue are in
 The research-backed retrieval and performance review, including current
 measurements and the promotion roadmap, is in
 [`docs/performance-research.md`](docs/performance-research.md).
+Vector-store alternatives, the local Qdrant recall/latency benchmark, and the
+video-frame embedding research are in
+[`docs/vector-search-and-multimodal-research-2026-07-17.md`](docs/vector-search-and-multimodal-research-2026-07-17.md).
 
 Operational details are in
 [`docs/indexing-operations-guide.md`](docs/indexing-operations-guide.md),

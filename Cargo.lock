@@ -2254,6 +2254,8 @@ name = "youtube_semantic"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "reqwest",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "youtube_ingest",
