@@ -29,6 +29,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[command(about = "Create missing Typesense collections without indexing data")]
+    InitBackend(InitBackendCommand),
     #[command(about = "Validate that a YouTube handle resolves and show recent uploads")]
     Validate(ValidateCommand),
     #[command(about = "Validate a YouTuber and create the search backend transcript index")]
@@ -53,6 +55,14 @@ enum Command {
     IndexVideo(IndexVideoCommand),
     #[command(about = "Search transcript chunks using the selected search backend")]
     Search(SearchCommand),
+}
+
+#[derive(Clone, Debug, Args)]
+struct InitBackendCommand {
+    #[command(flatten)]
+    search: SearchAdminArgs,
+    #[command(flatten)]
+    collection: TranscriptCollectionArg,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -822,6 +832,7 @@ async fn main() -> Result<(), CliError> {
     init_tracing();
 
     match Cli::parse().command {
+        Command::InitBackend(command) => init_backend_command(command).await,
         Command::Validate(command) => validate_command(command).await,
         Command::InitTypesense(command) => init_typesense_command(command).await,
         Command::IndexYoutuber(command) => index_youtuber_command(command).await,
@@ -837,6 +848,28 @@ async fn main() -> Result<(), CliError> {
         Command::IndexVideo(command) => index_video_command(command).await,
         Command::Search(command) => search_command(command).await,
     }
+}
+
+async fn init_backend_command(command: InitBackendCommand) -> Result<(), CliError> {
+    let collection = command.collection.collection;
+    let search = command.search.client(collection.clone())?;
+    match search.create_collection_if_missing().await? {
+        CollectionOutcome::Created => println!("Created search backend collection: {collection}"),
+        CollectionOutcome::AlreadyExists => {
+            println!("Search backend collection already exists: {collection}")
+        }
+    }
+
+    let youtubers = command.search.youtuber_client()?;
+    match youtubers.create_youtubers_collection_if_missing().await? {
+        CollectionOutcome::Created => {
+            println!("Created search backend collection: youtube_youtubers")
+        }
+        CollectionOutcome::AlreadyExists => {
+            println!("Search backend collection already exists: youtube_youtubers")
+        }
+    }
+    Ok(())
 }
 
 fn init_tracing() {

@@ -19,6 +19,7 @@ export TYPESENSE_SELFHOST_API_KEY="$(openssl rand -hex 24)"
 export YTSEARCH_INDEX_QUEUE_TOKEN="$(openssl rand -hex 24)"
 export PUBLIC_API_BASE_URL=http://localhost:8787
 docker compose up -d --build
+curl -fsS http://localhost:8787/api/youtubers
 ```
 
 Open `http://localhost:3000`. See [the self-hosting guide](docs/self-hosting.md)
@@ -130,3 +131,7 @@ Operational details are in
 [`docs/indexing-operations-guide.md`](docs/indexing-operations-guide.md),
 [`docs/staging-architecture.md`](docs/staging-architecture.md), and
 [`docs/staging-observability.md`](docs/staging-observability.md).
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the local
+workflow and safety requirements. Report vulnerabilities privately according to
+[SECURITY.md](SECURITY.md). This project is available under the [MIT License](LICENSE).

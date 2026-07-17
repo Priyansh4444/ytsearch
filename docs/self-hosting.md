@@ -27,7 +27,9 @@ only when YouTube Data API fallback is desired. Cookies can be supplied with
 ### Docker Compose
 
 The smallest complete deployment uses the checked-in Compose file. Set two
-private values and start all four services:
+private values and start the stack. An idempotent one-shot service creates the
+empty Typesense collections on first boot. The worker polls approved queue
+requests but does not run bulk channel updates unless explicitly enabled:
 
 ```bash
 export TYPESENSE_SELFHOST_API_KEY="$(openssl rand -hex 24)"
@@ -37,6 +39,13 @@ docker compose up -d --build
 docker compose ps
 curl -fsS http://localhost:8108/health
 curl -fsS http://localhost:8787/api/health
+curl -fsS http://localhost:8787/api/youtubers
+```
+
+To enable the periodic bulk update list, opt in when starting Compose:
+
+```bash
+DAILY_UPDATE_ENABLED=1 DAILY_UPDATE_INITIAL_DELAY_SECONDS=0 docker compose up -d worker
 ```
 
 Open `http://localhost:3000`. Persistent named volumes retain Typesense data,
@@ -67,6 +76,13 @@ Bootstrap a creator directly with:
 
 ```bash
 cargo run -p youtube_cli -- index-youtuber @handle --backend typesense --mode update
+```
+
+For a bare-process installation, initialize empty collections once before
+starting the API:
+
+```bash
+cargo run -p youtube_cli -- init-backend --backend typesense
 ```
 
 Queue administration routes require `YTSEARCH_INDEX_QUEUE_TOKEN`.

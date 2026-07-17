@@ -1,7 +1,7 @@
 FROM rust:1-bookworm AS builder
 WORKDIR /app
 COPY . .
-RUN cargo build --release -p youtube_api -p youtube_cli
+RUN cargo build --locked --release -p youtube_api -p youtube_cli
 
 FROM denoland/deno:bin-2.8.1 AS deno
 

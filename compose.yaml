@@ -8,7 +8,13 @@ services:
     volumes:
       - typesense-data:/data
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8108/health"]
+      test:
+        [
+          "CMD",
+          "bash",
+          "-c",
+          "exec 3<>/dev/tcp/127.0.0.1/8108; printf 'GET /health HTTP/1.0\r\n\r\n' >&3; grep -q '\"ok\":true' <&3",
+        ]
       interval: 10s
       timeout: 3s
       retries: 30
@@ -19,6 +25,8 @@ services:
     depends_on:
       typesense:
         condition: service_healthy
+      init-backend:
+        condition: service_completed_successfully
     ports:
       - "8787:8787"
     environment: &backend-environment
@@ -36,6 +44,31 @@ services:
       YT_DLP_COOKIES_FILE: ${YT_DLP_COOKIES_FILE:-}
     volumes:
       - queue-data:/queue
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/api/health', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+  init-backend:
+    build: .
+    command: ["ytsearch", "init-backend", "--backend", "typesense"]
+    restart: "no"
+    depends_on:
+      typesense:
+        condition: service_healthy
+    environment:
+      TYPESENSE_API_URL: http://typesense:8108
+      TYPESENSE_SELFHOST_API_URL: http://typesense:8108
+      TYPESENSE_ADMIN_API_KEY: ${TYPESENSE_SELFHOST_API_KEY}
+      TYPESENSE_SELFHOST_API_KEY: ${TYPESENSE_SELFHOST_API_KEY}
+      TYPESENSE_COLLECTION: youtube_transcript_chunks
 
   worker:
     build: .
@@ -43,7 +76,7 @@ services:
     restart: unless-stopped
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     environment:
       <<: *backend-environment
       INDEX_QUEUE_API_BASE_URL: http://api:8787
@@ -52,9 +85,9 @@ services:
       QUEUE_LOOP: "1"
       QUEUE_POLL_INTERVAL_SECONDS: "30"
       QUEUE_ONE_REQUEST_PER_PASS: "1"
-      DAILY_UPDATE_ENABLED: "1"
+      DAILY_UPDATE_ENABLED: ${DAILY_UPDATE_ENABLED:-0}
       DAILY_UPDATE_INTERVAL_SECONDS: "86400"
-      DAILY_UPDATE_INITIAL_DELAY_SECONDS: "0"
+      DAILY_UPDATE_INITIAL_DELAY_SECONDS: ${DAILY_UPDATE_INITIAL_DELAY_SECONDS:-86400}
       DAILY_UPDATE_LIST_FILE: /app/indexed-channels.txt
       TRANSCRIPT_CACHE_DIR: /data/transcript-cache
       JOBS: "1"
