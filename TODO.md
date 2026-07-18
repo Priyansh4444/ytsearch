@@ -155,6 +155,8 @@ This file tracks the current requested work and end-to-end verification. Mark an
 
 ## Deployment/Operations
 
+- [ ] Apply and measure the guarded Typesense display-field memory optimization after the active `@ryansolid` writer finishes; use the measured restart peak before reducing the 8 GB Machine.
+
 ### Autoresearch Follow-ups (Non-semantic)
 
 - [x] Benchmark public search with gzip on/off using the frozen query suite. A 20-pair alternating production run on 2026-07-15 returned identical counts and zero errors: gzip reduced average transfer from 90,461 to 17,351 bytes, average latency from 479 to 263 ms, p50 from 338 to 212 ms, and p95 from 980 to 566 ms.

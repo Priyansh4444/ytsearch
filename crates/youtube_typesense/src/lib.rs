@@ -1000,23 +1000,23 @@ pub fn transcript_chunk_schema(collection: &str) -> Value {
             { "name": "youtuber_id", "type": "string", "facet": true },
             { "name": "youtuber_handle", "type": "string", "facet": true },
             { "name": "youtuber_name", "type": "string" },
-            { "name": "channel_id", "type": "string", "facet": true },
+            { "name": "channel_id", "type": "string", "index": false, "optional": true },
             { "name": "video_id", "type": "string", "facet": true },
             { "name": "title", "type": "string" },
             { "name": "text", "type": "string" },
-            { "name": "prev_text", "type": "string", "optional": true },
-            { "name": "next_text", "type": "string", "optional": true },
-            { "name": "sequence", "type": "int32" },
-            { "name": "chapter", "type": "string", "optional": true },
-            { "name": "chapter_index", "type": "int32", "optional": true },
+            { "name": "prev_text", "type": "string", "index": false, "optional": true },
+            { "name": "next_text", "type": "string", "index": false, "optional": true },
+            { "name": "sequence", "type": "int32", "index": false, "optional": true },
+            { "name": "chapter", "type": "string", "index": false, "optional": true },
+            { "name": "chapter_index", "type": "int32", "index": false, "optional": true },
             { "name": "duration", "type": "int32", "optional": true },
-            { "name": "t_start_ms", "type": "int32" },
-            { "name": "t_end_ms", "type": "int32" },
-            { "name": "thumbnail", "type": "string", "optional": true },
-            { "name": "published_at", "type": "string", "facet": true, "optional": true },
+            { "name": "t_start_ms", "type": "int32", "index": false, "optional": true },
+            { "name": "t_end_ms", "type": "int32", "index": false, "optional": true },
+            { "name": "thumbnail", "type": "string", "index": false, "optional": true },
+            { "name": "published_at", "type": "string", "index": false, "optional": true },
             { "name": "published_at_timestamp", "type": "int64", "optional": true },
-            { "name": "upload_date", "type": "string", "facet": true, "optional": true },
-            { "name": "uploader_id", "type": "string", "facet": true }
+            { "name": "upload_date", "type": "string", "index": false, "optional": true },
+            { "name": "uploader_id", "type": "string", "index": false, "optional": true }
         ]
     })
 }
@@ -1251,6 +1251,48 @@ mod tests {
         assert!(fields.iter().any(|field| field["name"] == "text"));
         assert!(fields.iter().any(|field| field["name"] == "video_id"));
         assert!(fields.iter().any(|field| field["name"] == "t_start_ms"));
+    }
+
+    #[test]
+    fn schema_keeps_display_only_fields_out_of_memory_indexes() {
+        let schema = transcript_chunk_schema(DEFAULT_COLLECTION);
+        let fields = schema["fields"].as_array().expect("schema fields");
+        let indexed = |name: &str| {
+            fields
+                .iter()
+                .find(|field| field["name"] == name)
+                .and_then(|field| field.get("index"))
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+        };
+
+        for field in [
+            "channel_id",
+            "prev_text",
+            "next_text",
+            "sequence",
+            "chapter",
+            "chapter_index",
+            "t_start_ms",
+            "t_end_ms",
+            "thumbnail",
+            "published_at",
+            "upload_date",
+            "uploader_id",
+        ] {
+            assert!(!indexed(field), "{field} should remain disk-only");
+        }
+        for field in [
+            "youtuber_id",
+            "youtuber_handle",
+            "video_id",
+            "title",
+            "text",
+            "duration",
+            "published_at_timestamp",
+        ] {
+            assert!(indexed(field), "{field} is required by live queries");
+        }
     }
 
     #[test]

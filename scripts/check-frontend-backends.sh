@@ -10,7 +10,7 @@ QUERY="${QUERY:-fable}"
 PER_PAGE="${PER_PAGE:-3}"
 CURL_MAX_TIME="${CURL_MAX_TIME:-15}"
 
-TYPESENSE_FRONTEND_URL="${TYPESENSE_FRONTEND_URL:-${TYPESENSE_FLY_FRONTEND_URL:-https://ytsearch-755.pages.dev}}"
+TYPESENSE_FRONTEND_URL="${TYPESENSE_FRONTEND_URL:-${TYPESENSE_FLY_FRONTEND_URL:-https://search.pronsh.dev}}"
 
 required_env() {
   name="$1"
@@ -56,14 +56,21 @@ check_frontend_config() {
     exit 1
   fi
 
+  asset_path="${asset_path#/}"
   curl -fsS --max-time "$CURL_MAX_TIME" "${frontend_url%/}/$asset_path" >"$bundle_file"
   if grep -q 'ytsearch-index-queue-staging.fly.dev' "$bundle_file"; then
     echo "$label failed: bundle still references the retired queue API" >&2
     exit 1
   fi
   if ! grep -q "${expected_api_url#https://}" "$bundle_file"; then
-    echo "$label failed: expected API origin is missing from the bundle" >&2
-    exit 1
+    # The production Worker intentionally uses same-origin /api routes and
+    # proxies them to the configured Fly API, so no backend hostname appears
+    # in the browser bundle.
+    if ! grep -q '/api/search' "$bundle_file" ||
+      ! grep -q '/api/index-requests' "$bundle_file"; then
+      echo "$label failed: neither the expected API origin nor same-origin routes are present" >&2
+      exit 1
+    fi
   fi
   echo "$label config ok: active API owns search and queue routes"
 }

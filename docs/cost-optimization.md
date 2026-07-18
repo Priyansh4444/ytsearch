@@ -7,6 +7,9 @@ Concrete scale-to-zero, practical economy, warm concurrent, and three-node HA
 budgets are in
 [cold-warm-concurrency-costs-2026-07-17.md](cold-warm-concurrency-costs-2026-07-17.md).
 
+The current high-impact RAM reduction and guarded display-field migration are
+documented in [Typesense memory optimization](typesense-memory-optimization.md).
+
 ## Current Production Shape
 
 | Service | Current shape | Runtime policy | Main constraint |
