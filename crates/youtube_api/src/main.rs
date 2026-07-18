@@ -528,13 +528,14 @@ async fn search_handler(
     }
     let search_started = Instant::now();
     let video_scope = params.video_id.is_some();
-    // Fetch raw transcript hits so a single video can return multiple matching
-    // moments. The API groups those hits into video cards after retrieval.
-    let use_backend_grouping = false;
+    // Let the backend paginate video cards so long transcripts cannot crowd all
+    // other videos out of the bounded result window. A video-scoped request is
+    // the exception because it intentionally loads every matching moment.
+    let use_backend_grouping = !video_scope;
     let search_page_size = if video_scope {
         250
     } else if use_backend_grouping {
-        per_page.saturating_add(1).min(MAX_PER_PAGE)
+        per_page
     } else {
         per_page.saturating_mul(8).min(MAX_PER_PAGE)
     };
@@ -568,7 +569,7 @@ async fn search_handler(
         SearchSort::Relevance => search_query,
     };
     if use_backend_grouping {
-        search_query = search_query.group_by("video_id").group_limit(1);
+        search_query = search_query.group_by("video_id").group_limit(5);
     } else {
         search_query = search_query.without_grouping();
     }
@@ -612,24 +613,28 @@ async fn search_handler(
         let raw = state.search.search(&search_query).await?;
         Ok::<_, ApiError>((raw, first_backend_started.elapsed().as_millis() as u64))
     };
-    let ((first_raw, first_backend_search_ms), total_videos) = tokio::try_join!(
+    let totals_query = search_query.clone().without_grouping().per_page(1).page(1);
+    let ((first_raw, first_backend_search_ms), total_videos, ungrouped_totals) = tokio::try_join!(
         first_search,
         grouped_total_count(state.search.as_ref(), &search_query),
+        async {
+            if use_backend_grouping {
+                state
+                    .search
+                    .search(&totals_query)
+                    .await
+                    .map(Some)
+                    .map_err(ApiError::from)
+            } else {
+                Ok::<_, ApiError>(None)
+            }
+        },
     )?;
-    let found = first_raw
-        .get("estimatedTotalHits")
-        .or_else(|| first_raw.get("totalHits"))
-        .or_else(|| first_raw.get("found"))
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    let out_of = first_raw
-        .get("estimatedTotalHits")
-        .or_else(|| first_raw.get("totalHits"))
-        .or_else(|| first_raw.get("out_of"))
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
+    let totals_raw = ungrouped_totals.as_ref().unwrap_or(&first_raw);
+    let found = backend_found(totals_raw);
+    let out_of = backend_out_of(totals_raw);
     let processing_started = Instant::now();
-    let page_result = collect_visible_videos(
+    let mut page_result = collect_visible_videos(
         state.search.as_ref(),
         &search_query,
         first_raw,
@@ -647,6 +652,10 @@ async fn search_handler(
         },
     )
     .await?;
+    if use_backend_grouping {
+        page_result.has_next_page =
+            has_more_grouped_videos(total_videos, requested_offset, page_result.videos.len());
+    }
     let result_processing_ms = processing_started.elapsed().as_millis() as u64;
     let videos = page_result.videos;
     let hits = videos
@@ -1384,6 +1393,26 @@ fn page_result_from_videos(
     }
 }
 
+fn has_more_grouped_videos(total_videos: u64, requested_offset: u32, returned: usize) -> bool {
+    u64::from(requested_offset).saturating_add(returned as u64) < total_videos
+}
+
+fn backend_found(raw: &Value) -> u64 {
+    raw.get("estimatedTotalHits")
+        .or_else(|| raw.get("totalHits"))
+        .or_else(|| raw.get("found"))
+        .and_then(Value::as_u64)
+        .unwrap_or_default()
+}
+
+fn backend_out_of(raw: &Value) -> u64 {
+    raw.get("estimatedTotalHits")
+        .or_else(|| raw.get("totalHits"))
+        .or_else(|| raw.get("out_of"))
+        .and_then(Value::as_u64)
+        .unwrap_or_default()
+}
+
 fn video_results_from_hits(
     hits: &[SearchHit],
     sort: SearchSort,
@@ -1829,6 +1858,20 @@ mod tests {
         let second = page_result_from_videos(videos, 3, 3, Default::default());
         assert_eq!(second.videos.len(), 1);
         assert!(!second.has_next_page);
+    }
+
+    #[test]
+    fn grouped_pagination_uses_the_distinct_video_total() {
+        assert!(has_more_grouped_videos(73, 0, 12));
+        assert!(has_more_grouped_videos(73, 60, 12));
+        assert!(!has_more_grouped_videos(73, 72, 1));
+    }
+
+    #[test]
+    fn ungrouped_totals_preserve_the_matching_moment_count() {
+        let totals = json!({ "found": 35_383, "out_of": 7_129_139 });
+        assert_eq!(backend_found(&totals), 35_383);
+        assert_eq!(backend_out_of(&totals), 7_129_139);
     }
 
     #[test]
