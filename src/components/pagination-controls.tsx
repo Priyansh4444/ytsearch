@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For } from "solid-js";
 import type { Component, JSX } from "solid-js";
 import type { SearchResponse } from "../types";
 
@@ -12,34 +12,32 @@ export const PaginationControls: Component<{
   const pages = () => pageNumbers(props.currentPage, hasNext());
 
   return (
-    <Show when={hasPrevious() || hasNext()}>
-      <nav
-        aria-label="Search result pages"
-        class="flex flex-wrap items-center justify-center gap-2 py-3 text-sm"
+    <nav
+      aria-label="Search result pages"
+      class="flex flex-wrap items-center justify-center gap-2 py-3 text-sm"
+    >
+      <PageButton
+        disabled={!hasPrevious()}
+        onClick={() => props.onPageChange(props.currentPage - 1)}
       >
-        <PageButton
-          disabled={!hasPrevious()}
-          onClick={() => props.onPageChange(props.currentPage - 1)}
-        >
-          Previous
-        </PageButton>
+        Previous
+      </PageButton>
 
-        <For each={pages()}>
-          {(pageNumber) => (
-            <PageButton
-              active={pageNumber === props.currentPage}
-              onClick={() => props.onPageChange(pageNumber)}
-            >
-              {pageNumber}
-            </PageButton>
-          )}
-        </For>
+      <For each={pages()}>
+        {(pageNumber) => (
+          <PageButton
+            active={pageNumber === props.currentPage}
+            onClick={() => props.onPageChange(pageNumber)}
+          >
+            {pageNumber}
+          </PageButton>
+        )}
+      </For>
 
-        <PageButton disabled={!hasNext()} onClick={() => props.onPageChange(props.currentPage + 1)}>
-          Next
-        </PageButton>
-      </nav>
-    </Show>
+      <PageButton disabled={!hasNext()} onClick={() => props.onPageChange(props.currentPage + 1)}>
+        Next
+      </PageButton>
+    </nav>
   );
 };
 
