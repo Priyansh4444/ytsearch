@@ -10,7 +10,8 @@ for forbidden in native-tls openssl hyper-tls tokio-native-tls; do
   fi
 done
 
-if rg -n 'reqwest\s*=\s*\{' crates --glob Cargo.toml | grep -v 'workspace = true' >/dev/null; then
+if find crates -name Cargo.toml -exec grep -HEn 'reqwest[[:space:]]*=[[:space:]]*\{' {} + |
+  grep -v 'workspace = true' >/dev/null; then
   echo "dependency_policy=failed reason=reqwest_must_use_workspace_configuration" >&2
   exit 1
 fi

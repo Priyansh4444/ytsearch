@@ -6,8 +6,13 @@ set -eu
 
 APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-staging}"
 
-if ! command -v flyctl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
-  echo "flyctl and jq are required." >&2
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq is required." >&2
+  exit 1
+fi
+
+if [ -z "${MACHINES_JSON_FILE:-}" ] && ! command -v flyctl >/dev/null 2>&1; then
+  echo "flyctl is required when MACHINES_JSON_FILE is not provided." >&2
   exit 1
 fi
 
