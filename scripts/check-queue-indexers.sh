@@ -1,7 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-# Check that exactly one started persistent Typesense queue worker exists.
+# Check that exactly one on-demand Typesense queue worker exists. A stopped
+# machine is healthy while the queue is idle; Cloudflare starts it on approval.
 
 APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-staging}"
 
@@ -10,7 +11,11 @@ if ! command -v flyctl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-machines="$(flyctl machine list --app "$APP_NAME" --json)"
+if [ -n "${MACHINES_JSON_FILE:-}" ]; then
+  machines="$(cat "$MACHINES_JSON_FILE")"
+else
+  machines="$(flyctl machine list --app "$APP_NAME" --json)"
+fi
 printf 'backend\tmachine\tstate\trestart\n'
 printf '%s' "$machines" | jq -r '
   .[]
@@ -24,13 +29,19 @@ printf '%s' "$machines" | jq -r '
   | @tsv
 '
 
-failed=0
-for backend in typesense-fly; do
-  count="$(printf '%s' "$machines" | jq --arg backend "$backend" '[.[] | select(.state == "started" and .config.env.QUEUE_TARGET_BACKEND == $backend)] | length')"
-  if [ "$count" -ne 1 ]; then
-    echo "Expected exactly one started $backend queue worker; found $count." >&2
-    failed=1
-  fi
-done
+count="$(printf '%s' "$machines" | jq '[.[] | select(.config.env.QUEUE_TARGET_BACKEND == "typesense-fly")] | length')"
+if [ "$count" -ne 1 ]; then
+  echo "Expected exactly one configured typesense-fly queue worker; found $count." >&2
+  exit 1
+fi
 
-exit "$failed"
+if ! printf '%s' "$machines" | jq -e '
+  first(.[] | select(.config.env.QUEUE_TARGET_BACKEND == "typesense-fly"))
+  | (.state == "started" or .state == "starting" or .state == "stopped")
+    and (.config.env.QUEUE_LOOP == "1")
+    and ((.config.env.IDLE_EXIT_AFTER_SECONDS | tonumber?) // 0) > 0
+    and ((.config.restart.policy // "no") == "no")
+' >/dev/null; then
+  echo "The typesense-fly worker does not satisfy the on-demand queue invariant." >&2
+  exit 1
+fi

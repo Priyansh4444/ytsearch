@@ -10,10 +10,10 @@ Active staging paths:
 
 | Surface | URL / App | Notes |
 | --- | --- | --- |
-| Frontend | `https://ytsearch-755.pages.dev` | Production Pages deployment, connected to Typesense. |
+| Frontend | `https://search.pronsh.dev` | Canonical Cloudflare Worker frontend and same-origin API proxy. |
 | Typesense Fly API | `ytsearch-api-typesense-fly-staging` / `https://ytsearch-api-typesense-fly-staging.fly.dev` | Rust `youtube_api`, backend `typesense`. |
 | Typesense engine | `ytsearch-typesense-staging` | Self-hosted Typesense on Fly. |
-| Cloud indexer | `ytsearch-indexer-staging` | One persistent Typesense queue worker. |
+| Cloud indexer | `ytsearch-indexer-staging` | One on-demand Typesense queue worker, woken through Cloudflare Queue. |
 
 Managed Typesense Cloud is intentionally removed from active staging. Do not reintroduce it unless the user explicitly asks.
 
@@ -84,15 +84,16 @@ Indexing:
 Queue:
 
 - Frontends can submit an index request for a handle. The queue API stores JSONL on a Fly volume.
-- Only one persistent queue daemon should run against the JSONL queue. Multiple daemons can race.
+- Only one configured queue daemon may use the JSONL queue. It normally remains stopped while idle and Cloudflare wakes it after an approved request; multiple machines can race.
 - The active queue indexer processes `typesense-fly`.
 - Queue failures should log and not permanently block the queue. The queue daemon emits structured stderr logs and best-effort Axiom ingestion when Axiom env vars are present.
 - Current daemon command pattern:
 
 ```bash
+ON_DEMAND=1 \
 QUEUE_DAEMON=1 \
-DAILY_UPDATE_ENABLED=1 \
-ACK_FAILED_REQUESTS=1 \
+DAILY_UPDATE_ENABLED=0 \
+ACK_FAILED_REQUESTS=0 \
 BACKENDS="typesense-fly" \
 JOBS=1 \
 scripts/fly-run-queue-indexer.sh
@@ -145,7 +146,7 @@ Cloud indexer/queue daemon:
 
 ```bash
 scripts/fly-set-indexer-secrets.sh
-QUEUE_DAEMON=1 DAILY_UPDATE_ENABLED=1 ACK_FAILED_REQUESTS=1 scripts/fly-run-queue-indexer.sh
+scripts/fly-run-queue-indexers.sh
 ```
 
 Before replacing the queue daemon, confirm it is idle:
@@ -235,7 +236,11 @@ scripts/summarize-indexer-logs.sh
 Then read the relevant doc listed in "Read This First" before editing.
 
 
-CURRENTLY This change was implemented: I changed the queue so each frontend request becomes separate backend-specific queue rows, so the two daemons do not race or steal each other’s acknowledgements. I migrated the old backlog into split rows and removed the old shared daemon.
-
-Also removed `YOUTUBE_API_KEY` from the indexer secret set and recreated the machines, so the new runs are using `yt-dlp` first without falling back into the exhausted YouTube API quota. Logs confirm `yt-dlp` discovery is active. Some videos are still being skipped because YouTube is asking `yt-dlp` for cookies/bot confirmation; that will need cookies if we want those captions.
-But I want to remove it and also have YOUTUBE as a secondary option incase `yt-dlp` fails or is not available.
+CURRENTLY The queue has one backend-specific row per request and one on-demand
+Typesense worker. Cloudflare wakes the stopped worker after approval; it exits
+after five idle minutes. `yt-dlp` is the primary discovery/transcript source.
+When staged, `YOUTUBE_API_KEY_FILE_B64` is loaded only inside the indexer and
+the Data API is appended as metadata/discovery fallback; it cannot supply
+captions. Some videos still require authorized cookies or a permitted local
+transcript cache because neither public `yt-dlp` nor the Data API can retrieve
+those captions.

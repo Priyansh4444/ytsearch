@@ -11,6 +11,16 @@ TRANSCRIPT_CACHE_DIR="${TRANSCRIPT_CACHE_DIR:-$ROOT_DIR/data/transcript-cache}"
 
 . "$SCRIPT_DIR/load-env.sh"
 
+TYPESENSE_API_URL="${TYPESENSE_API_URL:-${TYPESENSE_SELFHOST_API_URL:-}}"
+TYPESENSE_ADMIN_API_KEY="${TYPESENSE_ADMIN_API_KEY:-${TYPESENSE_SELFHOST_API_KEY:-}}"
+TYPESENSE_SEARCH_API_KEY="${TYPESENSE_SEARCH_API_KEY:-$TYPESENSE_ADMIN_API_KEY}"
+export TYPESENSE_API_URL TYPESENSE_ADMIN_API_KEY TYPESENSE_SEARCH_API_KEY
+
+if [ "$BACKEND" = "typesense" ] && { [ -z "$TYPESENSE_API_URL" ] || [ -z "$TYPESENSE_ADMIN_API_KEY" ]; }; then
+  echo "conference-index: Typesense admin URL and key are required" >&2
+  exit 1
+fi
+
 command -v yt-dlp >/dev/null 2>&1 || {
   echo "yt-dlp is required" >&2
   exit 1
@@ -26,14 +36,16 @@ while IFS="$(printf '\t')" read -r target playlist_url; do
   yt-dlp --flat-playlist --print '%(id)s' "$playlist_url" |
     while IFS= read -r video_id; do
       [ -n "$video_id" ] || continue
-      if grep -Fxq "$video_id" "$completed"; then
+      if grep -Fxq -- "$video_id" "$completed"; then
         continue
       fi
       echo "conference-index: indexing target=$target video=$video_id"
-      if cargo run --release -p youtube_cli -- index-video "$video_id" \
+      if cargo run --release -p youtube_cli -- index-video \
         --backend "$BACKEND" \
         --collection "$COLLECTION" \
-        --transcript-cache-dir "$TRANSCRIPT_CACHE_DIR"; then
+        --no-wipe \
+        --transcript-cache-dir "$TRANSCRIPT_CACHE_DIR" \
+        -- "$video_id"; then
         printf '%s\n' "$video_id" >> "$completed"
       else
         echo "conference-index: failed target=$target video=$video_id; continuing" >&2

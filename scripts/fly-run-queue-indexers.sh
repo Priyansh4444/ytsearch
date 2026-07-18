@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-# Start the single persistent Typesense queue worker.
+# Start or create the single on-demand Typesense queue worker.
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-staging}"
@@ -23,16 +23,23 @@ run_worker() {
   machine_name="$2"
   volume_name="$3"
 
-  started="$(printf '%s' "$machines" | jq --arg backend "$backend" '[.[] | select(.state == "started" and .config.env.QUEUE_TARGET_BACKEND == $backend)] | length')"
-  if [ "$started" -eq 1 ]; then
-    echo "Queue worker already started: backend=$backend"
-    return 0
-  fi
-  if [ "$started" -gt 1 ]; then
-    echo "Refusing to start $backend: found $started started workers." >&2
+  configured="$(printf '%s' "$machines" | jq --arg backend "$backend" '[.[] | select(.config.env.QUEUE_TARGET_BACKEND == $backend)] | length')"
+  if [ "$configured" -gt 1 ]; then
+    echo "Refusing to start $backend: found $configured configured workers." >&2
     exit 1
   fi
+  if [ "$configured" -eq 1 ]; then
+    machine_id="$(printf '%s' "$machines" | jq -r --arg backend "$backend" 'first(.[] | select(.config.env.QUEUE_TARGET_BACKEND == $backend)) | .id')"
+    state="$(printf '%s' "$machines" | jq -r --arg backend "$backend" 'first(.[] | select(.config.env.QUEUE_TARGET_BACKEND == $backend)) | .state')"
+    case "$state" in
+      started|starting) echo "Queue worker already active: backend=$backend state=$state" ;;
+      stopped) flyctl machine start --app "$APP_NAME" "$machine_id" ;;
+      *) echo "Refusing to start $backend worker in state: $state" >&2; exit 1 ;;
+    esac
+    return 0
+  fi
 
+  ON_DEMAND="${ON_DEMAND:-1}" \
   QUEUE_DAEMON=1 \
   BACKENDS="$backend" \
   QUEUE_TARGET_BACKEND="$backend" \

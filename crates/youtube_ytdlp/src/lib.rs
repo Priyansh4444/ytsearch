@@ -187,10 +187,16 @@ impl YtDlpTranscriptSource {
         handle: &str,
         max_videos: Option<usize>,
     ) -> youtube_ingest::Result<Vec<YtDlpVideo>> {
-        Ok(self
-            .channel_feed_for_tab(handle, "streams", max_videos)
-            .await?
-            .videos)
+        Ok(self.channel_stream_feed(handle, max_videos).await?.videos)
+    }
+
+    pub async fn channel_stream_feed(
+        &self,
+        handle: &str,
+        max_videos: Option<usize>,
+    ) -> youtube_ingest::Result<YtDlpChannelFeed> {
+        self.channel_feed_for_tab(handle, "streams", max_videos)
+            .await
     }
 
     async fn channel_feed_for_tab(

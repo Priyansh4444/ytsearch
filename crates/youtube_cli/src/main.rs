@@ -2405,12 +2405,24 @@ async fn validate_youtuber_with_ytdlp(
     handle: &str,
     max_videos: u8,
 ) -> Result<ValidatedYoutuber, CliError> {
-    let feed = ytdlp
-        .channel_feed(handle, Some(usize::from(max_videos.max(1))))
-        .await?;
+    let limit = Some(usize::from(max_videos.max(1)));
+    let feed = match ytdlp.channel_feed(handle, limit).await {
+        Ok(feed) if !feed.videos.is_empty() => feed,
+        Ok(_) => {
+            println!("  uploads tab is empty; validating against streams tab");
+            ytdlp.channel_stream_feed(handle, limit).await?
+        }
+        Err(upload_error) => match ytdlp.channel_stream_feed(handle, limit).await {
+            Ok(feed) => {
+                println!("  uploads tab failed ({upload_error}); validating against streams tab");
+                feed
+            }
+            Err(_) => return Err(upload_error.into()),
+        },
+    };
     if feed.videos.is_empty() {
         return Err(CliError::Message(format!(
-            "No YouTube channel found for handle {handle}"
+            "No public uploads or streams found for handle {handle}"
         )));
     }
     let uploads_playlist = uploads_playlist_from_channel_id(&feed.channel_id);
@@ -2446,12 +2458,19 @@ async fn discover_videos_for_youtuber_with_ytdlp(
     ytdlp: &YtDlpTranscriptSource,
     handle: &str,
 ) -> Result<Vec<DiscoveredVideo>, CliError> {
-    let mut videos = ytdlp
-        .channel_videos(handle, None)
-        .await?
-        .into_iter()
-        .map(discovered_video_from_ytdlp_video)
-        .collect::<Vec<_>>();
+    let uploads = ytdlp.channel_videos(handle, None).await;
+    let mut videos = match &uploads {
+        Ok(uploads) => uploads
+            .iter()
+            .cloned()
+            .map(discovered_video_from_ytdlp_video)
+            .collect::<Vec<_>>(),
+        Err(error) => {
+            tracing::warn!(handle = %handle, %error, "yt-dlp uploads-tab discovery failed; trying streams");
+            println!("  uploads-tab discovery skipped ({error})");
+            Vec::new()
+        }
+    };
 
     match ytdlp.channel_streams(handle, None).await {
         Ok(streams) => {
@@ -2462,6 +2481,9 @@ async fn discover_videos_for_youtuber_with_ytdlp(
             videos.extend(streams.into_iter().map(discovered_video_from_ytdlp_video));
         }
         Err(error) => {
+            if videos.is_empty() {
+                return Err(uploads.err().unwrap_or(error).into());
+            }
             tracing::warn!(handle = %handle, %error, "yt-dlp stream-tab discovery failed; continuing with uploads");
             println!("  stream-tab discovery skipped ({error})");
         }

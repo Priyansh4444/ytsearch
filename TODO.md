@@ -19,6 +19,11 @@ This file tracks the current requested work and end-to-end verification. Mark an
 - [x] Regression found in channel directory: both search clients returned only their first 100 creator documents. Fixed with backend pagination, so the frontend can render every searchable indexed channel.
 - [x] Regression found in queue operations: the runner allowed a daemon with both target backends. Fixed by requiring exactly one backend per worker and adding a two-worker launcher/check.
 - [x] Regression found in Typesense ordering: low-signal newest queries used `t_start_ms` because the schema had no publication sort field. Fixed in code with `published_at_timestamp`; an intentional Typesense rewipe is required to backfill deployed chunks.
+- [x] Regression found in queue diagnostics: the intended on-demand worker was reported as missing while stopped, and the launcher could create a second Machine against the JSONL volume. The invariant now accepts one healthy stopped worker, rejects duplicates, and starts the existing Machine instead of creating another.
+- [x] Regression found in conference imports: the script loaded self-hosted Typesense variables but did not map them to the generic names required by `youtube_cli`, so every item failed before discovery. The importer now fails early, exports the correct aliases, and has a fixture test.
+- [x] Regression found in conference imports: `index-video` used its destructive default even though the playlist runner is resumable. The runner now always passes `--no-wipe`, and its fixture fails if that guard is removed.
+- [x] Regression found in creator discovery: an unavailable or empty uploads tab aborted before the streams tab was considered, so stream-only creators could not validate or index. Validation and discovery now fall back independently across both tabs while retaining `yt-dlp` as primary.
+- [x] Regression found in conference imports: a valid video ID beginning with `-` was parsed as a CLI option. The runner now places video IDs after an explicit `--` argument boundary.
 - [ ] Three unattached legacy indexer volumes still exist (`vol_v8e6wk3g1l6kj15v`, `vol_458zq611m0yppz14`, and `vol_4qlzgynglnz786gr`). Verify they contain no unique data, then delete them with explicit approval to save about $4.50/month; see `docs/cost-optimization.md`.
 
 ## Product/UI Behavior
@@ -43,7 +48,7 @@ This file tracks the current requested work and end-to-end verification. Mark an
 - [x] Rename frontend component files and imports to kebab-case.
 - [x] Make the Ko-fi destination configurable through `VITE_KOFI_URL` with a production fallback.
 - [x] Remove the homepage navbar, title, magnetic interaction hint, and self-hosting footer copy; keep only the configurable Ko-fi link at the bottom.
-- [ ] Measure current request volume impact after deployment. Blocked: the configured Axiom token is ingest-only and the aggregate report correctly returns HTTP 403; grant query/read permission to run `scripts/axiom-search-report.sh`.
+- [ ] Measure current request volume impact after deployment. Rechecked 2026-07-18: both rotated Axiom keys authenticate and list datasets, but both still return HTTP 403 for `query:read`; grant that action to the query key, then run `scripts/axiom-agent.sh report`.
   - [x] Cancel stale prewarm requests.
   - [x] Do not prewarm index-request mode queries that start with `@`.
 - [x] Retire the semantic search experiment without changing production Keyword search. The experiment failed the general-relevance and UI-isolation gates documented in `docs/semantic-experiment-2026-07-13.md`; its Pages preview was replaced with a Keyword-only build and its Fly resources were destroyed. (WE PLAN TO EXPERIMENT MORE IN THE FUTURE)
@@ -116,9 +121,9 @@ This file tracks the current requested work and end-to-end verification. Mark an
 - [x] `@codebullet`
 - [x] Veritasium target verified and queued/indexed. `@veritasium` was already queued.
 - [x] Vsauce target verified and queued/indexed. `@vsauce` queued for repair.
-- [ ] NVIDIA GTC 2026 official playlist researched and scoped (32 videos) in `scripts/conference-playlists.tsv`; resumable import is waiting behind the active single-writer DEF CON repair.
-- [ ] Google I/O 2026 All Sessions official playlist researched and scoped (68 videos) in `scripts/conference-playlists.tsv`; resumable import is waiting behind the active single-writer DEF CON repair.
-- [ ] Apple WWDC26 Sessions official playlist researched and scoped (107 videos) in `scripts/conference-playlists.tsv`; resumable import is waiting behind the active single-writer DEF CON repair.
+- [x] NVIDIA GTC 2026 official playlist imported as far as publicly possible: 29/32 videos indexed; two have no English captions and one is private.
+- [x] Google I/O 2026 All Sessions official playlist imported resumably: 68/68 videos.
+- [x] Apple WWDC26 Sessions official playlist imported resumably: 107/107 videos.
 
 ## Live Frontend Verification
 
@@ -166,7 +171,7 @@ This file tracks the current requested work and end-to-end verification. Mark an
 - [x] Document immediate and experimental cost reductions, performance gates, combined-server trade-offs, and the protobuf decision in `docs/cost-optimization.md`.
 - [x] Increase daily Fly snapshot retention from 5 to 30 days for the Typesense corpus and persistent queue, schedule fresh snapshots, and add checksummed provider-neutral backup/restore scripts plus `docs/disaster-recovery.md`.
 - [ ] Automate provider-neutral exports from an isolated snapshot restore. Never export the full collection from serving Typesense: the 2026-07-15 trial raised a health-check search from 99 ms to 5.7 seconds and was aborted; the script now fails closed for the production URL.
-- [ ] Enable R2 once in the Cloudflare dashboard, create a private `ytsearch-backups` bucket, and automate daily upload/retention of the checksummed exports. Wrangler is currently blocked by Cloudflare API code `10042` because R2 is disabled.
+- [ ] Enable R2 once in the Cloudflare dashboard, create a private `ytsearch-backups` bucket, and automate daily upload/retention of the checksummed exports. Rechecked 2026-07-18: Wrangler still returns Cloudflare API code `10042` because R2 is disabled.
 - [x] Reduce the always-on indexer from 4 to 2 performance CPUs while retaining 8 GB RAM, swap, and single-writer backpressure (Fly shared CPU is capped at the previously failing 4 GB memory tier).
 - [x] Finish the portable self-hosting guide: added provider-neutral Compose services for Typesense, API, frontend, and one persistent queue worker plus bare-process guidance.
 - [x] Remove legacy Meilisearch crate, Rust branches, Fly configuration, scripts, and non-historical documentation; retain only the README pointer and `docs/legacy/meilisearch-retirement.md`.

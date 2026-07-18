@@ -33,8 +33,9 @@ flowchart LR
 1. The JSONL request log remains authoritative. Cloudflare Queue is only a wake
    signal, so duplicate delivery is harmless and losing an individual signal
    does not lose a request.
-2. Keep exactly one persistent indexer Machine because JSONL has no distributed
-   lock. It uses shared CPU with 8 GB RAM, `JOBS=1`, and `TYPESENSE_JOBS=1`.
+2. Keep exactly one configured indexer Machine because JSONL has no distributed
+   lock. Its volume persists while the VM stops; it uses shared CPU with 8 GB
+   RAM, `JOBS=1`, and `TYPESENSE_JOBS=1` while active.
 3. The indexer has restart policy `no`, disables the legacy daily full refresh,
    and exits after five idle minutes. The Cloudflare consumer restarts it when
    a new request is accepted.

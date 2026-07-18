@@ -10,7 +10,8 @@ Active apps:
 
 - `ytsearch-typesense-staging`: persistent Typesense engine.
 - `ytsearch-api-typesense-fly-staging`: public API and JSONL queue owner.
-- `ytsearch-indexer-staging`: one persistent update/queue worker.
+- `ytsearch-indexer-staging`: one on-demand update/queue worker, woken by the
+  Cloudflare Queue consumer and stopped after an idle window.
 
 Deploy the API:
 

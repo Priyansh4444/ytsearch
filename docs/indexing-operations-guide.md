@@ -232,8 +232,8 @@ BACKENDS="typesense-fly" QUEUE_TARGET_BACKEND=typesense-fly JOBS=1 LIMIT=5 scrip
 flyctl logs --app ytsearch-indexer-staging
 ```
 
-Keep the active index building with one persistent polling Machine. The launcher
-is idempotent: it verifies the named worker and starts it only when missing:
+Keep exactly one configured on-demand Machine. The launcher is idempotent: it
+starts the existing stopped worker and creates one only when none exists:
 
 ```bash
 scripts/check-queue-indexers.sh
@@ -241,11 +241,10 @@ JOBS=1 QUEUE_POLL_INTERVAL_SECONDS=30 scripts/fly-run-queue-indexers.sh
 scripts/check-queue-indexers.sh
 ```
 
-After the request queue empties, the persistent worker immediately runs the
-non-destructive update list. A completed list pass has a five-minute cooldown
-before the next repair pass, so incomplete or newly published videos are
-continuously revisited without a tight loop. Queue requests are checked between
-channels and retain priority over the background repair pass.
+After the request queue empties, the worker exits after five idle minutes. The
+Cloudflare Queue consumer restarts it only after an operator approves another
+request. This keeps the transcript cache volume persistent without paying for
+an idle VM.
 
 `fly-run-queue-indexer.sh` refuses a missing target or a multi-backend scope. Do not run two daemons with the same `QUEUE_TARGET_BACKEND`. If channel validation or indexing fails, the row is retained with `failed` status and no longer blocks newer work. Re-submit the handle after correcting the spelling, cookies, or upstream issue to create a fresh retry row.
 
@@ -256,7 +255,8 @@ results. Existing chunks acquire it through non-destructive update ingestion.
 A destructive source re-extraction remains available only with both
 `--allow-destructive-rewipe` and `ALLOW_DESTRUCTIVE_REWIPE=1` in the wrappers.
 
-Enable the continuous caption/video repair pass used by staging:
+For a deliberate bounded repair window, temporarily enable the update pass.
+This is not the staging default and keeps the Machine running until stopped:
 
 ```bash
 DAILY_UPDATE_ENABLED=1 \
