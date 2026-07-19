@@ -59,6 +59,40 @@ queries.
 5. Run it in shadow mode. Record only aggregate timing, candidate overlap, and
    resource measurements until a privacy-reviewed judged-query set exists.
 
+## Intra-frame and inter-frame prototype
+
+`youtube_semantic` now has an isolated multimodal exact-search prototype:
+
+- `transcript` evidence represents what is said during an interval;
+- `intra_frame` evidence represents the content of one selected frame;
+- `inter_frame` evidence represents motion or change between two frames.
+
+Each modality is searched independently and may use a different model and
+embedding dimension. Results are fused only at the rank level. Evidence that
+refers to the same scene must use the same `segment_id`, while retaining its
+own timestamp interval. This avoids averaging incompatible text, image, and
+temporal vector spaces.
+
+Run the checked-in model-independent example:
+
+```bash
+cargo run -p youtube_semantic --example multimodal_search -- \
+  crates/youtube_semantic/fixtures/multimodal-corpus.jsonl \
+  crates/youtube_semantic/fixtures/multimodal-query.json
+```
+
+The corpus is JSONL with `id`, `segment_id`, `video_id`, timestamps, `kind`,
+and a precomputed `embedding`. The query JSON accepts an embedding and weight
+for any combination of `transcript`, `intra_frame`, and `inter_frame`.
+
+For a real one-channel experiment, generate intra-frame vectors with a local
+image-text encoder such as SigLIP 2. Generate inter-frame vectors with a model
+trained for temporal video-text retrieval; subtracting two image embeddings is
+an inexpensive diagnostic baseline, but it should not be described as motion
+understanding. Select frames by scene changes, deduplicate them before
+inference, and keep exact artifact revisions and licenses in the benchmark
+report.
+
 If four static vectors per video fail the judged relevance gate, test in this
 order:
 
@@ -115,4 +149,3 @@ tail latency.
 - [Qdrant quantization](https://qdrant.tech/documentation/guides/quantization/)
 - [Qdrant storage optimization](https://qdrant.tech/documentation/guides/optimize/)
 - [Reciprocal rank fusion](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf)
-

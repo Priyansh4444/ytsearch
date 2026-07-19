@@ -1,0 +1,8 @@
+{
+  "transcript": [1.0, 0.0],
+  "intra_frame": [1.0, 0.0],
+  "inter_frame": [1.0, 0.0, 0.0],
+  "transcript_weight": 0.7,
+  "intra_frame_weight": 1.0,
+  "inter_frame_weight": 1.0
+}
