@@ -1,4 +1,5 @@
 import type {
+  DashboardData,
   IndexQueueRequest,
   IndexStatus,
   IndexedChannel,
@@ -102,6 +103,44 @@ export async function indexStatus(handle?: string): Promise<IndexStatus> {
 
 export function clearIndexStatusCache(): void {
   indexStatusCache.clear();
+}
+
+export async function dashboardData(): Promise<DashboardData> {
+  const timed = async <T>(operation: () => Promise<T>) => {
+    const started = performance.now();
+    const value = await operation();
+    return { value, latencyMs: Math.round(performance.now() - started) };
+  };
+  const [health, channels, status] = await Promise.allSettled([
+    timed(async () => {
+      const response = await fetch(`${API_BASE_URL}/api/health`, { cache: "no-store" });
+      if (!response.ok) throw await apiError(response, "Health check failed");
+      return responseJson<{ ok: boolean }>(response, "Health check returned an invalid response");
+    }),
+    timed(indexedChannels),
+    timed(() => {
+      clearIndexStatusCache();
+      return indexStatus();
+    }),
+  ]);
+  const errors = [health, channels, status]
+    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .map((result) =>
+      result.reason instanceof Error ? result.reason.message : String(result.reason),
+    );
+
+  return {
+    channels: channels.status === "fulfilled" ? channels.value.value : [],
+    indexStatus: status.status === "fulfilled" ? status.value.value : undefined,
+    apiHealthy: health.status === "fulfilled" && health.value.value.ok,
+    fetchedAt: new Date().toISOString(),
+    latencyMs: {
+      health: health.status === "fulfilled" ? health.value.latencyMs : undefined,
+      channels: channels.status === "fulfilled" ? channels.value.latencyMs : undefined,
+      indexStatus: status.status === "fulfilled" ? status.value.latencyMs : undefined,
+    },
+    errors,
+  };
 }
 
 async function apiError(response: Response, fallback: string): Promise<Error> {

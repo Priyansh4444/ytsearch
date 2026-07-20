@@ -92,3 +92,16 @@ export type IndexStatus = {
   request_id?: string;
   target_backend?: string;
 };
+
+export type DashboardData = {
+  channels: IndexedChannel[];
+  indexStatus?: IndexStatus;
+  apiHealthy: boolean;
+  fetchedAt: string;
+  latencyMs: {
+    health?: number;
+    channels?: number;
+    indexStatus?: number;
+  };
+  errors: string[];
+};

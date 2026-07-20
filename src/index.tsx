@@ -3,6 +3,7 @@ import { render } from "solid-js/web";
 import "solid-devtools";
 
 import App from "./app";
+import { Dashboard } from "./components/dashboard";
 import "./index.css";
 
 const root = document.getElementById("root");
@@ -13,4 +14,4 @@ if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
   );
 }
 
-render(() => <App />, root!);
+render(() => (window.location.pathname === "/dashboard" ? <Dashboard /> : <App />), root!);

@@ -60,6 +60,9 @@ async function mockApi(page: Page) {
     if (url.pathname === "/api/youtubers") {
       return route.fulfill({ json: { channels: [channel] } });
     }
+    if (url.pathname === "/api/health") {
+      return route.fulfill({ json: { ok: true } });
+    }
     if (url.pathname === "/api/index-status") {
       return route.fulfill({ json: { handle: "", status: "idle" } });
     }
@@ -108,6 +111,38 @@ test("semantic mode remains opt-in and is sent to the API", async ({ page }) => 
   await expect(page).toHaveURL(/mode=semantic/);
   await expect(page.locator("article")).toHaveCount(1);
 });
+
+test("dashboard reports catalog and operational metrics", async ({ page }) => {
+  await page.goto("/dashboard");
+
+  await expect(page).toHaveTitle("Dashboard · YouTube Search");
+  await expect(page.getByRole("heading", { name: "System dashboard" })).toBeVisible();
+  await expect(page.getByText("Indexed videos").first()).toBeVisible();
+  await expect(page.getByText("Transcript moments").first()).toBeVisible();
+  await expect(page.getByText("Operational")).toBeVisible();
+  await expect(page.getByText("Example Creator")).toBeVisible();
+  await expect(page.getByText("10 / 20")).toBeVisible();
+  await expect(page.getByText("50%").first()).toBeVisible();
+});
+
+for (const viewport of [
+  { name: "small phone", width: 320, height: 700 },
+  { name: "tablet", width: 768, height: 900 },
+  { name: "desktop", width: 1280, height: 900 },
+]) {
+  test(`dashboard fits a ${viewport.name} viewport`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("/dashboard");
+    await expect(page.getByRole("heading", { name: "System dashboard" })).toBeVisible();
+    await expect(page.getByText("Example Creator")).toBeVisible();
+
+    const dimensions = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
+  });
+}
 
 for (const viewport of [
   { name: "small phone", width: 320, height: 700 },
