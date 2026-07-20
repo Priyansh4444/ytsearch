@@ -95,6 +95,7 @@ export type IndexStatus = {
 
 export type DashboardData = {
   channels: IndexedChannel[];
+  channelsAvailable: boolean;
   indexStatus?: IndexStatus;
   apiHealthy: boolean;
   fetchedAt: string;

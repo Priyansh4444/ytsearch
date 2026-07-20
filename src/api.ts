@@ -131,6 +131,7 @@ export async function dashboardData(): Promise<DashboardData> {
 
   return {
     channels: channels.status === "fulfilled" ? channels.value.value : [],
+    channelsAvailable: channels.status === "fulfilled",
     indexStatus: status.status === "fulfilled" ? status.value.value : undefined,
     apiHealthy: health.status === "fulfilled" && health.value.value.ok,
     fetchedAt: new Date().toISOString(),

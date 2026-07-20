@@ -120,6 +120,8 @@ test("dashboard reports catalog and operational metrics", async ({ page }) => {
   await expect(page.getByText("Indexed videos").first()).toBeVisible();
   await expect(page.getByText("Transcript moments").first()).toBeVisible();
   await expect(page.getByText("Operational")).toBeVisible();
+  await expect(page.getByText("Scheduled repair")).toBeVisible();
+  await expect(page.getByText("10 count gap · wakes every 6h")).toBeVisible();
   await expect(page.getByText("Example Creator")).toBeVisible();
   await expect(page.getByText("10 / 20")).toBeVisible();
   await expect(page.getByText("50%").first()).toBeVisible();

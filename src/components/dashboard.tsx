@@ -92,16 +92,21 @@ export const Dashboard: Component = () => {
               detail={latency(snapshot()?.latencyMs.health)}
             />
             <MetricCard
-              label="Channel catalog"
-              value={snapshot()?.channels ? "Available" : "Unavailable"}
-              tone={snapshot()?.channels ? "green" : "red"}
+              label="Catalog API"
+              value={snapshot()?.channelsAvailable ? "Online" : "Unavailable"}
+              tone={snapshot()?.channelsAvailable ? "green" : "red"}
               detail={latency(snapshot()?.latencyMs.channels)}
             />
             <MetricCard
               label="Indexer"
-              value={formatStatus(snapshot()?.indexStatus?.status ?? "unknown")}
-              tone={statusTone(snapshot()?.indexStatus?.status)}
-              detail={snapshot()?.indexStatus?.handle || latency(snapshot()?.latencyMs.indexStatus)}
+              value={indexerLabel(snapshot()?.indexStatus?.status, metrics().remainingVideos)}
+              tone={indexerTone(snapshot()?.indexStatus?.status, metrics().remainingVideos)}
+              detail={indexerDetail(
+                snapshot()?.indexStatus?.status,
+                snapshot()?.indexStatus?.handle,
+                metrics().remainingVideos,
+                snapshot()?.latencyMs.indexStatus,
+              )}
             />
             <MetricCard
               label="Last refreshed"
@@ -181,7 +186,7 @@ const MetricCard: Component<{
   label: string;
   value: string;
   detail?: string;
-  tone?: "green" | "red";
+  tone?: "green" | "yellow" | "red";
 }> = (props) => (
   <div class="min-w-0 border border-vesper-border bg-vesper-panel p-4 sm:p-5">
     <p class="text-xs uppercase tracking-[0.12em] text-vesper-dim">{props.label}</p>
@@ -191,7 +196,9 @@ const MetricCard: Component<{
           ? "text-vesper-green"
           : props.tone === "red"
             ? "text-vesper-red"
-            : "text-white"
+            : props.tone === "yellow"
+              ? "text-vesper-yellow"
+              : "text-white"
       }`}
     >
       {props.value}
@@ -282,16 +289,33 @@ function latency(value?: number): string {
   return value === undefined ? "No response" : `${integer.format(value)} ms browser latency`;
 }
 
-function formatStatus(value: string): string {
-  return value === "idle"
-    ? "Idle"
-    : value === "unknown"
-      ? "Unknown"
-      : value.replace(/^./, (c) => c.toUpperCase());
+function indexerLabel(status: string | undefined, remainingVideos: number): string {
+  if (status === "idle") return remainingVideos > 0 ? "Scheduled repair" : "Caught up";
+  if (!status) return "Unknown";
+  return status.replace(/^./, (character) => character.toUpperCase());
 }
 
-function statusTone(value?: string): "green" | "red" | undefined {
-  if (value === "idle" || value === "running" || value === "queued") return "green";
-  if (value === "failed" || value === "rejected") return "red";
+function indexerTone(
+  status: string | undefined,
+  remainingVideos: number,
+): "green" | "yellow" | "red" | undefined {
+  if (status === "idle") return remainingVideos > 0 ? "yellow" : "green";
+  if (status === "running") return "green";
+  if (status === "queued") return "yellow";
+  if (status === "failed" || status === "rejected") return "red";
   return undefined;
+}
+
+function indexerDetail(
+  status: string | undefined,
+  handle: string | undefined,
+  remainingVideos: number,
+  latencyMs: number | undefined,
+): string {
+  if (status === "running" && handle) return handle;
+  if (status === "idle" && remainingVideos > 0) {
+    return `${integer.format(remainingVideos)} count gap · wakes every 6h`;
+  }
+  if (status === "idle") return "No public/indexed count gap";
+  return latency(latencyMs);
 }
