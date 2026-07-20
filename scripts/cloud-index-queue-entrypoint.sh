@@ -9,6 +9,7 @@ VIDEO_TIMEOUT_SECONDS="${VIDEO_TIMEOUT_SECONDS:-300}"
 TRANSCRIPT_CACHE_DIR="${TRANSCRIPT_CACHE_DIR:-/data/transcript-cache}"
 LIMIT="${LIMIT:-10}"
 QUEUE_ONE_REQUEST_PER_PASS="${QUEUE_ONE_REQUEST_PER_PASS:-0}"
+DAILY_UPDATE_LIST_FILE="${DAILY_UPDATE_LIST_FILE:-/tmp/daily-indexed-channels.txt}"
 QUEUE_PRIORITY_LIST_FILE="${QUEUE_PRIORITY_LIST_FILE:-$DAILY_UPDATE_LIST_FILE}"
 MAX_VIDEOS_PER_PASS="${MAX_VIDEOS_PER_PASS:-0}"
 QUEUE_POLL_INTERVAL_SECONDS="${QUEUE_POLL_INTERVAL_SECONDS:-60}"
@@ -16,10 +17,13 @@ QUEUE_LOOP="${QUEUE_LOOP:-0}"
 DAILY_UPDATE_ENABLED="${DAILY_UPDATE_ENABLED:-0}"
 DAILY_UPDATE_INTERVAL_SECONDS="${DAILY_UPDATE_INTERVAL_SECONDS:-300}"
 DAILY_UPDATE_INITIAL_DELAY_SECONDS="${DAILY_UPDATE_INITIAL_DELAY_SECONDS:-86400}"
-DAILY_UPDATE_LIST_FILE="${DAILY_UPDATE_LIST_FILE:-/tmp/daily-indexed-channels.txt}"
 EXISTING_TAIL="${EXISTING_TAIL:-0}"
 ACK_FAILED_REQUESTS="${ACK_FAILED_REQUESTS:-0}"
 IDLE_EXIT_AFTER_SECONDS="${IDLE_EXIT_AFTER_SECONDS:-0}"
+IDLE_GAP_FILL_ENABLED="${IDLE_GAP_FILL_ENABLED:-0}"
+IDLE_GAP_FILL_STATE_FILE="${IDLE_GAP_FILL_STATE_FILE:-/data/idle-gap-fill.cursor}"
+IDLE_GAP_FILL_MAX_PASSES="${IDLE_GAP_FILL_MAX_PASSES:-1}"
+IDLE_GAP_FILL_MAX_NEW_VIDEOS="${IDLE_GAP_FILL_MAX_NEW_VIDEOS:-10}"
 
 mkdir -p "$TRANSCRIPT_CACHE_DIR"
 
@@ -54,6 +58,28 @@ validate_idle_exit() {
   case "$IDLE_EXIT_AFTER_SECONDS" in
     ''|*[!0-9]*)
       echo "cloud-queue-indexer: IDLE_EXIT_AFTER_SECONDS must be an integer" >&2
+      exit 1
+      ;;
+  esac
+}
+
+validate_idle_gap_fill() {
+  case "$IDLE_GAP_FILL_ENABLED" in
+    0|1) ;;
+    *)
+      echo "cloud-queue-indexer: IDLE_GAP_FILL_ENABLED must be 0 or 1" >&2
+      exit 1
+      ;;
+  esac
+  case "$IDLE_GAP_FILL_MAX_PASSES" in
+    ''|*[!0-9]*|0)
+      echo "cloud-queue-indexer: IDLE_GAP_FILL_MAX_PASSES must be a positive integer" >&2
+      exit 1
+      ;;
+  esac
+  case "$IDLE_GAP_FILL_MAX_NEW_VIDEOS" in
+    ''|*[!0-9]*|0)
+      echo "cloud-queue-indexer: IDLE_GAP_FILL_MAX_NEW_VIDEOS must be a positive integer" >&2
       exit 1
       ;;
   esac
@@ -314,6 +340,52 @@ for request in requests[:pull_limit]:
 PY
 }
 
+pull_idle_gap_handle() {
+  cursor=""
+  if [ -f "$IDLE_GAP_FILL_STATE_FILE" ]; then
+    cursor="$(sed -n '1p' "$IDLE_GAP_FILL_STATE_FILE" | tr '[:upper:]' '[:lower:]')"
+  fi
+  CURSOR="$cursor" python3 <<'PY'
+import json
+import os
+import sys
+import urllib.request
+
+url = os.environ["INDEX_QUEUE_API_BASE_URL"].rstrip("/") + "/api/youtubers"
+try:
+    with urllib.request.urlopen(url, timeout=30) as response:
+        body = json.load(response)
+except (OSError, ValueError) as error:
+    print(f"cloud-queue-indexer: gap catalog request failed: {error}", file=sys.stderr)
+    sys.exit(0)
+
+handles = sorted(
+    {
+        str(channel.get("handle") or "").strip().lower()
+        for channel in body.get("channels", [])
+        if int(channel.get("indexed_video_count") or 0)
+        < int(channel.get("public_video_count") or 0)
+    }
+    - {""}
+)
+cursor = os.environ.get("CURSOR", "").strip().lower()
+selected = next((handle for handle in handles if handle > cursor), None)
+if selected is None and handles:
+    selected = handles[0]
+if selected:
+    print(selected)
+PY
+}
+
+remember_idle_gap_handle() {
+  handle="$1"
+  state_dir="$(dirname "$IDLE_GAP_FILL_STATE_FILE")"
+  mkdir -p "$state_dir"
+  tmp_state="${IDLE_GAP_FILL_STATE_FILE}.tmp.$$"
+  printf '%s\n' "$handle" > "$tmp_state"
+  mv "$tmp_state" "$IDLE_GAP_FILL_STATE_FILE"
+}
+
 index_one_backend() {
   label="$1"
   backend="$2"
@@ -350,6 +422,7 @@ index_one_backend() {
 
 index_youtuber_for_backends() {
   handle="$1"
+  shift
   failed=0
   typesense_jobs="${TYPESENSE_JOBS:-$JOBS}"
 
@@ -360,7 +433,7 @@ index_youtuber_for_backends() {
       export TYPESENSE_API_URL="$TYPESENSE_SELFHOST_API_URL"
       export TYPESENSE_ADMIN_API_KEY="$TYPESENSE_SELFHOST_API_KEY"
       export TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SELFHOST_API_KEY"
-      if ! index_one_backend typesense-fly typesense "$typesense_jobs" "$handle"; then
+      if ! index_one_backend typesense-fly typesense "$typesense_jobs" "$handle" "$@"; then
         failed=1
         echo "cloud-queue-indexer: backend failed handle=$handle backend=typesense-fly" >&2
       fi
@@ -436,11 +509,37 @@ index_daily_update_for_backends() {
   return "$failed"
 }
 
+process_idle_gap_once() {
+  IDLE_GAP_HAD_WORK=0
+  handle="$(pull_idle_gap_handle)"
+  if [ -z "$handle" ]; then
+    echo "cloud-queue-indexer: no indexed/public video gaps found"
+    return 0
+  fi
+
+  IDLE_GAP_HAD_WORK=1
+  echo "cloud-queue-indexer: idle gap fill handle=$handle"
+  log_queue_event info idle_gap_fill_started "" "$handle" "" "$BACKENDS" "running"
+  set_index_activity "$handle" || true
+  if index_youtuber_for_backends "$handle" --max-new-videos "$IDLE_GAP_FILL_MAX_NEW_VIDEOS"; then
+    log_queue_event info idle_gap_fill_completed "" "$handle" "" "$BACKENDS" "completed"
+  else
+    log_queue_event error idle_gap_fill_failed "" "$handle" "" "$BACKENDS" "failed"
+  fi
+  remember_idle_gap_handle "$handle"
+  set_index_activity "" || true
+}
+
+if [ "${CLOUD_INDEX_QUEUE_LIBRARY_ONLY:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 require_env INDEX_QUEUE_API_BASE_URL
 require_env YTSEARCH_INDEX_QUEUE_TOKEN
 validate_backend_scope
 validate_update_schedule
 validate_idle_exit
+validate_idle_gap_fill
 
 process_queue_once() {
   QUEUE_HAD_WORK=0
@@ -510,6 +609,7 @@ process_queue_once() {
 if [ "$QUEUE_LOOP" = "1" ]; then
   echo "cloud-queue-indexer: daemon mode enabled poll_interval=${QUEUE_POLL_INTERVAL_SECONDS}s"
   idle_since="$(date +%s)"
+  idle_gap_passes=0
   next_daily_update=$(( $(date +%s) + DAILY_UPDATE_INITIAL_DELAY_SECONDS ))
   if [ "$DAILY_UPDATE_ENABLED" = "1" ]; then
     echo "cloud-queue-indexer: daily update enabled initial_delay=${DAILY_UPDATE_INITIAL_DELAY_SECONDS}s interval=${DAILY_UPDATE_INTERVAL_SECONDS}s next_after_epoch=$next_daily_update"
@@ -521,7 +621,15 @@ if [ "$QUEUE_LOOP" = "1" ]; then
     if [ "$QUEUE_HAD_WORK" = "1" ]; then
       idle_since="$(date +%s)"
     fi
-    if [ "$DAILY_UPDATE_ENABLED" = "1" ] && [ "$QUEUE_HAD_WORK" = "0" ]; then
+    IDLE_GAP_HAD_WORK=0
+    if [ "$IDLE_GAP_FILL_ENABLED" = "1" ] && [ "$QUEUE_HAD_WORK" = "0" ] && [ "$idle_gap_passes" -lt "$IDLE_GAP_FILL_MAX_PASSES" ]; then
+      process_idle_gap_once || echo "cloud-queue-indexer: idle gap pass failed; continuing after poll interval" >&2
+      if [ "$IDLE_GAP_HAD_WORK" = "1" ]; then
+        idle_gap_passes=$((idle_gap_passes + 1))
+        idle_since="$(date +%s)"
+      fi
+    fi
+    if [ "$DAILY_UPDATE_ENABLED" = "1" ] && [ "$QUEUE_HAD_WORK" = "0" ] && [ "$IDLE_GAP_HAD_WORK" = "0" ]; then
       now="$(date +%s)"
       if [ "$now" -ge "$next_daily_update" ]; then
         echo "cloud-queue-indexer: running scheduled daily update before queue pass"

@@ -158,6 +158,11 @@ struct IndexYoutuberCommand {
     max_videos: Option<usize>,
     #[arg(
         long,
+        help = "After existing-video filtering, index at most this many missing videos"
+    )]
+    max_new_videos: Option<usize>,
+    #[arg(
+        long,
         help = "In update mode, stop scanning newest-first after this many consecutive already-indexed videos. Use 0 to disable"
     )]
     stop_after_existing: Option<usize>,
@@ -1295,7 +1300,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         HashSet::new()
     };
     let existing_video_count = existing_video_ids.len();
-    let videos_to_index = videos_to_index
+    let mut videos_to_index = videos_to_index
         .into_iter()
         .filter(|video| {
             if existing_video_ids.contains(&video.video_id) {
@@ -1306,6 +1311,13 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
             }
         })
         .collect::<Vec<_>>();
+    if let Some(limit) = command.max_new_videos {
+        videos_to_index.truncate(limit);
+        println!(
+            "Capped this update pass at {} missing video(s)",
+            videos_to_index.len()
+        );
+    }
     if existing_video_count > 0 {
         println!(
             "Skipped {} already-indexed video(s) before starting workers",
@@ -1510,6 +1522,7 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
             search: command.search.clone(),
             collection: command.collection.clone(),
             max_videos: command.max_videos,
+            max_new_videos: None,
             mode: command.mode,
             allow_destructive_rewipe: command.allow_destructive_rewipe,
             jobs: command.jobs,

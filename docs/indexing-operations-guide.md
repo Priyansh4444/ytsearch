@@ -246,6 +246,24 @@ Cloudflare Queue consumer restarts it only after an operator approves another
 request. This keeps the transcript cache volume persistent without paying for
 an idle VM.
 
+The active worker also uses otherwise-idle time to close indexed/public video
+count gaps. `IDLE_GAP_FILL_ENABLED=1` reads the public channel catalog, selects
+only handles where `indexed_video_count < public_video_count`, and updates one
+creator per pass with `JOBS=1`. A cursor on the indexer volume rotates through
+gap creators so a repeatedly unavailable caption or channel cannot starve the
+others. Approved queue rows are checked before every gap pass and retain
+priority. An individual creator update is not interrupted midway. The active
+worker permits one gap pass per wake (`IDLE_GAP_FILL_MAX_PASSES=1`), preventing
+unavailable captions from keeping the paid Machine alive indefinitely.
+Each pass scans the selected creator for missing IDs but attempts at most ten
+missing videos (`IDLE_GAP_FILL_MAX_NEW_VIDEOS=10`), bounding the time before a
+newly approved queue row can take priority.
+
+The Cloudflare Worker wakes the stopped indexer every six hours at minute 17,
+in addition to approved-request wakes. When no gaps or queue rows exist, the
+Machine reaches its idle timeout and stops again. Disable the repair behavior
+for a deliberately queue-only worker with `IDLE_GAP_FILL_ENABLED=0`.
+
 `fly-run-queue-indexer.sh` refuses a missing target or a multi-backend scope. Do not run two daemons with the same `QUEUE_TARGET_BACKEND`. If channel validation or indexing fails, the row is retained with `failed` status and no longer blocks newer work. Re-submit the handle after correcting the spelling, cookies, or upstream issue to create a fresh retry row.
 
 ### Typesense publication-sort migration
@@ -255,8 +273,8 @@ results. Existing chunks acquire it through non-destructive update ingestion.
 A destructive source re-extraction remains available only with both
 `--allow-destructive-rewipe` and `ALLOW_DESTRUCTIVE_REWIPE=1` in the wrappers.
 
-For a deliberate bounded repair window, temporarily enable the update pass.
-This is not the staging default and keeps the Machine running until stopped:
+The older list-wide scheduled update remains available for a deliberate repair
+window, but is disabled on the active worker because gap fill is narrower:
 
 ```bash
 DAILY_UPDATE_ENABLED=1 \

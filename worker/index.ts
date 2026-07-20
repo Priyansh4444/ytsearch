@@ -47,6 +47,10 @@ export default {
       }
     }
   },
+
+  async scheduled(_controller, env): Promise<void> {
+    await startIndexer(env);
+  },
 } satisfies ExportedHandler<Env, WakeMessage>;
 
 async function startIndexer(env: Env): Promise<void> {

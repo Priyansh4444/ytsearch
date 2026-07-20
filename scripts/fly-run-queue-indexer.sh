@@ -176,6 +176,10 @@ exec flyctl machine run \
   --env "QUEUE_LOOP=${QUEUE_LOOP:-$QUEUE_DAEMON}" \
   --env "QUEUE_POLL_INTERVAL_SECONDS=${QUEUE_POLL_INTERVAL_SECONDS:-30}" \
   --env "IDLE_EXIT_AFTER_SECONDS=$idle_exit_after_seconds" \
+  --env "IDLE_GAP_FILL_ENABLED=${IDLE_GAP_FILL_ENABLED:-0}" \
+  --env "IDLE_GAP_FILL_STATE_FILE=${IDLE_GAP_FILL_STATE_FILE:-/data/idle-gap-fill.cursor}" \
+  --env "IDLE_GAP_FILL_MAX_PASSES=${IDLE_GAP_FILL_MAX_PASSES:-1}" \
+  --env "IDLE_GAP_FILL_MAX_NEW_VIDEOS=${IDLE_GAP_FILL_MAX_NEW_VIDEOS:-10}" \
   --env "ACK_FAILED_REQUESTS=${ACK_FAILED_REQUESTS:-0}" \
   --env "DAILY_UPDATE_ENABLED=$daily_update_enabled" \
   --env "DAILY_UPDATE_INTERVAL_SECONDS=$daily_update_interval_seconds" \
