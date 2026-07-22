@@ -10,12 +10,13 @@ TRANSCRIPT_CACHE_DIR="${TRANSCRIPT_CACHE_DIR:-/data/transcript-cache}"
 LIMIT="${LIMIT:-10}"
 QUEUE_ONE_REQUEST_PER_PASS="${QUEUE_ONE_REQUEST_PER_PASS:-0}"
 DAILY_UPDATE_LIST_FILE="${DAILY_UPDATE_LIST_FILE:-/tmp/daily-indexed-channels.txt}"
+DAILY_UPDATE_STATE_FILE="${DAILY_UPDATE_STATE_FILE:-/data/daily-update.last-completed}"
 QUEUE_PRIORITY_LIST_FILE="${QUEUE_PRIORITY_LIST_FILE:-$DAILY_UPDATE_LIST_FILE}"
 MAX_VIDEOS_PER_PASS="${MAX_VIDEOS_PER_PASS:-0}"
 QUEUE_POLL_INTERVAL_SECONDS="${QUEUE_POLL_INTERVAL_SECONDS:-60}"
 QUEUE_LOOP="${QUEUE_LOOP:-0}"
 DAILY_UPDATE_ENABLED="${DAILY_UPDATE_ENABLED:-0}"
-DAILY_UPDATE_INTERVAL_SECONDS="${DAILY_UPDATE_INTERVAL_SECONDS:-300}"
+DAILY_UPDATE_INTERVAL_SECONDS="${DAILY_UPDATE_INTERVAL_SECONDS:-86400}"
 DAILY_UPDATE_INITIAL_DELAY_SECONDS="${DAILY_UPDATE_INITIAL_DELAY_SECONDS:-86400}"
 EXISTING_TAIL="${EXISTING_TAIL:-0}"
 ACK_FAILED_REQUESTS="${ACK_FAILED_REQUESTS:-0}"
@@ -386,6 +387,33 @@ remember_idle_gap_handle() {
   mv "$tmp_state" "$IDLE_GAP_FILL_STATE_FILE"
 }
 
+next_daily_update_epoch() {
+  now="$1"
+  last_completed=""
+  if [ -f "$DAILY_UPDATE_STATE_FILE" ]; then
+    last_completed="$(sed -n '1p' "$DAILY_UPDATE_STATE_FILE")"
+  fi
+  case "$last_completed" in
+    ''|*[!0-9]*) printf '%s\n' "$(( now + DAILY_UPDATE_INITIAL_DELAY_SECONDS ))" ;;
+    *)
+      if [ "$last_completed" -gt "$now" ]; then
+        printf '%s\n' "$now"
+      else
+        printf '%s\n' "$(( last_completed + DAILY_UPDATE_INTERVAL_SECONDS ))"
+      fi
+      ;;
+  esac
+}
+
+remember_daily_update_completion() {
+  completed_at="$1"
+  state_dir="$(dirname "$DAILY_UPDATE_STATE_FILE")"
+  mkdir -p "$state_dir"
+  tmp_state="${DAILY_UPDATE_STATE_FILE}.tmp.$$"
+  printf '%s\n' "$completed_at" > "$tmp_state"
+  mv "$tmp_state" "$DAILY_UPDATE_STATE_FILE"
+}
+
 index_one_backend() {
   label="$1"
   backend="$2"
@@ -610,7 +638,8 @@ if [ "$QUEUE_LOOP" = "1" ]; then
   echo "cloud-queue-indexer: daemon mode enabled poll_interval=${QUEUE_POLL_INTERVAL_SECONDS}s"
   idle_since="$(date +%s)"
   idle_gap_passes=0
-  next_daily_update=$(( $(date +%s) + DAILY_UPDATE_INITIAL_DELAY_SECONDS ))
+  now="$(date +%s)"
+  next_daily_update="$(next_daily_update_epoch "$now")"
   if [ "$DAILY_UPDATE_ENABLED" = "1" ]; then
     echo "cloud-queue-indexer: daily update enabled initial_delay=${DAILY_UPDATE_INITIAL_DELAY_SECONDS}s interval=${DAILY_UPDATE_INTERVAL_SECONDS}s next_after_epoch=$next_daily_update"
   else
@@ -621,26 +650,32 @@ if [ "$QUEUE_LOOP" = "1" ]; then
     if [ "$QUEUE_HAD_WORK" = "1" ]; then
       idle_since="$(date +%s)"
     fi
+    DAILY_UPDATE_HAD_WORK=0
+    if [ "$DAILY_UPDATE_ENABLED" = "1" ] && [ "$QUEUE_HAD_WORK" = "0" ]; then
+      now="$(date +%s)"
+      if [ "$now" -ge "$next_daily_update" ]; then
+        DAILY_UPDATE_HAD_WORK=1
+        echo "cloud-queue-indexer: running scheduled daily update before gap repair"
+        log_queue_event info daily_update_started "" "" "" "$BACKENDS" "running"
+        if index_daily_update_for_backends; then
+          log_queue_event info daily_update_completed "" "" "" "$BACKENDS" "completed"
+        else
+          log_queue_event error daily_update_failed "" "" "" "$BACKENDS" "failed"
+        fi
+        completed_at="$(date +%s)"
+        remember_daily_update_completion "$completed_at"
+        next_daily_update=$(( completed_at + DAILY_UPDATE_INTERVAL_SECONDS ))
+        idle_since="$completed_at"
+        set_index_activity "" || true
+        echo "cloud-queue-indexer: next daily update after epoch=$next_daily_update"
+      fi
+    fi
     IDLE_GAP_HAD_WORK=0
-    if [ "$IDLE_GAP_FILL_ENABLED" = "1" ] && [ "$QUEUE_HAD_WORK" = "0" ] && [ "$idle_gap_passes" -lt "$IDLE_GAP_FILL_MAX_PASSES" ]; then
+    if [ "$IDLE_GAP_FILL_ENABLED" = "1" ] && [ "$QUEUE_HAD_WORK" = "0" ] && [ "$DAILY_UPDATE_HAD_WORK" = "0" ] && [ "$idle_gap_passes" -lt "$IDLE_GAP_FILL_MAX_PASSES" ]; then
       process_idle_gap_once || echo "cloud-queue-indexer: idle gap pass failed; continuing after poll interval" >&2
       if [ "$IDLE_GAP_HAD_WORK" = "1" ]; then
         idle_gap_passes=$((idle_gap_passes + 1))
         idle_since="$(date +%s)"
-      fi
-    fi
-    if [ "$DAILY_UPDATE_ENABLED" = "1" ] && [ "$QUEUE_HAD_WORK" = "0" ] && [ "$IDLE_GAP_HAD_WORK" = "0" ]; then
-      now="$(date +%s)"
-      if [ "$now" -ge "$next_daily_update" ]; then
-        echo "cloud-queue-indexer: running scheduled daily update before queue pass"
-        if index_daily_update_for_backends; then
-          next_daily_update=$(( now + DAILY_UPDATE_INTERVAL_SECONDS ))
-          idle_since="$now"
-          echo "cloud-queue-indexer: next daily update after epoch=$next_daily_update"
-        else
-          next_daily_update=$(( now + QUEUE_POLL_INTERVAL_SECONDS ))
-          echo "cloud-queue-indexer: daily update failed; retry_after=${QUEUE_POLL_INTERVAL_SECONDS}s" >&2
-        fi
       fi
     fi
     now="$(date +%s)"

@@ -65,7 +65,7 @@ if [ -z "$daily_update_enabled" ]; then
   fi
 fi
 
-daily_update_interval_seconds="${DAILY_UPDATE_INTERVAL_SECONDS:-300}"
+daily_update_interval_seconds="${DAILY_UPDATE_INTERVAL_SECONDS:-86400}"
 daily_update_initial_delay_seconds="${DAILY_UPDATE_INITIAL_DELAY_SECONDS:-}"
 if [ -z "$daily_update_initial_delay_seconds" ]; then
   # Start a complete update after deployment, then repeat on the normal cadence.
@@ -182,6 +182,7 @@ exec flyctl machine run \
   --env "IDLE_GAP_FILL_MAX_NEW_VIDEOS=${IDLE_GAP_FILL_MAX_NEW_VIDEOS:-10}" \
   --env "ACK_FAILED_REQUESTS=${ACK_FAILED_REQUESTS:-0}" \
   --env "DAILY_UPDATE_ENABLED=$daily_update_enabled" \
+  --env "DAILY_UPDATE_STATE_FILE=${DAILY_UPDATE_STATE_FILE:-/data/daily-update.last-completed}" \
   --env "DAILY_UPDATE_INTERVAL_SECONDS=$daily_update_interval_seconds" \
   --env "DAILY_UPDATE_INITIAL_DELAY_SECONDS=$daily_update_initial_delay_seconds" \
   --env "EXISTING_TAIL=${EXISTING_TAIL:-0}" \

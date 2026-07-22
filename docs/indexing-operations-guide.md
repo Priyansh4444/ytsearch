@@ -259,10 +259,11 @@ Each pass scans the selected creator for missing IDs but attempts at most ten
 missing videos (`IDLE_GAP_FILL_MAX_NEW_VIDEOS=10`), bounding the time before a
 newly approved queue row can take priority.
 
-The Cloudflare Worker wakes the stopped indexer every six hours at minute 17,
-in addition to approved-request wakes. When no gaps or queue rows exist, the
-Machine reaches its idle timeout and stops again. Disable the repair behavior
-for a deliberately queue-only worker with `IDLE_GAP_FILL_ENABLED=0`.
+The Cloudflare Worker enqueues a durable wake every six hours at minute 17, in
+addition to approved-request wakes. When no queue, daily-refresh, or gap work
+exists, the Machine reaches its idle timeout and stops again. Disable the gap
+repair behavior for a deliberately queue-only worker with
+`IDLE_GAP_FILL_ENABLED=0`.
 
 `fly-run-queue-indexer.sh` refuses a missing target or a multi-backend scope. Do not run two daemons with the same `QUEUE_TARGET_BACKEND`. If channel validation or indexing fails, the row is retained with `failed` status and no longer blocks newer work. Re-submit the handle after correcting the spelling, cookies, or upstream issue to create a fresh retry row.
 
@@ -273,13 +274,16 @@ results. Existing chunks acquire it through non-destructive update ingestion.
 A destructive source re-extraction remains available only with both
 `--allow-destructive-rewipe` and `ALLOW_DESTRUCTIVE_REWIPE=1` in the wrappers.
 
-The older list-wide scheduled update remains available for a deliberate repair
-window, but is disabled on the active worker because gap fill is narrower:
+The active worker also runs the list-wide update once per day. Its last
+completion timestamp is stored on the persistent indexer volume, so the
+six-hour wake does not repeat the full update more often than the configured
+cadence. Queue rows retain priority, and a due daily update runs before the
+narrower gap pass so a persistent count gap cannot starve it:
 
 ```bash
 DAILY_UPDATE_ENABLED=1 \
 DAILY_UPDATE_INITIAL_DELAY_SECONDS=0 \
-DAILY_UPDATE_INTERVAL_SECONDS=300 \
+DAILY_UPDATE_INTERVAL_SECONDS=86400 \
 DAILY_UPDATE_LIST_SOURCE=scripts/indexed-channels.txt \
 JOBS=1 \
 scripts/fly-run-queue-indexers.sh

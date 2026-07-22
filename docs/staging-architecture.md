@@ -36,11 +36,12 @@ flowchart LR
 2. Keep exactly one configured indexer Machine because JSONL has no distributed
    lock. Its volume persists while the VM stops; it uses shared CPU with 8 GB
    RAM, `JOBS=1`, and `TYPESENSE_JOBS=1` while active.
-3. The indexer has restart policy `no`, disables the legacy daily full refresh,
-   and exits after five minutes with no queue or gap work. The Cloudflare
-   consumer restarts it when a request is accepted and a six-hour cron wake
-   lets it non-destructively close indexed/public video gaps while otherwise
-   idle.
+3. The indexer has restart policy `no` and exits after five minutes with no
+   queue, daily refresh, or gap work. The Cloudflare consumer restarts it when
+   a request is accepted, and a six-hour cron sends the same durable wake
+   signal. A timestamp on the indexer volume makes the list-wide refresh run
+   at most once per day; other scheduled wakes non-destructively close
+   indexed/public video gaps.
 4. Public search and Typesense stay warm. Typesense uses four performance CPUs
    and 8 GB RAM: a live shared-CPU trial made cold-start recovery too slow. Keep
    the API separate because combining it saves very little while coupling public

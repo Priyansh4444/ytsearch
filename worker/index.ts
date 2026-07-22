@@ -2,7 +2,7 @@ import { shouldWakeIndexer } from "./wake-policy";
 import { requestOriginAllowed } from "./origin-policy";
 
 type WakeMessage = {
-  reason: "index-request";
+  reason: "index-request" | "scheduled-repair";
 };
 
 export default {
@@ -39,6 +39,7 @@ export default {
         console.error(
           JSON.stringify({
             event: "indexer_wake_failed",
+            reason: message.body.reason,
             attempt: message.attempts,
             error: error instanceof Error ? error.message : String(error),
           }),
@@ -48,8 +49,16 @@ export default {
     }
   },
 
-  async scheduled(_controller, env): Promise<void> {
-    await startIndexer(env);
+  async scheduled(controller, env): Promise<void> {
+    await env.INDEX_WAKE_QUEUE.send({ reason: "scheduled-repair" });
+    // eslint-disable-next-line no-console -- Workers structured log event.
+    console.log(
+      JSON.stringify({
+        event: "indexer_repair_wake_enqueued",
+        cron: controller.cron,
+        scheduled_time: controller.scheduledTime,
+      }),
+    );
   },
 } satisfies ExportedHandler<Env, WakeMessage>;
 
