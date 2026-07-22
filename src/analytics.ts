@@ -3,35 +3,55 @@ import type { SearchRequest, SearchResponse } from "./types";
 const apiKey = import.meta.env.VITE_POSTHOG_KEY?.trim();
 const apiHost = import.meta.env.VITE_POSTHOG_HOST?.trim() || "https://us.i.posthog.com";
 let initialized = false;
+let initializing = false;
 type PostHogClient = typeof import("posthog-js").default;
-let client: PostHogClient | undefined;
+let client: Pick<PostHogClient, "capture"> | undefined;
 
 type Properties = Record<string, boolean | number | string | undefined>;
+const pendingEvents: Array<{ event: string; properties: Properties }> = [];
+const MAX_PENDING_EVENTS = 50;
 
 export function initializeAnalytics(): void {
-  if (!apiKey || initialized) return;
-  void import("posthog-js").then(({ default: posthog }) => {
-    posthog.init(apiKey, {
-      api_host: apiHost,
-      autocapture: false,
-      capture_pageview: false,
-      capture_pageleave: false,
-      capture_exceptions: true,
-      capture_performance: {
-        web_vitals: true,
-        web_vitals_allowed_metrics: ["CLS", "FCP", "INP", "LCP"],
-      },
-      disable_session_recording: true,
-      person_profiles: "identified_only",
+  if (!apiKey || initialized || initializing) return;
+  initializing = true;
+  void import("posthog-js")
+    .then(({ default: posthog }) => {
+      posthog.init(apiKey, {
+        api_host: apiHost,
+        autocapture: false,
+        capture_pageview: false,
+        capture_pageleave: false,
+        capture_exceptions: true,
+        capture_performance: {
+          web_vitals: true,
+          web_vitals_allowed_metrics: ["CLS", "FCP", "INP", "LCP"],
+        },
+        disable_session_recording: true,
+        person_profiles: "identified_only",
+        loaded: (loadedClient) => {
+          client = loadedClient;
+          initialized = true;
+          initializing = false;
+          for (const pending of pendingEvents.splice(0)) {
+            loadedClient.capture(pending.event, pending.properties);
+          }
+          loadedClient.capture("page_view", { path: window.location.pathname });
+        },
+      });
+    })
+    .catch(() => {
+      initializing = false;
+      pendingEvents.length = 0;
     });
-    client = posthog;
-    initialized = true;
-    capture("page_view", { path: window.location.pathname });
-  });
 }
 
 export function capture(event: string, properties: Properties = {}): void {
-  if (initialized) client?.capture(event, properties);
+  if (!apiKey) return;
+  if (initialized) {
+    client?.capture(event, properties);
+    return;
+  }
+  if (pendingEvents.length < MAX_PENDING_EVENTS) pendingEvents.push({ event, properties });
 }
 
 export function captureSearchSubmitted(request: SearchRequest): void {

@@ -95,6 +95,26 @@ test("loads channels and completes a basic search", async ({ page }) => {
   await expect(page.getByText("1 video · 1 moment · 8 ms to first result")).toBeVisible();
 });
 
+for (const viewport of [
+  { name: "phone", width: 390, height: 844 },
+  { name: "desktop", width: 1_280, height: 900 },
+]) {
+  test(`home page has no phantom scrollbar on ${viewport.name}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    await expect(page.getByText("Example Creator").first()).toBeVisible();
+
+    const dimensions = await page.evaluate(() => ({
+      clientHeight: document.documentElement.clientHeight,
+      clientWidth: document.documentElement.clientWidth,
+      scrollHeight: document.documentElement.scrollHeight,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(dimensions.scrollHeight).toBeLessThanOrEqual(dimensions.clientHeight);
+    expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
+  });
+}
+
 test("semantic mode remains opt-in and is sent to the API", async ({ page }) => {
   await page.goto("/");
   const mode = page.getByRole("combobox", { name: "Search mode" });
@@ -121,7 +141,7 @@ test("dashboard reports catalog and operational metrics", async ({ page }) => {
   await expect(page.getByText("Transcript moments").first()).toBeVisible();
   await expect(page.getByText("Operational")).toBeVisible();
   await expect(page.getByText("Scheduled repair")).toBeVisible();
-  await expect(page.getByText("10 count gap · wakes every 6h")).toBeVisible();
+  await expect(page.getByText("10 count gap · 6h repair + daily refresh")).toBeVisible();
   await expect(page.getByText("Example Creator")).toBeVisible();
   await expect(page.getByText("10 / 20")).toBeVisible();
   await expect(page.getByText("50%").first()).toBeVisible();

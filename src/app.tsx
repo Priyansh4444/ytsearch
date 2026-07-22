@@ -165,7 +165,40 @@ const App: Component = () => {
   onMount(() => {
     initializeAnalytics();
     window.addEventListener("popstate", syncRoute);
-    onCleanup(() => window.removeEventListener("popstate", syncRoute));
+    let disposed = false;
+    let shownRequestId = "";
+    let previousStatus = "idle";
+    let toastTimeout: number | undefined;
+    const checkStatus = () => {
+      clearIndexStatusCache();
+      void indexStatus()
+        .then((status) => {
+          if (disposed) return;
+          if (status.status !== previousStatus) void refreshChannels();
+          if (["running", "queued"].includes(status.status)) void refreshChannels();
+          previousStatus = status.status;
+          if (
+            !["running", "queued"].includes(status.status) ||
+            !status.request_id ||
+            status.request_id === shownRequestId
+          )
+            return;
+          shownRequestId = status.request_id;
+          setIndexingToast(status.handle);
+          setIndexingChannelPreview(status.channel);
+          if (toastTimeout) window.clearTimeout(toastTimeout);
+          toastTimeout = window.setTimeout(() => setIndexingToast(undefined), 5_000);
+        })
+        .catch(() => undefined);
+    };
+    checkStatus();
+    const interval = window.setInterval(checkStatus, 15_000);
+    onCleanup(() => {
+      disposed = true;
+      window.removeEventListener("popstate", syncRoute);
+      window.clearInterval(interval);
+      if (toastTimeout) window.clearTimeout(toastTimeout);
+    });
   });
 
   const selectChannel = (handle: string) => {
@@ -197,39 +230,6 @@ const App: Component = () => {
       })
       .catch(() => undefined);
   };
-
-  createEffect(() => {
-    let shownRequestId = "";
-    let previousStatus = "idle";
-    let toastTimeout: number | undefined;
-    const checkStatus = () => {
-      clearIndexStatusCache();
-      void indexStatus()
-        .then((status) => {
-          if (status.status !== previousStatus) void refreshChannels();
-          if (["running", "queued"].includes(status.status)) void refreshChannels();
-          previousStatus = status.status;
-          if (
-            !["running", "queued"].includes(status.status) ||
-            !status.request_id ||
-            status.request_id === shownRequestId
-          )
-            return;
-          shownRequestId = status.request_id;
-          setIndexingToast(status.handle);
-          setIndexingChannelPreview(status.channel);
-          if (toastTimeout) window.clearTimeout(toastTimeout);
-          toastTimeout = window.setTimeout(() => setIndexingToast(undefined), 5_000);
-        })
-        .catch(() => undefined);
-    };
-    checkStatus();
-    const interval = window.setInterval(checkStatus, 15_000);
-    onCleanup(() => {
-      window.clearInterval(interval);
-      if (toastTimeout) window.clearTimeout(toastTimeout);
-    });
-  });
 
   const confirmIndexRequest = async () => {
     const handle = pendingIndexHandle();
@@ -405,7 +405,7 @@ const App: Component = () => {
   });
 
   return (
-    <main class="flex min-h-svh flex-col bg-vesper-bg text-vesper-text">
+    <main class="flex min-h-svh flex-col overflow-clip bg-vesper-bg text-vesper-text">
       <div class="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
         <section
           class={`relative ${

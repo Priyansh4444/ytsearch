@@ -1,7 +1,5 @@
 import type { IndexedChannel } from "./types";
 
-export type DashboardMetrics = ReturnType<typeof calculateDashboardMetrics>;
-
 export function calculateDashboardMetrics(channels: IndexedChannel[]) {
   const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
   const indexedVideos = sum(channels.map((channel) => channel.indexed_video_count));

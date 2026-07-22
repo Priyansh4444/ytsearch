@@ -314,7 +314,7 @@ function indexerDetail(
 ): string {
   if (status === "running" && handle) return handle;
   if (status === "idle" && remainingVideos > 0) {
-    return `${integer.format(remainingVideos)} count gap · wakes every 6h`;
+    return `${integer.format(remainingVideos)} count gap · 6h repair + daily refresh`;
   }
   if (status === "idle") return "No public/indexed count gap";
   return latency(latencyMs);

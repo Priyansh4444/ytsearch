@@ -11,19 +11,6 @@ export const LoadingState: Component = () => (
   </div>
 );
 
-export const IndexUnavailableState: Component<{ handle: string }> = (props) => {
-  return (
-    <div class="border border-vesper-green/30 bg-vesper-panel p-5 shadow-2xl shadow-vesper-green/5">
-      <p class="text-sm uppercase tracking-[0.18em] text-vesper-green">Indexing unavailable</p>
-      <p class="mt-2 text-xl font-semibold text-white">{props.handle}</p>
-      <p class="mt-2 max-w-2xl text-sm text-vesper-muted">
-        This installation does not accept public index requests. Ask its administrator to add this
-        channel.
-      </p>
-    </div>
-  );
-};
-
 export const IndexRequestState: Component<{ handle: string; requestId: string }> = (props) => {
   const [status, setStatus] = createSignal<IndexRequestStatus>("pending");
   const refresh = () =>
@@ -81,15 +68,6 @@ function indexRequestDescription(status: IndexRequestStatus, requestId: string):
       return `Request ${requestId} is no longer queued.`;
   }
 }
-
-export const NoChannelMatchState: Component<{ handle: string }> = (props) => (
-  <div class="border border-vesper-border bg-vesper-panel p-5">
-    <p class="font-semibold text-white">No indexed channel matches {props.handle}</p>
-    <p class="mt-2 text-sm text-vesper-muted">
-      Choose a channel from the suggestions or search without an @ filter.
-    </p>
-  </div>
-);
 
 export const ErrorState: Component<{ message: string; title?: string }> = (props) => (
   <div class="border border-vesper-red/40 bg-vesper-red/10 p-5 text-vesper-red">

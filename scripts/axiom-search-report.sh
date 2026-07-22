@@ -7,10 +7,10 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 . "$SCRIPT_DIR/load-env.sh"
 
-token="${AXIOM_TOKEN:-${AXIOM_API_KEY:-}}"
+token="${AXIOM_PROD_API_KEY:-${AXIOM_TOKEN:-${AXIOM_API_KEY:-}}}"
 dataset="${AXIOM_DATASET:-}"
 if [ -z "$token" ] || [ -z "$dataset" ]; then
-  echo "AXIOM_TOKEN (or AXIOM_API_KEY) and AXIOM_DATASET are required." >&2
+  echo "AXIOM_PROD_API_KEY (or an Axiom query-capable token) and AXIOM_DATASET are required." >&2
   exit 1
 fi
 

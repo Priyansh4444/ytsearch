@@ -8,6 +8,7 @@ scripts/test-doctor.sh
 scripts/test-check-queue-indexers.sh
 scripts/test-index-conference-playlists.sh
 scripts/test-compare-autoresearch-search.sh
+scripts/test-idle-gap-fill.sh
 
 for script in scripts/*.sh; do
   sh -n "$script"

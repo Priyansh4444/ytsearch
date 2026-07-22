@@ -1,6 +1,6 @@
 import { gzipSync } from "node:zlib";
 import { readdirSync, readFileSync } from "node:fs";
-import { chromium } from "playwright";
+import { chromium } from "@playwright/test";
 
 const publicUrl = process.env.PUBLIC_URL ?? "https://search.pronsh.dev";
 const budgets = {
