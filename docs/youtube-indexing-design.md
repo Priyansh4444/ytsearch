@@ -280,8 +280,8 @@ chunk ids and replace the same documents.
 The workspace is split into focused crates:
 
 - `youtube_client`: internal YouTube Data API v3 wrapper.
-- `youtube_ingest`: stable document model, 5-second chunker, ingest orchestration, and ports.
-- `youtube_sources`: concrete metadata source using `youtube_client`, fallback source composition, and in-memory transcript source for tests/dev.
+- `youtube_ingest`: stable document model, 5-second chunker, and source/sink ports.
+- `youtube_sources`: concrete YouTube metadata source and metadata fallback composition.
 - `youtube_typesense`: Typesense schema, document import, grouped text query helper, and `ChunkSink` implementation.
 - `youtube_semantic`: embedding source helpers plus an in-memory vector store boundary.
 
@@ -292,7 +292,6 @@ The `youtube_ingest` crate provides:
 - `Youtuber`
 - `TranscriptSegment`
 - `Chunker::five_seconds()`
-- `VideoIngestor`
 - Swappable source/sink traits
 - Unit tests for chunking and clear empty-transcript errors
 

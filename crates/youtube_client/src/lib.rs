@@ -24,7 +24,6 @@ pub type Result<T> = std::result::Result<T, YouTubeError>;
 #[derive(Clone, Debug)]
 pub enum Auth {
     ApiKey(String),
-    Bearer(String),
     None,
 }
 
@@ -38,10 +37,6 @@ pub struct YouTubeClient {
 impl YouTubeClient {
     pub fn with_api_key(api_key: impl Into<String>) -> Result<Self> {
         Self::new(Auth::ApiKey(api_key.into()))
-    }
-
-    pub fn with_bearer_token(token: impl Into<String>) -> Result<Self> {
-        Self::new(Auth::Bearer(token.into()))
     }
 
     pub fn unauthenticated() -> Result<Self> {
@@ -68,18 +63,8 @@ impl YouTubeClient {
         self.endpoint(resource.into(), ApiMethod::List)
     }
 
-    fn url_for(
-        &self,
-        resource: Resource,
-        method: ApiMethod,
-        path_params: &BTreeMap<String, String>,
-    ) -> Result<Url> {
-        let mut path = resource.path(method).to_string();
-        for (key, value) in path_params {
-            path = path.replace(&format!("{{{key}}}"), value);
-        }
-
-        Ok(self.base_url.join(&path)?)
+    fn url_for(&self, resource: Resource, method: ApiMethod) -> Result<Url> {
+        Ok(self.base_url.join(resource.path(method))?)
     }
 
     async fn execute<T: DeserializeOwned>(
@@ -87,10 +72,8 @@ impl YouTubeClient {
         resource: Resource,
         method: ApiMethod,
         query: &Query,
-        path_params: &BTreeMap<String, String>,
-        body: Option<Value>,
     ) -> Result<T> {
-        let mut url = self.url_for(resource, method, path_params)?;
+        let mut url = self.url_for(resource, method)?;
         {
             let mut pairs = url.query_pairs_mut();
             for (key, value) in &query.params {
@@ -101,15 +84,7 @@ impl YouTubeClient {
             }
         }
 
-        let mut request = self.http.request(method.http_method(), url);
-        if let Auth::Bearer(token) = &self.auth {
-            request = request.bearer_auth(token);
-        }
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
-
-        let response = request.send().await?;
+        let response = self.http.request(method.http_method(), url).send().await?;
         let status = response.status();
         let body = response.json::<Value>().await?;
         if !status.is_success() {
@@ -132,13 +107,6 @@ impl Query {
 
     pub fn set(mut self, key: impl Into<String>, value: impl ToString) -> Self {
         self.params.insert(key.into(), value.to_string());
-        self
-    }
-
-    pub fn maybe_set(mut self, key: impl Into<String>, value: Option<impl ToString>) -> Self {
-        if let Some(value) = value {
-            self.params.insert(key.into(), value.to_string());
-        }
         self
     }
 
@@ -168,8 +136,6 @@ pub struct RequestBuilder<'a> {
     resource: Resource,
     method: ApiMethod,
     query: Query,
-    path_params: BTreeMap<String, String>,
-    body: Option<Value>,
 }
 
 impl<'a> RequestBuilder<'a> {
@@ -179,8 +145,6 @@ impl<'a> RequestBuilder<'a> {
             resource,
             method,
             query: Query::new(),
-            path_params: BTreeMap::new(),
-            body: None,
         }
     }
 
@@ -189,40 +153,10 @@ impl<'a> RequestBuilder<'a> {
         self
     }
 
-    pub fn param(mut self, key: impl Into<String>, value: impl ToString) -> Self {
-        self.query = self.query.set(key, value);
-        self
-    }
-
-    pub fn path_param(mut self, key: impl Into<String>, value: impl ToString) -> Self {
-        self.path_params.insert(key.into(), value.to_string());
-        self
-    }
-
-    pub fn part(mut self, parts: impl IntoParts) -> Self {
-        self.query = self.query.part(parts);
-        self
-    }
-
-    pub fn body(mut self, body: impl Serialize) -> serde_json::Result<Self> {
-        self.body = Some(serde_json::to_value(body)?);
-        Ok(self)
-    }
-
     pub async fn send<T: DeserializeOwned>(self) -> Result<T> {
         self.client
-            .execute(
-                self.resource,
-                self.method,
-                &self.query,
-                &self.path_params,
-                self.body,
-            )
+            .execute(self.resource, self.method, &self.query)
             .await
-    }
-
-    pub async fn send_json(self) -> Result<Value> {
-        self.send().await
     }
 
     pub async fn page(self) -> Result<Page<Value>> {
@@ -512,18 +446,123 @@ impl fmt::Display for Resource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        task::JoinHandle,
+    };
+
+    async fn spawn_mock_server(
+        status: &'static str,
+        body: &'static str,
+    ) -> (Url, JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = vec![0_u8; 16 * 1024];
+            let read = socket.read(&mut buffer).await.unwrap();
+            let request = String::from_utf8(buffer[..read].to_vec()).unwrap();
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            request
+        });
+        let base_url = Url::parse(&format!("http://{address}/youtube/v3/")).unwrap();
+        (base_url, server)
+    }
 
     #[test]
     fn default_base_url_keeps_youtube_v3_prefix() {
         let client = YouTubeClient::unauthenticated().unwrap();
 
         let url = client
-            .url_for(Resource::Videos, ApiMethod::GetRating, &BTreeMap::default())
+            .url_for(Resource::Videos, ApiMethod::GetRating)
             .unwrap();
 
         assert_eq!(
             url.as_str(),
             "https://www.googleapis.com/youtube/v3/videos/getRating"
         );
+    }
+
+    #[tokio::test]
+    async fn list_request_sends_api_key_and_query_contract_to_mock_server() {
+        let (base_url, server) = spawn_mock_server(
+            "200 OK",
+            r#"{"items":[{"id":"video-1"}],"nextPageToken":"next"}"#,
+        )
+        .await;
+        let mut client = YouTubeClient::with_api_key("test-key").unwrap();
+        client.base_url = base_url;
+
+        let page = client
+            .list(ListResource::Videos)
+            .query(
+                Query::new()
+                    .part(["snippet", "contentDetails"])
+                    .ids(["video-1"])
+                    .max_results(7),
+            )
+            .page()
+            .await
+            .unwrap();
+        let request = server.await.unwrap();
+        let target = request
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .unwrap();
+        let request_url = Url::parse(&format!("http://mock{target}")).unwrap();
+        let params = request_url.query_pairs().collect::<BTreeMap<_, _>>();
+
+        assert_eq!(page.items[0]["id"], "video-1");
+        assert_eq!(page.next_page_token.as_deref(), Some("next"));
+        assert_eq!(request_url.path(), "/youtube/v3/videos");
+        assert_eq!(
+            params.get("part").map(|value| value.as_ref()),
+            Some("snippet,contentDetails")
+        );
+        assert_eq!(
+            params.get("id").map(|value| value.as_ref()),
+            Some("video-1")
+        );
+        assert_eq!(
+            params.get("maxResults").map(|value| value.as_ref()),
+            Some("7")
+        );
+        assert_eq!(
+            params.get("key").map(|value| value.as_ref()),
+            Some("test-key")
+        );
+    }
+
+    #[tokio::test]
+    async fn api_errors_from_mock_server_preserve_status_and_json_body() {
+        let (base_url, server) = spawn_mock_server(
+            "403 Forbidden",
+            r#"{"error":{"message":"quota exhausted"}}"#,
+        )
+        .await;
+        let mut client = YouTubeClient::with_api_key("test-key").unwrap();
+        client.base_url = base_url;
+
+        let error = client
+            .list(ListResource::Videos)
+            .query(Query::new().ids(["video-1"]))
+            .page()
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+
+        match error {
+            YouTubeError::Api { status, body } => {
+                assert_eq!(status, StatusCode::FORBIDDEN);
+                assert_eq!(body["error"]["message"], "quota exhausted");
+            }
+            other => panic!("expected structured API error, got {other}"),
+        }
     }
 }

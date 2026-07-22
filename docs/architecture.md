@@ -7,7 +7,7 @@
 | Crate | Responsibility | Hotswap boundary |
 | --- | --- | --- |
 | `youtube_client` | Small typed wrapper around YouTube Data API v3 list endpoints. | Replace if moving to generated OpenAPI clients or another metadata provider. |
-| `youtube_sources` | YouTube Data API metadata source plus in-memory/fallback source combinators. | Implements `VideoMetadataSource`; does not know about `yt-dlp`. |
+| `youtube_sources` | YouTube Data API metadata source plus metadata fallback composition. | Implements `VideoMetadataSource`; does not know about `yt-dlp`. |
 | `youtube_ytdlp` | `yt-dlp` backed public caption transcript source. Parses `json3`/`vtt` into timestamped segments. | Implements `TranscriptSource`; can be replaced by any captions provider. |
 | `youtube_transcribe` | Optional local audio fallback using `yt-dlp` audio extraction, `ffmpeg`, `ffprobe`, and `voxtype`. | Implements `TranscriptSource`; use only when captions are missing and you are allowed to transcribe. |
 | `youtube_ingest` | Core domain model, ports/traits, and transcript chunker. | Defines `VideoMetadataSource`, `TranscriptSource`, `TranscriptChunkSource`, `ChunkSink`, and `EmbeddingSource`. |

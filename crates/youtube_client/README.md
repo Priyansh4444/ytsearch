@@ -28,5 +28,3 @@ println!("{:#?}", page.items);
 # Ok(())
 # }
 ```
-
-OAuth-only methods can use `YouTubeClient::with_bearer_token`.

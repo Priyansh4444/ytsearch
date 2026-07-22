@@ -1,0 +1,9 @@
+[[production]]
+package = "youtube_api"
+bin = "youtube-api"
+reason = "deployed staging search API"
+
+[[production]]
+package = "youtube_cli"
+bin = "ytsearch"
+reason = "operator CLI used for indexing, repair, validation, and benchmarks"

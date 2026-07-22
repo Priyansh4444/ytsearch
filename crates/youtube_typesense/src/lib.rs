@@ -13,9 +13,6 @@ use youtube_search::{
     YoutuberDocument as SharedYoutuberDocument,
 };
 
-#[deprecated(since = "0.1.0", note = "Typesense is the supported search backend.")]
-pub mod deprecated_notice {}
-
 pub const DEFAULT_COLLECTION: &str = "youtube_transcript_chunks";
 pub const YOUTUBERS_COLLECTION: &str = "youtube_youtubers";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
@@ -111,14 +108,6 @@ impl TypesenseAdminClient {
         }
     }
 
-    pub fn with_http_client(http: HttpClient, config: TypesenseAdminConfig) -> Self {
-        Self { http, config }
-    }
-
-    pub fn config(&self) -> &TypesenseAdminConfig {
-        &self.config
-    }
-
     pub async fn wait_until_ready(&self) -> Result<()> {
         self.wait_until_ready_with(READINESS_ATTEMPTS, READINESS_DELAY)
             .await
@@ -158,19 +147,6 @@ impl TypesenseAdminClient {
             }
         }
         Err(TypesenseError::Unavailable(last_error))
-    }
-
-    pub async fn create_collection(&self) -> Result<Value> {
-        let url = endpoint(&self.config.api_url, "collections")?;
-        let response = self
-            .http
-            .post(url)
-            .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
-            .json(&transcript_chunk_schema(&self.config.collection))
-            .send()
-            .await?;
-
-        json_response(response).await
     }
 
     pub async fn create_collection_if_missing(&self) -> Result<CreateCollectionOutcome> {
@@ -618,14 +594,6 @@ impl TypesenseSearchClient {
         }
     }
 
-    pub fn with_http_client(http: HttpClient, config: TypesenseSearchConfig) -> Self {
-        Self { http, config }
-    }
-
-    pub fn config(&self) -> &TypesenseSearchConfig {
-        &self.config
-    }
-
     pub async fn search(&self, query: &TextSearchQuery) -> Result<Value> {
         let path = format!("collections/{}/documents/search", self.config.collection);
         let mut url = endpoint(&self.config.api_url, &path)?;
@@ -871,29 +839,14 @@ impl TextSearchQuery {
         self
     }
 
-    pub fn filter_by(mut self, filter_by: impl Into<String>) -> Self {
-        self.filter_by = Some(filter_by.into());
-        self
-    }
-
     pub fn youtuber_handle(mut self, handle: impl AsRef<str>) -> Self {
         self.filter_by = Some(format!("youtuber_handle:={}", handle.as_ref()));
-        self
-    }
-
-    pub fn group_by(mut self, group_by: impl Into<String>) -> Self {
-        self.group_by = Some(group_by.into());
         self
     }
 
     pub fn without_grouping(mut self) -> Self {
         self.group_by = None;
         self.group_limit = None;
-        self
-    }
-
-    pub fn group_limit(mut self, group_limit: u8) -> Self {
-        self.group_limit = Some(group_limit);
         self
     }
 
@@ -904,16 +857,6 @@ impl TextSearchQuery {
 
     pub fn page(mut self, page: u32) -> Self {
         self.page = Some(page.max(1));
-        self
-    }
-
-    pub fn highlight_fields(mut self, highlight_fields: impl Into<String>) -> Self {
-        self.highlight_fields = Some(highlight_fields.into());
-        self
-    }
-
-    pub fn sort_by(mut self, sort_by: impl Into<String>) -> Self {
-        self.sort_by = Some(sort_by.into());
         self
     }
 

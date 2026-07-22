@@ -4,8 +4,6 @@ use serde_json::Value;
 use thiserror::Error;
 
 pub const DEFAULT_COLLECTION: &str = "youtube_transcript_chunks";
-pub const YOUTUBERS_COLLECTION: &str = "youtube_youtubers";
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct YoutuberDocument {
     pub id: String,

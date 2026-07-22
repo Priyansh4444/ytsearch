@@ -1,10 +1,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
-use std::collections::BTreeMap;
 use youtube_client::{ListResource, Page, Query, YouTubeClient};
-use youtube_ingest::{
-    IngestError, TranscriptSegment, TranscriptSource, VideoMetadata, VideoMetadataSource, Youtuber,
-};
+use youtube_ingest::{IngestError, VideoMetadata, VideoMetadataSource, Youtuber};
 use youtube_time::parse_duration_ms as parse_youtube_duration_ms;
 
 #[derive(Clone, Debug)]
@@ -15,10 +12,6 @@ pub struct YouTubeMetadataSource {
 impl YouTubeMetadataSource {
     pub fn new(client: YouTubeClient) -> Self {
         Self { client }
-    }
-
-    pub fn client(&self) -> &YouTubeClient {
-        &self.client
     }
 }
 
@@ -109,14 +102,6 @@ impl FallbackMetadataSource {
         self.push(source);
         self
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.sources.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.sources.len()
-    }
 }
 
 #[async_trait]
@@ -138,107 +123,6 @@ impl VideoMetadataSource for FallbackMetadataSource {
         };
 
         Err(metadata_error(video_id, reason))
-    }
-}
-
-#[derive(Default)]
-pub struct FallbackTranscriptSource {
-    sources: Vec<Box<dyn TranscriptSource + Send + Sync>>,
-}
-
-impl FallbackTranscriptSource {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn push<S>(&mut self, source: S)
-    where
-        S: TranscriptSource + Send + Sync + 'static,
-    {
-        self.sources.push(Box::new(source));
-    }
-
-    pub fn with_source<S>(mut self, source: S) -> Self
-    where
-        S: TranscriptSource + Send + Sync + 'static,
-    {
-        self.push(source);
-        self
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.sources.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.sources.len()
-    }
-}
-
-#[async_trait]
-impl TranscriptSource for FallbackTranscriptSource {
-    async fn transcript_for_video(
-        &self,
-        video_id: &str,
-    ) -> youtube_ingest::Result<Vec<TranscriptSegment>> {
-        let mut reasons = Vec::new();
-
-        for source in &self.sources {
-            match source.transcript_for_video(video_id).await {
-                Ok(transcript) if transcript.is_empty() => {
-                    reasons.push("transcript source returned no segments".to_string());
-                }
-                Ok(transcript) => return Ok(transcript),
-                Err(error) => reasons.push(error.to_string()),
-            }
-        }
-
-        let reason = if reasons.is_empty() {
-            "no transcript sources configured".to_string()
-        } else {
-            reasons.join("; ")
-        };
-
-        Err(IngestError::TranscriptUnavailable {
-            video_id: video_id.to_string(),
-            reason,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct InMemoryTranscriptSource {
-    transcripts: BTreeMap<String, Vec<TranscriptSegment>>,
-}
-
-impl InMemoryTranscriptSource {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn insert(
-        mut self,
-        video_id: impl Into<String>,
-        transcript: Vec<TranscriptSegment>,
-    ) -> Self {
-        self.transcripts.insert(video_id.into(), transcript);
-        self
-    }
-}
-
-#[async_trait]
-impl TranscriptSource for InMemoryTranscriptSource {
-    async fn transcript_for_video(
-        &self,
-        video_id: &str,
-    ) -> youtube_ingest::Result<Vec<TranscriptSegment>> {
-        self.transcripts
-            .get(video_id)
-            .cloned()
-            .ok_or_else(|| IngestError::TranscriptUnavailable {
-                video_id: video_id.to_string(),
-                reason: "in-memory transcript not found".to_string(),
-            })
     }
 }
 
@@ -336,6 +220,70 @@ fn compact_upload_date(published_at: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    enum MockMetadataResponse {
+        Success(VideoMetadata),
+        Failure(&'static str),
+    }
+
+    struct MockMetadataSource {
+        name: &'static str,
+        response: MockMetadataResponse,
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl MockMetadataSource {
+        fn new(
+            name: &'static str,
+            response: MockMetadataResponse,
+            calls: Arc<Mutex<Vec<String>>>,
+        ) -> Self {
+            Self {
+                name,
+                response,
+                calls,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl VideoMetadataSource for MockMetadataSource {
+        async fn metadata_for_video(
+            &self,
+            video_id: &str,
+        ) -> youtube_ingest::Result<VideoMetadata> {
+            self.calls
+                .lock()
+                .expect("mock call log lock")
+                .push(self.name.to_string());
+            match &self.response {
+                MockMetadataResponse::Success(metadata) => Ok(metadata.clone()),
+                MockMetadataResponse::Failure(reason) => Err(IngestError::MetadataUnavailable {
+                    video_id: video_id.to_string(),
+                    reason: (*reason).to_string(),
+                }),
+            }
+        }
+    }
+
+    fn metadata(video_id: &str) -> VideoMetadata {
+        VideoMetadata {
+            video_id: video_id.to_string(),
+            title: "Recovered metadata".to_string(),
+            youtuber: Youtuber {
+                id: "test".to_string(),
+                handle: "@test".to_string(),
+                name: "Test".to_string(),
+                channel_id: "UCtest".to_string(),
+            },
+            duration_ms: Some(42_000),
+            thumbnail: None,
+            published_at: Some("2026-07-21T00:00:00Z".to_string()),
+            upload_date: Some("20260721".to_string()),
+        }
+    }
 
     #[test]
     fn parses_youtube_duration() {
@@ -359,10 +307,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn in_memory_transcript_source_returns_clear_missing_error() {
-        let source = InMemoryTranscriptSource::new();
-        let error = source.transcript_for_video("missing").await.unwrap_err();
+    async fn metadata_fallback_uses_sources_in_order_and_stops_after_success() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let expected = metadata("video-1");
+        let source = FallbackMetadataSource::new()
+            .with_source(MockMetadataSource::new(
+                "primary",
+                MockMetadataResponse::Failure("primary unavailable"),
+                Arc::clone(&calls),
+            ))
+            .with_source(MockMetadataSource::new(
+                "fallback",
+                MockMetadataResponse::Success(expected.clone()),
+                Arc::clone(&calls),
+            ))
+            .with_source(MockMetadataSource::new(
+                "should-not-run",
+                MockMetadataResponse::Failure("unexpected call"),
+                Arc::clone(&calls),
+            ));
 
-        assert!(matches!(error, IngestError::TranscriptUnavailable { .. }));
+        let actual = source.metadata_for_video("video-1").await.unwrap();
+
+        assert_eq!(actual, expected);
+        assert_eq!(
+            *calls.lock().expect("mock call log lock"),
+            ["primary", "fallback"]
+        );
+    }
+
+    #[tokio::test]
+    async fn metadata_fallback_preserves_every_failure_reason() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let source = FallbackMetadataSource::new()
+            .with_source(MockMetadataSource::new(
+                "yt-dlp",
+                MockMetadataResponse::Failure("captions metadata missing"),
+                Arc::clone(&calls),
+            ))
+            .with_source(MockMetadataSource::new(
+                "data-api",
+                MockMetadataResponse::Failure("quota exhausted"),
+                Arc::clone(&calls),
+            ));
+
+        let error = source.metadata_for_video("video-2").await.unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("captions metadata missing"));
+        assert!(message.contains("quota exhausted"));
+        assert_eq!(
+            *calls.lock().expect("mock call log lock"),
+            ["yt-dlp", "data-api"]
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_metadata_fallback_returns_an_actionable_error() {
+        let error = FallbackMetadataSource::new()
+            .metadata_for_video("video-3")
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "video metadata unavailable for video-3: no metadata sources configured"
+        );
     }
 }

@@ -107,18 +107,6 @@ impl MultimodalVectorStore {
         Self::default()
     }
 
-    pub fn len(&self) -> Result<usize> {
-        Ok(self
-            .evidence
-            .read()
-            .map_err(|_| SemanticError::StorePoisoned)?
-            .len())
-    }
-
-    pub fn is_empty(&self) -> Result<bool> {
-        Ok(self.len()? == 0)
-    }
-
     pub fn upsert(&self, values: impl IntoIterator<Item = SemanticEvidence>) -> Result<()> {
         let mut store = self
             .evidence
@@ -311,14 +299,6 @@ pub struct InMemoryVectorStore {
 impl InMemoryVectorStore {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn len(&self) -> Result<usize> {
-        Ok(self.read()?.len())
-    }
-
-    pub fn is_empty(&self) -> Result<bool> {
-        Ok(self.len()? == 0)
     }
 
     fn read(&self) -> Result<std::sync::RwLockReadGuard<'_, BTreeMap<String, Vec<f32>>>> {

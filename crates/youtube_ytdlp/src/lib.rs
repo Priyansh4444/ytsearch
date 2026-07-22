@@ -58,14 +58,6 @@ impl YtDlpTranscriptSource {
         }
     }
 
-    pub fn with_http_client(http: HttpClient, binary: impl Into<String>) -> Self {
-        Self {
-            http,
-            binary: binary.into(),
-            cache_dir: None,
-        }
-    }
-
     pub fn with_cache_dir(mut self, cache_dir: impl Into<PathBuf>) -> Self {
         self.cache_dir = Some(cache_dir.into());
         self
