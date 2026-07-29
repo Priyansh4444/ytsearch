@@ -18,6 +18,7 @@ export const ChannelAvatar: Component<{
     if (props.size === "swarm") return "size-10 sm:size-12";
     return props.size === "compact" ? "size-9" : "size-11";
   };
+  const outlineClass = () => (props.size === "swarm" ? "" : "ring-1 ring-white/10");
   const transitionStyle = () =>
     props.transitionName ? `view-transition-name: ${props.transitionName}` : undefined;
   const initials = () =>
@@ -33,7 +34,7 @@ export const ChannelAvatar: Component<{
       when={avatarUrl()}
       fallback={
         <div
-          class={`${sizeClass()} grid aspect-square shrink-0 place-items-center rounded-full border border-vesper-border bg-vesper-panel2 text-xs font-semibold text-vesper-yellow`}
+          class={`${sizeClass()} ${outlineClass()} grid aspect-square shrink-0 place-items-center rounded-full bg-vesper-panel2 text-xs font-semibold text-vesper-yellow`}
           style={transitionStyle()}
           aria-label={`${props.channel?.name ?? "Channel"} avatar unavailable`}
         >
@@ -45,7 +46,7 @@ export const ChannelAvatar: Component<{
         <img
           src={avatarUrl()}
           alt={`${props.channel?.name ?? "Channel"} profile picture`}
-          class={`${sizeClass()} aspect-square max-w-none shrink-0 rounded-full border border-vesper-border object-cover`}
+          class={`${sizeClass()} ${outlineClass()} aspect-square max-w-none shrink-0 rounded-full object-cover`}
           style={transitionStyle()}
           loading={props.size === "compact" ? "lazy" : "eager"}
           onError={() => setImageFailed(true)}

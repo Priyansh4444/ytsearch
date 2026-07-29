@@ -62,6 +62,31 @@ export type SearchRequest = {
   mode: SearchMode;
 };
 
+export type SearchAvailabilityStatus =
+  | "scheduled_offline"
+  | "prewarming"
+  | "ready"
+  | "starting"
+  | "degraded";
+
+export type SearchAvailability = {
+  status: SearchAvailabilityStatus;
+  search_enabled: boolean;
+  enforced: boolean;
+  schedule_phase: "closed" | "prewarm" | "open";
+  time_zone: "America/Los_Angeles";
+  daily_window: {
+    opens: "12:00";
+    closes: "00:00";
+    label: "12:00 PM–12:00 AM Pacific Time";
+  };
+  next_transition_at: string;
+};
+
+export type RecentSearch = Omit<SearchRequest, "page"> & {
+  searchedAt: string;
+};
+
 export type IndexedChannel = {
   id: string;
   handle: string;

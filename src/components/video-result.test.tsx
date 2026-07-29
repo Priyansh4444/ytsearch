@@ -43,7 +43,7 @@ describe("VideoResult", () => {
     render(() => <VideoResult video={video} query="moment" rank={1} />);
 
     expect(screen.getAllByRole("button", { name: /Moment \d/ })).toHaveLength(3);
-    await fireEvent.click(screen.getByRole("button", { name: "Show all moments" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show all moments" }));
     await waitFor(() =>
       expect(screen.getAllByRole("button", { name: /Moment \d/ })).toHaveLength(7),
     );
@@ -51,10 +51,10 @@ describe("VideoResult", () => {
     expect(screen.queryByRole("button", { name: "Show all moments" })).not.toBeInTheDocument();
   });
 
-  test("records feedback against the selected moment", async () => {
+  test("records feedback against the selected moment", () => {
     render(() => <VideoResult video={video} query="moment" rank={2} />);
 
-    await fireEvent.click(screen.getAllByRole("button", { name: "Mark moment useful" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Mark moment useful" })[0]);
     expect(capture).toHaveBeenCalledWith(
       "result_moment_feedback",
       expect.objectContaining({ moment_id: "hit-0", rank: 2, value: "useful" }),

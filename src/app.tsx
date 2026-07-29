@@ -11,6 +11,7 @@ import {
 import type { Component } from "solid-js";
 import {
   clearIndexStatusCache,
+  fetchSearchAvailability,
   indexStatus,
   indexedChannels,
   requestIndex,
@@ -23,6 +24,7 @@ import {
   initializeAnalytics,
 } from "./analytics";
 import { ChannelPicker } from "./components/channel-picker";
+import { AvailabilityNotice } from "./components/availability-notice";
 import { ChannelAvatar } from "./components/channel-profile";
 import {
   channelMentionQuery,
@@ -32,6 +34,7 @@ import {
 import { ChannelIdentity } from "./components/channel-profile";
 import { IndexRequestDialog } from "./components/index-request-dialog";
 import { PaginationControls } from "./components/pagination-controls";
+import { RecentSearches } from "./components/recent-searches";
 import { SearchForm } from "./components/search-form";
 import {
   EmptyState,
@@ -44,11 +47,16 @@ import { VideoResult } from "./components/video-result";
 import { BackButton, CopyLinkButton } from "./components/toolbar-actions";
 import type {
   IndexedChannel,
+  RecentSearch,
+  SearchAvailability,
   SearchMode,
   SearchRequest,
   SearchSort,
   SearchVideoResult,
 } from "./types";
+import { cacheChannels, loadCachedChannels } from "./channel-cache";
+import { clearRecentSearches, loadRecentSearches, saveRecentSearch } from "./recent-searches";
+import { evaluateSearchSchedule } from "../shared/service-schedule";
 import {
   copyToClipboard,
   creatorFromPath,
@@ -60,6 +68,9 @@ import {
 const pluralize = (count: number, singular: string, plural = `${singular}s`) =>
   `${count} ${count === 1 ? singular : plural}`;
 
+const videoCountLabel = (returned: number, total: number) =>
+  returned < total ? `${returned} shown of ${total} videos` : pluralize(total, "video");
+
 const sectionVideos = (videos: SearchVideoResult[], kind: "video" | "short") =>
   videos.filter((video) => video.content_kind === kind);
 
@@ -68,6 +79,28 @@ const unknownVideos = (videos: SearchVideoResult[]) =>
 
 const semanticSearchEnabled = import.meta.env.VITE_SEMANTIC_SEARCH_ENABLED === "true";
 const supportUrl = import.meta.env.VITE_KOFI_URL?.trim() || "https://ko-fi.com/pronsh";
+
+const provisionalAvailability = (now = new Date()): SearchAvailability => {
+  const schedule = evaluateSearchSchedule(now);
+  return {
+    status:
+      schedule.phase === "open"
+        ? "starting"
+        : schedule.phase === "prewarm"
+          ? "prewarming"
+          : "scheduled_offline",
+    search_enabled: schedule.phase === "open",
+    enforced: true,
+    schedule_phase: schedule.phase,
+    time_zone: "America/Los_Angeles",
+    daily_window: {
+      opens: "12:00",
+      closes: "00:00",
+      label: "12:00 PM–12:00 AM Pacific Time",
+    },
+    next_transition_at: schedule.nextTransitionAt,
+  };
+};
 
 const searchStateFromLocation = (): SearchRequest | undefined => {
   const params = new URLSearchParams(window.location.search);
@@ -100,7 +133,15 @@ const App: Component = () => {
   const [routeHandle, setRouteHandle] = createSignal(
     initialSearch?.youtuber ? normalizeHandle(initialSearch.youtuber) : creatorFromPath(),
   );
-  const [channels, { refetch: refreshChannels }] = createResource(indexedChannels);
+  const [channels, setChannels] = createSignal<IndexedChannel[] | undefined>(loadCachedChannels());
+  const refreshChannels = async () => {
+    const refreshed = await indexedChannels();
+    setChannels(refreshed);
+    cacheChannels(refreshed);
+    return refreshed;
+  };
+  const [availability, setAvailability] = createSignal(provisionalAvailability());
+  const [recentSearches, setRecentSearches] = createSignal(loadRecentSearches());
   const [query, setQuery] = createSignal(initialSearch?.query ?? "");
   const [youtuber, setYoutuber] = createSignal(initialSearch?.youtuber ?? routeHandle() ?? "");
   const [page, setPage] = createSignal(initialSearch?.page ?? 1);
@@ -116,7 +157,10 @@ const App: Component = () => {
   }>();
   const [indexingToast, setIndexingToast] = createSignal<string>();
   const [indexingChannelPreview, setIndexingChannelPreview] = createSignal<IndexedChannel>();
-  const [result] = createResource(submitted, (request) => searchTranscripts(request));
+  const executableSearch = createMemo(() =>
+    availability().search_enabled ? submitted() : undefined,
+  );
+  const [result] = createResource(executableSearch, (request) => searchTranscripts(request));
 
   const selectedChannel = createMemo(() => {
     const selectedHandle = normalizeHandle(youtuber());
@@ -169,13 +213,25 @@ const App: Component = () => {
     let shownRequestId = "";
     let previousStatus = "idle";
     let toastTimeout: number | undefined;
+    const refreshAvailability = () => {
+      setAvailability(provisionalAvailability());
+      void fetchSearchAvailability()
+        .then((value) => {
+          if (disposed) return;
+          setAvailability(value);
+          if (value.search_enabled) void refreshChannels().catch(() => undefined);
+        })
+        .catch(() => undefined);
+    };
     const checkStatus = () => {
       clearIndexStatusCache();
       void indexStatus()
         .then((status) => {
           if (disposed) return;
-          if (status.status !== previousStatus) void refreshChannels();
-          if (["running", "queued"].includes(status.status)) void refreshChannels();
+          if (availability().search_enabled && status.status !== previousStatus)
+            void refreshChannels().catch(() => undefined);
+          if (availability().search_enabled && ["running", "queued"].includes(status.status))
+            void refreshChannels().catch(() => undefined);
           previousStatus = status.status;
           if (
             !["running", "queued"].includes(status.status) ||
@@ -191,12 +247,16 @@ const App: Component = () => {
         })
         .catch(() => undefined);
     };
+    refreshAvailability();
     checkStatus();
+    if (availability().search_enabled) void refreshChannels().catch(() => undefined);
     const interval = window.setInterval(checkStatus, 15_000);
+    const availabilityInterval = window.setInterval(refreshAvailability, 60_000);
     onCleanup(() => {
       disposed = true;
       window.removeEventListener("popstate", syncRoute);
       window.clearInterval(interval);
+      window.clearInterval(availabilityInterval);
       if (toastTimeout) window.clearTimeout(toastTimeout);
     });
   });
@@ -271,13 +331,11 @@ const App: Component = () => {
         mode: searchMode(),
       };
       captureSearchSubmitted(request);
-      withViewTransition(() => {
-        setYoutuber(request.youtuber);
-        setQuery(request.query);
-        setPage(nextPage);
-        setSubmitted(request);
-        writeSearchUrl(request);
-      });
+      setYoutuber(request.youtuber);
+      setQuery(request.query);
+      setPage(nextPage);
+      setSubmitted(request);
+      writeSearchUrl(request);
       return;
     }
     if (isIndexMode()) {
@@ -285,6 +343,7 @@ const App: Component = () => {
       setPendingIndexHandle(normalizeHandle(normalizedQuery.split(/\s+/, 1)[0] ?? normalizedQuery));
       return;
     }
+    if (!availability().search_enabled) return;
     const request = {
       query: normalizedQuery,
       youtuber: youtuber(),
@@ -304,13 +363,11 @@ const App: Component = () => {
     ) {
       return;
     }
-    withViewTransition(() => {
-      setQuery(normalizedQuery);
-      setQueuedIndexRequest(undefined);
-      setPage(nextPage);
-      setSubmitted(request);
-      writeSearchUrl(request);
-    });
+    setQuery(normalizedQuery);
+    setQueuedIndexRequest(undefined);
+    setPage(nextPage);
+    setSubmitted(request);
+    writeSearchUrl(request);
   };
 
   const goToPage = (nextPage: number) => {
@@ -318,11 +375,9 @@ const App: Component = () => {
     if (!current) return;
     const request = { ...current, page: nextPage };
     captureSearchSubmitted(request);
-    withViewTransition(() => {
-      setPage(nextPage);
-      setSubmitted(request);
-      writeSearchUrl(request);
-    });
+    setPage(nextPage);
+    setSubmitted(request);
+    writeSearchUrl(request);
   };
 
   const goBack = () => {
@@ -360,7 +415,8 @@ const App: Component = () => {
     const currentSort = sort();
     const currentSearchMode = searchMode();
     const currentSubmitted = submitted();
-    if (currentFormMode !== "search" || searchQuery.length < 2) return;
+    if (currentFormMode !== "search" || searchQuery.length < 2 || !availability().search_enabled)
+      return;
     if (
       currentSubmitted?.query === searchQuery &&
       currentSubmitted.youtuber === currentYoutuber &&
@@ -402,7 +458,26 @@ const App: Component = () => {
     if (key === lastTrackedResponse) return;
     lastTrackedResponse = key;
     captureSearchLoaded(request, response);
+    if (request.page === 1) {
+      setRecentSearches((current) => saveRecentSearch(current, request));
+    }
   });
+
+  const selectRecentSearch = (recent: RecentSearch) => {
+    setQuery(recent.query);
+    setYoutuber(recent.youtuber);
+    setSort(recent.sort);
+    setSearchMode(recent.mode);
+    setPage(1);
+    if (!availability().search_enabled) {
+      setSubmitted(undefined);
+      return;
+    }
+    const request: SearchRequest = { ...recent, page: 1 };
+    captureSearchSubmitted(request);
+    setSubmitted(request);
+    writeSearchUrl(request);
+  };
 
   return (
     <main class="flex min-h-svh flex-col overflow-clip bg-vesper-bg text-vesper-text">
@@ -435,6 +510,7 @@ const App: Component = () => {
             sort={sort()}
             searchMode={searchMode()}
             semanticSearchEnabled={semanticSearchEnabled}
+            searchAvailable={availability().search_enabled}
             home={!hasSearchSurface()}
             selectedChannelName={selectedChannel()?.name}
             mode={formMode()}
@@ -445,6 +521,14 @@ const App: Component = () => {
             channelSuggestions={channelSuggestions()}
             onChannelSelect={selectChannel}
           />
+          <AvailabilityNotice availability={availability()} />
+          <Show when={!hasSearchSurface()}>
+            <RecentSearches
+              searches={recentSearches()}
+              onSelect={selectRecentSearch}
+              onClear={() => setRecentSearches(clearRecentSearches())}
+            />
+          </Show>
         </section>
 
         <section class={hasSearchSurface() ? "pb-8" : "hidden"}>
@@ -454,26 +538,41 @@ const App: Component = () => {
             )}
           </Show>
 
-          <Show when={!queuedIndexRequest() && result.loading}>
+          <Show when={!queuedIndexRequest() && availability().search_enabled && result.loading}>
             <LoadingState />
           </Show>
 
-          <Show when={!queuedIndexRequest() && result.error}>
+          <Show when={!queuedIndexRequest() && availability().search_enabled && result.error}>
             {(error) => <ErrorState message={String(error())} />}
           </Show>
 
           <Show
             when={
-              !queuedIndexRequest() && submitted() && !result.loading && !result.error && result()
+              !queuedIndexRequest() &&
+              availability().search_enabled &&
+              submitted() &&
+              !result.loading &&
+              !result.error &&
+              result()
             }
           >
             {(response) => (
               <div class="flex flex-col gap-5">
                 <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-white/10 pb-3 text-sm text-vesper-muted">
-                  <span class="font-medium text-white">{response().query}</span>
-                  <span class="text-xs sm:text-sm">
-                    {pluralize(response().total_videos ?? response().videos.length, "video")} ·{" "}
-                    {pluralize(response().total_moments ?? response().total_found, "moment")} ·{" "}
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="font-medium text-white">{response().query}</span>
+                    <span class="border border-white/10 bg-vesper-panel px-2 py-0.5 text-xs uppercase tracking-[0.12em] text-vesper-dim">
+                      {submitted()?.youtuber
+                        ? `Channel: ${normalizeHandle(submitted()!.youtuber)}`
+                        : "All channels"}
+                    </span>
+                  </div>
+                  <span class="text-xs tabular-nums sm:text-sm">
+                    {videoCountLabel(
+                      response().videos.length,
+                      response().total_videos ?? response().videos.length,
+                    )}{" "}
+                    · {pluralize(response().total_moments ?? response().total_found, "moment")} ·{" "}
                     {response().time_to_first_result_ms} ms to first result
                   </span>
                 </div>
@@ -540,7 +639,7 @@ const App: Component = () => {
       <Show when={indexingToast()}>
         {(handle) => (
           <div
-            class="fixed bottom-5 right-5 z-50 flex max-w-[calc(100vw-2.5rem)] items-center gap-3 border border-vesper-green bg-vesper-panel px-4 py-3 text-sm text-white shadow-xl"
+            class="fixed end-5 bottom-5 z-50 flex max-w-[calc(100vw-2.5rem)] items-center gap-3 border border-vesper-green bg-vesper-panel px-4 py-3 text-sm text-white shadow-xl"
             role="status"
           >
             <ChannelAvatar channel={indexingChannel()} size="compact" />

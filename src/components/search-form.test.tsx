@@ -21,6 +21,7 @@ describe("SearchForm", () => {
         sort="relevance"
         searchMode="lexical"
         semanticSearchEnabled={false}
+        searchAvailable={true}
         home={false}
         mode="search"
         onQueryInput={() => undefined}
@@ -43,6 +44,7 @@ describe("SearchForm", () => {
         sort="relevance"
         searchMode="lexical"
         semanticSearchEnabled={false}
+        searchAvailable={true}
         home={false}
         mode="search"
         onQueryInput={() => undefined}
@@ -54,7 +56,7 @@ describe("SearchForm", () => {
       />
     ));
 
-    await fireEvent.submit(screen.getByRole("button", { name: "Search" }).closest("form")!);
+    fireEvent.submit(screen.getByRole("button", { name: "Search" }).closest("form")!);
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
@@ -66,6 +68,7 @@ describe("SearchForm", () => {
         sort="relevance"
         searchMode="lexical"
         semanticSearchEnabled={false}
+        searchAvailable={true}
         home={false}
         mode="channel"
         onQueryInput={() => undefined}
@@ -77,7 +80,35 @@ describe("SearchForm", () => {
       />
     ));
 
-    await fireEvent.click(screen.getByRole("button", { name: /marimo.*@marimo-team/i }));
+    fireEvent.click(screen.getByRole("option", { name: /marimo.*@marimo-team/i }));
+    expect(onChannelSelect).toHaveBeenCalledWith("@marimo-team");
+  });
+
+  test("names the search field and supports suggestion keyboard navigation", async () => {
+    const onChannelSelect = vi.fn();
+    render(() => (
+      <SearchForm
+        query="@marimo"
+        sort="relevance"
+        searchMode="lexical"
+        semanticSearchEnabled={false}
+        searchAvailable={true}
+        home={true}
+        mode="channel"
+        onQueryInput={() => undefined}
+        onSortChange={() => undefined}
+        onSearchModeChange={() => undefined}
+        onSubmit={() => undefined}
+        channelSuggestions={[channel]}
+        onChannelSelect={onChannelSelect}
+      />
+    ));
+
+    const search = screen.getByRole("combobox", { name: "Search transcripts" });
+    expect(search).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(search).toHaveAttribute("aria-activedescendant", "channel-suggestion-0");
+    fireEvent.keyDown(search, { key: "Enter" });
     expect(onChannelSelect).toHaveBeenCalledWith("@marimo-team");
   });
 
@@ -89,6 +120,7 @@ describe("SearchForm", () => {
         sort="relevance"
         searchMode="lexical"
         semanticSearchEnabled={true}
+        searchAvailable={true}
         home={false}
         mode="search"
         onQueryInput={() => undefined}
@@ -102,7 +134,49 @@ describe("SearchForm", () => {
 
     const selector = screen.getByRole("combobox", { name: "Search mode" });
     expect(selector).toHaveValue("lexical");
-    await fireEvent.change(selector, { target: { value: "semantic" } });
+    fireEvent.change(selector, { target: { value: "semantic" } });
     expect(onSearchModeChange).toHaveBeenCalledWith("semantic");
+  });
+
+  test("disables transcript search while leaving channel mode usable", () => {
+    const { unmount } = render(() => (
+      <SearchForm
+        query="solid js"
+        sort="relevance"
+        searchMode="lexical"
+        semanticSearchEnabled={false}
+        searchAvailable={false}
+        home={true}
+        mode="search"
+        onQueryInput={() => undefined}
+        onSortChange={() => undefined}
+        onSearchModeChange={() => undefined}
+        onSubmit={() => undefined}
+        channelSuggestions={[]}
+        onChannelSelect={() => undefined}
+      />
+    ));
+
+    expect(screen.getByRole("button", { name: "Available at noon" })).toBeDisabled();
+    unmount();
+
+    render(() => (
+      <SearchForm
+        query="@example"
+        sort="relevance"
+        searchMode="lexical"
+        semanticSearchEnabled={false}
+        searchAvailable={false}
+        home={true}
+        mode="channel"
+        onQueryInput={() => undefined}
+        onSortChange={() => undefined}
+        onSearchModeChange={() => undefined}
+        onSubmit={() => undefined}
+        channelSuggestions={[]}
+        onChannelSelect={() => undefined}
+      />
+    ));
+    expect(screen.getByRole("button", { name: "Open channel" })).toBeEnabled();
   });
 });

@@ -1,11 +1,11 @@
 import { For, Show, createSignal } from "solid-js";
 import type { Component } from "solid-js";
-import { ChevronDown, LoaderCircle, ThumbsDown, ThumbsUp } from "lucide-solid";
 import { searchVideoMoments } from "../api";
 import { capture } from "../analytics";
 import type { SearchHit, SearchVideoResult } from "../types";
 import { copyToClipboard, formatDate } from "../utils";
 import { HighlightedText } from "./highlighted-text";
+import { ChevronDownIcon, LoaderCircleIcon, ThumbsDownIcon, ThumbsUpIcon } from "./icons";
 import { CopyLinkButton } from "./toolbar-actions";
 
 export const VideoResult: Component<{ video: SearchVideoResult; query: string; rank: number }> = (
@@ -38,8 +38,8 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
         visible_moments: completeVideo?.hits.length ?? allHits().length,
         total_returned_moments: completeVideo?.hits.length ?? allHits().length,
       });
-    } catch (error) {
-      setMomentsError(error instanceof Error ? error.message : "Could not load every moment");
+    } catch {
+      setMomentsError("Unable to load all moments. Try again.");
     } finally {
       setMomentsLoading(false);
     }
@@ -52,7 +52,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
   };
 
   return (
-    <article class="border border-vesper-border bg-vesper-panel transition duration-300 hover:border-vesper-dim">
+    <article class="border border-vesper-border bg-vesper-panel transition-colors duration-300 hover:border-vesper-dim">
       <div class="grid gap-0 xl:grid-cols-[minmax(32rem,40rem)_1fr]">
         <div class="relative bg-vesper-bg">
           <iframe
@@ -64,7 +64,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
             referrerpolicy="strict-origin-when-cross-origin"
             allowfullscreen
           />
-          <span class="absolute bottom-2 left-2 bg-vesper-bg/90 px-2 py-1 text-xs font-semibold text-vesper-yellow ring-1 ring-vesper-border">
+          <span class="absolute bottom-2 start-2 bg-vesper-bg/90 px-2 py-1 text-xs font-semibold tabular-nums text-vesper-yellow ring-1 ring-vesper-border">
             {selectedHit()?.timestamp ?? "title"}
           </span>
         </div>
@@ -76,7 +76,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
                 href={props.video.youtube_url}
                 target="_blank"
                 rel="noreferrer"
-                class="text-lg font-semibold leading-snug text-white transition hover:text-vesper-yellow"
+                class="text-lg font-semibold leading-snug text-white transition-colors hover:text-vesper-yellow"
                 onClick={() => capture("result_opened", resultProperties(props))}
               >
                 <HighlightedText
@@ -103,10 +103,10 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
                 href={selectedHit()?.youtube_url ?? props.video.youtube_url}
                 target="_blank"
                 rel="noreferrer"
-                class="inline-flex h-10 items-center border border-vesper-border bg-vesper-bg px-3 text-sm font-medium text-vesper-green transition hover:border-vesper-green"
+                class="pressable inline-flex h-10 items-center border border-vesper-control bg-vesper-bg px-3 text-sm font-medium text-vesper-green hover:border-vesper-green"
                 onClick={() => capture("result_opened", resultProperties(props))}
               >
-                Open
+                Open on YouTube
               </a>
             </div>
           </div>
@@ -135,19 +135,29 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
                 type="button"
                 onClick={() => void expandMoments()}
                 disabled={momentsLoading()}
-                class="inline-flex h-9 items-center justify-center gap-2 border border-vesper-border bg-vesper-bg px-3 text-sm font-medium text-vesper-muted transition hover:border-vesper-yellow hover:text-vesper-yellow"
+                class="pressable inline-flex h-9 items-center justify-center gap-2 border border-vesper-control bg-vesper-bg px-3 text-sm font-medium text-vesper-muted hover:border-vesper-yellow hover:text-vesper-yellow"
               >
                 <Show
                   when={!momentsLoading()}
-                  fallback={<LoaderCircle class="animate-spin" size={16} aria-hidden="true" />}
+                  fallback={
+                    <LoaderCircleIcon
+                      class="motion-safe:animate-spin"
+                      size={16}
+                      aria-hidden="true"
+                    />
+                  }
                 >
-                  <ChevronDown size={16} aria-hidden="true" />
+                  <ChevronDownIcon size={16} aria-hidden="true" />
                 </Show>
                 {momentsLoading() ? "Loading every moment…" : "Show all moments"}
               </button>
             </Show>
             <Show when={momentsError()}>
-              {(message) => <p class="text-sm text-red-300">{message()}</p>}
+              {(message) => (
+                <p class="text-sm text-red-300" role="alert">
+                  {message()}
+                </p>
+              )}
             </Show>
           </div>
         </div>
@@ -178,7 +188,7 @@ const TranscriptExcerpt: Component<{
 
   return (
     <div
-      class={`grid grid-cols-[1fr_auto] items-stretch border bg-vesper-bg transition ${
+      class={`grid grid-cols-[1fr_auto] items-stretch border bg-vesper-bg transition-colors ${
         props.selected
           ? "border-vesper-yellow"
           : "border-vesper-border hover:border-vesper-yellow/70"
@@ -187,7 +197,7 @@ const TranscriptExcerpt: Component<{
       <button
         type="button"
         onClick={props.onSelect}
-        class="min-w-0 p-3 text-left text-sm leading-6 text-white"
+        class="pressable min-w-0 p-3 text-left text-sm leading-6 text-white"
       >
         <Show
           when={props.hit.match_kind === "transcript"}
@@ -216,7 +226,7 @@ const TranscriptExcerpt: Component<{
           </Show>
         </Show>
       </button>
-      <div class="flex w-10 flex-col border-l border-vesper-border">
+      <div class="flex w-10 flex-col border-s border-vesper-border">
         <MomentFeedbackButton
           value="useful"
           selected={feedback() === "useful"}
@@ -249,7 +259,8 @@ const MomentFeedbackButton: Component<{
     <button
       type="button"
       onClick={() => props.onSelect(props.value)}
-      class={`grid min-h-10 flex-1 place-items-center transition ${
+      aria-pressed={props.selected}
+      class={`pressable grid min-h-10 flex-1 place-items-center ${
         props.selected
           ? useful()
             ? "bg-vesper-green/15 text-vesper-green"
@@ -261,8 +272,8 @@ const MomentFeedbackButton: Component<{
       aria-label={useful() ? "Mark moment useful" : "Mark moment not useful"}
       title={useful() ? "Useful moment" : "Not useful moment"}
     >
-      <Show when={useful()} fallback={<ThumbsDown size={15} aria-hidden="true" />}>
-        <ThumbsUp size={15} aria-hidden="true" />
+      <Show when={useful()} fallback={<ThumbsDownIcon size={15} aria-hidden="true" />}>
+        <ThumbsUpIcon size={15} aria-hidden="true" />
       </Show>
     </button>
   );

@@ -88,6 +88,35 @@ describe("frontend API client", () => {
     await expect(searchVideoMoments("query", "bad/id")).rejects.toThrow("invalid video id");
   });
 
+  test("does not retry a structured scheduled-offline response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: "scheduled_offline",
+          error: "Search returns at noon.",
+          available_at: "2026-07-27T19:00:00.000Z",
+        }),
+        { status: 503 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { searchTranscripts } = await import("./api");
+
+    await expect(
+      searchTranscripts({
+        query: "rust",
+        youtuber: "",
+        page: 1,
+        sort: "relevance",
+        mode: "lexical",
+      }),
+    ).rejects.toMatchObject({
+      code: "scheduled_offline",
+      availableAt: "2026-07-27T19:00:00.000Z",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   test("rejects malformed successful JSON with actionable context", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("not-json", { status: 200 })));
     const { indexedChannels } = await import("./api");

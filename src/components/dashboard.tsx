@@ -51,7 +51,7 @@ export const Dashboard: Component = () => {
           </div>
           <button
             type="button"
-            class="min-h-11 border border-vesper-border bg-vesper-panel px-4 py-2 text-sm font-medium text-white transition-colors hover:border-vesper-yellow disabled:cursor-wait disabled:opacity-60"
+            class="pressable min-h-11 border border-vesper-control bg-vesper-panel px-4 py-2 text-sm font-medium text-white hover:border-vesper-yellow disabled:cursor-wait disabled:opacity-60"
             disabled={snapshot.loading}
             onClick={() => void refetch()}
           >
@@ -191,7 +191,7 @@ const MetricCard: Component<{
   <div class="min-w-0 border border-vesper-border bg-vesper-panel p-4 sm:p-5">
     <p class="text-xs uppercase tracking-[0.12em] text-vesper-dim">{props.label}</p>
     <p
-      class={`mt-2 break-words text-xl font-semibold sm:text-2xl ${
+      class={`mt-2 break-words text-xl font-semibold tabular-nums sm:text-2xl ${
         props.tone === "green"
           ? "text-vesper-green"
           : props.tone === "red"
@@ -234,7 +234,7 @@ const Distribution: Component<{
 
 const DistributionValue: Component<{ label: string; value: number }> = (props) => (
   <div>
-    <dt class="text-[0.65rem] uppercase tracking-[0.1em] text-vesper-dim">{props.label}</dt>
+    <dt class="text-xs uppercase tracking-[0.1em] text-vesper-dim">{props.label}</dt>
     <dd class="mt-1 font-mono text-sm text-white">{number.format(props.value)}</dd>
   </div>
 );
@@ -250,7 +250,7 @@ const ChannelMetricCard: Component<{ channel: IndexedChannel }> = (props) => {
   return (
     <a
       href={routeForHandle(props.channel.handle)}
-      class="group min-w-0 border border-vesper-border bg-vesper-panel p-4 transition-colors hover:border-vesper-yellow focus-visible:border-vesper-yellow focus-visible:outline-none"
+      class="pressable group min-w-0 border border-vesper-control bg-vesper-panel p-4 hover:border-vesper-yellow"
     >
       <div class="flex min-w-0 items-center gap-3">
         <ChannelAvatar channel={props.channel} size="compact" />

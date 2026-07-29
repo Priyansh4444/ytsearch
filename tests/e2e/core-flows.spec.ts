@@ -54,11 +54,29 @@ const searchResponse = {
   ],
 };
 
-async function mockApi(page: Page) {
+const readyAvailability = {
+  status: "ready",
+  search_enabled: true,
+  enforced: true,
+  schedule_phase: "open",
+  time_zone: "America/Los_Angeles",
+  daily_window: {
+    opens: "12:00",
+    closes: "00:00",
+    label: "12:00 PM–12:00 AM Pacific Time",
+  },
+  next_transition_at: "2026-07-27T07:00:00.000Z",
+};
+
+async function mockApi(page: Page, availability = readyAvailability, channels = [channel]) {
+  let searchRequests = 0;
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname === "/api/availability") {
+      return route.fulfill({ json: availability });
+    }
     if (url.pathname === "/api/youtubers") {
-      return route.fulfill({ json: { channels: [channel] } });
+      return route.fulfill({ json: { channels } });
     }
     if (url.pathname === "/api/health") {
       return route.fulfill({ json: { ok: true } });
@@ -67,6 +85,7 @@ async function mockApi(page: Page) {
       return route.fulfill({ json: { handle: "", status: "idle" } });
     }
     if (url.pathname === "/api/search") {
+      searchRequests += 1;
       return route.fulfill({
         json: {
           ...searchResponse,
@@ -77,6 +96,7 @@ async function mockApi(page: Page) {
     }
     return route.fulfill({ status: 404, json: { error: "not mocked" } });
   });
+  return { searchRequests: () => searchRequests };
 }
 
 test.beforeEach(async ({ page }) => {
@@ -87,12 +107,163 @@ test("loads channels and completes a basic search", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("Example Creator").first()).toBeVisible();
 
-  await page.getByPlaceholder("Search transcripts or type @creator").fill("rust testing");
+  await page.getByRole("combobox", { name: "Search transcripts" }).fill("rust testing");
   await page.getByRole("button", { name: "Search" }).click();
 
   await expect(page).toHaveURL(/q=rust\+testing/);
   await expect(page.getByRole("link", { name: /Reliable Rust testing/ })).toBeVisible();
+  await expect(page.getByText("All channels", { exact: true })).toBeVisible();
   await expect(page.getByText("1 video · 1 moment · 8 ms to first result")).toBeVisible();
+});
+
+test("searches battery gate within @t3dotgg", async ({ page }) => {
+  const searchRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return (
+      url.pathname === "/api/search" &&
+      url.searchParams.get("q") === "battery gate" &&
+      url.searchParams.get("youtuber") === "@t3dotgg"
+    );
+  });
+
+  await page.goto("/?q=battery+gate&youtuber=%40t3dotgg");
+  await searchRequest;
+
+  await expect(page.getByRole("combobox", { name: "Search transcripts" })).toHaveValue(
+    "battery gate",
+  );
+  await expect(page.getByText("Channel: @t3dotgg")).toBeVisible();
+  await expect(page.getByRole("link", { name: /Reliable Rust testing/ })).toBeVisible();
+});
+
+test("closed homepage renders immediately with private recent searches", async ({ page }) => {
+  await page.unroute("**/api/**");
+  await page.clock.setFixedTime(new Date("2026-07-26T17:00:00Z"));
+  const api = await mockApi(page, {
+    ...readyAvailability,
+    status: "scheduled_offline",
+    search_enabled: false,
+    schedule_phase: "closed",
+    next_transition_at: "2026-07-26T19:00:00.000Z",
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "ytsearch.recent-searches.v1",
+      JSON.stringify([
+        {
+          query: "rust testing",
+          youtuber: "@example",
+          sort: "relevance",
+          mode: "lexical",
+          searchedAt: "2026-07-25T20:00:00.000Z",
+        },
+      ]),
+    );
+  });
+
+  await page.goto("/?q=bookmarked");
+
+  await expect(page.getByText(/Search hours: 12:00 PM–12:00 AM Pacific/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Available at noon" })).toBeDisabled();
+  await expect(page.getByRole("heading", { name: "Recent searches" })).not.toBeVisible();
+  await expect(page.locator(".animate-pulse")).toHaveCount(0);
+  expect(api.searchRequests()).toBe(0);
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Recent searches" })).toBeVisible();
+  await page.getByRole("button", { name: /rust testing/i }).click();
+  await expect(page.getByRole("combobox", { name: "Search transcripts" })).toHaveValue(
+    "rust testing",
+  );
+  expect(api.searchRequests()).toBe(0);
+});
+
+test("channel swarm fills the home canvas without clipping hover labels", async ({ page }) => {
+  await page.unroute("**/api/**");
+  const channels = Array.from({ length: 43 }, (_, index) => ({
+    ...channel,
+    id: `example-${index}`,
+    handle: `@example${index}`,
+    name: `Example Creator ${index}`,
+    channel_id: `UCexample${index}`,
+  }));
+  await mockApi(page, readyAvailability, channels);
+  await page.setViewportSize({ width: 1_280, height: 800 });
+  await page.goto("/");
+
+  const swarm = page.getByLabel("Choose a YouTube channel");
+  await expect(swarm).toBeVisible();
+  await expect(swarm).toHaveCSS("pointer-events", "none");
+  const stage = await swarm.boundingBox();
+  expect(stage).not.toBeNull();
+  expect(stage!.width).toBeGreaterThan(1_000);
+  expect(stage!.height).toBeGreaterThan(680);
+
+  const items = swarm.getByRole("link");
+  await expect(items).toHaveCount(43);
+  await expect(items.first()).toHaveCSS("pointer-events", "auto");
+  const positions = await items.evaluateAll((elements) =>
+    elements.map((element) => {
+      const style = (element as HTMLElement).style;
+      return {
+        x: Number.parseFloat(style.getPropertyValue("--swarm-x")),
+        y: Number.parseFloat(style.getPropertyValue("--swarm-y")),
+      };
+    }),
+  );
+  const ovalDistances = positions.map(({ x, y }, index) => {
+    const ring = index % 2;
+    const radiusX = ring === 0 ? 44 : 36;
+    const radiusY = ring === 0 ? 43 : 35;
+    return ((x - 50) / radiusX) ** 2 + ((y - 50) / radiusY) ** 2;
+  });
+  expect(ovalDistances.every((distance) => Math.abs(distance - 1) < 0.02)).toBe(true);
+  expect(
+    new Set(
+      await items.evaluateAll((elements) =>
+        elements.map((element) => (element as HTMLElement).style.getPropertyValue("--swarm-color")),
+      ),
+    ).size,
+  ).toBe(5);
+
+  for (const index of [0, 2, 4, 6, 8, 10, 12, 14]) {
+    await items.nth(index).hover();
+    const label = await items.nth(index).locator(".channel-swarm-label").boundingBox();
+    expect(label).not.toBeNull();
+    expect(label!.x).toBeGreaterThanOrEqual(0);
+    expect(label!.x + label!.width).toBeLessThanOrEqual(1_280);
+    expect(label!.y).toBeGreaterThanOrEqual(0);
+    expect(label!.y + label!.height).toBeLessThanOrEqual(800);
+  }
+  const firstBox = await items.first().boundingBox();
+  expect(firstBox).not.toBeNull();
+  await page.mouse.move(firstBox!.x + firstBox!.width / 2 + 80, firstBox!.y + firstBox!.height / 2);
+  await expect
+    .poll(() => items.first().evaluate((element) => element.style.getPropertyValue("--magnet-x")))
+    .not.toBe("0px");
+  await expect
+    .poll(() => swarm.evaluate((element) => getComputedStyle(element, "::before").opacity))
+    .toBe("1");
+
+  const searchInput = page.getByRole("combobox", { name: "Search transcripts" });
+  await searchInput.click();
+  await searchInput.fill("interaction still works");
+  await expect(searchInput).toHaveValue("interaction still works");
+});
+
+test("creator suggestions push the schedule down instead of overlaying it", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("combobox", { name: "Search transcripts" }).fill("@exam");
+
+  const suggestions = page.getByTestId("channel-suggestions");
+  const schedule = page.getByRole("status");
+  await expect(suggestions).toBeVisible();
+  await expect(schedule).toBeVisible();
+  const suggestionBox = await suggestions.boundingBox();
+  const scheduleBox = await schedule.boundingBox();
+  expect(suggestionBox).not.toBeNull();
+  expect(scheduleBox).not.toBeNull();
+  expect(suggestionBox!.y + suggestionBox!.height).toBeLessThanOrEqual(scheduleBox!.y);
 });
 
 for (const viewport of [
@@ -124,7 +295,7 @@ test("semantic mode remains opt-in and is sent to the API", async ({ page }) => 
   const requestPromise = page.waitForRequest(
     (request) => request.url().includes("/api/search?") && request.url().includes("mode=semantic"),
   );
-  await page.getByPlaceholder("Search transcripts or type @creator").fill("security bug");
+  await page.getByRole("combobox", { name: "Search transcripts" }).fill("security bug");
   await page.getByRole("button", { name: "Search" }).click();
   await requestPromise;
 
@@ -183,7 +354,7 @@ for (const viewport of [
     expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
 
     for (const element of [
-      page.getByPlaceholder("Search transcripts or type @creator"),
+      page.getByRole("combobox", { name: "Search transcripts" }),
       page.getByRole("button", { name: "Search" }),
       page.locator("article"),
     ]) {

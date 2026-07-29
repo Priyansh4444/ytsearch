@@ -5,6 +5,7 @@ import type {
   IndexedChannel,
   SearchRequest,
   SearchResponse,
+  SearchAvailability,
 } from "./types";
 
 const DEFAULT_PER_PAGE = 12;
@@ -41,6 +42,13 @@ export async function searchTranscripts(
 
   let response = await fetch(url, { signal: options.signal });
   if (response.status === 502 || response.status === 503 || response.status === 504) {
+    const firstError = await apiError(response.clone(), "Search failed");
+    if (
+      firstError instanceof ApiResponseError &&
+      ["scheduled_offline", "search_starting"].includes(firstError.code ?? "")
+    ) {
+      throw firstError;
+    }
     await new Promise((resolve) => window.setTimeout(resolve, 250));
     response = await fetch(url, { signal: options.signal });
   }
@@ -48,6 +56,15 @@ export async function searchTranscripts(
   const body = await responseJson<SearchResponse>(response, "Search returned an invalid response");
   searchCache.set(url, { response: body, expiresAt: Date.now() + SEARCH_CACHE_TTL_MS });
   return body;
+}
+
+export async function fetchSearchAvailability(): Promise<SearchAvailability> {
+  const response = await fetch(`${API_BASE_URL}/api/availability`, { cache: "no-store" });
+  if (!response.ok) throw await apiError(response, "Could not load search availability");
+  return responseJson<SearchAvailability>(
+    response,
+    "Search availability returned an invalid response",
+  );
 }
 
 export async function searchVideoMoments(query: string, videoId: string): Promise<SearchResponse> {
@@ -144,13 +161,30 @@ export async function dashboardData(): Promise<DashboardData> {
   };
 }
 
+export class ApiResponseError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+    readonly availableAt?: string,
+  ) {
+    super(message);
+    this.name = "ApiResponseError";
+  }
+}
+
 async function apiError(response: Response, fallback: string): Promise<Error> {
   const body = await response.text().catch(() => "");
   try {
-    const parsed = JSON.parse(body) as { error?: string };
-    return new Error(parsed.error ?? `${fallback} with HTTP ${response.status}`);
+    const parsed = JSON.parse(body) as { error?: string; code?: string; available_at?: string };
+    return new ApiResponseError(
+      parsed.error ?? `${fallback} with HTTP ${response.status}`,
+      response.status,
+      parsed.code,
+      parsed.available_at,
+    );
   } catch {
-    return new Error(`${fallback} with HTTP ${response.status}`);
+    return new ApiResponseError(`${fallback} with HTTP ${response.status}`, response.status);
   }
 }
 

@@ -52,11 +52,11 @@ const PageButton: Component<{
     aria-current={props.active ? "page" : undefined}
     disabled={props.disabled}
     onClick={props.onClick}
-    class={`border px-3 py-1.5 transition ${
+    class={`pressable min-h-10 border px-3 py-1.5 ${
       props.active
         ? "border-vesper-yellow bg-vesper-yellow text-vesper-bg"
-        : "border-vesper-border bg-vesper-bg text-vesper-muted hover:border-vesper-yellow hover:text-vesper-yellow"
-    } disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-vesper-border disabled:hover:text-vesper-muted`}
+        : "border-vesper-control bg-vesper-bg text-vesper-muted hover:border-vesper-yellow hover:text-vesper-yellow"
+    } disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-vesper-control disabled:hover:text-vesper-muted`}
   >
     {props.children}
   </button>

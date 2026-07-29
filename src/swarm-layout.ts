@@ -1,0 +1,51 @@
+export type SwarmPosition = {
+  x: number;
+  y: number;
+  mobileX: number;
+  mobileY: number;
+  color: string;
+};
+
+const VESPER_SWARM_COLORS = ["#ffc799", "#99ffe4", "#8db4ff", "#ff8080", "#ffb86c"];
+
+export function ovalSwarmPositions(total: number): SwarmPosition[] {
+  const ringCounts = [Math.ceil(total / 2), Math.floor(total / 2)];
+  const ringProgress = [0, 0];
+
+  return Array.from({ length: total }, (_, index) => {
+    const ring = index % 2;
+    const ringIndex = ringProgress[ring]++;
+    const angle = (ringIndex / ringCounts[ring]) * Math.PI * 2 - Math.PI / 2 + ring * 0.09;
+    const radiusX = ring === 0 ? 44 : 36;
+    const radiusY = ring === 0 ? 43 : 35;
+    const mobile = mobilePosition(index, total);
+    return {
+      x: round(50 + Math.cos(angle) * radiusX),
+      y: round(50 + Math.sin(angle) * radiusY),
+      mobileX: mobile.x,
+      mobileY: mobile.y,
+      color: VESPER_SWARM_COLORS[index % VESPER_SWARM_COLORS.length],
+    };
+  });
+}
+
+export function magneticOffset(deltaX: number, deltaY: number) {
+  const distance = Math.hypot(deltaX, deltaY);
+  if (distance >= 220) return { x: 0, y: 0 };
+  const pull = (1 - distance / 220) ** 2 * 0.6;
+  return { x: round(deltaX * pull), y: round(deltaY * pull) };
+}
+
+function mobilePosition(index: number, total: number) {
+  const itemsPerRow = 7;
+  const row = Math.floor(index / itemsPerRow);
+  const column = index % itemsPerRow;
+  const rowCount = Math.min(itemsPerRow, total - row * itemsPerRow);
+  const yPositions = [7, 18, 29, 71, 82, 93];
+  const x = rowCount === 1 ? 50 : 9 + (column / (rowCount - 1)) * 82;
+  return { x: round(x), y: yPositions[row] ?? 96 };
+}
+
+function round(value: number): number {
+  return Math.round(value * 100) / 100;
+}

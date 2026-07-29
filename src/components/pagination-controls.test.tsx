@@ -40,7 +40,7 @@ describe("PaginationControls", () => {
       <PaginationControls response={response(true)} currentPage={1} onPageChange={onPageChange} />
     ));
 
-    await fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(onPageChange).toHaveBeenCalledWith(2);
   });
 });

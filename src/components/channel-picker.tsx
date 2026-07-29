@@ -1,11 +1,9 @@
-import { For, Show, createMemo, onCleanup } from "solid-js";
+import { For, Show, createEffect, createMemo, onCleanup, onMount } from "solid-js";
 import type { Component } from "solid-js";
 import type { IndexedChannel } from "../types";
 import { routeForHandle } from "../utils";
+import { magneticOffset, ovalSwarmPositions } from "../swarm-layout";
 import { ChannelAvatar } from "./channel-profile";
-
-const MAGNET_RADIUS = 220;
-const MAGNET_STRENGTH = 0.6;
 
 type SwarmItem = {
   channel: IndexedChannel;
@@ -13,6 +11,7 @@ type SwarmItem = {
   y: number;
   mobileX: number;
   mobileY: number;
+  color: string;
 };
 
 export const ChannelPicker: Component<{
@@ -27,12 +26,13 @@ export const ChannelPicker: Component<{
   let activeElements = new Set<HTMLAnchorElement>();
 
   const moveSwarm = (event: PointerEvent) => {
-    if (event.pointerType === "touch") return;
+    if (event.pointerType === "touch" || !props.visible) return;
     if (animationFrame) window.cancelAnimationFrame(animationFrame);
     animationFrame = window.requestAnimationFrame(() => {
       if (!stage) return;
       const bounds = stage.getBoundingClientRect();
       const useMobileLayout = bounds.width < 640;
+      stage.dataset.cursorActive = "true";
       stage.style.setProperty("--cursor-x", `${event.clientX - bounds.left}px`);
       stage.style.setProperty("--cursor-y", `${event.clientY - bounds.top}px`);
       const nextActiveElements = new Set<HTMLAnchorElement>();
@@ -62,8 +62,21 @@ export const ChannelPicker: Component<{
     activeElements.clear();
   };
 
+  onMount(() => {
+    // Track over the whole viewport so the magnetic field remains continuous
+    // while the swarm canvas itself stays pointer-transparent.
+    window.addEventListener("pointermove", moveSwarm, { passive: true });
+    window.addEventListener("blur", releaseSwarm);
+  });
+
+  createEffect(() => {
+    if (!props.visible) releaseSwarm();
+  });
+
   onCleanup(() => {
     if (animationFrame) window.cancelAnimationFrame(animationFrame);
+    window.removeEventListener("pointermove", moveSwarm);
+    window.removeEventListener("blur", releaseSwarm);
   });
 
   return (
@@ -73,8 +86,6 @@ export const ChannelPicker: Component<{
         class={`channel-swarm ${props.visible ? "channel-swarm-visible" : "channel-swarm-hidden"}`}
         aria-label="Choose a YouTube channel"
         aria-hidden={!props.visible}
-        onPointerMove={moveSwarm}
-        onPointerLeave={releaseSwarm}
       >
         <For each={swarm()}>
           {(item) => (
@@ -84,7 +95,7 @@ export const ChannelPicker: Component<{
               aria-label={`Search ${item.channel.name}`}
               title={`Search ${item.channel.name}`}
               class="channel-swarm-item group"
-              style={`--swarm-x:${item.x}%;--swarm-y:${item.y}%;--swarm-mobile-x:${item.mobileX}%;--swarm-mobile-y:${item.mobileY}%`}
+              style={`--swarm-x:${item.x}%;--swarm-y:${item.y}%;--swarm-mobile-x:${item.mobileX}%;--swarm-mobile-y:${item.mobileY}%;--swarm-color:${item.color}`}
               onClick={(event) => {
                 event.preventDefault();
                 event.currentTarget.style.viewTransitionName = "selected-channel-identity";
@@ -102,45 +113,14 @@ export const ChannelPicker: Component<{
 };
 
 function positionChannels(channels: IndexedChannel[]): SwarmItem[] {
-  const ringCounts = [Math.ceil(channels.length / 2), Math.floor(channels.length / 2)];
-  const ringProgress = [0, 0];
-
+  const positions = ovalSwarmPositions(channels.length);
   return channels.map((channel, index) => {
-    const ring = index % 2;
-    const ringIndex = ringProgress[ring]++;
-    const angle = (ringIndex / ringCounts[ring]) * Math.PI * 2 - Math.PI / 2 + ring * 0.09;
-    const radiusX = ring === 0 ? 48 : 39;
-    const radiusY = ring === 0 ? 46 : 36;
-    const mobile = mobilePosition(index, channels.length);
+    const position = positions[index];
     return {
       channel,
-      x: round(50 + Math.cos(angle) * radiusX),
-      y: round(50 + Math.sin(angle) * radiusY),
-      mobileX: mobile.x,
-      mobileY: mobile.y,
+      ...position,
     };
   });
-}
-
-function mobilePosition(index: number, total: number) {
-  const itemsPerRow = 7;
-  const row = Math.floor(index / itemsPerRow);
-  const column = index % itemsPerRow;
-  const rowCount = Math.min(itemsPerRow, total - row * itemsPerRow);
-  const yPositions = [4, 15, 26, 74, 85, 96];
-  const x = rowCount === 1 ? 50 : 7 + (column / (rowCount - 1)) * 86;
-  return { x: round(x), y: yPositions[row] ?? 96 };
-}
-
-function magneticOffset(deltaX: number, deltaY: number) {
-  const distance = Math.hypot(deltaX, deltaY);
-  if (distance >= MAGNET_RADIUS) return { x: 0, y: 0 };
-  const pull = (1 - distance / MAGNET_RADIUS) ** 2 * MAGNET_STRENGTH;
-  return { x: round(deltaX * pull), y: round(deltaY * pull) };
-}
-
-function round(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 function resetMagnet(element: HTMLAnchorElement) {
