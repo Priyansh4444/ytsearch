@@ -23,7 +23,7 @@
     "SEARCH_OPEN_LOCAL_TIME": "12:00",
     "SEARCH_CLOSE_LOCAL_TIME": "00:00",
     "SEARCH_PREWARM_MINUTES": "15",
-    "SEARCH_SCHEDULE_MODE": "enforce",
+    "SEARCH_SCHEDULE_MODE": "observe",
   },
   "queues": {
     "producers": [{ "binding": "INDEX_WAKE_QUEUE", "queue": "ytsearch-indexer-wake" }],
