@@ -5,11 +5,11 @@ edition = "2024"
 
 [dependencies]
 reqwest = { workspace = true }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "2.0"
-url = "2.5"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+url = "2.5.8"
 
 [dev-dependencies]
-dotenvy = "0.15"
-tokio = { version = "1.37", features = ["io-util", "macros", "net", "rt-multi-thread"] }
+dotenvy = "0.15.7"
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread"] }

@@ -1,8 +1,10 @@
 #!/usr/bin/env sh
 set -eu
 
-bun run test
-bun run frontend:check
+bun run check:precommit
+scripts/check-rust-packages.sh
+cargo test --workspace
+bun run test:e2e
 scripts/check-rust-dependency-policy.sh
 scripts/test-doctor.sh
 scripts/test-check-queue-indexers.sh

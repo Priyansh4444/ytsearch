@@ -29,7 +29,15 @@ indexing is disabled unless you explicitly opt in.
 Run the complete repository check before opening a pull request:
 
 ```bash
-bun run check:all
+bun run check
+```
+
+Install the repository hook once per clone to run formatting, type-aware
+Oxlint, strict Clippy, frontend tests, the production build, and bundle budgets
+before each commit:
+
+```bash
+bun run hooks:install
 ```
 
 Browser-level core-flow and responsive checks use mocked API responses, so they

@@ -9,4 +9,4 @@ fi
 cp scripts/hooks/pre-commit .git/hooks/pre-commit
 chmod +x .git/hooks/pre-commit
 
-echo "Installed pre-commit frontend checks."
+echo "Installed pre-commit format, lint, test, build, and bundle-performance checks."

@@ -4,7 +4,7 @@ import { chromium } from "@playwright/test";
 
 const publicUrl = process.env.PUBLIC_URL ?? "https://search.pronsh.dev";
 const budgets = {
-  javascriptGzipBytes: 110_000,
+  javascriptGzipBytes: 55_000,
   cssGzipBytes: 8_000,
   firstContentfulPaintMs: 1_800,
   searchToResultsMs: 2_500,
@@ -31,8 +31,10 @@ const firstContentfulPaintMs = median(firstContentfulPaintSamplesMs);
 
 async function readFirstContentfulPaint(target: typeof page): Promise<number> {
   return target.evaluate(() => {
-  const paints = performance.getEntriesByType("paint");
-  return Math.round(paints.find((entry) => entry.name === "first-contentful-paint")?.startTime ?? 0);
+    const paints = performance.getEntriesByType("paint");
+    return Math.round(
+      paints.find((entry) => entry.name === "first-contentful-paint")?.startTime ?? 0,
+    );
   });
 }
 const expectedChannelCount = await page.evaluate(async () => {

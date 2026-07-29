@@ -9,6 +9,17 @@ use std::{env, error::Error, time::Instant};
 
 const COLLECTION: &str = "ytsearch_vector_bench";
 
+#[derive(Clone, Copy)]
+struct BenchmarkCase {
+    count: usize,
+    dimensions: usize,
+    query_count: usize,
+    warmups: usize,
+    top_k: usize,
+    hnsw_ef: usize,
+    filtered: bool,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let endpoint = env::var("QDRANT_URL").unwrap_or_else(|_| "http://127.0.0.1:6333".into());
@@ -76,28 +87,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "engine=qdrant vectors={count} dimensions={dimensions} queries={query_count} top_k={top_k} hnsw_ef={hnsw_ef} ingest_ms={}",
         ingest_started.elapsed().as_millis()
     );
-    run_case(
-        &client,
-        &endpoint,
+    let case = BenchmarkCase {
         count,
         dimensions,
         query_count,
         warmups,
         top_k,
         hnsw_ef,
-        false,
-    )
-    .await?;
+        filtered: false,
+    };
+    run_case(&client, &endpoint, case).await?;
     run_case(
         &client,
         &endpoint,
-        count,
-        dimensions,
-        query_count,
-        warmups,
-        top_k,
-        hnsw_ef,
-        true,
+        BenchmarkCase {
+            filtered: true,
+            ..case
+        },
     )
     .await?;
     Ok(())
@@ -106,28 +112,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
 async fn run_case(
     client: &Client,
     endpoint: &str,
-    count: usize,
-    dimensions: usize,
-    query_count: usize,
-    warmups: usize,
-    top_k: usize,
-    hnsw_ef: usize,
-    filtered: bool,
+    case: BenchmarkCase,
 ) -> Result<(), Box<dyn Error>> {
-    let mut exact_latency = Vec::with_capacity(query_count);
-    let mut ann_latency = Vec::with_capacity(query_count);
-    let mut recalls = Vec::with_capacity(query_count);
+    let mut exact_latency = Vec::with_capacity(case.query_count);
+    let mut ann_latency = Vec::with_capacity(case.query_count);
+    let mut recalls = Vec::with_capacity(case.query_count);
 
-    for query_index in 0..(warmups + query_count) {
-        let id = (query_index.wrapping_mul(7_919) + 17) % count;
-        let mut query = vector(id as u64, dimensions);
+    for query_index in 0..(case.warmups + case.query_count) {
+        let id = (query_index.wrapping_mul(7_919) + 17) % case.count;
+        let mut query = vector(id as u64, case.dimensions);
         // A small deterministic perturbation prevents an exact self-match from
         // making every approximate query unrealistically easy.
         for (offset, value) in query.iter_mut().enumerate() {
             *value += (((query_index + offset * 13) % 17) as f32 - 8.0) * 0.0005;
         }
         normalize(&mut query);
-        let filter = filtered.then(|| {
+        let filter = case.filtered.then(|| {
             json!({"must": [{"key": "creator", "match": {"value": format!("creator-{}", id % 100)}}]})
         });
 
@@ -135,8 +135,8 @@ async fn run_case(
             client,
             endpoint,
             &query,
-            top_k,
-            hnsw_ef,
+            case.top_k,
+            case.hnsw_ef,
             true,
             filter.as_ref(),
         )
@@ -145,13 +145,13 @@ async fn run_case(
             client,
             endpoint,
             &query,
-            top_k,
-            hnsw_ef,
+            case.top_k,
+            case.hnsw_ef,
             false,
             filter.as_ref(),
         )
         .await?;
-        if query_index >= warmups {
+        if query_index >= case.warmups {
             exact_latency.push(exact_ms);
             ann_latency.push(ann_ms);
             let found = ann.iter().filter(|id| exact.contains(id)).count();
@@ -161,17 +161,18 @@ async fn run_case(
 
     exact_latency.sort_unstable();
     ann_latency.sort_unstable();
-    let label = if filtered {
+    let label = if case.filtered {
         "creator-filtered"
     } else {
         "unfiltered"
     };
     println!(
-        "case={label} exact_p50_us={} exact_p95_us={} ann_p50_us={} ann_p95_us={} recall_at_{top_k}={:.4}",
+        "case={label} exact_p50_us={} exact_p95_us={} ann_p50_us={} ann_p95_us={} recall_at_{}={:.4}",
         percentile(&exact_latency, 50),
         percentile(&exact_latency, 95),
         percentile(&ann_latency, 50),
         percentile(&ann_latency, 95),
+        case.top_k,
         recalls.iter().sum::<f64>() / recalls.len().max(1) as f64,
     );
     Ok(())

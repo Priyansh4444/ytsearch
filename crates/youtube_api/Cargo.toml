@@ -8,16 +8,15 @@ name = "youtube-api"
 path = "src/main.rs"
 
 [dependencies]
-axiom-rs = { version = "0.11.0", default-features = false, features = ["tokio", "rustls-tls"] }
 axum = "0.8"
 dotenvy = "0.15"
 reqwest = { workspace = true }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "2.0"
-tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "signal", "sync"] }
-tower-http = { version = "0.6", features = ["compression-gzip", "cors", "trace"] }
-tracing = "0.1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "signal", "sync"] }
+tower-http = { version = "0.6.11", features = ["compression-gzip", "cors", "trace"] }
+tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 youtube_search = { path = "../youtube_search" }
 youtube_typesense = { path = "../youtube_typesense" }

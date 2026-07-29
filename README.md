@@ -97,14 +97,26 @@ be imported resumably with `scripts/index-conference-playlists.sh`.
 ## Verification
 
 ```bash
-cargo fmt --check
-bun run test                 # Cargo workspace + frontend component tests
+bun run check                # Format, lint, typecheck, tests, build, and bundle budget
 bun run test:frontend:watch  # focused frontend development
 bun run test:frontend:coverage
-bun run frontend:check
 bun run check:responsive       # mocked browser flows at phone/tablet/desktop widths
 scripts/check-rust-dependency-policy.sh # reject duplicate native TLS/OpenSSL clients
 sh -n scripts/cloud-index-queue-entrypoint.sh scripts/fly-run-queue-indexer.sh
+```
+
+Install the repository-owned pre-commit hook to run the fast deterministic
+subset, including strict Clippy and the local bundle-size performance budget:
+
+```bash
+bun run hooks:install
+```
+
+The full browser performance check intentionally stays separate because it
+loads the deployed site:
+
+```bash
+bun run perf:frontend
 ```
 
 Agent-oriented production diagnostics are intentionally bounded:

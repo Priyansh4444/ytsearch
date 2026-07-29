@@ -3,14 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const posthog = vi.hoisted(() => {
   const capture = vi.fn();
   const client = { capture };
-  const init = vi.fn((_key: string, config: { loaded?: (loadedClient: typeof client) => void }) =>
-    config.loaded?.(client),
-  );
-  return { capture, client, init };
+  const constructor = vi.fn(function PostHog() {
+    return client;
+  });
+  return { capture, client, constructor };
 });
 
-vi.mock("posthog-js", () => ({
-  default: { capture: posthog.capture, init: posthog.init },
+vi.mock("posthog-js-lite", () => ({
+  default: posthog.constructor,
 }));
 
 describe("analytics", () => {
@@ -51,16 +51,16 @@ describe("analytics", () => {
     analytics.initializeAnalytics();
     analytics.initializeAnalytics();
 
-    await vi.waitFor(() => expect(posthog.init).toHaveBeenCalledOnce());
-    const [key, config] = posthog.init.mock.calls[0]!;
+    await vi.waitFor(() => expect(posthog.constructor).toHaveBeenCalledOnce());
+    const [key, config] = posthog.constructor.mock.calls[0]!;
     expect(key).toBe("phc_test_project");
     expect(config).toMatchObject({
-      api_host: "https://analytics.example.com",
+      host: "https://analytics.example.com",
       autocapture: false,
-      capture_pageview: false,
-      capture_pageleave: false,
-      disable_session_recording: true,
-      person_profiles: "identified_only",
+      captureHistoryEvents: false,
+      disableRemoteFeatureFlags: true,
+      persistence: "localStorage",
+      preloadFeatureFlags: false,
     });
   });
 });

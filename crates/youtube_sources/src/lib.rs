@@ -224,7 +224,7 @@ mod tests {
 
     #[derive(Clone)]
     enum MockMetadataResponse {
-        Success(VideoMetadata),
+        Success(Box<VideoMetadata>),
         Failure(&'static str),
     }
 
@@ -259,7 +259,7 @@ mod tests {
                 .expect("mock call log lock")
                 .push(self.name.to_string());
             match &self.response {
-                MockMetadataResponse::Success(metadata) => Ok(metadata.clone()),
+                MockMetadataResponse::Success(metadata) => Ok((**metadata).clone()),
                 MockMetadataResponse::Failure(reason) => Err(IngestError::MetadataUnavailable {
                     video_id: video_id.to_string(),
                     reason: (*reason).to_string(),
@@ -318,7 +318,7 @@ mod tests {
             ))
             .with_source(MockMetadataSource::new(
                 "fallback",
-                MockMetadataResponse::Success(expected.clone()),
+                MockMetadataResponse::Success(Box::new(expected.clone())),
                 Arc::clone(&calls),
             ))
             .with_source(MockMetadataSource::new(

@@ -616,6 +616,12 @@ impl TypesenseSearchClient {
             let mut pairs = url.query_pairs_mut();
             pairs.append_pair("q", &query.q);
             pairs.append_pair("query_by", &query.query_by);
+            // This count drives pagination and must use the same match
+            // expansion as the result query. Otherwise a query such as
+            // "blackhole" can return split-token "black hole" results while
+            // counting only literal-token videos.
+            pairs.append_pair("typo_tokens_threshold", "5");
+            pairs.append_pair("split_join_tokens", "always");
             pairs.append_pair("per_page", "0");
             pairs.append_pair("facet_by", field);
             pairs.append_pair("max_facet_values", "100000");
@@ -1018,7 +1024,12 @@ fn append_search_query_params(url: &mut Url, query: &TextSearchQuery) {
     pairs.append_pair("prioritize_exact_match", "true");
     pairs.append_pair("prioritize_token_position", "true");
     pairs.append_pair("typo_tokens_threshold", "5");
-    pairs.append_pair("split_join_tokens", "fallback");
+    // Keep tokenization semantics independent of filters. With `fallback`, a
+    // literal hit for "blackhole" anywhere in the corpus prevents Typesense
+    // from also considering "black hole", while a creator filter with no
+    // literal hit activates the split. That makes filtering reveal an entirely
+    // different result set for the same query.
+    pairs.append_pair("split_join_tokens", "always");
 
     if let Some(filter_by) = &query.filter_by {
         pairs.append_pair("filter_by", filter_by);
@@ -1333,6 +1344,11 @@ mod tests {
             pairs
                 .iter()
                 .any(|(key, value)| { key == "prioritize_token_position" && value == "true" })
+        );
+        assert!(
+            pairs
+                .iter()
+                .any(|(key, value)| key == "split_join_tokens" && value == "always")
         );
     }
 

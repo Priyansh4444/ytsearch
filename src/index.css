@@ -1,6 +1,22 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --color-vesper-bg: #050505;
+  --color-vesper-panel: #0b0b0b;
+  --color-vesper-panel2: #111111;
+  --color-vesper-border: #252525;
+  --color-vesper-control: #606060;
+  --color-vesper-text: #ffffff;
+  --color-vesper-muted: #a0a0a0;
+  --color-vesper-dim: #7d7d7d;
+  --color-vesper-yellow: #ffc799;
+  --color-vesper-orange: #ffb86c;
+  --color-vesper-green: #99ffe4;
+  --color-vesper-blue: #8db4ff;
+  --color-vesper-red: #ff8080;
+  --shadow-vesper: 0 24px 80px rgb(0 0 0 / 45%);
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+}
 
 :root {
   color-scheme: dark;
@@ -20,8 +36,34 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
+}
+
+@layer base {
+  :where(a, button, input, select, [role="option"]):focus-visible {
+    outline: 2px solid var(--color-vesper-yellow);
+    outline-offset: 3px;
+  }
+
+  @media (forced-colors: active) {
+    :where(a, button, input, select, [role="option"]):focus-visible {
+      outline-color: Highlight;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pressable {
+    transition-property: color, background-color, border-color, opacity, scale;
+    transition-duration: 150ms;
+    transition-timing-function: ease-out;
+  }
+
+  .pressable:not(:disabled):active {
+    scale: 0.96;
+  }
 }
 
 ::selection {
@@ -37,12 +79,12 @@ input {
 }
 
 ::view-transition-group(search-controls) {
-  animation-duration: 520ms;
+  animation-duration: 260ms;
   animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 ::view-transition-group(selected-channel-identity) {
-  animation-duration: 620ms;
+  animation-duration: 320ms;
   animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -89,8 +131,19 @@ input {
 
 .channel-swarm {
   position: absolute;
-  inset: 1rem 0;
+  /*
+   * Let the swarm occupy the viewport around the centered search controls.
+   * The item coordinates retain a safe inner margin for hover scaling and
+   * labels, while the expanded stage keeps the composition airy.
+   */
+  inset: -2rem clamp(-3rem, -4vw, -1rem);
   z-index: 0;
+  min-height: calc(100% + 4rem);
+  /*
+   * The canvas is decorative outside of its avatars. Without this, its large
+   * transparent box can become the pointer target above homepage controls.
+   */
+  pointer-events: none;
   transition:
     opacity 320ms ease,
     transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
@@ -98,10 +151,11 @@ input {
 
 .channel-swarm::before {
   position: absolute;
-  inset: -10rem 0;
+  inset: 0;
   background: radial-gradient(
-    160px circle at var(--cursor-x, 50%) calc(var(--cursor-y, 50%) + 10rem),
-    rgb(255 199 153 / 7%),
+    220px circle at var(--cursor-x, 50%) var(--cursor-y, 50%),
+    rgb(255 199 153 / 10%),
+    rgb(255 184 108 / 5%) 38%,
     transparent 72%
   );
   content: "";
@@ -110,7 +164,7 @@ input {
   transition: opacity 240ms ease;
 }
 
-.channel-swarm:hover::before {
+.channel-swarm-visible[data-cursor-active="true"]::before {
   opacity: 1;
 }
 
@@ -127,11 +181,12 @@ input {
 
 .channel-swarm-item {
   position: absolute;
-  left: var(--swarm-x);
+  inset-inline-start: var(--swarm-x);
   top: var(--swarm-y);
   display: grid;
   place-items: center;
   color: #a0a0a0;
+  pointer-events: auto;
   text-decoration: none;
   transform: translate(calc(-50% + var(--magnet-x, 0px)), calc(-50% + var(--magnet-y, 0px)));
   transition:
@@ -157,17 +212,19 @@ input {
 
 .channel-swarm-item:hover,
 .channel-swarm-item:focus-visible {
-  z-index: 5;
-  color: #fff;
-  outline: none;
+  z-index: 20;
+  color: var(--swarm-color, #ffc799);
+  filter: drop-shadow(0 0 12px color-mix(in srgb, var(--swarm-color, #ffc799) 45%, transparent));
 }
 
 .channel-swarm-item:hover img,
 .channel-swarm-item:hover > div,
 .channel-swarm-item:focus-visible img,
 .channel-swarm-item:focus-visible > div {
-  border-color: #ffc799;
-  box-shadow: 0 0 28px rgb(255 199 153 / 28%);
+  border-color: var(--swarm-color, #ffc799);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--swarm-color, #ffc799) 75%, transparent),
+    0 0 30px color-mix(in srgb, var(--swarm-color, #ffc799) 38%, transparent);
   opacity: 1;
   scale: 1.14;
 }
@@ -181,7 +238,7 @@ input {
   border: 1px solid rgb(255 255 255 / 10%);
   background: rgb(10 10 10 / 92%);
   padding: 0.25rem 0.5rem;
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   line-height: 1rem;
   opacity: 0;
   pointer-events: none;
@@ -229,11 +286,17 @@ input {
   .channel-swarm-item > div {
     transition: none;
   }
+
+  .animate-pulse,
+  .animate-spin {
+    animation: none;
+  }
 }
 
 @media (max-width: 639px) {
   .channel-swarm {
-    inset: 2rem 0;
+    inset: 0.5rem -0.5rem;
+    min-height: calc(100% - 1rem);
   }
 
   .channel-swarm-item img,
@@ -243,7 +306,7 @@ input {
   }
 
   .channel-swarm-item {
-    left: var(--swarm-mobile-x);
+    inset-inline-start: var(--swarm-mobile-x);
     top: var(--swarm-mobile-y);
   }
 
