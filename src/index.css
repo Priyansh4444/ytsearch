@@ -109,6 +109,19 @@ select {
   grid-area: submit;
 }
 
+.search-submit:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--color-vesper-bg);
+}
+
+@media (forced-colors: active) {
+  .search-submit:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -4px;
+    box-shadow: none;
+  }
+}
+
 @media (min-width: 640px) {
   .search-form-grid {
     grid-template-areas:
