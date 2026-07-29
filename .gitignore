@@ -33,6 +33,7 @@ app.config.timestamp_*.js
 # generated search/transcription data
 data/
 backups/
+query-log.txt
 
 # Temp
 gitignore
