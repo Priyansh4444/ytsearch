@@ -29,8 +29,10 @@ scripts/check-queue-indexers.sh
 scripts/fly-run-queue-indexers.sh
 ```
 
-The public API and Typesense engine remain warm. The worker uses conservative
-single-writer concurrency because indexing and public search share one engine.
+The public API remains warm. Typesense follows the scheduled availability
+policy described in `docs/staging-architecture.md`. The indexer uses
+conservative single-writer concurrency because indexing and public search share
+one engine.
 
 ## Cloudflare Pages
 
@@ -55,6 +57,33 @@ Deploy the production branch:
 scripts/cloudflare-worker-deploy.sh
 ```
 
+The committed Worker configuration starts in observation mode:
+
+```json
+"SEARCH_SCHEDULE_MODE": "observe"
+```
+
+Observation mode neither blocks search nor starts/stops Fly Machines. Before
+changing it to `enforce`:
+
+1. Observe at least 48 hours of `typesense_schedule_observed` events.
+2. Confirm `FLY_TYPESENSE_MACHINE_ID` is the production Machine, not a
+   benchmark Machine.
+3. Exercise start, health, and graceful stop against an isolated Machine.
+4. Confirm the production node is healthy before noon for one scheduled cycle.
+5. Deploy `fly.typesense.toml` with automatic starts disabled.
+6. Change the Worker mode to `enforce` and deploy it.
+7. Observe two complete prewarm/open/stop cycles.
+
+Emergency rollback:
+
+```bash
+flyctl machine start MACHINE_ID --app ytsearch-typesense-staging
+```
+
+Then restore `auto_start_machines=true`, `min_machines_running=1`, change the
+Worker to observation mode, and redeploy both configurations.
+
 Never expose Typesense admin keys, queue tokens, YouTube keys, cookies, or
 Axiom tokens in `VITE_*` variables.
 
@@ -65,4 +94,5 @@ scripts/check-frontend-backends.sh
 scripts/check-staging-machines.sh
 scripts/check-queue-indexers.sh
 curl -fsS https://ytsearch-typesense-staging.fly.dev/health
+curl -fsS https://search.pronsh.dev/api/availability | jq .
 ```

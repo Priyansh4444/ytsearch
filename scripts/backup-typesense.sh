@@ -24,6 +24,10 @@ fi
 mkdir -p "$BACKUP_DIR"
 : >"$BACKUP_DIR/COUNTS.tsv"
 for collection in $COLLECTIONS; do
+  curl -fsS --retry 3 --retry-all-errors \
+    -H "X-TYPESENSE-API-KEY: $API_KEY" \
+    "${API_URL%/}/collections/$collection" |
+    jq 'del(.created_at, .num_documents)' >"$BACKUP_DIR/$collection.schema.json"
   output="$BACKUP_DIR/$collection.jsonl.gz"
   curl -fsS --retry 3 --retry-all-errors \
     -H "X-TYPESENSE-API-KEY: $API_KEY" \
@@ -34,11 +38,13 @@ done
 
 (
   cd "$BACKUP_DIR"
-  sha256sum ./*.jsonl.gz >SHA256SUMS
+  sha256sum ./*.jsonl.gz ./*.schema.json COUNTS.tsv >SHA256SUMS
 )
 
-cat >"$BACKUP_DIR/manifest.json" <<EOF
-{"created_at":"$STAMP","format":"typesense-jsonl-gzip","collections":"$COLLECTIONS"}
-EOF
+jq -n \
+  --arg created_at "$STAMP" \
+  --arg collections "$COLLECTIONS" \
+  '{created_at:$created_at,format:"typesense-jsonl-gzip-v2",collections:($collections | split(" "))}' \
+  >"$BACKUP_DIR/manifest.json"
 
 echo "$BACKUP_DIR"

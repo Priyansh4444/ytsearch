@@ -60,24 +60,24 @@ uncertainty is useful and can be recorded as “test both.”
 3. May thumbnails or representative frames be returned to users, or should the
    product only deep-link to YouTube at the matching timestamp?
 
-   **Owner comments:**
+   **Owner comments:** Just the deep-link for now, but may add thumbnails and representative frames in the future. So please make sure crates are made modular to make feature-parity down the line easier.
 
 4. Are private, members-only, age-restricted, unlisted, or cookie-authenticated
    videos explicitly out of scope?
 
-   **Owner comments:**
+   **Owner comments:** Yes.
 
 ### 3. Local hardware and runtime
 
 1. What is the weakest machine that must perform indexing? Include OS, CPU,
    RAM, GPU model/VRAM if present, and available disk.
 
-   **Owner comments:**
+   **Owner comments:** Please look at the fly machine, and assume we have the lowest tier. Else Look at my laptop and then assume that tier but unstable and runs semi-occassionally depending on my schedule (non-dedicated)
 
 2. Must query embedding run on CPU, or may it require a local GPU? Should Apple
    Silicon, Linux CUDA, and CPU-only Linux all be supported?
 
-   **Owner comments:**
+   **Owner comments:** Same as above.
 
 3. What are acceptable limits for:
 
@@ -88,12 +88,12 @@ uncertainty is useful and can be recorded as “test both.”
    - warm query latency;
    - cold-start latency?
 
-   **Owner comments:**
+   **Owner comments:** Same as above.
 
 4. Is an always-warm semantic process acceptable, or must it be able to load on
    demand and shut down when idle?
 
-   **Owner comments:**
+   **Owner comments:** Prefer always-warm. but cheap is better than expensive, so compromise is acceptable.
 
 ### 4. Quality and model constraints
 

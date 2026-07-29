@@ -20,8 +20,16 @@ if [ "${DETAILS:-0}" = "1" ]; then
 fi
 
 apps_with_machines=0
-always_on_ok=true
+availability_ok=true
 indexer_ok=true
+pacific_hhmm="$(TZ=America/Los_Angeles date +%H%M)"
+schedule_mode="${SEARCH_SCHEDULE_MODE:-observe}"
+typesense_should_run=true
+if [ "$schedule_mode" = "enforce" ] && [ "$pacific_hhmm" -lt 1145 ]; then
+  typesense_should_run=false
+elif [ "$pacific_hhmm" -ge 1145 ]; then
+  typesense_should_run=true
+fi
 
 for app in $APPS; do
   json="$(flyctl machine list --app "$app" --json 2>/dev/null || printf '[]')"
@@ -42,9 +50,15 @@ for app in $APPS; do
         indexer_ok=false
       fi
       ;;
+    ytsearch-typesense-staging)
+      if { [ "$typesense_should_run" = true ] && [ "$started_for_app" -ne 1 ]; } ||
+        { [ "$typesense_should_run" = false ] && [ "$started_for_app" -ne 0 ]; }; then
+        availability_ok=false
+      fi
+      ;;
     *)
       if [ "$started_for_app" -ne 1 ]; then
-        always_on_ok=false
+        availability_ok=false
       fi
       ;;
   esac
@@ -75,8 +89,8 @@ for app in $APPS; do
 done
 
 ok=false
-if [ "$apps_with_machines" -eq 3 ] && [ "$always_on_ok" = true ] && [ "$indexer_ok" = true ]; then
+if [ "$apps_with_machines" -eq 3 ] && [ "$availability_ok" = true ] && [ "$indexer_ok" = true ]; then
   ok=true
 fi
 
-echo "apps=$apps_with_machines always_on_ok=$always_on_ok one_indexer=$indexer_ok ok=$ok"
+echo "apps=$apps_with_machines availability_ok=$availability_ok schedule_mode=$schedule_mode typesense_should_run=$typesense_should_run one_indexer=$indexer_ok ok=$ok"

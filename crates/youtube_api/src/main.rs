@@ -1,4 +1,3 @@
-use axiom_rs::Client as AxiomClient;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -63,8 +62,8 @@ struct IndexQueue {
 
 #[derive(Clone, Debug)]
 struct AxiomLogger {
-    client: AxiomClient,
-    dataset: String,
+    client: reqwest::Client,
+    ingest_url: reqwest::Url,
 }
 
 #[derive(Default)]
@@ -1716,6 +1715,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn axiom_ingest_urls_preserve_base_paths_and_encode_dataset_names() {
+        assert_eq!(
+            axiom_ingest_url("https://api.axiom.co", "search events", false)
+                .unwrap()
+                .as_str(),
+            "https://api.axiom.co/v1/datasets/search%20events/ingest"
+        );
+        assert_eq!(
+            axiom_ingest_url("https://edge.example.com/custom/", "search/events", true)
+                .unwrap()
+                .as_str(),
+            "https://edge.example.com/custom/v1/ingest/search%2Fevents"
+        );
+    }
+
     fn test_document(id: &str, video_id: &str, text: &str) -> Value {
         json!({
             "id": id,
@@ -2491,26 +2506,54 @@ impl AxiomLogger {
             .or_else(|_| env::var("AXIOM_API_KEY"))
             .ok()?;
         let dataset = env::var("AXIOM_DATASET").ok()?;
-        let mut builder = AxiomClient::builder().with_token(token);
-
-        if let Ok(edge_url) = env::var("AXIOM_EDGE_URL") {
-            builder = builder.with_edge_url(edge_url);
+        let (base_url, edge) = if let Ok(edge_url) = env::var("AXIOM_EDGE_URL") {
+            (edge_url, true)
         } else if let Ok(edge) = env::var("AXIOM_EDGE") {
-            builder = builder.with_edge(edge);
+            (
+                format!("https://{}", edge.trim().trim_end_matches('/')),
+                true,
+            )
         } else if let Ok(url) = env::var("AXIOM_URL") {
-            builder = builder.with_url(url);
+            (url, false)
         } else if let Ok(domain) = env::var("AXIOM_DOMAIN") {
-            builder = builder.with_url(format!(
-                "https://{}",
-                domain
-                    .trim()
-                    .trim_start_matches("https://")
-                    .trim_start_matches("http://")
-                    .trim_end_matches('/')
-            ));
-        }
-
-        let client = match builder.build() {
+            (
+                format!(
+                    "https://{}",
+                    domain
+                        .trim()
+                        .trim_start_matches("https://")
+                        .trim_start_matches("http://")
+                        .trim_end_matches('/')
+                ),
+                false,
+            )
+        } else {
+            ("https://api.axiom.co".to_string(), false)
+        };
+        let ingest_url = match axiom_ingest_url(&base_url, &dataset, edge) {
+            Ok(url) => url,
+            Err(error) => {
+                tracing::warn!(%error, "failed to build Axiom ingest URL");
+                return None;
+            }
+        };
+        let mut headers = reqwest::header::HeaderMap::new();
+        let mut authorization =
+            match reqwest::header::HeaderValue::from_str(&format!("Bearer {token}")) {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(%error, "failed to initialize Axiom authorization");
+                    return None;
+                }
+            };
+        authorization.set_sensitive(true);
+        headers.insert(reqwest::header::AUTHORIZATION, authorization);
+        let client = match reqwest::Client::builder()
+            .default_headers(headers)
+            .connect_timeout(Duration::from_secs(2))
+            .timeout(Duration::from_secs(5))
+            .build()
+        {
             Ok(client) => client,
             Err(error) => {
                 tracing::warn!(%error, "failed to initialize Axiom logger");
@@ -2518,7 +2561,7 @@ impl AxiomLogger {
             }
         };
 
-        Some(Self { client, dataset })
+        Some(Self { client, ingest_url })
     }
 
     fn log_search(&self, event: SearchLogEvent) {
@@ -2530,12 +2573,30 @@ impl AxiomLogger {
         });
     }
 
-    async fn ingest(&self, event: SearchLogEvent) -> Result<(), axiom_rs::Error> {
+    async fn ingest(&self, event: SearchLogEvent) -> Result<(), reqwest::Error> {
         self.client
-            .ingest(self.dataset.as_str(), [event])
+            .post(self.ingest_url.clone())
+            .json(&[event])
+            .send()
             .await
+            .and_then(reqwest::Response::error_for_status)
             .map(|_| ())
     }
+}
+
+fn axiom_ingest_url(base_url: &str, dataset: &str, edge: bool) -> Result<reqwest::Url, String> {
+    let mut url = reqwest::Url::parse(base_url).map_err(|error| error.to_string())?;
+    let mut segments = url
+        .path_segments_mut()
+        .map_err(|_| "Axiom URL cannot be used as a base URL".to_string())?;
+    segments.pop_if_empty();
+    if edge {
+        segments.extend(["v1", "ingest", dataset]);
+    } else {
+        segments.extend(["v1", "datasets", dataset, "ingest"]);
+    }
+    drop(segments);
+    Ok(url)
 }
 
 fn init_tracing() {

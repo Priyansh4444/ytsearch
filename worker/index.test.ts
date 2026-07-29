@@ -1,6 +1,12 @@
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import worker from "./index";
 import { shouldWakeIndexer } from "./wake-policy";
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("index request approval wake gate", () => {
   test("does not wake the indexer for a new public request", () => {
@@ -28,7 +34,7 @@ describe("scheduled repair wake", () => {
         scheduledTime,
         noRetry: vi.fn(),
       },
-      { INDEX_WAKE_QUEUE: { send } } as unknown as Env,
+      testEnv({ INDEX_WAKE_QUEUE: { send } }),
     );
 
     expect(send).toHaveBeenCalledOnce();
@@ -43,3 +49,198 @@ describe("scheduled repair wake", () => {
     log.mockRestore();
   });
 });
+
+describe("scheduled search availability", () => {
+  test("serves static assets without consulting Fly", async () => {
+    const assetResponse = new Response("app");
+    const assetFetch = vi.fn().mockResolvedValue(assetResponse);
+    vi.stubGlobal("fetch", vi.fn());
+
+    const response = await worker.fetch(
+      new Request("https://search.pronsh.dev/"),
+      testEnv({ ASSETS: { fetch: assetFetch } }),
+    );
+
+    expect(response).toBe(assetResponse);
+    expect(assetFetch).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  test("blocks off-hours searches without contacting Fly or the API", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T17:00:00Z"));
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const response = await worker.fetch(
+      new Request("https://search.pronsh.dev/api/search?q=rust"),
+      testEnv(),
+    );
+    const body = await response.json<{ code: string; available_at: string }>();
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Retry-After")).toBe("7200");
+    expect(body).toEqual({
+      code: "scheduled_offline",
+      error: "Search is available daily from 12:00 PM to 12:00 AM Pacific Time.",
+      available_at: "2026-07-26T19:00:00.000Z",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("proxies open-window searches unchanged", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T20:00:00Z"));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({ query: "rust", videos: [] }, { headers: { "x-upstream": "yes" } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await worker.fetch(
+      new Request("https://search.pronsh.dev/api/search?q=rust"),
+      testEnv(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-upstream")).toBe("yes");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect((fetchMock.mock.calls[0][0] as Request).url).toContain(
+      "ytsearch-api-typesense-fly-staging.fly.dev/api/search?q=rust",
+    );
+  });
+
+  test("returns normalized availability without provider identifiers", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T17:00:00Z"));
+    vi.stubGlobal("fetch", vi.fn());
+
+    const response = await worker.fetch(
+      new Request("https://search.pronsh.dev/api/availability"),
+      testEnv(),
+    );
+    const text = await response.text();
+
+    expect(JSON.parse(text)).toMatchObject({
+      status: "scheduled_offline",
+      search_enabled: false,
+      enforced: true,
+      schedule_phase: "closed",
+      time_zone: "America/Los_Angeles",
+    });
+    expect(text).not.toContain("8147deb94937e8");
+    expect(text).not.toContain("fly-token");
+  });
+
+  test("starts only the configured Typesense machine during prewarm", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ state: "stopped" }))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await worker.scheduled(scheduledController("*/5 * * * *", "2026-07-26T18:45:00Z"), testEnv());
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "/apps/ytsearch-typesense-staging/machines/8147deb94937e8",
+    );
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      "/apps/ytsearch-typesense-staging/machines/8147deb94937e8/start",
+    );
+    expect(fetchMock.mock.calls.join(" ")).not.toContain("d8de466f330468");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("typesense_schedule_started"));
+  });
+
+  test("defers midnight shutdown until the indexer stops", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ state: "started" }))
+      .mockResolvedValueOnce(Response.json({ state: "started" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await worker.scheduled(scheduledController("*/5 * * * *", "2026-07-27T07:00:00Z"), testEnv());
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/stop"))).toBe(false);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("typesense_schedule_stop_deferred_indexer"),
+    );
+  });
+
+  test("stops Typesense after midnight when the indexer is stopped", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ state: "started" }))
+      .mockResolvedValueOnce(Response.json({ state: "stopped" }))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await worker.scheduled(scheduledController("*/5 * * * *", "2026-07-27T07:00:00Z"), testEnv());
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain(
+      "/apps/ytsearch-typesense-staging/machines/8147deb94937e8/stop",
+    );
+  });
+
+  test("acknowledges and defers an off-hours indexer wake", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T17:00:00Z"));
+    const ack = vi.fn();
+    const retry = vi.fn();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn());
+
+    await worker.queue(
+      {
+        messages: [{ body: { reason: "index-request" }, attempts: 1, ack, retry }],
+      } as unknown as MessageBatch<WakeMessage>,
+      testEnv(),
+    );
+
+    expect(ack).toHaveBeenCalledOnce();
+    expect(retry).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("indexer_wake_deferred"));
+  });
+});
+
+type WakeMessage = {
+  reason: "index-request" | "scheduled-repair" | "availability-open";
+};
+
+function testEnv(overrides: Record<string, unknown> = {}): Env {
+  return {
+    INDEX_WAKE_QUEUE: { send: vi.fn().mockResolvedValue(undefined) },
+    ASSETS: { fetch: vi.fn().mockResolvedValue(new Response("asset")) },
+    PUBLIC_APP_ORIGIN: "https://search.pronsh.dev",
+    API_BASE_URL: "https://ytsearch-api-typesense-fly-staging.fly.dev",
+    FLY_API_BASE_URL: "https://api.machines.dev",
+    FLY_APP_NAME: "ytsearch-indexer-staging",
+    FLY_MACHINE_ID: "78410e0f165138",
+    FLY_TYPESENSE_APP_NAME: "ytsearch-typesense-staging",
+    FLY_TYPESENSE_MACHINE_ID: "8147deb94937e8",
+    TYPESENSE_HEALTH_URL: "https://ytsearch-typesense-staging.fly.dev/health",
+    SEARCH_TIME_ZONE: "America/Los_Angeles",
+    SEARCH_OPEN_LOCAL_TIME: "12:00",
+    SEARCH_CLOSE_LOCAL_TIME: "00:00",
+    SEARCH_PREWARM_MINUTES: "15",
+    SEARCH_SCHEDULE_MODE: "enforce",
+    FLYIO_TOKEN: "fly-token",
+    ...overrides,
+  } as unknown as Env;
+}
+
+function scheduledController(cron: string, instant: string): ScheduledController {
+  return {
+    cron,
+    scheduledTime: new Date(instant).getTime(),
+    noRetry: vi.fn(),
+  };
+}

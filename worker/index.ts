@@ -1,8 +1,21 @@
 import { shouldWakeIndexer } from "./wake-policy";
 import { requestOriginAllowed } from "./origin-policy";
+import { evaluateSearchSchedule } from "../shared/service-schedule";
+import {
+  flyMachineState,
+  startFlyMachine,
+  stopFlyMachine,
+  type FlyMachineState,
+} from "./fly-machine";
+import {
+  scheduleEnforced,
+  scheduledOfflineResponse,
+  searchAvailability,
+  typesenseHealthy,
+} from "./search-availability";
 
 type WakeMessage = {
-  reason: "index-request" | "scheduled-repair";
+  reason: "index-request" | "scheduled-repair" | "availability-open";
 };
 
 export default {
@@ -20,6 +33,22 @@ export default {
     if (!isApiRequest) {
       return env.ASSETS.fetch(request);
     }
+    if (request.method === "GET" && url.pathname === "/api/availability") {
+      return Response.json(await searchAvailability(env), {
+        headers: { "Cache-Control": "no-store" },
+      });
+    }
+    if (
+      url.pathname === "/api/search" &&
+      scheduleEnforced(env) &&
+      evaluateSearchSchedule().phase !== "open"
+    ) {
+      const schedule = evaluateSearchSchedule();
+      logEvent("scheduled_search_blocked", {
+        schedule_phase: schedule.phase,
+      });
+      return scheduledOfflineResponse();
+    }
 
     const upstreamUrl = new URL(url.pathname + url.search, env.API_BASE_URL);
     const upstreamResponse = await fetch(new Request(upstreamUrl, request));
@@ -32,6 +61,15 @@ export default {
   async queue(batch, env): Promise<void> {
     for (const message of batch.messages) {
       try {
+        const schedule = evaluateSearchSchedule();
+        if (scheduleEnforced(env) && schedule.phase !== "open") {
+          logEvent("indexer_wake_deferred", {
+            reason: message.body.reason,
+            schedule_phase: schedule.phase,
+          });
+          message.ack();
+          continue;
+        }
         await startIndexer(env);
         message.ack();
       } catch (error) {
@@ -50,38 +88,107 @@ export default {
   },
 
   async scheduled(controller, env): Promise<void> {
-    await env.INDEX_WAKE_QUEUE.send({ reason: "scheduled-repair" });
-    // eslint-disable-next-line no-console -- Workers structured log event.
-    console.log(
-      JSON.stringify({
-        event: "indexer_repair_wake_enqueued",
+    if (controller.cron === "17 */6 * * *") {
+      await env.INDEX_WAKE_QUEUE.send({ reason: "scheduled-repair" });
+      logEvent("indexer_repair_wake_enqueued", {
         cron: controller.cron,
         scheduled_time: controller.scheduledTime,
-      }),
-    );
+      });
+      return;
+    }
+    await reconcileSearchMachine(env, new Date(controller.scheduledTime));
   },
 } satisfies ExportedHandler<Env, WakeMessage>;
 
 async function startIndexer(env: Env): Promise<void> {
-  const machineUrl = `${env.FLY_API_BASE_URL}/v1/apps/${env.FLY_APP_NAME}/machines/${env.FLY_MACHINE_ID}`;
-  const headers = { Authorization: `Bearer ${env.FLYIO_TOKEN}` };
-  const machineResponse = await fetch(machineUrl, { headers });
-  if (!machineResponse.ok) {
-    throw new Error(`Fly machine lookup failed with HTTP ${machineResponse.status}`);
-  }
-
-  const machine = await machineResponse.json<{ state?: string }>();
-  if (machine.state === "started" || machine.state === "starting") return;
-
-  const startResponse = await fetch(`${machineUrl}/start`, { method: "POST", headers });
-  if (!startResponse.ok) {
-    throw new Error(`Fly machine start failed with HTTP ${startResponse.status}`);
-  }
-
-  // eslint-disable-next-line no-console -- Workers structured log event.
-  console.log(JSON.stringify({ event: "indexer_woken", machine: env.FLY_MACHINE_ID }));
+  const state = await flyMachineState(env, env.FLY_APP_NAME, env.FLY_MACHINE_ID);
+  if (state === "started" || state === "starting") return;
+  await startFlyMachine(env, env.FLY_APP_NAME, env.FLY_MACHINE_ID);
+  logEvent("indexer_woken", {});
 }
 
 function retryDelaySeconds(attempts: number): number {
   return Math.min(30 * 2 ** Math.max(0, attempts - 1), 3_600);
+}
+
+async function reconcileSearchMachine(env: Env, now: Date): Promise<void> {
+  const schedule = evaluateSearchSchedule(now);
+  try {
+    const state = await flyMachineState(
+      env,
+      env.FLY_TYPESENSE_APP_NAME,
+      env.FLY_TYPESENSE_MACHINE_ID,
+    );
+    if (!scheduleEnforced(env)) {
+      logEvent("typesense_schedule_observed", {
+        schedule_phase: schedule.phase,
+        machine_state: state,
+        desired_state: schedule.phase === "closed" ? "stopped" : "started",
+      });
+      return;
+    }
+
+    if (schedule.phase !== "closed") {
+      await ensureSearchMachineStarted(env, state, schedule.phase);
+      if (
+        schedule.phase === "open" &&
+        schedule.localMinuteOfDay < 12 * 60 + 15 &&
+        (await typesenseHealthy(env))
+      ) {
+        await env.INDEX_WAKE_QUEUE.send({ reason: "availability-open" });
+      }
+      return;
+    }
+
+    if (state !== "started" && state !== "starting") return;
+    const indexerState = await flyMachineState(env, env.FLY_APP_NAME, env.FLY_MACHINE_ID);
+    if (indexerState === "started" || indexerState === "starting") {
+      logEvent("typesense_schedule_stop_deferred_indexer", {
+        schedule_phase: schedule.phase,
+        machine_state: state,
+        indexer_state: indexerState,
+      });
+      return;
+    }
+    logEvent("typesense_schedule_stop_requested", {
+      schedule_phase: schedule.phase,
+      machine_state: state,
+    });
+    await stopFlyMachine(env, env.FLY_TYPESENSE_APP_NAME, env.FLY_TYPESENSE_MACHINE_ID);
+    logEvent("typesense_schedule_stopped", { schedule_phase: schedule.phase });
+  } catch (error) {
+    logEvent("typesense_schedule_degraded", {
+      schedule_phase: schedule.phase,
+      error: safeError(error),
+    });
+  }
+}
+
+async function ensureSearchMachineStarted(
+  env: Env,
+  state: FlyMachineState,
+  schedulePhase: "prewarm" | "open",
+): Promise<void> {
+  if (state === "started" || state === "starting") {
+    if (state === "started" && (await typesenseHealthy(env))) {
+      logEvent("typesense_schedule_ready", { schedule_phase: schedulePhase });
+    }
+    return;
+  }
+  logEvent("typesense_schedule_start_requested", {
+    schedule_phase: schedulePhase,
+    machine_state: state,
+  });
+  await startFlyMachine(env, env.FLY_TYPESENSE_APP_NAME, env.FLY_TYPESENSE_MACHINE_ID);
+  logEvent("typesense_schedule_started", { schedule_phase: schedulePhase });
+}
+
+function logEvent(event: string, fields: Record<string, unknown>): void {
+  // eslint-disable-next-line no-console -- Workers structured operational event.
+  console.log(JSON.stringify({ event, ...fields }));
+}
+
+function safeError(error: unknown): string {
+  if (!(error instanceof Error)) return "unknown lifecycle error";
+  return error.message.replaceAll(/(Bearer|token|key)\s+[^\s]+/gi, "$1 [redacted]");
 }

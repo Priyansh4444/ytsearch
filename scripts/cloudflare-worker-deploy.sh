@@ -20,10 +20,14 @@ PUBLIC_URL="${PUBLIC_URL:-https://search.pronsh.dev}"
 smoke_response="$(mktemp)"
 trap 'rm -f "$smoke_response"' EXIT
 
-curl -fsS "${PUBLIC_URL%/}/api/youtubers" >"$smoke_response"
-if ! jq -e '.channels | type == "array"' "$smoke_response" >/dev/null; then
-  echo "Deployment smoke test failed: /api/youtubers did not return a channel array" >&2
+curl -fsS "${PUBLIC_URL%/}/api/availability" >"$smoke_response"
+if ! jq -e '
+  (.status | type == "string") and
+  (.search_enabled | type == "boolean") and
+  .time_zone == "America/Los_Angeles"
+' "$smoke_response" >/dev/null; then
+  echo "Deployment smoke test failed: /api/availability returned an invalid response" >&2
   exit 1
 fi
 
-echo "Deployment smoke test passed: ${PUBLIC_URL%/}/api/youtubers"
+echo "Deployment smoke test passed: ${PUBLIC_URL%/}/api/availability"

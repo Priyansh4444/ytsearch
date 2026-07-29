@@ -21,6 +21,25 @@ fi
 
 for archive in "$BACKUP_DIR"/*.jsonl.gz; do
   collection="$(basename "$archive" .jsonl.gz)"
+  schema="$BACKUP_DIR/$collection.schema.json"
+  if [ ! -f "$schema" ]; then
+    echo "Missing collection schema: $schema" >&2
+    exit 1
+  fi
+  status="$(curl -sS -o /dev/null -w '%{http_code}' \
+    -H "X-TYPESENSE-API-KEY: $API_KEY" \
+    "${API_URL%/}/collections/$collection")"
+  if [ "$status" = "404" ]; then
+    echo "Creating $collection" >&2
+    curl -fsS --retry 3 --retry-all-errors \
+      -H "X-TYPESENSE-API-KEY: $API_KEY" \
+      -H "Content-Type: application/json" \
+      --data-binary "@$schema" \
+      "${API_URL%/}/collections" >/dev/null
+  elif [ "$status" != "200" ]; then
+    echo "Failed to inspect $collection (HTTP $status)" >&2
+    exit 1
+  fi
   echo "Restoring $collection" >&2
   gzip -dc "$archive" | curl -fsS --retry 3 --retry-all-errors \
     -H "X-TYPESENSE-API-KEY: $API_KEY" \
@@ -30,4 +49,5 @@ for archive in "$BACKUP_DIR"/*.jsonl.gz; do
     awk 'BEGIN {failed=0} /"success":false/ {failed++} END {if (failed) {print failed " rows failed" > "/dev/stderr"; exit 1}}'
 done
 
+"$(dirname "$0")/verify-typesense-backup.sh" "$BACKUP_DIR"
 echo "Restore completed from $BACKUP_DIR"

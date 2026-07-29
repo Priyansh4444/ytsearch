@@ -9,7 +9,7 @@ frontend request.
 | Cloudflare Worker | Static application, queue/status proxy, and approved-request wake producer | Yes |
 | Cloudflare Queue | Durable, retryable indexer wake signal | Managed |
 | `ytsearch-api-typesense-fly-staging` | Public search API and authoritative JSONL request queue | Yes |
-| `ytsearch-typesense-staging` | Typesense engine and data volume | Yes |
+| `ytsearch-typesense-staging` | Typesense engine and data volume | 11:45 AM–12:00 AM Pacific, plus indexing overrun |
 | `ytsearch-indexer-staging` | Queue/indexing daemon and transcript cache | Only while work is active |
 
 Production is served at `https://search.pronsh.dev`.
@@ -42,10 +42,11 @@ flowchart LR
    signal. A timestamp on the indexer volume makes the list-wide refresh run
    at most once per day; other scheduled wakes non-destructively close
    indexed/public video gaps.
-4. Public search and Typesense stay warm. Typesense uses four performance CPUs
-   and 8 GB RAM: a live shared-CPU trial made cold-start recovery too slow. Keep
-   the API separate because combining it saves very little while coupling public
-   availability to Typesense restarts and memory pressure.
+4. Public search is available from noon through midnight Pacific Time.
+   Cloudflare begins prewarming Typesense at 11:45 AM because the measured cold
+   load is approximately nine minutes. The static site and request queue remain
+   available continuously. At midnight, search closes immediately and the
+   engine stops after the indexer is no longer active.
 5. The indexer uses `yt-dlp` first. A YouTube Data API key is metadata discovery
    fallback only; it cannot retrieve transcript captions.
 6. Update mode preserves existing chunks. Refresh indexed-count documents after
@@ -55,6 +56,26 @@ flowchart LR
 8. Idle gap repair processes one creator at a time and rotates through a
    persistent cursor. Queue work is checked between creators and remains higher
    priority; `JOBS=1` preserves the single Typesense writer rule.
+9. `SEARCH_SCHEDULE_MODE=observe` is the safe deployment default. It logs
+   desired lifecycle actions without blocking searches or changing Machine
+   state. Set it to `enforce` only after the observation and isolated lifecycle
+   tests in `docs/deploy.md`.
+
+## Search Availability Schedule
+
+The Worker owns `GET /api/availability` and blocks `/api/search` outside the
+public window only in enforcement mode. Cloudflare Cron runs in UTC, so a
+five-minute trigger evaluates `America/Los_Angeles` in code to follow PST/PDT.
+
+The Fly Typesense service has `auto_start_machines=false` and
+`min_machines_running=0` in the scheduled configuration. This prevents a
+direct request from bypassing the cost boundary. The exact production Machine
+ID is configured in `wrangler.jsonc`; the stopped cold-benchmark Machine is
+never a lifecycle target.
+
+Off-hours indexer wake messages are acknowledged because the JSONL queue on the
+API volume remains authoritative. After Typesense becomes healthy at noon, the
+Worker sends an idempotent `availability-open` wake so approved work resumes.
 
 ## Operator Surfaces
 
