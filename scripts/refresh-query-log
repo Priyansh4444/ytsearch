@@ -1,0 +1,61 @@
+#!/usr/bin/env sh
+set -eu
+
+# Append newly recorded Axiom search queries to query-log.txt.
+# The existing log may contain legacy query-only lines; new entries use:
+#   RFC3339 timestamp<TAB>query
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+. "$SCRIPT_DIR/load-env.sh"
+
+token="${AXIOM_PROD_API_KEY:-${AXIOM_TOKEN:-${AXIOM_API_KEY:-}}}"
+dataset="${AXIOM_DATASET:-ytsearch}"
+log_file="${QUERY_LOG_FILE:-$ROOT_DIR/query-log.txt}"
+
+if [ -z "$token" ]; then
+  echo "AXIOM_PROD_API_KEY (or AXIOM_TOKEN/AXIOM_API_KEY) is required." >&2
+  exit 1
+fi
+command -v curl >/dev/null 2>&1 || { echo "curl is required." >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo "jq is required." >&2; exit 1; }
+
+last_seen=""
+if [ -f "$log_file" ]; then
+  last_seen="$(awk -F '\t' '/^[0-9]{4}-[0-9]{2}-[0-9]{2}T/ { print $1 }' "$log_file" | tail -n 1)"
+fi
+
+if [ -n "$last_seen" ]; then
+  time_filter="where _time > datetime(\"$last_seen\")"
+else
+  time_filter="where _time > ago(${QUERY_LOG_INITIAL_WINDOW:-365d})"
+fi
+
+base="${AXIOM_EDGE_URL:-${AXIOM_URL:-https://api.axiom.co}}"
+base="${base%/}"
+apl="['${dataset}'] | ${time_filter} | where event == \"search_query\" | project _time, query | sort by _time asc | limit 65000"
+body="$(jq -n --arg apl "$apl" '{apl:$apl}')"
+response="$(mktemp)"
+trap 'rm -f "$response"' EXIT HUP INT TERM
+status="$(curl -sS --max-time 60 -o "$response" -w '%{http_code}' \
+  -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+  -d "$body" "$base/v1/datasets/_apl?format=tabular")"
+
+if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+  jq -r '.message // .error // "unknown Axiom query failure"' "$response" >&2 2>/dev/null || cat "$response" >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$log_file")"
+count="$(jq -r '
+  (.columns // [] | map(.name // .)) as $columns
+  | ($columns | index("_time")) as $time
+  | ($columns | index("query")) as $query
+  | (.rows // .data // [])[] | [.[ $time ], .[ $query ]] | @tsv
+' "$response" | tee -a "$log_file" | wc -l | tr -d ' ')"
+
+if [ "$count" -eq 0 ]; then
+  echo "No new search queries."
+else
+  echo "Appended $count search quer$( [ "$count" -eq 1 ] && echo y || echo ies ) to $log_file."
+fi
