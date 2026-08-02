@@ -39,6 +39,10 @@ const MIN_SPLIT_TERM_CHARS: usize = 2;
 const MIN_FUZZY_SPLIT_COMPONENT_CHARS: usize = 3;
 const MAX_SPLIT_ALTERNATIVES: usize = 8;
 const SPLIT_SCORE_BONUS: f32 = 8.0;
+const ENGAGEMENT_RELEVANCE_BOOST: f32 = 0.20;
+const VIEW_WEIGHT: f32 = 0.50;
+const LIKE_WEIGHT: f32 = 0.35;
+const COMMENT_WEIGHT: f32 = 0.15;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BuildReport {
@@ -67,6 +71,12 @@ struct IndexDocument {
     published_at: Option<String>,
     #[serde(default)]
     published_at_timestamp: Option<i64>,
+    #[serde(default)]
+    view_count: u64,
+    #[serde(default)]
+    like_count: u64,
+    #[serde(default)]
+    comment_count: u64,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -75,6 +85,12 @@ struct VideoMeta {
     handle: String,
     title: String,
     published_at_timestamp: i64,
+    #[serde(default)]
+    view_count: u64,
+    #[serde(default)]
+    like_count: u64,
+    #[serde(default)]
+    comment_count: u64,
     documents: Vec<u32>,
 }
 
@@ -87,6 +103,9 @@ struct Manifest {
     terms: u32,
     blocks: u32,
     average_document_tokens: f32,
+    max_view_count: u64,
+    max_like_count: u64,
+    max_comment_count: u64,
 }
 
 #[derive(Default)]
@@ -244,7 +263,12 @@ pub fn build_index(
                 .and_then(parse_rfc3339_timestamp)
         });
         let video = if let Some(video) = video_ids.get(&source.video_id) {
-            *video
+            let video = *video;
+            let metadata = &mut videos[video as usize];
+            metadata.view_count = metadata.view_count.max(source.view_count);
+            metadata.like_count = metadata.like_count.max(source.like_count);
+            metadata.comment_count = metadata.comment_count.max(source.comment_count);
+            video
         } else {
             let video = videos.len() as u32;
             let title_counts = token_counts(&source.title);
@@ -259,6 +283,9 @@ pub fn build_index(
                 handle: source.youtuber_handle.to_ascii_lowercase(),
                 title: source.title,
                 published_at_timestamp: published_at_timestamp.unwrap_or_default(),
+                view_count: source.view_count,
+                like_count: source.like_count,
+                comment_count: source.comment_count,
                 documents: Vec::new(),
             });
             video_ids.insert(source.video_id, video);
@@ -321,13 +348,28 @@ pub fn build_index(
         total_tokens as f32 / document_count as f32
     };
     let manifest = Manifest {
-        schema_version: 2,
+        schema_version: 3,
         documents: document_count,
         videos: videos.len() as u32,
         channels: channels.len() as u32,
         terms: term_count as u32,
         blocks: block_records.len() as u32,
         average_document_tokens,
+        max_view_count: videos
+            .iter()
+            .map(|video| video.view_count)
+            .max()
+            .unwrap_or(0),
+        max_like_count: videos
+            .iter()
+            .map(|video| video.like_count)
+            .max()
+            .unwrap_or(0),
+        max_comment_count: videos
+            .iter()
+            .map(|video| video.comment_count)
+            .max()
+            .unwrap_or(0),
     };
     serde_json::to_writer_pretty(
         BufWriter::new(File::create(index_path.join(MANIFEST_FILE))?),
@@ -544,7 +586,7 @@ impl RawSearchEngine {
     pub fn open(index_path: &Path) -> Result<Self> {
         let manifest: Manifest =
             serde_json::from_reader(BufReader::new(File::open(index_path.join(MANIFEST_FILE))?))?;
-        if manifest.schema_version != 2 {
+        if manifest.schema_version != 3 {
             return Err(Error::Corrupt(format!(
                 "unsupported schema version {}",
                 manifest.schema_version
@@ -1361,17 +1403,22 @@ impl RawSearchEngine {
             }
         }
         let mut matches = filtered;
-        match params.sort_by.as_deref() {
-            Some("published_at_timestamp:desc") => matches.sort_unstable_by(|left, right| {
-                self.document_published(right.document)
-                    .cmp(&self.document_published(left.document))
-            }),
-            Some("published_at_timestamp:asc") => matches.sort_unstable_by(|left, right| {
-                self.document_published(left.document)
-                    .cmp(&self.document_published(right.document))
-            }),
-            _ => matches.sort_unstable_by(descending_doc_score),
-        }
+        matches.sort_unstable_by(|left, right| {
+            let left_video = self.video_for_document(left.document);
+            let right_video = self.video_for_document(right.document);
+            match (left_video, right_video) {
+                (Some(left_video), Some(right_video)) => compare_video_sort(
+                    left_video,
+                    left.score,
+                    right_video,
+                    right.score,
+                    params.sort_by.as_deref(),
+                    &self.inner.manifest,
+                )
+                .then_with(|| left.document.cmp(&right.document)),
+                _ => left.document.cmp(&right.document),
+            }
+        });
         let found = matches.len();
         let (offset, limit) = result_window(params);
         let mut hits = Vec::with_capacity(limit.min(matches.len()));
@@ -1389,20 +1436,14 @@ impl RawSearchEngine {
         groups.sort_unstable_by(|left, right| {
             let left_video = &self.inner.videos[left.video as usize];
             let right_video = &self.inner.videos[right.video as usize];
-            match sort_by {
-                Some("published_at_timestamp:desc") => right_video
-                    .published_at_timestamp
-                    .cmp(&left_video.published_at_timestamp)
-                    .then_with(|| left_video.id.cmp(&right_video.id)),
-                Some("published_at_timestamp:asc") => left_video
-                    .published_at_timestamp
-                    .cmp(&right_video.published_at_timestamp)
-                    .then_with(|| left_video.id.cmp(&right_video.id)),
-                _ => right
-                    .score
-                    .total_cmp(&left.score)
-                    .then_with(|| left_video.id.cmp(&right_video.id)),
-            }
+            compare_video_sort(
+                left_video,
+                left.score,
+                right_video,
+                right.score,
+                sort_by,
+                &self.inner.manifest,
+            )
         });
     }
 
@@ -1422,16 +1463,17 @@ impl RawSearchEngine {
             videos.sort_unstable_by(|left, right| {
                 let left = &self.inner.videos[*left as usize];
                 let right = &self.inner.videos[*right as usize];
-                match params.sort_by.as_deref() {
-                    Some("published_at_timestamp:asc") => left
-                        .published_at_timestamp
-                        .cmp(&right.published_at_timestamp)
-                        .then_with(|| left.id.cmp(&right.id)),
-                    _ => right
-                        .published_at_timestamp
-                        .cmp(&left.published_at_timestamp)
-                        .then_with(|| left.id.cmp(&right.id)),
-                }
+                compare_video_sort(
+                    left,
+                    0.0,
+                    right,
+                    0.0,
+                    params
+                        .sort_by
+                        .as_deref()
+                        .or(Some("published_at_timestamp:desc")),
+                    &self.inner.manifest,
+                )
             });
             let found = videos.len();
             let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
@@ -1465,14 +1507,25 @@ impl RawSearchEngine {
                     .is_some_and(|video| video_matches_filter(video, filter))
             })
             .collect::<Vec<_>>();
-        match params.sort_by.as_deref() {
-            Some("published_at_timestamp:asc") => {
-                documents.sort_unstable_by_key(|document| self.document_published(*document));
+        documents.sort_unstable_by(|left, right| {
+            let left_video = self.video_for_document(*left);
+            let right_video = self.video_for_document(*right);
+            match (left_video, right_video) {
+                (Some(left_video), Some(right_video)) => compare_video_sort(
+                    left_video,
+                    0.0,
+                    right_video,
+                    0.0,
+                    params
+                        .sort_by
+                        .as_deref()
+                        .or(Some("published_at_timestamp:desc")),
+                    &self.inner.manifest,
+                )
+                .then_with(|| left.cmp(right)),
+                _ => left.cmp(right),
             }
-            _ => documents.sort_unstable_by_key(|document| {
-                std::cmp::Reverse(self.document_published(*document))
-            }),
-        }
+        });
         let found = documents.len();
         let mut hits = Vec::with_capacity(limit.min(documents.len()));
         for document in documents.into_iter().skip(offset).take(limit) {
@@ -1485,17 +1538,23 @@ impl RawSearchEngine {
         }))
     }
 
-    fn document_published(&self, document: u32) -> i64 {
+    fn video_for_document(&self, document: u32) -> Option<&VideoMeta> {
         self.inner
             .metadata
             .document(document)
             .ok()
             .and_then(|record| self.inner.videos.get(record.video as usize))
-            .map_or(0, |video| video.published_at_timestamp)
     }
 
     fn hit_value(&self, document: u32, terms: &[String], cache: &mut BlockCache) -> Result<Value> {
-        let source = self.document_value(document, cache)?;
+        let mut source = self.document_value(document, cache)?;
+        if let Some(video) = self.video_for_document(document)
+            && let Some(object) = source.as_object_mut()
+        {
+            object.insert("view_count".to_string(), json!(video.view_count));
+            object.insert("like_count".to_string(), json!(video.like_count));
+            object.insert("comment_count".to_string(), json!(video.comment_count));
+        }
         let mut highlights = Vec::with_capacity(2);
         if let Some(text) = source.get("text").and_then(Value::as_str)
             && let Some(snippet) = highlighted_snippet(text, terms, 360)
@@ -1576,6 +1635,51 @@ impl RawSearchEngine {
             .collect::<Vec<_>>();
         json!({ "found": found, "out_of": found, "hits": hits })
     }
+}
+
+fn compare_video_sort(
+    left: &VideoMeta,
+    left_relevance: f32,
+    right: &VideoMeta,
+    right_relevance: f32,
+    sort_by: Option<&str>,
+    manifest: &Manifest,
+) -> Ordering {
+    let ordering = match sort_by {
+        Some("published_at_timestamp:desc") => right
+            .published_at_timestamp
+            .cmp(&left.published_at_timestamp),
+        Some("published_at_timestamp:asc") => left
+            .published_at_timestamp
+            .cmp(&right.published_at_timestamp),
+        Some("view_count:desc") => right.view_count.cmp(&left.view_count),
+        Some("like_count:desc") => right.like_count.cmp(&left.like_count),
+        Some("comment_count:desc") => right.comment_count.cmp(&left.comment_count),
+        Some("engagement_score:desc") => blended_relevance(right_relevance, right, manifest)
+            .total_cmp(&blended_relevance(left_relevance, left, manifest)),
+        _ => right_relevance.total_cmp(&left_relevance),
+    };
+    ordering
+        .then_with(|| right_relevance.total_cmp(&left_relevance))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn blended_relevance(relevance: f32, video: &VideoMeta, manifest: &Manifest) -> f32 {
+    relevance
+        + relevance.max(1.0) * ENGAGEMENT_RELEVANCE_BOOST * normalized_engagement(video, manifest)
+}
+
+fn normalized_engagement(video: &VideoMeta, manifest: &Manifest) -> f32 {
+    VIEW_WEIGHT * normalized_log(video.view_count, manifest.max_view_count)
+        + LIKE_WEIGHT * normalized_log(video.like_count, manifest.max_like_count)
+        + COMMENT_WEIGHT * normalized_log(video.comment_count, manifest.max_comment_count)
+}
+
+fn normalized_log(value: u64, maximum: u64) -> f32 {
+    if maximum == 0 {
+        return 0.0;
+    }
+    (value as f32).ln_1p() / (maximum as f32).ln_1p()
 }
 
 fn retain_best_document(documents: &mut Vec<DocMatch>, candidate: DocMatch, limit: usize) {
@@ -1960,6 +2064,25 @@ mod tests {
         (root, engine)
     }
 
+    fn engagement_engine() -> (TempDir, RawSearchEngine) {
+        let root = TempDir::new().expect("temp dir");
+        let chunks_path = root.path().join("chunks.jsonl");
+        let channels_path = root.path().join("channels.jsonl");
+        let index_path = root.path().join("index");
+        let mut chunks = File::create(&chunks_path).expect("chunks");
+        for document in [
+            json!({"id":"small-1","video_id":"small","title":"Space systems","text":"orbital mechanics explained","youtuber_handle":"@one","youtuber_name":"One","view_count":100,"like_count":20,"comment_count":2}),
+            json!({"id":"large-1","video_id":"large","title":"Space systems","text":"orbital mechanics explained","youtuber_handle":"@two","youtuber_name":"Two","view_count":1_000_000,"like_count":100_000,"comment_count":10_000}),
+            json!({"id":"exact-1","video_id":"exact","title":"Orbital mechanics","text":"an introduction","youtuber_handle":"@three","youtuber_name":"Three","view_count":1,"like_count":1,"comment_count":1}),
+        ] {
+            writeln!(chunks, "{document}").expect("write chunk");
+        }
+        File::create(&channels_path).expect("channels");
+        build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+        let engine = RawSearchEngine::open(&index_path).expect("open raw index");
+        (root, engine)
+    }
+
     fn grouped_query(query: &str) -> SearchParams {
         SearchParams {
             q: query.to_string(),
@@ -2127,6 +2250,69 @@ mod tests {
         oldest.sort_by = Some("published_at_timestamp:asc".to_string());
         let oldest = engine.search(&oldest).expect("oldest");
         assert_eq!(oldest["grouped_hits"][0]["group_key"][0], "veritasium");
+    }
+
+    #[test]
+    fn engagement_sorts_are_explicit_bounded_and_return_the_source_counts() {
+        let (_root, engine) = engagement_engine();
+
+        for sort in [
+            "engagement_score:desc",
+            "view_count:desc",
+            "like_count:desc",
+            "comment_count:desc",
+        ] {
+            let mut query = grouped_query("systems explained");
+            query.sort_by = Some(sort.to_string());
+            let response = engine.search(&query).expect("engagement search");
+            assert_eq!(response["grouped_hits"][0]["group_key"][0], "large");
+            assert_eq!(
+                response["grouped_hits"][0]["hits"][0]["document"]["view_count"],
+                1_000_000
+            );
+            assert_eq!(
+                response["grouped_hits"][0]["hits"][0]["document"]["like_count"],
+                100_000
+            );
+            assert_eq!(
+                response["grouped_hits"][0]["hits"][0]["document"]["comment_count"],
+                10_000
+            );
+        }
+
+        let relevant = engine
+            .search(&grouped_query("orbital mechanics"))
+            .expect("relevance search");
+        assert_eq!(relevant["grouped_hits"][0]["group_key"][0], "exact");
+    }
+
+    #[test]
+    fn engagement_normalization_is_bounded_and_handles_missing_metrics() {
+        let manifest = Manifest {
+            schema_version: 3,
+            documents: 0,
+            videos: 0,
+            channels: 0,
+            terms: 0,
+            blocks: 0,
+            average_document_tokens: 0.0,
+            max_view_count: 1_000,
+            max_like_count: 100,
+            max_comment_count: 10,
+        };
+        let video = VideoMeta {
+            id: "video".to_string(),
+            handle: "@creator".to_string(),
+            title: "Video".to_string(),
+            published_at_timestamp: 0,
+            view_count: 1_000,
+            like_count: 100,
+            comment_count: 10,
+            documents: Vec::new(),
+        };
+        assert!((normalized_engagement(&video, &manifest) - 1.0).abs() < f32::EPSILON);
+        assert_eq!(normalized_log(0, 0), 0.0);
+        assert_eq!(blended_relevance(10.0, &video, &manifest), 12.0);
     }
 
     #[test]

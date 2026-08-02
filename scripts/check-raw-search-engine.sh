@@ -67,6 +67,10 @@ done
 
 search "$TRANSCRIPT_ROUTE" blackhole '' 'published_at_timestamp:desc' 0 10 "$RAW_CHECK_TMP/newest.json"
 search "$TRANSCRIPT_ROUTE" blackhole '' 'published_at_timestamp:asc' 0 10 "$RAW_CHECK_TMP/oldest.json"
+search "$TRANSCRIPT_ROUTE" blackhole '' 'engagement_score:desc' 0 10 "$RAW_CHECK_TMP/engagement.json"
+search "$TRANSCRIPT_ROUTE" blackhole '' 'view_count:desc' 0 10 "$RAW_CHECK_TMP/views.json"
+search "$TRANSCRIPT_ROUTE" blackhole '' 'like_count:desc' 0 10 "$RAW_CHECK_TMP/likes.json"
+search "$TRANSCRIPT_ROUTE" blackhole '' 'comment_count:desc' 0 10 "$RAW_CHECK_TMP/comments.json"
 jq -e '
   def timestamp:
     if .published_at_timestamp != null then .published_at_timestamp
@@ -86,6 +90,24 @@ jq -e '
 jq -e --slurpfile oldest "$RAW_CHECK_TMP/oldest.json" '
   [.grouped_hits[].group_key[0]] != [$oldest[0].grouped_hits[].group_key[0]]
 ' "$RAW_CHECK_TMP/newest.json" >/dev/null
+
+for metric in view_count like_count comment_count; do
+  result_file="$RAW_CHECK_TMP/${metric%_count}s.json"
+  [[ "$metric" != comment_count ]] || result_file="$RAW_CHECK_TMP/comments.json"
+  jq -e --arg metric "$metric" '
+    [.grouped_hits[].hits[0].document[$metric]] as $values |
+    ($values | length) > 0 and
+    all($values[]; type == "number") and
+    all(range(1; $values | length); $values[. - 1] >= $values[.])
+  ' "$result_file" >/dev/null
+done
+jq -e '
+  (.grouped_hits | length) > 0 and
+  all(.grouped_hits[].hits[0].document;
+    (.view_count | type) == "number" and
+    (.like_count | type) == "number" and
+    (.comment_count | type) == "number")
+' "$RAW_CHECK_TMP/engagement.json" >/dev/null
 
 search "$TRANSCRIPT_ROUTE" blackhole '' '' 0 1 "$RAW_CHECK_TMP/page-one.json"
 search "$TRANSCRIPT_ROUTE" blackhole '' '' 1 1 "$RAW_CHECK_TMP/page-two.json"
@@ -113,7 +135,11 @@ jq -n \
   --slurpfile blakhole "$RAW_CHECK_TMP/blakhole.json" \
   --slurpfile blackhle "$RAW_CHECK_TMP/blackhle.json" \
   --slurpfile newest "$RAW_CHECK_TMP/newest.json" \
-  --slurpfile oldest "$RAW_CHECK_TMP/oldest.json" '
+  --slurpfile oldest "$RAW_CHECK_TMP/oldest.json" \
+  --slurpfile engagement "$RAW_CHECK_TMP/engagement.json" \
+  --slurpfile views "$RAW_CHECK_TMP/views.json" \
+  --slurpfile likes "$RAW_CHECK_TMP/likes.json" \
+  --slurpfile comments "$RAW_CHECK_TMP/comments.json" '
   {
     query:"blackhole",
     global_found:$global[0].found,
@@ -127,6 +153,10 @@ jq -n \
     relevance_top_10:[$global[0].grouped_hits[].group_key[0]],
     newest_top_10:[$newest[0].grouped_hits[].group_key[0]],
     oldest_top_10:[$oldest[0].grouped_hits[].group_key[0]],
-    checks:{raw_alias:true,typo_recovery:true,creator_scope:true,date_sort:true,pagination:true,channel_search:true,authentication:true}
+    engagement_top_10:[$engagement[0].grouped_hits[].group_key[0]],
+    views_top_10:[$views[0].grouped_hits[].group_key[0]],
+    likes_top_10:[$likes[0].grouped_hits[].group_key[0]],
+    comments_top_10:[$comments[0].grouped_hits[].group_key[0]],
+    checks:{raw_alias:true,typo_recovery:true,creator_scope:true,date_sort:true,engagement_sort:true,pagination:true,channel_search:true,authentication:true}
   }
 ' | tee "$OUTPUT"
