@@ -2163,6 +2163,24 @@ mod tests {
     }
 
     #[test]
+    fn nearby_moment_coalescing_is_chronological_and_order_independent() {
+        let hits = [20_000, 40_000, 0]
+            .into_iter()
+            .map(|start| {
+                let mut hit = test_hit("video", "Video", "matching moment");
+                hit.id = format!("moment-{start}");
+                hit.t_start_ms = start;
+                hit
+            })
+            .collect::<Vec<_>>();
+
+        let merged = merge_nearby_transcript_hits(hits);
+        let mut starts = merged.iter().map(|hit| hit.t_start_ms).collect::<Vec<_>>();
+        starts.sort_unstable();
+        assert_eq!(starts, vec![0, 40_000]);
+    }
+
+    #[test]
     fn video_results_keep_every_collected_moment() {
         let hits = (0..12)
             .map(|index| {
@@ -2369,35 +2387,35 @@ mod tests {
 }
 
 fn merge_nearby_transcript_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
-    let mut merged: Vec<SearchHit> = Vec::with_capacity(hits.len());
-
-    for hit in hits {
-        if hit.match_kind != MatchKind::Transcript {
-            merged.push(hit);
-            continue;
+    let mut keep = vec![true; hits.len()];
+    let mut by_video = HashMap::<&str, Vec<usize>>::new();
+    for (index, hit) in hits.iter().enumerate() {
+        if hit.match_kind == MatchKind::Transcript {
+            by_video
+                .entry(hit.video_id.as_str())
+                .or_default()
+                .push(index);
         }
-
-        if let Some(existing) = merged
-            .iter_mut()
-            .find(|existing| is_same_transcript_moment(existing, &hit))
-        {
-            if hit.t_start_ms < existing.t_start_ms {
-                *existing = hit;
+    }
+    for indices in by_video.values_mut() {
+        indices.sort_unstable_by_key(|index| (hits[*index].t_start_ms, *index));
+        let mut cluster_start = None;
+        for index in indices.iter().copied() {
+            let start = hits[index].t_start_ms;
+            if cluster_start.is_none_or(|cluster| {
+                start.saturating_sub(cluster) > MERGE_TRANSCRIPT_HIT_WINDOW_MS
+            }) {
+                cluster_start = Some(start);
+            } else {
+                keep[index] = false;
             }
-            continue;
         }
-
-        merged.push(hit);
     }
 
-    merged
-}
-
-fn is_same_transcript_moment(left: &SearchHit, right: &SearchHit) -> bool {
-    left.match_kind == MatchKind::Transcript
-        && right.match_kind == MatchKind::Transcript
-        && left.video_id == right.video_id
-        && left.t_start_ms.abs_diff(right.t_start_ms) <= MERGE_TRANSCRIPT_HIT_WINDOW_MS
+    hits.into_iter()
+        .enumerate()
+        .filter_map(|(index, hit)| keep[index].then_some(hit))
+        .collect()
 }
 
 fn dedupe_title_only_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
