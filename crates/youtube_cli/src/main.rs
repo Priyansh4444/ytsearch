@@ -2,9 +2,10 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::Value;
 use std::{
     collections::HashSet,
-    path::PathBuf,
+    fs,
+    path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 use thiserror::Error;
 use tokio::task::JoinSet;
@@ -210,6 +211,12 @@ struct IndexYoutuberCommand {
     transcript_cache_dir: PathBuf,
     #[arg(long, help = "Disable the yt-dlp transcript cache")]
     no_transcript_cache: bool,
+    #[arg(
+        long,
+        default_value_t = 21_600,
+        help = "Seconds before retrying a video whose fetch or import previously failed"
+    )]
+    transcript_failure_retry_seconds: u64,
     #[arg(long, default_value_t = 30)]
     transcription_chunk_seconds: u32,
     #[arg(
@@ -280,6 +287,12 @@ struct IndexYoutubersCommand {
     transcript_cache_dir: PathBuf,
     #[arg(long, help = "Disable the yt-dlp transcript cache")]
     no_transcript_cache: bool,
+    #[arg(
+        long,
+        default_value_t = 21_600,
+        help = "Seconds before retrying a video whose fetch or import previously failed"
+    )]
+    transcript_failure_retry_seconds: u64,
     #[arg(long, default_value_t = 30)]
     transcription_chunk_seconds: u32,
     #[arg(
@@ -830,6 +843,7 @@ struct IndexStats {
     attempted_videos: usize,
     indexed_videos: u32,
     skipped_videos: u32,
+    deferred_transcript_failures: u32,
     kind_filtered_videos: u32,
     existing_videos: u32,
     existing_chunks: u32,
@@ -1317,6 +1331,13 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
             }
         })
         .collect::<Vec<_>>();
+    let transcript_failure_dir = command.transcript_cache_dir.join(".failures");
+    defer_recent_transcript_failures(
+        &mut videos_to_index,
+        &transcript_failure_dir,
+        Duration::from_secs(command.transcript_failure_retry_seconds),
+        &mut stats,
+    );
     if let Some(limit) = command.max_new_videos {
         videos_to_index.truncate(limit);
         println!(
@@ -1382,6 +1403,8 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
             let content_kind = command.content_kind;
             let timeout_video_id = video.video_id.clone();
             let timeout_title = video.title.clone();
+            let transcript_failure_dir = transcript_failure_dir.clone();
+            let timeout_failure_dir = transcript_failure_dir.clone();
             tasks.spawn(async move {
                 tokio::time::timeout(
                     Duration::from_secs(timeout_seconds),
@@ -1397,10 +1420,12 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
                         transcript_search,
                         content_kind,
                         use_worker_existing_checks,
+                        transcript_failure_dir,
                     ),
                 )
                 .await
                 .unwrap_or_else(|_| {
+                    remember_transcript_failure(&timeout_failure_dir, &timeout_video_id);
                     Ok(IndexVideoOutcome::Skipped {
                         video_id: timeout_video_id,
                         title: timeout_title,
@@ -1556,6 +1581,7 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
                 transcription_cache_dir: command.transcription_cache_dir.clone(),
                 transcript_cache_dir: command.transcript_cache_dir.clone(),
                 no_transcript_cache: command.no_transcript_cache,
+                transcript_failure_retry_seconds: command.transcript_failure_retry_seconds,
                 transcription_chunk_seconds: command.transcription_chunk_seconds,
                 voxtype_engine: command.voxtype_engine.clone(),
             };
@@ -1760,6 +1786,74 @@ fn should_use_worker_existing_checks(
     candidate_count: usize,
 ) -> bool {
     skip_existing && stop_after_existing.is_none() && (1..=100).contains(&candidate_count)
+}
+
+fn defer_recent_transcript_failures(
+    videos: &mut Vec<DiscoveredVideo>,
+    failure_dir: &Path,
+    retry_after: Duration,
+    stats: &mut IndexStats,
+) {
+    if retry_after.is_zero() {
+        return;
+    }
+
+    let now = SystemTime::now();
+    videos.retain(|video| {
+        let path = transcript_failure_path(failure_dir, &video.video_id);
+        let recent = fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age < retry_after);
+        if recent {
+            stats.deferred_transcript_failures =
+                stats.deferred_transcript_failures.saturating_add(1);
+        }
+        !recent
+    });
+
+    if stats.deferred_transcript_failures > 0 {
+        println!(
+            "Deferred {} recently failed video(s); they remain eligible after {} seconds",
+            stats.deferred_transcript_failures,
+            retry_after.as_secs()
+        );
+    }
+}
+
+fn transcript_failure_path(failure_dir: &Path, video_id: &str) -> PathBuf {
+    let key = video_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    failure_dir.join(format!("{key}.failed"))
+}
+
+fn remember_transcript_failure(failure_dir: &Path, video_id: &str) {
+    if let Err(error) = fs::create_dir_all(failure_dir).and_then(|_| {
+        fs::write(
+            transcript_failure_path(failure_dir, video_id),
+            b"video fetch or import failed; retry after cooldown\n",
+        )
+    }) {
+        tracing::warn!(video_id, %error, "failed to persist video retry marker");
+    }
+}
+
+fn clear_transcript_failure(failure_dir: &Path, video_id: &str) {
+    let path = transcript_failure_path(failure_dir, video_id);
+    if let Err(error) = fs::remove_file(path)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(video_id, %error, "failed to clear video retry marker");
+    }
 }
 
 fn select_missing_video_until_existing_tail(
@@ -2064,6 +2158,7 @@ async fn index_discovered_video(
     search: SearchAdminClient,
     content_kind_filter: ContentKindFilter,
     skip_existing: bool,
+    transcript_failure_dir: PathBuf,
 ) -> Result<IndexVideoOutcome, CliError> {
     tracing::info!(
         video_id = %video.video_id,
@@ -2091,6 +2186,7 @@ async fn index_discovered_video(
     let mut metadata = match metadata_source.metadata_for_video(&video.video_id).await {
         Ok(metadata) => metadata,
         Err(error) => {
+            remember_transcript_failure(&transcript_failure_dir, &video.video_id);
             tracing::warn!(video_id = %video.video_id, %error, "skipped video metadata");
             return Ok(IndexVideoOutcome::Skipped {
                 video_id: video.video_id,
@@ -2103,6 +2199,8 @@ async fn index_discovered_video(
 
     let content_kind = content_kind_for_duration(metadata.duration_ms);
     if !content_kind_filter.includes(content_kind) {
+        caption_source.discard_video_json(&video.video_id).await;
+        clear_transcript_failure(&transcript_failure_dir, &video.video_id);
         tracing::info!(video_id = %video.video_id, ?content_kind, "skipped by content kind");
         return Ok(IndexVideoOutcome::KindFiltered {
             video_id: video.video_id,
@@ -2120,6 +2218,7 @@ async fn index_discovered_video(
     {
         Ok(result) => result,
         Err(error) => {
+            remember_transcript_failure(&transcript_failure_dir, &video.video_id);
             tracing::warn!(video_id = %video.video_id, %error, "skipped transcript");
             return Ok(IndexVideoOutcome::Skipped {
                 video_id: video.video_id,
@@ -2143,6 +2242,7 @@ async fn index_discovered_video(
 
     let chunk_count = chunks.len();
     if let Err(error) = search.import_chunks_batched(&chunks).await {
+        remember_transcript_failure(&transcript_failure_dir, &video.video_id);
         tracing::warn!(video_id = %video.video_id, %error, "skipped import");
         return Ok(IndexVideoOutcome::Skipped {
             video_id: video.video_id,
@@ -2150,6 +2250,7 @@ async fn index_discovered_video(
             reason: format!("import: {error}"),
         });
     }
+    clear_transcript_failure(&transcript_failure_dir, &video.video_id);
     tracing::info!(video_id = %video.video_id, chunk_count, "imported transcript chunks");
 
     Ok(IndexVideoOutcome::Indexed {
@@ -2792,12 +2893,13 @@ fn saturating_u32(value: impl TryInto<u32>) -> u32 {
 
 fn print_index_summary(stats: &IndexStats) {
     println!(
-        "Index summary: discovered={}, attempted={}, indexed={}, existing={}, skipped={}, kind_filtered={}, audio_transcribed={}, chunks={}, existing_chunks={}",
+        "Index summary: discovered={}, attempted={}, indexed={}, existing={}, skipped={}, deferred_failures={}, kind_filtered={}, audio_transcribed={}, chunks={}, existing_chunks={}",
         stats.discovered_videos,
         stats.attempted_videos,
         stats.indexed_videos,
         stats.existing_videos,
         stats.skipped_videos,
+        stats.deferred_transcript_failures,
         stats.kind_filtered_videos,
         stats.audio_transcribed_videos,
         stats.indexed_chunks,
@@ -2994,6 +3096,36 @@ mod tests {
         assert!(!should_use_worker_existing_checks(true, None, 101));
         assert!(!should_use_worker_existing_checks(false, None, 10));
         assert!(!should_use_worker_existing_checks(true, Some(50), 10));
+    }
+
+    #[test]
+    fn recent_failures_do_not_block_later_missing_videos() {
+        let failure_dir = std::env::temp_dir().join(format!(
+            "ytsearch-video-failure-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&failure_dir);
+        remember_transcript_failure(&failure_dir, "failed-video");
+        let mut videos = vec![video("failed-video"), video("next-video")];
+        let mut stats = IndexStats::default();
+
+        defer_recent_transcript_failures(
+            &mut videos,
+            &failure_dir,
+            Duration::from_secs(3_600),
+            &mut stats,
+        );
+
+        assert_eq!(
+            videos
+                .iter()
+                .map(|video| video.video_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["next-video"]
+        );
+        assert_eq!(stats.deferred_transcript_failures, 1);
+        clear_transcript_failure(&failure_dir, "failed-video");
+        let _ = fs::remove_dir_all(&failure_dir);
     }
 
     #[test]
