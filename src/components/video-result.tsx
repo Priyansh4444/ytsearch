@@ -92,6 +92,9 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
                   · {formatDate(props.video.published_at)}
                 </Show>
               </p>
+              <Show when={engagementSummary(props.video)}>
+                {(summary) => <p class="mt-1 text-xs tabular-nums text-vesper-dim">{summary()}</p>}
+              </Show>
             </div>
             <div class="flex shrink-0 items-center gap-2">
               <CopyLinkButton
@@ -165,6 +168,23 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
     </article>
   );
 };
+
+const compactNumber = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
+function engagementSummary(video: SearchVideoResult): string | undefined {
+  const metrics = [
+    [video.view_count, "views"],
+    [video.like_count, "likes"],
+    [video.comment_count, "comments"],
+  ] as const;
+  const present = metrics
+    .filter(([value]) => typeof value === "number" && value > 0)
+    .map(([value, label]) => `${compactNumber.format(value ?? 0)} ${label}`);
+  return present.length > 0 ? present.join(" · ") : undefined;
+}
 
 const TranscriptExcerpt: Component<{
   hit: SearchHit;

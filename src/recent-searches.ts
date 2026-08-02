@@ -1,4 +1,5 @@
 import type { RecentSearch, SearchRequest } from "./types";
+import { isSearchSort } from "./search-sorts";
 import { normalizeHandle } from "./utils";
 
 export const RECENT_SEARCHES_KEY = "ytsearch.recent-searches.v1";
@@ -67,7 +68,7 @@ function isRecentSearch(value: unknown): value is RecentSearch {
     typeof candidate.query === "string" &&
     candidate.query.trim().length > 0 &&
     typeof candidate.youtuber === "string" &&
-    ["relevance", "published_desc", "published_asc"].includes(candidate.sort ?? "") &&
+    isSearchSort(candidate.sort) &&
     ["lexical", "semantic"].includes(candidate.mode ?? "") &&
     typeof candidate.searchedAt === "string"
   );

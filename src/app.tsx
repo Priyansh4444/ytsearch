@@ -54,6 +54,7 @@ import type {
   SearchSort,
   SearchVideoResult,
 } from "./types";
+import { isAvailableSearchSort } from "./search-sorts";
 import { cacheChannels, loadCachedChannels } from "./channel-cache";
 import { clearRecentSearches, loadRecentSearches, saveRecentSearch } from "./recent-searches";
 import { evaluateSearchSchedule } from "../shared/service-schedule";
@@ -113,7 +114,7 @@ const searchStateFromLocation = (): SearchRequest | undefined => {
     query,
     youtuber: normalizeHandle(params.get("youtuber") ?? creatorFromPath() ?? ""),
     page: Number.isFinite(page) && page > 0 ? Math.floor(page) : 1,
-    sort: ["relevance", "published_desc", "published_asc"].includes(sort) ? sort : "relevance",
+    sort: isAvailableSearchSort(sort) ? sort : "relevance",
     mode: mode === "semantic" ? "semantic" : "lexical",
   };
 };

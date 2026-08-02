@@ -12,6 +12,9 @@ export type SearchHit = {
   youtuber_name: string;
   thumbnail?: string;
   published_at?: string;
+  view_count?: number;
+  like_count?: number;
+  comment_count?: number;
   content_kind: "video" | "short" | "unknown";
   t_start_ms: number;
   timestamp?: string;
@@ -27,6 +30,9 @@ export type SearchVideoResult = {
   youtuber_name: string;
   thumbnail?: string;
   published_at?: string;
+  view_count?: number;
+  like_count?: number;
+  comment_count?: number;
   content_kind: "video" | "short" | "unknown";
   match_count: number;
   youtube_url: string;
@@ -35,7 +41,14 @@ export type SearchVideoResult = {
   hits: SearchHit[];
 };
 
-export type SearchSort = "relevance" | "published_desc" | "published_asc";
+export type SearchSort =
+  | "relevance"
+  | "relevance_engagement"
+  | "views_desc"
+  | "likes_desc"
+  | "comments_desc"
+  | "published_desc"
+  | "published_asc";
 export type SearchMode = "lexical" | "semantic";
 
 export type SearchResponse = {

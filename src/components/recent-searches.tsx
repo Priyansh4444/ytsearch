@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import type { Component } from "solid-js";
 import type { RecentSearch } from "../types";
+import { searchSortLabel } from "../search-sorts";
 
 export const RecentSearches: Component<{
   searches: RecentSearch[];
@@ -32,7 +33,7 @@ export const RecentSearches: Component<{
               <span class="truncate">{search.query}</span>
               <Show when={search.youtuber || search.sort !== "relevance"}>
                 <span class="shrink-0 text-vesper-dim">
-                  {search.youtuber || sortLabel(search.sort)}
+                  {search.youtuber || searchSortLabel(search.sort)}
                 </span>
               </Show>
             </button>
@@ -42,7 +43,3 @@ export const RecentSearches: Component<{
     </section>
   </Show>
 );
-
-function sortLabel(sort: RecentSearch["sort"]): string {
-  return sort === "published_desc" ? "Newest" : "Oldest";
-}

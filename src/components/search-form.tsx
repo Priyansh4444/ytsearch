@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createSignal } from "solid-js";
 import type { Component } from "solid-js";
 import type { IndexedChannel, SearchMode, SearchSort } from "../types";
+import { searchSortOptions } from "../search-sorts";
 import { ChannelAvatar, indexedCountLabel } from "./channel-profile";
 
 export const SearchForm: Component<{
@@ -114,9 +115,9 @@ export const SearchForm: Component<{
                 aria-label="Sort results"
                 class="min-w-0 flex-1 border border-vesper-control bg-vesper-bg px-3 py-3 text-base text-white transition-colors focus:border-vesper-yellow sm:text-sm"
               >
-                <option value="relevance">Relevant</option>
-                <option value="published_desc">Newest</option>
-                <option value="published_asc">Oldest</option>
+                <For each={searchSortOptions()}>
+                  {([value, label]) => <option value={value}>{label}</option>}
+                </For>
               </select>
             </div>
           </Show>
