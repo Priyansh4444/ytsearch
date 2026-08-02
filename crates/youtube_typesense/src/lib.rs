@@ -97,6 +97,7 @@ impl fmt::Debug for TypesenseSearchConfig {
 #[derive(Clone, Debug)]
 pub struct TypesenseAdminClient {
     http: HttpClient,
+    import_http: HttpClient,
     config: TypesenseAdminConfig,
 }
 
@@ -104,6 +105,7 @@ impl TypesenseAdminClient {
     pub fn new(config: TypesenseAdminConfig) -> Self {
         Self {
             http: timeout_http_client(),
+            import_http: import_http_client(),
             config,
         }
     }
@@ -535,8 +537,11 @@ impl TypesenseAdminClient {
             self.config.collection
         );
         let url = endpoint(&self.config.api_url, &path)?;
+        // Typesense imports are synchronous and can commit after a short client
+        // timeout. Keep connect timeout/keepalive protection, but let the caller's
+        // per-video timeout own the end-to-end deadline and cancellation policy.
         let response = self
-            .http
+            .import_http
             .post(url)
             .header("X-TYPESENSE-API-KEY", &self.config.admin_api_key)
             .header(CONTENT_TYPE, "text/plain")
@@ -992,6 +997,14 @@ fn timeout_http_client() -> HttpClient {
         .timeout(HTTP_TIMEOUT)
         .build()
         .expect("typesense HTTP client configuration should be valid")
+}
+
+fn import_http_client() -> HttpClient {
+    HttpClient::builder()
+        .connect_timeout(HTTP_TIMEOUT)
+        .tcp_keepalive(Duration::from_secs(30))
+        .build()
+        .expect("typesense import HTTP client configuration should be valid")
 }
 
 fn endpoint(api_url: &str, path: &str) -> Result<Url> {
