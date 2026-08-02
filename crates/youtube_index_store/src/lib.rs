@@ -111,7 +111,7 @@ impl<'a> VideoReplacement<'a> {
                 "a replacement must contain at least one chunk".to_string(),
             ));
         }
-        if chunks.iter().any(|chunk| chunk.video_id != video_id) {
+        if chunks.iter().any(|chunk| chunk.video_id() != video_id) {
             return Err(IndexStoreError::InvalidInput(format!(
                 "every replacement chunk must belong to video {video_id}"
             )));

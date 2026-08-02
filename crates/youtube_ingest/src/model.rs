@@ -58,3 +58,9 @@ pub struct TranscriptChunk {
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
+
+impl TranscriptChunk {
+    pub fn video_id(&self) -> &str {
+        &self.video_id
+    }
+}
