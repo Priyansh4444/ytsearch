@@ -805,6 +805,19 @@ impl RawSearchEngine {
         {
             return self.format_matches(params, &highlight_terms, matches, &mut cache);
         }
+        // Treat a missing separator plus one corrected component as a more
+        // specific hypothesis than an unrelated whole-token typo. The path is
+        // still guarded by lexicon membership, one exact component, one
+        // distance-one component, and a same-document intersection.
+        if !has_exact_split {
+            let (fuzzy_split, fuzzy_split_terms) =
+                self.fuzzy_split_term_matches(term, fields, &mut cache)?;
+            matches = union_sorted(matches, fuzzy_split);
+            highlight_terms.extend(fuzzy_split_terms);
+            if self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)? {
+                return self.format_matches(params, &highlight_terms, matches, &mut cache);
+            }
+        }
         let maximum_distance = bounded_typo_distance(term);
         for distance in 1..=maximum_distance {
             let (fuzzy, fuzzy_terms) =
@@ -816,13 +829,6 @@ impl RawSearchEngine {
             {
                 break;
             }
-        }
-        if !has_exact_split
-            && !self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)?
-        {
-            let (fuzzy_split, fuzzy_split_terms) = self.fuzzy_split_term_matches(term, fields)?;
-            matches = union_sorted(matches, fuzzy_split);
-            highlight_terms.extend(fuzzy_split_terms);
         }
         self.format_matches(params, &highlight_terms, matches, &mut cache)
     }
@@ -937,14 +943,17 @@ impl RawSearchEngine {
         &self,
         term: &str,
         fields: QueryFields,
+        cache: &mut BlockCache,
     ) -> Result<(Vec<DocMatch>, Vec<String>)> {
         let boundaries = term
             .char_indices()
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
         let character_count = boundaries.len();
-        let mut alternatives = Vec::new();
-        let mut highlight_terms = Vec::new();
+        let mut loose_alternatives = Vec::new();
+        let mut loose_highlight_terms = Vec::new();
+        let mut phrase_alternatives = Vec::new();
+        let mut phrase_highlight_terms = Vec::new();
 
         for (character_index, &byte_index) in boundaries.iter().enumerate().skip(1) {
             if character_index < MIN_FUZZY_SPLIT_COMPONENT_CHARS
@@ -967,18 +976,40 @@ impl RawSearchEngine {
                         continue;
                     }
                     for candidate in &mut matches {
+                        // Preserve the corrected two-term query's relative field/term
+                        // weights. A smaller base bonus avoids over-rewarding the
+                        // correction; adjacent phrase evidence is handled separately.
+                        // This keeps `blak + hole` and `black + hloe` from ranking the
+                        // same corrected intent differently.
                         candidate.score += SPLIT_SCORE_BONUS * 0.5;
                     }
-                    alternatives.push(matches);
-                    highlight_terms.push(left_candidate.highlight.clone());
-                    highlight_terms.push(right_candidate.highlight.clone());
-                    if alternatives.len() == MAX_SPLIT_ALTERNATIVES {
-                        return Ok((union_all(alternatives), highlight_terms));
+                    let mut phrase_matches = matches.clone();
+                    let phrase =
+                        format!("{} {}", left_candidate.highlight, right_candidate.highlight);
+                    self.retain_phrase_matches(&mut phrase_matches, &phrase, cache)?;
+                    if !phrase_matches.is_empty() {
+                        phrase_alternatives.push(phrase_matches);
+                        phrase_highlight_terms.push(left_candidate.highlight.clone());
+                        phrase_highlight_terms.push(right_candidate.highlight.clone());
+                    }
+                    loose_alternatives.push(matches);
+                    loose_highlight_terms.push(left_candidate.highlight.clone());
+                    loose_highlight_terms.push(right_candidate.highlight.clone());
+                    if loose_alternatives.len() == MAX_SPLIT_ALTERNATIVES {
+                        return if phrase_alternatives.is_empty() {
+                            Ok((union_all(loose_alternatives), loose_highlight_terms))
+                        } else {
+                            Ok((union_all(phrase_alternatives), phrase_highlight_terms))
+                        };
                     }
                 }
             }
         }
-        Ok((union_all(alternatives), highlight_terms))
+        if phrase_alternatives.is_empty() {
+            Ok((union_all(loose_alternatives), loose_highlight_terms))
+        } else {
+            Ok((union_all(phrase_alternatives), phrase_highlight_terms))
+        }
     }
 
     fn split_component_candidates(
@@ -1019,10 +1050,7 @@ impl RawSearchEngine {
             if candidate_term.len() < term.len() {
                 continue;
             }
-            let mut matches = self.matches_for_split_component(candidate_term, fields)?;
-            for matched in &mut matches {
-                matched.score *= 0.5;
-            }
+            let matches = self.matches_for_split_component(candidate_term, fields)?;
             output.push(SplitComponent {
                 matches,
                 highlight: candidate_term.to_string(),
@@ -1913,6 +1941,25 @@ mod tests {
         (root, engine)
     }
 
+    fn weighted_blackhole_engine() -> (TempDir, RawSearchEngine) {
+        let root = TempDir::new().expect("temp dir");
+        let chunks_path = root.path().join("chunks.jsonl");
+        let channels_path = root.path().join("channels.jsonl");
+        let index_path = root.path().join("index");
+        let mut chunks = File::create(&chunks_path).expect("chunks");
+        for document in [
+            json!({"id":"black-heavy-1","video_id":"black-heavy","title":"black black black black black hole","text":"space","youtuber_handle":"@one","youtuber_name":"One"}),
+            json!({"id":"hole-heavy-1","video_id":"hole-heavy","title":"black hole hole hole hole","text":"space","youtuber_handle":"@two","youtuber_name":"Two"}),
+            json!({"id":"blank-distractor-1","video_id":"blank-distractor","title":"blank blank blank blank tape with a hole","text":"space","youtuber_handle":"@three","youtuber_name":"Three"}),
+        ] {
+            writeln!(chunks, "{document}").expect("write chunk");
+        }
+        File::create(&channels_path).expect("channels");
+        build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+        let engine = RawSearchEngine::open(&index_path).expect("open raw index");
+        (root, engine)
+    }
+
     fn grouped_query(query: &str) -> SearchParams {
         SearchParams {
             q: query.to_string(),
@@ -2044,6 +2091,22 @@ mod tests {
                 .collect::<HashSet<_>>();
             assert!(ids.contains("veritasium"), "query={query}");
             assert!(ids.contains("vsauce"), "query={query}");
+        }
+    }
+
+    #[test]
+    fn typo_corrected_split_preserves_corrected_query_ranking() {
+        let (_root, engine) = weighted_blackhole_engine();
+        let exact = engine.search(&grouped_query("blackhole")).expect("exact");
+        let expected = exact["grouped_hits"][0]["group_key"][0]
+            .as_str()
+            .expect("exact top result");
+        for query in ["blackhloe", "blakhole", "blackhle"] {
+            let response = engine.search(&grouped_query(query)).expect("search");
+            assert_eq!(
+                response["grouped_hits"][0]["group_key"][0], expected,
+                "query={query}"
+            );
         }
     }
 
