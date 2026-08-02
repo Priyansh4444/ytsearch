@@ -101,6 +101,10 @@ The search-only API image is 29 MB and omits the CLI, Deno, `yt-dlp`, FFmpeg,
 and queue indexer tools. Both experimental Fly services keep zero warm machines
 and suspend when idle.
 
+`scripts/cloudflare-worker-experimental-deploy.sh` always builds with the Raw
+feature flag, enforces the browser bundle budgets, deploys the isolated Worker
+config, and smoke-tests availability plus descending view order.
+
 ## Verification
 
 - 30 Raw release tests pass across three suites.
