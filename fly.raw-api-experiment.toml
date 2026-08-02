@@ -1,0 +1,41 @@
+app = 'ytsearch-api-raw-experiment'
+primary_region = 'sjc'
+
+[build]
+  dockerfile = 'Dockerfile.search-api'
+
+[env]
+  YTSEARCH_API_ADDR = '0.0.0.0:8787'
+  TYPESENSE_COLLECTION = 'youtube_transcript_chunks'
+  TYPESENSE_API_URL = 'https://ytsearch-raw-experiment.fly.dev'
+  YTSEARCH_INDEX_QUEUE_PATH = '/tmp/index-requests.jsonl'
+  YTSEARCH_INDEX_REQUEST_RATE_LIMIT_PER_MINUTE = '6'
+  YTSEARCH_INDEX_QUEUE_MAX_ITEMS = '100'
+  YTSEARCH_ALLOWED_ORIGINS = 'https://search.experimental.pronsh.dev'
+  YTSEARCH_ENGAGEMENT_SORTS = 'true'
+  YTSEARCH_BACKEND_LABEL = 'raw'
+  RUST_LOG = 'youtube_api=info,tower_http=info'
+  LOG_FORMAT = 'json'
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = 'suspend'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+[checks]
+  [checks.health]
+    port = 8787
+    type = 'http'
+    interval = '15s'
+    timeout = '2s'
+    grace_period = '10s'
+    method = 'get'
+    path = '/api/health'
