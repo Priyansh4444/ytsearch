@@ -30,11 +30,11 @@ curl -fsS -G "${public_url%/}/api/search" \
   --data-urlencode 'sort=views_desc' \
   --data-urlencode 'per_page=3' >"$smoke_response"
 jq -e '
+  [.videos[].view_count] as $views |
   .sort == "views_desc" and
   (.videos | length) > 0 and
   all(.videos[]; (.view_count | type) == "number") and
-  [.videos[].view_count] as $views |
-  all(range(1; $views | length); $views[. - 1] >= $views[.])
+  all(range(1; ($views | length)); $views[. - 1] >= $views[.])
 ' "$smoke_response" >/dev/null
 
 echo "Experimental deployment smoke test passed: ${public_url%/}"
