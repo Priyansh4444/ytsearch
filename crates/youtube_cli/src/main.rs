@@ -251,6 +251,12 @@ struct IndexYoutubersCommand {
     jobs: usize,
     #[arg(
         long,
+        default_value_t = 1,
+        help = "Concurrent creators; automatically bounded so total video workers never exceed 16"
+    )]
+    channel_jobs: usize,
+    #[arg(
+        long,
         default_value_t = 300,
         help = "Maximum seconds to spend on one video"
     )]
@@ -1515,35 +1521,60 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
         )));
     }
 
+    let channel_jobs = effective_channel_jobs(command.channel_jobs, command.jobs);
+    println!(
+        "Indexing creators with {channel_jobs} concurrent creator job(s) and up to {} video worker(s) each",
+        command.jobs.clamp(1, 16)
+    );
+    let mut handles = handles.into_iter();
+    let mut tasks = JoinSet::new();
     let mut failures = Vec::new();
-    for handle in handles {
-        let failed_handle = handle.clone();
-        let command = IndexYoutuberCommand {
-            youtuber: YoutuberArg { handle },
-            youtube: command.youtube.clone(),
-            search: command.search.clone(),
-            collection: command.collection.clone(),
-            max_videos: command.max_videos,
-            max_new_videos: None,
-            mode: command.mode,
-            allow_destructive_rewipe: command.allow_destructive_rewipe,
-            jobs: command.jobs,
-            video_timeout_seconds: command.video_timeout_seconds,
-            stop_after_existing: command.stop_after_existing,
-            skip_existing: command.mode == IndexMode::Update,
-            no_wipe: command.mode == IndexMode::Update,
-            content_kind: command.content_kind,
-            chunk_seconds: command.chunk_seconds,
-            transcribe_missing: command.transcribe_missing,
-            transcription_cache_dir: command.transcription_cache_dir.clone(),
-            transcript_cache_dir: command.transcript_cache_dir.clone(),
-            no_transcript_cache: command.no_transcript_cache,
-            transcription_chunk_seconds: command.transcription_chunk_seconds,
-            voxtype_engine: command.voxtype_engine.clone(),
+
+    loop {
+        while tasks.len() < channel_jobs {
+            let Some(handle) = handles.next() else {
+                break;
+            };
+            let failed_handle = handle.clone();
+            let child = IndexYoutuberCommand {
+                youtuber: YoutuberArg { handle },
+                youtube: command.youtube.clone(),
+                search: command.search.clone(),
+                collection: command.collection.clone(),
+                max_videos: command.max_videos,
+                max_new_videos: None,
+                mode: command.mode,
+                allow_destructive_rewipe: command.allow_destructive_rewipe,
+                jobs: command.jobs,
+                video_timeout_seconds: command.video_timeout_seconds,
+                stop_after_existing: command.stop_after_existing,
+                skip_existing: command.mode == IndexMode::Update,
+                no_wipe: command.mode == IndexMode::Update,
+                content_kind: command.content_kind,
+                chunk_seconds: command.chunk_seconds,
+                transcribe_missing: command.transcribe_missing,
+                transcription_cache_dir: command.transcription_cache_dir.clone(),
+                transcript_cache_dir: command.transcript_cache_dir.clone(),
+                no_transcript_cache: command.no_transcript_cache,
+                transcription_chunk_seconds: command.transcription_chunk_seconds,
+                voxtype_engine: command.voxtype_engine.clone(),
+            };
+            tasks.spawn(async move { (failed_handle, index_youtuber_command(child).await) });
+        }
+
+        let Some(result) = tasks.join_next().await else {
+            break;
         };
-        if let Err(error) = index_youtuber_command(command).await {
-            tracing::error!(handle = %failed_handle, %error, "YouTuber indexing failed; continuing with remaining creators");
-            failures.push(format!("{failed_handle}: {error}"));
+        match result {
+            Ok((_, Ok(()))) => {}
+            Ok((failed_handle, Err(error))) => {
+                tracing::error!(handle = %failed_handle, %error, "YouTuber indexing failed; continuing with remaining creators");
+                failures.push(format!("{failed_handle}: {error}"));
+            }
+            Err(error) => {
+                tracing::error!(%error, "YouTuber indexing task failed; continuing with remaining creators");
+                failures.push(format!("indexing task: {error}"));
+            }
         }
     }
 
@@ -1556,6 +1587,11 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
             failures.join(" | ")
         )))
     }
+}
+
+fn effective_channel_jobs(requested: usize, video_jobs: usize) -> usize {
+    let video_jobs = video_jobs.clamp(1, 16);
+    requested.clamp(1, 4).min(16 / video_jobs).max(1)
 }
 
 fn validate_rewipe_safety(
@@ -2938,6 +2974,16 @@ mod tests {
         assert_eq!(normalized_stop_after_existing(Some(0)), None);
         assert_eq!(normalized_stop_after_existing(Some(50)), Some(50));
         assert_eq!(normalized_stop_after_existing(None), None);
+    }
+
+    #[test]
+    fn creator_concurrency_respects_the_global_video_worker_budget() {
+        assert_eq!(effective_channel_jobs(0, 4), 1);
+        assert_eq!(effective_channel_jobs(2, 4), 2);
+        assert_eq!(effective_channel_jobs(4, 4), 4);
+        assert_eq!(effective_channel_jobs(4, 8), 2);
+        assert_eq!(effective_channel_jobs(4, 16), 1);
+        assert_eq!(effective_channel_jobs(99, 1), 4);
     }
 
     #[test]
