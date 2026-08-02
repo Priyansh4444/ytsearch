@@ -22,11 +22,14 @@ use std::{
 const TRANSCRIPT_COLLECTION: &str = "youtube_transcript_chunks";
 const CHANNEL_COLLECTION: &str = "youtube_youtubers";
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SearchParams {
     pub q: String,
     #[serde(default)]
     pub query_by: Option<String>,
+    #[serde(default)]
+    pub query_by_weights: Option<String>,
     #[serde(default)]
     pub filter_by: Option<String>,
     #[serde(default)]
@@ -44,14 +47,34 @@ pub struct SearchParams {
     #[serde(default)]
     pub sort_by: Option<String>,
     #[serde(default)]
+    pub text_match_type: Option<String>,
+    #[serde(default)]
+    pub prioritize_exact_match: Option<bool>,
+    #[serde(default)]
+    pub prioritize_token_position: Option<bool>,
+    #[serde(default)]
+    pub typo_tokens_threshold: Option<u32>,
+    #[serde(default)]
+    pub split_join_tokens: Option<String>,
+    #[serde(default)]
+    pub highlight_fields: Option<String>,
+    #[serde(default)]
+    pub include_fields: Option<String>,
+    #[serde(default)]
     pub use_cache: Option<bool>,
     #[serde(default)]
     pub cache_ttl: Option<u64>,
 }
 
+#[derive(Debug)]
+pub enum BackendError {
+    InvalidInput(String),
+    Internal(String),
+}
+
 pub trait SearchBackend: Send + Sync + 'static {
     fn name(&self) -> &'static str;
-    fn search(&self, params: &SearchParams) -> Result<Value, String>;
+    fn search(&self, params: &SearchParams) -> Result<Value, BackendError>;
     fn search_channels(&self, params: &SearchParams) -> Value;
     fn documents(&self) -> u64;
     fn index_bytes(&self) -> u64;
@@ -195,10 +218,9 @@ async fn search(
     record_elapsed(&state, started);
     match result {
         Ok(value) => {
-            let body = Bytes::from(
-                serde_json::to_vec(&value)
-                    .map_err(|error| ServerError::Backend(error.to_string()))?,
-            );
+            let body = Bytes::from(serde_json::to_vec(&value).map_err(|error| {
+                ServerError::Backend(BackendError::Internal(error.to_string()))
+            })?);
             if let Some(key) = cache_key {
                 let ttl = params.cache_ttl.unwrap_or(60).clamp(1, 300);
                 if let Ok(mut cache) = state.cache.lock() {
@@ -249,7 +271,7 @@ fn json_bytes_response(body: Bytes) -> Response {
 }
 
 enum ServerError {
-    Backend(String),
+    Backend(BackendError),
     NotFound(String),
     Unauthorized,
 }
@@ -257,7 +279,10 @@ enum ServerError {
 impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            Self::Backend(error) => (StatusCode::INTERNAL_SERVER_ERROR, error),
+            Self::Backend(BackendError::InvalidInput(error)) => (StatusCode::BAD_REQUEST, error),
+            Self::Backend(BackendError::Internal(error)) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, error)
+            }
             Self::NotFound(collection) => (
                 StatusCode::NOT_FOUND,
                 format!("unknown collection: {collection}"),
@@ -296,6 +321,19 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_search_parameters_fail_closed() {
+        let uri = "/?q=blackhole&unsupported=true".parse().expect("URI");
+        assert!(Query::<SearchParams>::try_from_uri(&uri).is_err());
+    }
+
+    #[test]
+    fn invalid_backend_input_is_a_bad_request() {
+        let response = ServerError::Backend(BackendError::InvalidInput("bad query".to_string()))
+            .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 
     #[test]
     fn cache_is_bounded_and_expires_by_contract() {

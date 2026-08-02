@@ -18,7 +18,7 @@ use std::{
     sync::Arc,
     time::Instant,
 };
-use youtube_search_service::{SearchBackend, SearchParams};
+use youtube_search_service::{BackendError, SearchBackend, SearchParams};
 use youtube_time::parse_rfc3339_timestamp;
 
 const MANIFEST_FILE: &str = "manifest.json";
@@ -44,6 +44,10 @@ const ENGAGEMENT_RELEVANCE_BOOST: f32 = 0.20;
 const VIEW_WEIGHT: f32 = 0.50;
 const LIKE_WEIGHT: f32 = 0.35;
 const COMMENT_WEIGHT: f32 = 0.15;
+const MAX_QUERY_BYTES: usize = 512;
+const MAX_FILTER_VALUE_BYTES: usize = 256;
+const MAX_PAGE_SIZE: u8 = 250;
+const ACTIVE_INCLUDE_FIELDS: &str = "id,video_id,title,text,prev_text,next_text,youtuber_handle,youtuber_name,thumbnail,published_at,duration,t_start_ms,t_end_ms";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BuildReport {
@@ -839,8 +843,11 @@ impl SearchBackend for RawSearchEngine {
         "raw-inverted-index"
     }
 
-    fn search(&self, params: &SearchParams) -> std::result::Result<Value, String> {
-        RawSearchEngine::search(self, params).map_err(|error| error.to_string())
+    fn search(&self, params: &SearchParams) -> std::result::Result<Value, BackendError> {
+        RawSearchEngine::search(self, params).map_err(|error| match error {
+            Error::InvalidInput(message) => BackendError::InvalidInput(message),
+            error => BackendError::Internal(error.to_string()),
+        })
     }
 
     fn search_channels(&self, params: &SearchParams) -> Value {
@@ -858,11 +865,12 @@ impl SearchBackend for RawSearchEngine {
 
 impl RawSearchEngine {
     pub fn search(&self, params: &SearchParams) -> Result<Value> {
+        validate_search_params(params)?;
         let terms = unique_tokens(&params.q);
         if params.q.trim() == "*" || terms.is_empty() {
             return self.search_all(params);
         }
-        let fields = query_fields(params.query_by.as_deref());
+        let fields = query_fields(params.query_by.as_deref())?;
 
         if terms.len() == 1 {
             return self.search_single_token(params, &terms[0], fields);
@@ -949,7 +957,7 @@ impl RawSearchEngine {
         matches: &[DocMatch],
         threshold: usize,
     ) -> Result<bool> {
-        let filter = parse_filter(params.filter_by.as_deref());
+        let filter = parse_filter(params.filter_by.as_deref())?;
         if params.group_by.as_deref() == Some("video_id") {
             let mut videos = HashSet::with_capacity(threshold);
             for candidate in matches {
@@ -1404,7 +1412,7 @@ impl RawSearchEngine {
         }
 
         let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
-        let filter = parse_filter(params.filter_by.as_deref());
+        let filter = parse_filter(params.filter_by.as_deref())?;
         let mut groups = HashMap::<u32, VideoMatches>::new();
         for candidate in matches {
             let record = self.inner.metadata.document(candidate.document())?;
@@ -1464,7 +1472,7 @@ impl RawSearchEngine {
         matches: Vec<DocMatch>,
         cache: &mut BlockCache,
     ) -> Result<Value> {
-        let filter = parse_filter(params.filter_by.as_deref());
+        let filter = parse_filter(params.filter_by.as_deref())?;
         let mut filtered = Vec::with_capacity(matches.len());
         let mut moment_counts = HashMap::<u32, MomentCounter>::new();
         for candidate in matches {
@@ -1537,7 +1545,7 @@ impl RawSearchEngine {
     }
 
     fn search_all(&self, params: &SearchParams) -> Result<Value> {
-        let filter = parse_filter(params.filter_by.as_deref());
+        let filter = parse_filter(params.filter_by.as_deref())?;
         let (offset, limit) = result_window(params);
         let mut cache = BlockCache::default();
         if params.group_by.as_deref() == Some("video_id") {
@@ -1936,17 +1944,154 @@ fn push_unique_token(output: &mut Vec<String>, seen: &mut HashSet<String>, token
     }
 }
 
-fn query_fields(query_by: Option<&str>) -> QueryFields {
-    let requested = query_by.unwrap_or("text,title");
-    let text = requested.split(',').any(|field| field.trim() == "text");
-    let title = requested.split(',').any(|field| field.trim() == "title");
-    if !text && !title {
-        return QueryFields {
-            text: true,
-            title: false,
-        };
+fn validate_search_params(params: &SearchParams) -> Result<()> {
+    let query = params.q.trim();
+    if query.is_empty() {
+        return Err(Error::InvalidInput("q cannot be empty".to_string()));
     }
-    QueryFields { text, title }
+    if params.q.len() > MAX_QUERY_BYTES {
+        return Err(Error::InvalidInput(format!(
+            "q exceeds {MAX_QUERY_BYTES} bytes"
+        )));
+    }
+
+    query_fields(params.query_by.as_deref())?;
+    parse_filter(params.filter_by.as_deref())?;
+    if let Some(group_by) = params.group_by.as_deref()
+        && group_by != "video_id"
+    {
+        return Err(Error::InvalidInput(format!(
+            "unsupported group_by field: {group_by}"
+        )));
+    }
+    if params.group_limit == Some(0) {
+        return Err(Error::InvalidInput(
+            "group_limit must be at least 1".to_string(),
+        ));
+    }
+    for (name, value) in [
+        ("group_limit", params.group_limit),
+        ("per_page", params.per_page),
+        ("limit", params.limit),
+    ] {
+        if value.is_some_and(|value| value > MAX_PAGE_SIZE) {
+            return Err(Error::InvalidInput(format!(
+                "{name} cannot exceed {MAX_PAGE_SIZE}"
+            )));
+        }
+    }
+    if params.limit.is_some() && (params.page.is_some() || params.per_page.is_some()) {
+        return Err(Error::InvalidInput(
+            "limit/offset cannot be combined with page/per_page".to_string(),
+        ));
+    }
+    if params.offset.is_some() && params.limit.is_none() {
+        return Err(Error::InvalidInput("offset requires limit".to_string()));
+    }
+    if let Some(sort_by) = params.sort_by.as_deref()
+        && !matches!(
+            sort_by,
+            "published_at_timestamp:desc"
+                | "published_at_timestamp:asc"
+                | "view_count:desc"
+                | "like_count:desc"
+                | "comment_count:desc"
+                | "engagement_score:desc"
+        )
+    {
+        return Err(Error::InvalidInput(format!(
+            "unsupported sort_by expression: {sort_by}"
+        )));
+    }
+
+    if let Some(weights) = params.query_by_weights.as_deref() {
+        let fields = params.query_by.as_deref().unwrap_or("text,title");
+        let expected = match fields {
+            "text,title" => "4,6",
+            "title,text" => "6,4",
+            "text" => "4",
+            "title" => "6",
+            _ => {
+                return Err(Error::InvalidInput(
+                    "query_by_weights requires an exact supported query_by order".to_string(),
+                ));
+            }
+        };
+        if weights != expected {
+            return Err(Error::InvalidInput(format!(
+                "query_by_weights must be {expected} for query_by={fields}"
+            )));
+        }
+    }
+    if params
+        .text_match_type
+        .as_deref()
+        .is_some_and(|value| value != "sum_score")
+    {
+        return Err(Error::InvalidInput(
+            "text_match_type must be sum_score".to_string(),
+        ));
+    }
+    if params.prioritize_exact_match == Some(false) {
+        return Err(Error::InvalidInput(
+            "prioritize_exact_match=false is unsupported".to_string(),
+        ));
+    }
+    if params.prioritize_token_position == Some(false) {
+        return Err(Error::InvalidInput(
+            "prioritize_token_position=false is unsupported".to_string(),
+        ));
+    }
+    if params.typo_tokens_threshold.is_some_and(|value| value != 5) {
+        return Err(Error::InvalidInput(
+            "typo_tokens_threshold must be 5".to_string(),
+        ));
+    }
+    if params
+        .split_join_tokens
+        .as_deref()
+        .is_some_and(|value| value != "always")
+    {
+        return Err(Error::InvalidInput(
+            "split_join_tokens must be always".to_string(),
+        ));
+    }
+    if let Some(fields) = params.highlight_fields.as_deref() {
+        query_fields(Some(fields))?;
+    }
+    if params
+        .include_fields
+        .as_deref()
+        .is_some_and(|fields| fields != ACTIVE_INCLUDE_FIELDS)
+    {
+        return Err(Error::InvalidInput(
+            "unsupported include_fields projection".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn query_fields(query_by: Option<&str>) -> Result<QueryFields> {
+    let requested = query_by.unwrap_or("text,title");
+    let mut text = false;
+    let mut title = false;
+    for field in requested.split(',').map(str::trim) {
+        match field {
+            "text" => text = true,
+            "title" => title = true,
+            "" => {
+                return Err(Error::InvalidInput(
+                    "query_by cannot contain an empty field".to_string(),
+                ));
+            }
+            unsupported => {
+                return Err(Error::InvalidInput(format!(
+                    "unsupported query_by field: {unsupported}"
+                )));
+            }
+        }
+    }
+    Ok(QueryFields { text, title })
 }
 
 fn inverse_document_frequency(documents: u32, frequency: u32) -> f32 {
@@ -1986,10 +2131,31 @@ fn response_found(response: &Value) -> u64 {
         .unwrap_or_default()
 }
 
-fn parse_filter(filter: Option<&str>) -> Option<(&str, &str)> {
-    let (field, value) = filter?.split_once(":=")?;
+fn parse_filter(filter: Option<&str>) -> Result<Option<(&str, &str)>> {
+    let Some(filter) = filter else {
+        return Ok(None);
+    };
+    let (field, value) = filter
+        .split_once(":=")
+        .ok_or_else(|| Error::InvalidInput("filter_by must use an exact := filter".to_string()))?;
     let value = value.trim().trim_matches('`');
-    (!field.trim().is_empty() && !value.is_empty()).then_some((field.trim(), value))
+    let field = field.trim();
+    if !matches!(field, "video_id" | "youtuber_handle") {
+        return Err(Error::InvalidInput(format!(
+            "unsupported filter_by field: {field}"
+        )));
+    }
+    if value.is_empty() {
+        return Err(Error::InvalidInput(
+            "filter_by value cannot be empty".to_string(),
+        ));
+    }
+    if value.len() > MAX_FILTER_VALUE_BYTES {
+        return Err(Error::InvalidInput(format!(
+            "filter_by value exceeds {MAX_FILTER_VALUE_BYTES} bytes"
+        )));
+    }
+    Ok(Some((field, value)))
 }
 
 fn video_matches_filter(video: &VideoMeta, filter: Option<(&str, &str)>) -> bool {
@@ -2197,6 +2363,7 @@ mod tests {
             sort_by: None,
             use_cache: None,
             cache_ttl: None,
+            ..SearchParams::default()
         }
     }
 
@@ -2274,6 +2441,66 @@ mod tests {
         let response = engine.search(&query).expect("search");
         assert_eq!(response["found"], 1);
         assert_eq!(response["grouped_hits"][0]["group_key"][0], "b");
+    }
+
+    #[test]
+    fn unsupported_search_contracts_fail_closed() {
+        let (_root, engine) = test_engine();
+        for (field, value, expected) in [
+            ("query_by", "text,description", "unsupported query_by field"),
+            (
+                "filter_by",
+                "published_at:=2026",
+                "unsupported filter_by field",
+            ),
+            ("group_by", "youtuber_handle", "unsupported group_by field"),
+            (
+                "sort_by",
+                "published_at:desc",
+                "unsupported sort_by expression",
+            ),
+        ] {
+            let mut query = grouped_query("search");
+            match field {
+                "query_by" => query.query_by = Some(value.to_string()),
+                "filter_by" => query.filter_by = Some(value.to_string()),
+                "group_by" => query.group_by = Some(value.to_string()),
+                "sort_by" => query.sort_by = Some(value.to_string()),
+                _ => unreachable!(),
+            }
+            let error = engine.search(&query).expect_err("invalid request");
+            assert!(error.to_string().contains(expected), "error={error}");
+        }
+
+        let mut malformed_filter = grouped_query("search");
+        malformed_filter.filter_by = Some("video_id:abc".to_string());
+        assert!(engine.search(&malformed_filter).is_err());
+
+        let mut conflicting_window = grouped_query("search");
+        conflicting_window.per_page = Some(10);
+        assert!(engine.search(&conflicting_window).is_err());
+
+        let mut empty = grouped_query("  ");
+        empty.limit = Some(10);
+        assert!(engine.search(&empty).is_err());
+    }
+
+    #[test]
+    fn active_typesense_parameters_are_validated_and_supported() {
+        let (_root, engine) = test_engine();
+        let mut query = grouped_query("search");
+        query.query_by_weights = Some("4,6".to_string());
+        query.text_match_type = Some("sum_score".to_string());
+        query.prioritize_exact_match = Some(true);
+        query.prioritize_token_position = Some(true);
+        query.typo_tokens_threshold = Some(5);
+        query.split_join_tokens = Some("always".to_string());
+        query.highlight_fields = Some("text,title".to_string());
+        query.include_fields = Some(ACTIVE_INCLUDE_FIELDS.to_string());
+        assert_eq!(engine.search(&query).expect("active contract")["found"], 1);
+
+        query.typo_tokens_threshold = Some(1);
+        assert!(engine.search(&query).is_err());
     }
 
     #[test]
@@ -2527,6 +2754,7 @@ mod tests {
             sort_by: None,
             use_cache: None,
             cache_ttl: None,
+            ..SearchParams::default()
         });
         assert_eq!(channels["found"], 1);
         assert_eq!(channels["hits"][0]["document"]["handle"], "@vsauce");
