@@ -33,6 +33,8 @@ const DOCUMENTS_PER_BLOCK: usize = 64;
 const MOMENT_COALESCE_WINDOW_MS: u32 = 20_000;
 const METADATA_PREFIX_BYTES: usize = HEADER_BYTES + 8;
 const TYPO_RESULT_THRESHOLD: usize = 5;
+const DROP_RESULT_THRESHOLD: usize = 1;
+const MAX_TOKEN_DROP_CANDIDATES: usize = 20;
 const MAX_FUZZY_TERMS_PER_DISTANCE: usize = 4;
 const MAX_FUZZY_SPLIT_TERMS: usize = 8;
 const MIN_ONE_TYPO_BYTES: usize = 4;
@@ -280,14 +282,6 @@ struct SplitComponent {
     matches: Vec<DocMatch>,
     highlight: String,
     fuzzy: bool,
-}
-
-#[derive(Clone, Copy)]
-enum QueryMode {
-    Strict,
-    LeadingPhrase,
-    Exact,
-    Fuzzy,
 }
 
 #[derive(Clone, Copy)]
@@ -1011,25 +1005,41 @@ impl RawSearchEngine {
             return self.search_single_token(params, &terms[0], fields);
         }
 
-        if terms.len() > 1 {
-            let strict = self.search_mode(params, &terms, fields, QueryMode::Strict)?;
-            if response_found(&strict) as usize >= TYPO_RESULT_THRESHOLD {
-                return Ok(strict);
+        let exact_term_matches = self.exact_term_matches(&terms, fields)?;
+        let strict_matches = intersect_all_borrowed(&exact_term_matches);
+        if self.reaches_result_threshold(params, &strict_matches, TYPO_RESULT_THRESHOLD)? {
+            return self.format_conjunctive(params, terms, strict_matches);
+        }
+
+        // Typesense expands the last token as a prefix and tolerates typos before it
+        // starts dropping query tokens. Every expansion remains conjunctive: a
+        // document must match one alternative for every retained query token.
+        if let Some((matches, highlights)) =
+            self.best_conjunctive_candidate(params, &terms, fields, true, Some(exact_term_matches))?
+        {
+            return self.format_conjunctive(params, highlights, matches);
+        }
+
+        // Match Typesense's default right_to_left progression. Prefer the longest
+        // retained prefix, then try retained suffixes where prefix search remains
+        // useful. Bound both ladders so adversarial long queries cannot multiply
+        // fuzzy work without limit.
+        for retained in (1..terms.len()).rev().take(MAX_TOKEN_DROP_CANDIDATES) {
+            if let Some((matches, highlights)) =
+                self.best_conjunctive_candidate(params, &terms[..retained], fields, false, None)?
+            {
+                return self.format_conjunctive(params, highlights, matches);
             }
         }
-        if terms.len() > 2 {
-            let leading =
-                self.search_mode(params, &terms[..2], fields, QueryMode::LeadingPhrase)?;
-            if response_found(&leading) >= 3 {
-                return Ok(leading);
+        for dropped in 1..terms.len().min(MAX_TOKEN_DROP_CANDIDATES + 1) {
+            if let Some((matches, highlights)) =
+                self.best_conjunctive_candidate(params, &terms[dropped..], fields, true, None)?
+            {
+                return self.format_conjunctive(params, highlights, matches);
             }
         }
-        let exact = self.search_mode(params, &terms, fields, QueryMode::Exact)?;
-        let query_is_short = params.q.trim().len() < 5;
-        if query_is_short || response_found(&exact) as usize >= TYPO_RESULT_THRESHOLD {
-            return Ok(exact);
-        }
-        self.search_mode(params, &terms, fields, QueryMode::Fuzzy)
+
+        self.format_conjunctive(params, terms, Vec::new())
     }
 
     fn search_single_token(
@@ -1319,46 +1329,88 @@ impl RawSearchEngine {
         Ok(output)
     }
 
-    fn search_mode(
+    fn best_conjunctive_candidate(
         &self,
         params: &SearchParams,
         terms: &[String],
         fields: QueryFields,
-        mode: QueryMode,
-    ) -> Result<Value> {
-        let mut term_matches = Vec::with_capacity(terms.len());
+        prefix_last: bool,
+        initial_term_matches: Option<Vec<Vec<DocMatch>>>,
+    ) -> Result<Option<(Vec<DocMatch>, Vec<String>)>> {
+        let maximum_distance = terms
+            .iter()
+            .map(|term| bounded_typo_distance(term))
+            .max()
+            .unwrap_or(0);
+        let mut term_matches = match initial_term_matches {
+            Some(matches) => matches,
+            None => self.exact_term_matches(terms, fields)?,
+        };
         let mut highlight_terms = terms.to_vec();
-        for (index, term) in terms.iter().enumerate() {
-            let mut matches = self.matches_for_term(term, fields)?;
-            if index + 1 == terms.len()
-                && !matches!(mode, QueryMode::Strict | QueryMode::LeadingPhrase)
-            {
-                let (prefix, prefix_terms) =
-                    self.fuzzy_alternatives(term, fields, 0, None, true)?;
-                matches = union_sorted(matches, prefix);
-                highlight_terms.extend(prefix_terms);
-            }
-            if matches!(mode, QueryMode::Fuzzy) {
-                for distance in 1..=bounded_typo_distance(term) {
-                    let (fuzzy, fuzzy_terms) =
-                        self.fuzzy_alternatives(term, fields, distance, Some(distance), false)?;
-                    matches = union_sorted(matches, fuzzy);
+        if prefix_last {
+            let last = terms
+                .last()
+                .ok_or_else(|| Error::InvalidInput("query has no searchable tokens".to_string()))?;
+            let (prefix, prefix_terms) = self.fuzzy_alternatives(last, fields, 0, None, true)?;
+            let last_matches = term_matches
+                .last_mut()
+                .ok_or_else(|| Error::InvalidInput("query has no searchable tokens".to_string()))?;
+            *last_matches = union_sorted(std::mem::take(last_matches), prefix);
+            highlight_terms.extend(prefix_terms);
+        }
+
+        for typo_distance in 0..=maximum_distance {
+            if typo_distance > 0 {
+                for (term, matches) in terms.iter().zip(&mut term_matches) {
+                    if typo_distance > bounded_typo_distance(term) {
+                        continue;
+                    }
+                    let (fuzzy, fuzzy_terms) = self.fuzzy_alternatives(
+                        term,
+                        fields,
+                        typo_distance,
+                        Some(typo_distance),
+                        false,
+                    )?;
+                    *matches = union_sorted(std::mem::take(matches), fuzzy);
                     highlight_terms.extend(fuzzy_terms);
                 }
             }
-            term_matches.push(matches);
+            let matches = intersect_all_borrowed(&term_matches);
+            let enough = self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)?;
+            if enough {
+                return Ok(Some((matches, highlight_terms)));
+            }
+            if typo_distance == maximum_distance {
+                return if self.reaches_result_threshold(params, &matches, DROP_RESULT_THRESHOLD)? {
+                    Ok(Some((matches, highlight_terms)))
+                } else {
+                    Ok(None)
+                };
+            }
         }
-        let require_every_term = matches!(mode, QueryMode::Strict | QueryMode::LeadingPhrase);
-        let mut matches = if require_every_term {
-            intersect_all(term_matches)
-        } else {
-            union_all(term_matches)
-        };
+        Ok(None)
+    }
+
+    fn exact_term_matches(
+        &self,
+        terms: &[String],
+        fields: QueryFields,
+    ) -> Result<Vec<Vec<DocMatch>>> {
+        let mut term_matches = Vec::with_capacity(terms.len());
+        for term in terms {
+            term_matches.push(self.matches_for_term(term, fields)?);
+        }
+        Ok(term_matches)
+    }
+
+    fn format_conjunctive(
+        &self,
+        params: &SearchParams,
+        highlight_terms: Vec<String>,
+        matches: Vec<DocMatch>,
+    ) -> Result<Value> {
         let mut cache = BlockCache::default();
-        if matches!(mode, QueryMode::LeadingPhrase) {
-            let phrase = terms.join(" ");
-            self.retain_phrase_matches(&mut matches, &phrase, &mut cache)?;
-        }
         self.format_matches(params, &highlight_terms, matches, &mut cache)
     }
 
@@ -1992,19 +2044,50 @@ fn descending_doc_score(left: &DocMatch, right: &DocMatch) -> Ordering {
         .then_with(|| left.document().cmp(&right.document()))
 }
 
-fn intersect_all(mut lists: Vec<Vec<DocMatch>>) -> Vec<DocMatch> {
-    if lists.is_empty() {
+fn intersect_all_borrowed(lists: &[Vec<DocMatch>]) -> Vec<DocMatch> {
+    let Some((smallest_index, smallest)) = lists
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, matches)| matches.len())
+    else {
         return Vec::new();
-    }
-    lists.sort_unstable_by_key(Vec::len);
-    let mut intersection = lists.remove(0);
-    for list in lists {
-        intersection = intersect_sorted(intersection, list);
+    };
+    let mut intersection = smallest.clone();
+    for (index, list) in lists.iter().enumerate() {
+        if index == smallest_index {
+            continue;
+        }
+        intersection = intersect_sorted_borrowed(intersection, list);
         if intersection.is_empty() {
             break;
         }
     }
     intersection
+}
+
+fn intersect_sorted_borrowed(left: Vec<DocMatch>, right: &[DocMatch]) -> Vec<DocMatch> {
+    let mut output = Vec::with_capacity(left.len().min(right.len()));
+    let mut left_index = 0_usize;
+    let mut right_index = 0_usize;
+    while left_index < left.len() && right_index < right.len() {
+        match left[left_index]
+            .document()
+            .cmp(&right[right_index].document())
+        {
+            Ordering::Less => left_index += 1,
+            Ordering::Greater => right_index += 1,
+            Ordering::Equal => {
+                output.push(DocMatch::new(
+                    left[left_index].document(),
+                    left[left_index].score + right[right_index].score,
+                    left[left_index].matches_text() || right[right_index].matches_text(),
+                ));
+                left_index += 1;
+                right_index += 1;
+            }
+        }
+    }
+    output
 }
 
 fn intersect_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec<DocMatch> {
@@ -2235,6 +2318,20 @@ fn validate_search_params(params: &SearchParams) -> Result<()> {
             "typo_tokens_threshold must be 5".to_string(),
         ));
     }
+    if params.drop_tokens_threshold.is_some_and(|value| value != 1) {
+        return Err(Error::InvalidInput(
+            "drop_tokens_threshold must be 1".to_string(),
+        ));
+    }
+    if params
+        .drop_tokens_mode
+        .as_deref()
+        .is_some_and(|value| value != "right_to_left")
+    {
+        return Err(Error::InvalidInput(
+            "drop_tokens_mode must be right_to_left".to_string(),
+        ));
+    }
     if params
         .split_join_tokens
         .as_deref()
@@ -2321,13 +2418,6 @@ fn result_window(params: &SearchParams) -> (usize, usize) {
     let limit = usize::from(params.per_page.unwrap_or(10));
     let page = params.page.unwrap_or(1).max(1) as usize;
     ((page - 1).saturating_mul(limit), limit)
-}
-
-fn response_found(response: &Value) -> u64 {
-    response
-        .get("found")
-        .and_then(Value::as_u64)
-        .unwrap_or_default()
 }
 
 fn parse_filter(filter: Option<&str>) -> Result<Option<(&str, &str)>> {
@@ -2566,6 +2656,25 @@ mod tests {
         (root, engine)
     }
 
+    fn token_drop_engine() -> (TempDir, RawSearchEngine) {
+        let root = TempDir::new().expect("temp dir");
+        let chunks_path = root.path().join("chunks.jsonl");
+        let channels_path = root.path().join("channels.jsonl");
+        let index_path = root.path().join("index");
+        let mut chunks = File::create(&chunks_path).expect("chunks");
+        for document in [
+            json!({"id":"prefix-pair-1","video_id":"prefix-pair","title":"Alpha beta","text":"paired terms","youtuber_handle":"@one","youtuber_name":"One"}),
+            json!({"id":"suffix-pair-1","video_id":"suffix-pair","title":"Beta gamma","text":"paired terms","youtuber_handle":"@two","youtuber_name":"Two"}),
+            json!({"id":"single-1","video_id":"single","title":"Alpha alone","text":"one term only","youtuber_handle":"@three","youtuber_name":"Three"}),
+        ] {
+            writeln!(chunks, "{document}").expect("write chunk");
+        }
+        File::create(&channels_path).expect("channels");
+        build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+        let engine = RawSearchEngine::open(&index_path).expect("open raw index");
+        (root, engine)
+    }
+
     fn grouped_query(query: &str) -> SearchParams {
         SearchParams {
             q: query.to_string(),
@@ -2723,12 +2832,22 @@ mod tests {
         query.prioritize_exact_match = Some(true);
         query.prioritize_token_position = Some(true);
         query.typo_tokens_threshold = Some(5);
+        query.drop_tokens_threshold = Some(1);
+        query.drop_tokens_mode = Some("right_to_left".to_string());
         query.split_join_tokens = Some("always".to_string());
         query.highlight_fields = Some("text,title".to_string());
         query.include_fields = Some(ACTIVE_INCLUDE_FIELDS.to_string());
         assert_eq!(engine.search(&query).expect("active contract")["found"], 1);
 
         query.typo_tokens_threshold = Some(1);
+        assert!(engine.search(&query).is_err());
+
+        query.typo_tokens_threshold = Some(5);
+        query.drop_tokens_threshold = Some(0);
+        assert!(engine.search(&query).is_err());
+
+        query.drop_tokens_threshold = Some(1);
+        query.drop_tokens_mode = Some("left_to_right".to_string());
         assert!(engine.search(&query).is_err());
     }
 
@@ -2774,6 +2893,50 @@ mod tests {
                 "query={query}"
             );
         }
+    }
+
+    #[test]
+    fn token_drop_prefers_the_longest_right_to_left_conjunction() {
+        let (_root, engine) = token_drop_engine();
+        let response = engine
+            .search(&grouped_query("alpha beta missing"))
+            .expect("token-drop search");
+
+        assert_eq!(response["found"], 1);
+        assert_eq!(response["grouped_hits"][0]["group_key"][0], "prefix-pair");
+    }
+
+    #[test]
+    fn token_drop_switches_direction_only_after_prefixes_are_exhausted() {
+        let (_root, engine) = token_drop_engine();
+        let response = engine
+            .search(&grouped_query("missing beta gamma"))
+            .expect("token-drop search");
+
+        assert_eq!(response["found"], 1);
+        assert_eq!(response["grouped_hits"][0]["group_key"][0], "suffix-pair");
+    }
+
+    #[test]
+    fn token_drop_threshold_applies_the_active_filter() {
+        let (_root, engine) = token_drop_engine();
+        let mut query = grouped_query("alpha beta gamma");
+        query.filter_by = Some("youtuber_handle:=@two".to_string());
+        let response = engine.search(&query).expect("filtered token-drop search");
+
+        assert_eq!(response["found"], 1);
+        assert_eq!(response["grouped_hits"][0]["group_key"][0], "suffix-pair");
+    }
+
+    #[test]
+    fn typo_expansion_stays_conjunctive_inside_a_retained_subset() {
+        let (_root, engine) = token_drop_engine();
+        let response = engine
+            .search(&grouped_query("alpha betta missing"))
+            .expect("fuzzy token-drop search");
+
+        assert_eq!(response["found"], 1);
+        assert_eq!(response["grouped_hits"][0]["group_key"][0], "prefix-pair");
     }
 
     #[test]

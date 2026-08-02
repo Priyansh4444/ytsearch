@@ -55,6 +55,10 @@ pub struct SearchParams {
     #[serde(default)]
     pub typo_tokens_threshold: Option<u32>,
     #[serde(default)]
+    pub drop_tokens_threshold: Option<u32>,
+    #[serde(default)]
+    pub drop_tokens_mode: Option<String>,
+    #[serde(default)]
     pub split_join_tokens: Option<String>,
     #[serde(default)]
     pub highlight_fields: Option<String>,
