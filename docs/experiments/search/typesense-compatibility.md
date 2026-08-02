@@ -63,7 +63,7 @@ only for guarded prefix/typo fallback.
 | Candidate cap | Four terms per edit distance, ranked by field-weighted posting frequency |
 | Progressive expansion | Exact/split, then prefix, then distance one, then distance two; stop at five grouped results |
 | Prefix search | Guarded fallback when exact/split coverage is below five |
-| Exact priority | Saturating exact-token count packed into the 8-byte candidate; prefix/fuzzy alternatives contribute zero exact tokens |
+| Exact priority | Four-bit exact-token mask packed into the 8-byte candidate; compare count, then earlier query terms; prefix/fuzzy alternatives contribute zero bits |
 | First-token position | Compact `positions.bin` sidecar; decoded only for exact postings and used as a bounded score multiplier |
 | Token dropping | Conjunctive right-to-left suffix drops, then left-to-right prefix drops, filter-aware threshold one, maximum 20 candidates |
 | Compact split | Same-chunk intersection with narrow plural recovery |
@@ -101,12 +101,17 @@ index is 74,256,152 bytes, so positions plus populated counter metadata add
 
 The v5 HTTP contract passed global and creator-filtered `blackhole`, all three
 composed typo cases, relevance/date/engagement ordering, pagination, channel
-search, authentication, and both route aliases. Multi-word differential cases
-became deliberately narrower: `battery gate incident` fell from 41 loosely
-unioned videos to its one conjunctive match; `why is the sky blue` fell from 61
-to one; `relativity explained simply` fell from 139 to two. Exact-token priority
-then moved the true relativity result ahead of the unrelated `relatively`
-candidate.
+search, authentication, and both route aliases. On the two-channel differential,
+multi-word cases became deliberately narrower: `battery gate incident` 41→1,
+`why is the sky blue` 61→1, `relativity explained simply` 139→2, and
+`black hole event horizon` 16→3. On the full four-channel snapshot the same
+v4→v5 counts are 3→10, 394→3, 627→6, and 22→3. The battery expansion contains
+literal T3 `battery gate` mentions but is retained as a judged-query question
+because dropping `incident` broadens the intent. Exact-token priority then
+moved the true relativity result ahead of the unrelated `relatively`
+candidate. A paired 225-search A/B found no retained cost from refining the
+packed count to an order-aware mask: mean was 5.23 vs 5.20 ms and CPU was 108
+vs 107 ticks.
 
 Matched local loopback runs used 25 requests per query:
 
@@ -188,6 +193,12 @@ A complete win requires all of the following on a production-shaped snapshot:
 - smaller on-disk index and faster offline build;
 - debug/release, corruption, concurrency, API-contract, and rollback checks;
 - shadow traffic before any production switch.
+
+The Raw experimental API now preserves backend relevance order explicitly.
+This is required because its former Typesense-oriented substring reranker could
+move a fuzzy title match above Raw's exact query-token winner. The policy is
+configuration-scoped to Raw and has a regression test for video and moment
+ordering; Typesense behavior is unchanged.
 
 Current decision: retain schema v5 as the Raw promotion candidate. It closes
 the active first-position, exact-priority, and token-drop gaps, but production

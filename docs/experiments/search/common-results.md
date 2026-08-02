@@ -40,12 +40,14 @@ typo/prefix queries Raw measured 1.83/3.14 ms p50/p95 versus Typesense 30.2 at
 3.80/9.12 ms, while recovering `blackhloe` and `blackhle` as black-hole intent
 where the matched Typesense control returned zero.
 
-Schema v5 adds compact first-token positions, packed exact-token priority, and
+Schema v5 adds compact first-token positions, packed exact-token masks, and
 filter-aware conjunctive token dropping. On the engagement-enriched
 four-channel snapshot it is 83.64 MB and built in 4.42 seconds. The active HTTP
-contract passes with nonzero views/likes/comments, and broad
-multi-word false-positive sets shrink substantially (`battery gate incident`
-41→1, `why is the sky blue` 61→1). Against archived v4, core p95 moved only
+contract passes with nonzero views/likes/comments. On the two-channel
+differential, broad multi-word sets shrink substantially (`battery gate
+incident` 41→1, `why is the sky blue` 61→1); the four-channel battery case
+instead moves 3→10 because the added T3 videos contain literal battery-gate
+mentions, so it remains in the judged-query gate. Against archived v4, core p95 moved only
 1.8% (7.51→7.64 ms), while mean/CPU increased about 6–8%; the short typo run's
 tail remains a shadow-traffic gate. Full measurements are in
 [typesense-compatibility.md](typesense-compatibility.md).
@@ -129,8 +131,8 @@ contract; they are not used to choose an engine.
 
 ## Existing API compatibility
 
-`youtube_api` ran unchanged against Raw. Twenty requests for each case produced
-zero errors:
+The first compatibility run used `youtube_api` unchanged against Raw. Twenty
+requests for each case produced zero errors:
 
 | Case | API p50 | API p95 | Stable result |
 | --- | ---: | ---: | --- |
@@ -140,8 +142,18 @@ zero errors:
 | low signal | 3 ms | 4 ms | 1,060 videos / 20 returned moments |
 | page two | 1 ms | 2 ms | Empty page, stable total |
 
-This covers the real pagination, nearby-hit merge, grouping, reranking, date
-sorting, gzip, and public response path rather than only the engine endpoint.
+This covers the real pagination, nearby-hit merge, grouping, date sorting,
+gzip, and public response path rather than only the engine endpoint. A later
+exact-token audit found the API's legacy Typesense substring reranker could
+undo Raw's backend order. The experimental API now enables an explicit
+Raw-only preserve-order policy; Typesense retains the old default. The deployed
+facade and backend both rank “Which Way Is Down?” first for `relativity
+explained simply`.
+
+The latest public contract also passes typo recovery, creator scoping,
+views/likes/comments ordering, ascending/descending date order, pagination,
+channel discovery, and authentication. Initial browser JavaScript remains
+24,002 bytes gzip against the 30,000-byte ceiling.
 
 ## Fly experiments
 

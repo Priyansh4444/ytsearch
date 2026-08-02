@@ -49,8 +49,9 @@ is not copied into a process-owned hash map at startup.
 7. Keep every multi-token expansion conjunctive. If no result remains, drop
    suffix tokens one at a time, then prefix tokens, stopping at the longest
    filter-visible subset. Each ladder is capped at 20 candidates.
-8. Rank by retained-token count, packed exact-token count, BM25/title score,
-   and first-token position. The exact count shares the existing 8-byte hot
+8. Rank by retained-token count, a packed exact-token mask, BM25/title score,
+   and first-token position. The mask compares exact-token count first and
+   earlier retained query tokens second while sharing the existing 8-byte hot
    candidate rather than allocating per-hit provenance.
 9. Apply an explicit date, engagement, or bounded relevance-plus-engagement
    order when requested.
@@ -108,6 +109,9 @@ The isolated Fly app uses [fly.raw-search-experiment.toml](../../../fly.raw-sear
 one shared CPU, 256 MB RAM, authentication, zero warm machines, and suspend on
 idle. Schema v5 is deployed at <https://ytsearch-raw-experiment.fly.dev>; the
 frontend/API facade is <https://search.experimental.pronsh.dev>.
+The Raw API deployment sets `YTSEARCH_PRESERVE_BACKEND_RELEVANCE_ORDER=true`
+so the compatibility layer does not replace the engine's exact-token order;
+the Typesense default remains unchanged.
 
 ```sh
 fly deploy --config fly.raw-search-experiment.toml --ha=false

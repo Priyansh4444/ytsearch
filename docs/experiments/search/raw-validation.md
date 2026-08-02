@@ -131,13 +131,17 @@ different and deterministic.
 | Relevance top result                 | `3pAnRKD4raY`, “Travel INSIDE a Black Hole” |
 | Newest Raw top result                | `piHGnG4LsmQ`, 2025-12-24                   |
 | Oldest Raw top result                | `KB24FakYVmc`, 2011-04-15                   |
-| Global/Veritasium/Vsauce totals      | 21 / 6 / 15 videos                          |
+| Global/Veritasium/Vsauce totals      | 30 / 6 / 15 videos                          |
 | Page-one/page-two overlap            | 0                                           |
 | Raw alias equals compatibility route | Yes                                         |
 | Missing authentication               | HTTP 401                                    |
 
-The unchanged `youtube_api` returned the same totals and date endpoints after
-its normal nearby-hit merge and reranking. Twenty requests per API case:
+The API now has an explicit Raw-only policy that preserves the backend's
+relevance order for both videos and moments. This prevents its legacy
+Typesense substring reranker from undoing Raw's exact-token and fuzzy ranking;
+the default remains off for Typesense. The regression query `relativity
+explained simply` returns “Which Way Is Down?” first from both the backend and
+the public facade. Twenty requests per historical API case:
 
 | API case         | Errors |  p50 |  p95 |
 | ---------------- | -----: | ---: | ---: |
@@ -186,9 +190,10 @@ The four-channel schema-v5 candidate contains 420,720 chunks, 2,743 videos,
 59,596 terms, and 83,637,146 bytes. It built from the 324 MB
 engagement-enriched source JSONL in 4.419 seconds. Positions plus populated
 counter metadata add 12.6% over the archived 74,256,152-byte zero-counter v4
-index. The query hot candidate remains eight bytes: four
-packed bits count exact query tokens, one bit records transcript provenance,
-and 27 bits retain capacity for more than 100 million documents.
+index. The query hot candidate remains eight bytes: a four-bit mask records
+which of the first retained query tokens matched exactly, one bit records
+transcript provenance, and 27 bits retain capacity for more than 100 million
+documents. Ranking compares mask population first, then earlier query tokens.
 
 Multi-token evaluation no longer falls back to an OR of every query word. It
 expands prefix and typo alternatives within an intersection, then drops suffix
@@ -196,17 +201,26 @@ tokens one at a time before switching direction. The stop threshold is applied
 after creator/video filtering. Four focused fixtures verify longest-subset
 preference, direction switching, filter-aware stopping, and a typo inside a
 retained conjunction. A fifth verifies exact-token priority over a
-higher-frequency correction.
+higher-frequency correction, and a sixth verifies that an exact earlier query
+term wins an equal-count tie. On the full corpus this moves “Which Way Is
+Down?” above `relatively`/`explained` title matches for
+`relativity explained simply`.
 
 On the production-shaped corpus, representative result counts changed as
-intended:
+follows:
 
 | Query | Archived broad fallback | Schema v5 |
 | --- | ---: | ---: |
-| `battery gate incident` | 41 | 1 |
-| `why is the sky blue` | 61 | 1 |
-| `relativity explained simply` | 139 | 2 |
-| `black hole event horizon` | 16 | 3 |
+| `battery gate incident` | 3 | 10 |
+| `why is the sky blue` | 394 | 3 |
+| `relativity explained simply` | 627 | 6 |
+| `black hole event horizon` | 22 | 3 |
+
+The battery expansion is retained for judgment rather than labeled an
+automatic win: the new results contain literal `battery gate` transcript
+mentions from the added T3 corpus, but the dropped `incident` token broadens
+the intent. On the smaller two-channel differential, where those T3 videos do
+not exist, the old/new counts were 41→1, 61→1, 139→2, and 16→3 respectively.
 
 The full contract passes with 30 global `blackhole` videos, including 6
 Veritasium and 15 Vsauce results; the extra nine come from the two additional
@@ -256,8 +270,8 @@ the rejected broad path is not.
 
 ## Correctness evidence and gaps
 
-- 43 Raw tests and 3 shared-service tests pass in release; the full workspace gate is
-  run before handoff.
+- 44 Raw tests, 3 shared-service tests, and 30 API tests pass in release; the
+  full workspace gate is run before handoff.
 - Tests cover grouping, highlights, creator/video filters, relevance/date
   order, compact split and plural recovery, prefix search, transpositions,
   two-edit correction, typo-plus-split recovery, pagination, field selection,
