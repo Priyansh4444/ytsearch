@@ -2,6 +2,86 @@
 
 This file tracks the current requested work and end-to-end verification. Mark any discovered or introduced regression in the Regression Log before changing behavior further.
 
+## Raw Search Production Readiness (active)
+
+Checked items are implemented and verified. Unchecked items are required before
+Raw can replace Typesense as the canonical search index.
+
+### Completed foundation
+
+- [x] Build and serve an immutable Raw index snapshot.
+- [x] Store term frequencies and first-token positions in schema v5.
+- [x] Preserve exact query-token order during conjunctive matching.
+- [x] Apply bounded per-token typo matching and ordered token dropping.
+- [x] Reject unsupported search parameters instead of silently ignoring them.
+- [x] Rank with text relevance plus likes, views, comments, and recency.
+- [x] Keep the experimental browser entry bundle below the 30 KB gzip limit.
+- [x] Preserve the retired Tantivy experiment and results outside production.
+
+### P0: relevance and compatibility
+
+- [ ] Add schema v6 complete positional postings.
+  - [ ] Keep first positions in a compact hot sidecar for ordinary queries.
+  - [ ] Delta-encode all remaining positions into a cold sidecar.
+  - [ ] Checksum and length-check every generation file at startup.
+- [ ] Add exact quoted phrases, phrase slop, proximity, and early-position ranking.
+- [ ] Finish multi-token fallback parity with a bounded typo/token-drop work budget.
+- [ ] Add quoted/negative terms, duplicate-token semantics, Unicode and numeric rules.
+- [ ] Add safe phrase-aware, configurable multi-snippet highlights and match metadata.
+- [ ] Fail closed on every unknown filter, sort, facet, operator, and malformed value.
+- [ ] Add a versioned 300-query human-judged relevance oracle.
+- [ ] Cover global and channel-specific `blackhole` searches for Veritasium and Vsauce.
+- [ ] Differential-test the complete application contract against Typesense.
+
+### P1: canonical write path
+
+- [ ] Add a backend-neutral search-index administration contract.
+- [ ] Adapt Typesense administration behind the shared contract during migration.
+- [ ] Add a durable Raw writer with SQLite WAL and idempotency keys.
+- [ ] Add atomic replace/delete video and upsert/delete channel operations.
+- [ ] Add counts, channel statistics, indexed-video pagination, and operation status.
+- [ ] Publish immutable delta segments and tombstones without rewriting the base.
+- [ ] Make acknowledged writes visible on both readers within 60 seconds at p95.
+- [ ] Add streaming bounded-memory compaction, atomic generations, and rollback.
+- [ ] Upload checksummed versioned artifacts to private R2 once R2 is enabled.
+- [ ] Bootstrap from one final Typesense snapshot, then stop dual-writing.
+
+### P1: indexing reliability and throughput
+
+- [ ] Add bounded fetch concurrency with per-host and per-channel limits.
+- [ ] Classify retryable, terminal, private, deleted, and unavailable-video failures.
+- [ ] Persist jittered backoff and resume incomplete channels after restarts.
+- [ ] Batch by bytes and document count; avoid retaining transcripts twice.
+- [ ] Emit progress, retry, failure-reason, throughput, and freshness metrics.
+- [ ] Add `scripts/index-all-raw.sh` only after restart and recovery tests pass.
+
+### P2: operations and cutover
+
+- [ ] Run one writer and two independently refreshing Raw readers.
+- [ ] Add health, readiness, generation, lag, and integrity endpoints.
+- [ ] Test crashes, partial uploads, disk full, corruption, and stale readers.
+- [ ] Shadow production queries and compare ordered results.
+- [ ] Roll out at 1%, 10%, 50%, and 100% with automatic rollback thresholds.
+- [ ] Remove Typesense from the live path only after the soak period passes.
+
+### Non-negotiable performance and resource gates
+
+- [ ] Schema v6 non-phrase p95 is no more than 10% slower than schema v5.
+- [ ] Raw p95 latency and CPU/query are each at most 75% of Typesense.
+- [ ] Raw steady-state RSS is at most 60% of Typesense.
+- [ ] Full-snapshot compaction peak RSS stays below 512 MiB.
+- [ ] Complete-position artifact growth is measured and documented.
+- [ ] Benchmarks name corpus, hardware, build mode, concurrency, and cache state.
+- [ ] Every optimization has a correctness invariant and rollback condition.
+- [ ] Experimental browser JavaScript remains at or below 30 KB gzip.
+
+### Documentation and evidence
+
+- [ ] Keep common experiment outputs in one versioned Markdown report.
+- [ ] Document schema layouts, scoring, visibility, recovery, and rollback.
+- [ ] Record debug/release/Clippy/test/benchmark/RSS/artifact-size results.
+- [ ] Update this ledger in the same commit that completes each item.
+
 ## Regression Log
 
 - [x] A queued channel could not be cleanly removed through a guarded operator workflow. Added explicit queue cancellation guidance and made `remove-youtuber` require `--allow-destructive-remove` before deleting both transcript chunks and the channel profile.
@@ -183,3 +263,4 @@ This file tracks the current requested work and end-to-end verification. Mark an
 - [x] Before replacing queue daemon, confirm existing `ytsearch-indexer-staging` queue daemon state and logs.
 - [x] After replacing queue daemon, confirm only one persistent daemon is processing the JSONL queue. Existing daemon was left running; no replacement daemon started.
 - [x] Record final machine state, frontend URLs, and indexing status.
+
