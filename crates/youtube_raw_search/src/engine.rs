@@ -222,16 +222,19 @@ struct DocMatch {
 
 impl DocMatch {
     const TEXT_MATCH_FLAG: u32 = 1 << 31;
-    const EXACT_TOKENS_SHIFT: u32 = 27;
-    const EXACT_TOKENS_MASK: u32 = 0b1111 << Self::EXACT_TOKENS_SHIFT;
-    const MAX_EXACT_TOKENS: u8 = 0b1111;
-    const DOCUMENT_MASK: u32 = (1 << Self::EXACT_TOKENS_SHIFT) - 1;
+    const EXACT_MASK_SHIFT: u32 = 27;
+    const EXACT_MASK_BITS: u32 = 0b1111 << Self::EXACT_MASK_SHIFT;
+    const DOCUMENT_MASK: u32 = (1 << Self::EXACT_MASK_SHIFT) - 1;
 
     fn new(document: u32, score: f32, matches_text: bool) -> Self {
+        Self::with_exact_mask(document, score, matches_text, 1)
+    }
+
+    fn with_exact_mask(document: u32, score: f32, matches_text: bool, exact_mask: u8) -> Self {
         debug_assert_eq!(document & !Self::DOCUMENT_MASK, 0);
         Self {
             document_with_flags: document
-                | (1 << Self::EXACT_TOKENS_SHIFT)
+                | (u32::from(exact_mask & 0b1111) << Self::EXACT_MASK_SHIFT)
                 | (u32::from(matches_text) * Self::TEXT_MATCH_FLAG),
             score,
         }
@@ -247,18 +250,22 @@ impl DocMatch {
 
     fn set_matches_text(&mut self, matches_text: bool) {
         self.document_with_flags = self.document()
-            | (self.document_with_flags & Self::EXACT_TOKENS_MASK)
+            | (self.document_with_flags & Self::EXACT_MASK_BITS)
             | (u32::from(matches_text) * Self::TEXT_MATCH_FLAG);
     }
 
-    fn exact_tokens(self) -> u8 {
-        ((self.document_with_flags & Self::EXACT_TOKENS_MASK) >> Self::EXACT_TOKENS_SHIFT) as u8
+    fn exact_mask(self) -> u8 {
+        ((self.document_with_flags & Self::EXACT_MASK_BITS) >> Self::EXACT_MASK_SHIFT) as u8
     }
 
-    fn set_exact_tokens(&mut self, exact_tokens: u8) {
+    fn exact_tokens(self) -> u8 {
+        self.exact_mask().count_ones() as u8
+    }
+
+    fn set_exact_mask(&mut self, exact_mask: u8) {
         self.document_with_flags = self.document()
             | (self.document_with_flags & Self::TEXT_MATCH_FLAG)
-            | (u32::from(exact_tokens.min(Self::MAX_EXACT_TOKENS)) << Self::EXACT_TOKENS_SHIFT);
+            | (u32::from(exact_mask & 0b1111) << Self::EXACT_MASK_SHIFT);
     }
 }
 
@@ -268,6 +275,7 @@ struct VideoMatches {
     video: u32,
     score: f32,
     exact_tokens: u8,
+    exact_mask: u8,
     moments: MomentCounter,
     documents: Vec<DocMatch>,
 }
@@ -276,6 +284,7 @@ struct VideoMatches {
 struct RelevanceRank {
     score: f32,
     exact_tokens: u8,
+    exact_mask: u8,
 }
 
 #[derive(Default)]
@@ -314,6 +323,7 @@ struct QueryFields {
     text: bool,
     title: bool,
     prioritize_position: bool,
+    exact_mask: u8,
 }
 
 #[derive(Default)]
@@ -1270,7 +1280,7 @@ impl RawSearchEngine {
                         // This keeps `blak + hole` and `black + hloe` from ranking the
                         // same corrected intent differently.
                         candidate.score += SPLIT_SCORE_BONUS * 0.5;
-                        candidate.set_exact_tokens(0);
+                        candidate.set_exact_mask(0);
                     }
                     let mut phrase_matches = matches.clone();
                     let phrase =
@@ -1424,8 +1434,15 @@ impl RawSearchEngine {
         fields: QueryFields,
     ) -> Result<Vec<Vec<DocMatch>>> {
         let mut term_matches = Vec::with_capacity(terms.len());
-        for term in terms {
-            term_matches.push(self.matches_for_term(term, fields)?);
+        for (index, term) in terms.iter().enumerate() {
+            let exact_mask = 1 << (3 - index.min(3));
+            term_matches.push(self.matches_for_term(
+                term,
+                QueryFields {
+                    exact_mask,
+                    ..fields
+                },
+            )?);
         }
         Ok(term_matches)
     }
@@ -1464,12 +1481,12 @@ impl RawSearchEngine {
         let idf =
             inverse_document_frequency(self.inner.manifest.documents, effective_frequency.max(1));
         let text = if fields.text {
-            self.decode_text_postings(entry, idf, fields.prioritize_position)?
+            self.decode_text_postings(entry, idf, fields.prioritize_position, fields.exact_mask)?
         } else {
             Vec::new()
         };
         let title = if fields.title {
-            self.decode_title_postings(entry, idf, fields.prioritize_position)?
+            self.decode_title_postings(entry, idf, fields.prioritize_position, fields.exact_mask)?
         } else {
             Vec::new()
         };
@@ -1481,6 +1498,7 @@ impl RawSearchEngine {
         entry: TermEntry,
         idf: f32,
         prioritize_position: bool,
+        exact_mask: u8,
     ) -> Result<Vec<DocMatch>> {
         let bytes = self.postings_range(entry.text_offset, entry.text_length)?;
         let position_bytes = prioritize_position
@@ -1504,7 +1522,7 @@ impl RawSearchEngine {
                 self.inner.manifest.average_document_tokens,
             ) * idf
                 * token_position_multiplier(first_position, prioritize_position);
-            matches.push(DocMatch::new(document, score, true));
+            matches.push(DocMatch::with_exact_mask(document, score, true, exact_mask));
         }
         if matches.len() != entry.text_frequency as usize
             || position_bytes.is_some_and(|positions| position_cursor != positions.len())
@@ -1521,6 +1539,7 @@ impl RawSearchEngine {
         entry: TermEntry,
         idf: f32,
         prioritize_position: bool,
+        exact_mask: u8,
     ) -> Result<Vec<DocMatch>> {
         let bytes = self.postings_range(entry.title_offset, entry.title_length)?;
         let position_bytes = prioritize_position
@@ -1553,7 +1572,9 @@ impl RawSearchEngine {
                 * (1.0 + (frequency as f32).ln())
                 * token_position_multiplier(first_position, prioritize_position);
             for &document in &video.documents {
-                matches.push(DocMatch::new(document, score, false));
+                matches.push(DocMatch::with_exact_mask(
+                    document, score, false, exact_mask,
+                ));
             }
             postings += 1;
         }
@@ -1615,6 +1636,7 @@ impl RawSearchEngine {
                 entry,
                 QueryFields {
                     prioritize_position: false,
+                    exact_mask: 0,
                     ..fields
                 },
             )?;
@@ -1625,7 +1647,6 @@ impl RawSearchEngine {
             };
             for matched in &mut matches {
                 matched.score *= score_multiplier;
-                matched.set_exact_tokens(0);
             }
             alternatives.push(matches);
             highlight_terms.push(candidate.to_string());
@@ -1690,11 +1711,26 @@ impl RawSearchEngine {
                 video: record.video,
                 score: candidate.score,
                 exact_tokens: candidate.exact_tokens(),
+                exact_mask: candidate.exact_mask(),
                 moments: MomentCounter::default(),
                 documents: Vec::with_capacity(hits_per_group),
             });
-            group.score = group.score.max(candidate.score);
-            group.exact_tokens = group.exact_tokens.max(candidate.exact_tokens());
+            let candidate_rank = (
+                candidate.exact_tokens(),
+                candidate.exact_mask(),
+                candidate.score,
+            );
+            let group_rank = (group.exact_tokens, group.exact_mask, group.score);
+            if candidate_rank.0 > group_rank.0
+                || (candidate_rank.0 == group_rank.0 && candidate_rank.1 > group_rank.1)
+                || (candidate_rank.0 == group_rank.0
+                    && candidate_rank.1 == group_rank.1
+                    && candidate_rank.2 > group_rank.2)
+            {
+                group.exact_tokens = candidate_rank.0;
+                group.exact_mask = candidate_rank.1;
+                group.score = candidate_rank.2;
+            }
             if candidate.matches_text() {
                 group.moments.record(record.t_start_ms);
             }
@@ -1772,11 +1808,13 @@ impl RawSearchEngine {
                     RelevanceRank {
                         score: left.score,
                         exact_tokens: left.exact_tokens(),
+                        exact_mask: left.exact_mask(),
                     },
                     right_video,
                     RelevanceRank {
                         score: right.score,
                         exact_tokens: right.exact_tokens(),
+                        exact_mask: right.exact_mask(),
                     },
                     params.sort_by.as_deref(),
                     &self.inner.manifest,
@@ -1808,11 +1846,13 @@ impl RawSearchEngine {
                 RelevanceRank {
                     score: left.score,
                     exact_tokens: left.exact_tokens,
+                    exact_mask: left.exact_mask,
                 },
                 right_video,
                 RelevanceRank {
                     score: right.score,
                     exact_tokens: right.exact_tokens,
+                    exact_mask: right.exact_mask,
                 },
                 sort_by,
                 &self.inner.manifest,
@@ -1841,11 +1881,13 @@ impl RawSearchEngine {
                     RelevanceRank {
                         score: 0.0,
                         exact_tokens: 0,
+                        exact_mask: 0,
                     },
                     right,
                     RelevanceRank {
                         score: 0.0,
                         exact_tokens: 0,
+                        exact_mask: 0,
                     },
                     params
                         .sort_by
@@ -1896,11 +1938,13 @@ impl RawSearchEngine {
                     RelevanceRank {
                         score: 0.0,
                         exact_tokens: 0,
+                        exact_mask: 0,
                     },
                     right_video,
                     RelevanceRank {
                         score: 0.0,
                         exact_tokens: 0,
+                        exact_mask: 0,
                     },
                     params
                         .sort_by
@@ -2046,6 +2090,7 @@ fn compare_video_sort(
             Some("engagement_score:desc") => right_rank
                 .exact_tokens
                 .cmp(&left_rank.exact_tokens)
+                .then_with(|| right_rank.exact_mask.cmp(&left_rank.exact_mask))
                 .then_with(|| {
                     blended_relevance(right_rank.score, right, manifest)
                         .total_cmp(&blended_relevance(left_rank.score, left, manifest))
@@ -2053,6 +2098,7 @@ fn compare_video_sort(
             _ => right_rank
                 .exact_tokens
                 .cmp(&left_rank.exact_tokens)
+                .then_with(|| right_rank.exact_mask.cmp(&left_rank.exact_mask))
                 .then_with(|| right_rank.score.total_cmp(&left_rank.score)),
         };
     ordering
@@ -2091,12 +2137,17 @@ fn retain_best_document(documents: &mut Vec<DocMatch>, candidate: DocMatch, limi
         left.1
             .exact_tokens()
             .cmp(&right.1.exact_tokens())
+            .then_with(|| left.1.exact_mask().cmp(&right.1.exact_mask()))
             .then_with(|| left.1.score.total_cmp(&right.1.score))
     }) else {
         return;
     };
     if candidate.exact_tokens() > worst.exact_tokens()
-        || (candidate.exact_tokens() == worst.exact_tokens() && candidate.score > worst.score)
+        || (candidate.exact_tokens() == worst.exact_tokens()
+            && candidate.exact_mask() > worst.exact_mask())
+        || (candidate.exact_tokens() == worst.exact_tokens()
+            && candidate.exact_mask() == worst.exact_mask()
+            && candidate.score > worst.score)
     {
         documents[worst_index] = candidate;
     }
@@ -2106,6 +2157,7 @@ fn descending_doc_score(left: &DocMatch, right: &DocMatch) -> Ordering {
     right
         .exact_tokens()
         .cmp(&left.exact_tokens())
+        .then_with(|| right.exact_mask().cmp(&left.exact_mask()))
         .then_with(|| right.score.total_cmp(&left.score))
         .then_with(|| left.document().cmp(&right.document()))
 }
@@ -2148,10 +2200,8 @@ fn intersect_sorted_borrowed(left: Vec<DocMatch>, right: &[DocMatch]) -> Vec<Doc
                     left[left_index].score + right[right_index].score,
                     left[left_index].matches_text() || right[right_index].matches_text(),
                 );
-                combined.set_exact_tokens(
-                    left[left_index]
-                        .exact_tokens()
-                        .saturating_add(right[right_index].exact_tokens()),
+                combined.set_exact_mask(
+                    left[left_index].exact_mask() | right[right_index].exact_mask(),
                 );
                 output.push(combined);
                 left_index += 1;
@@ -2179,10 +2229,8 @@ fn intersect_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec<DocMatch> 
                     left[left_index].score + right[right_index].score,
                     left[left_index].matches_text() || right[right_index].matches_text(),
                 );
-                combined.set_exact_tokens(
-                    left[left_index]
-                        .exact_tokens()
-                        .saturating_add(right[right_index].exact_tokens()),
+                combined.set_exact_mask(
+                    left[left_index].exact_mask() | right[right_index].exact_mask(),
                 );
                 output.push(combined);
                 left_index += 1;
@@ -2222,9 +2270,7 @@ fn union_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec<DocMatch> {
                             left_value.score + right_value.score,
                             left_value.matches_text() || right_value.matches_text(),
                         );
-                        combined.set_exact_tokens(
-                            left_value.exact_tokens().max(right_value.exact_tokens()),
-                        );
+                        combined.set_exact_mask(left_value.exact_mask() | right_value.exact_mask());
                         output.push(combined);
                     }
                 }
@@ -2462,6 +2508,7 @@ fn query_fields(query_by: Option<&str>, prioritize_position: bool) -> Result<Que
         text,
         title,
         prioritize_position,
+        exact_mask: 1,
     })
 }
 
@@ -2750,6 +2797,8 @@ mod tests {
             json!({"id":"single-1","video_id":"single","title":"Alpha alone","text":"one term only","youtuber_handle":"@three","youtuber_name":"Three"}),
             json!({"id":"exact-relativity-1","video_id":"exact-relativity","title":"Relativity explained","text":"a clear account","youtuber_handle":"@one","youtuber_name":"One"}),
             json!({"id":"fuzzy-relativity-1","video_id":"fuzzy-relativity","title":"Relatively explained explained explained explained","text":"a repeated account","youtuber_handle":"@two","youtuber_name":"Two"}),
+            json!({"id":"early-exact-1","video_id":"early-exact","title":"Planet oribt","text":"an account","youtuber_handle":"@one","youtuber_name":"One"}),
+            json!({"id":"late-exact-1","video_id":"late-exact","title":"Planat orbit orbit orbit","text":"a repeated account","youtuber_handle":"@two","youtuber_name":"Two"}),
         ] {
             writeln!(chunks, "{document}").expect("write chunk");
         }
@@ -2817,17 +2866,22 @@ mod tests {
     fn match_provenance_does_not_increase_the_hot_candidate_size() {
         assert_eq!(std::mem::size_of::<DocMatch>(), 8);
         assert_eq!(std::mem::size_of::<BuildPosting>(), 8);
-        let transcript = DocMatch::new(42, 1.0, true);
+        let mut transcript = DocMatch::new(42, 1.0, true);
         assert_eq!(transcript.document(), 42);
         assert!(transcript.matches_text());
         assert_eq!(transcript.exact_tokens(), 1);
+        transcript.set_exact_mask(0b1000);
         let mut fuzzy = DocMatch::new(42, 2.0, true);
-        fuzzy.set_exact_tokens(0);
+        fuzzy.set_exact_mask(0);
         let union = union_sorted(vec![transcript], vec![fuzzy]);
         assert_eq!(union[0].exact_tokens(), 1);
+        assert_eq!(union[0].exact_mask(), 0b1000);
 
-        let two_exact = intersect_sorted(vec![transcript], vec![transcript]);
+        let mut later_exact = transcript;
+        later_exact.set_exact_mask(0b0100);
+        let two_exact = intersect_sorted(vec![transcript], vec![later_exact]);
         assert_eq!(two_exact[0].exact_tokens(), 2);
+        assert_eq!(two_exact[0].exact_mask(), 0b1100);
         let one_exact = intersect_sorted(vec![transcript], vec![fuzzy]);
         assert_eq!(one_exact[0].exact_tokens(), 1);
     }
@@ -3045,6 +3099,17 @@ mod tests {
             response["grouped_hits"][0]["group_key"][0],
             "exact-relativity"
         );
+    }
+
+    #[test]
+    fn earlier_exact_query_tokens_break_equal_exact_count_ties() {
+        let (_root, engine) = token_drop_engine();
+        let response = engine
+            .search(&grouped_query("planet orbit missing"))
+            .expect("query-order exact-priority search");
+
+        assert_eq!(response["found"], 2);
+        assert_eq!(response["grouped_hits"][0]["group_key"][0], "early-exact");
     }
 
     #[test]
