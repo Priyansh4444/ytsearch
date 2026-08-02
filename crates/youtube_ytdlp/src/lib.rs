@@ -10,13 +10,16 @@ use reqwest::Client as HttpClient;
 use serde::Deserialize;
 use serde_json::Value;
 use std::{
+    collections::HashMap,
     env, fs,
     path::{Path, PathBuf},
     process::Stdio,
+    sync::Arc,
 };
 use tokio::{
     process::Command,
-    time::{Duration, sleep, timeout},
+    sync::Mutex,
+    time::{Duration, Instant, sleep, timeout},
 };
 use youtube_ingest::{
     DurationMs, IngestError, TimestampMs, TranscriptSegment, TranscriptSource, VideoMetadata,
@@ -31,16 +34,25 @@ const YT_DLP_EXTRACTOR_ARGS_ENV: &str = "YT_DLP_EXTRACTOR_ARGS";
 const YT_DLP_USER_AGENT_ENV: &str = "YT_DLP_USER_AGENT";
 const CAPTION_LANGUAGES: [&str; 4] = ["en", "en-orig", "a.en", "en-US"];
 const CAPTION_EXTENSIONS: [&str; 2] = ["json3", "vtt"];
-const CAPTION_FETCH_ATTEMPTS: u8 = 3;
+const DEFAULT_CAPTION_FETCH_ATTEMPTS: u8 = 6;
+const DEFAULT_CAPTION_MIN_INTERVAL_MS: u64 = 1_500;
+const DEFAULT_RATE_LIMIT_RETRY_BASE_SECONDS: u64 = 5;
+const MAX_RATE_LIMIT_RETRY_SECONDS: u64 = 120;
+const CAPTION_FETCH_ATTEMPTS_ENV: &str = "YT_DLP_CAPTION_FETCH_ATTEMPTS";
+const CAPTION_MIN_INTERVAL_MS_ENV: &str = "YT_DLP_CAPTION_MIN_INTERVAL_MS";
+const RATE_LIMIT_RETRY_BASE_SECONDS_ENV: &str = "YT_DLP_RATE_LIMIT_RETRY_BASE_SECONDS";
 const ERROR_BODY_PREVIEW_BYTES: usize = 240;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const YT_DLP_TIMEOUT: Duration = Duration::from_secs(60);
+const VIDEO_JSON_HANDOFF_LIMIT: usize = 64;
 
 #[derive(Clone, Debug)]
 pub struct YtDlpTranscriptSource {
     http: HttpClient,
     binary: String,
     cache_dir: Option<PathBuf>,
+    caption_request_slot: Arc<Mutex<Instant>>,
+    video_json_handoff: Arc<Mutex<HashMap<String, Value>>>,
 }
 
 impl YtDlpTranscriptSource {
@@ -50,11 +62,13 @@ impl YtDlpTranscriptSource {
         )
     }
 
-    pub fn with_binary(binary: impl Into<String>) -> Self {
+    fn with_binary(binary: impl Into<String>) -> Self {
         Self {
             http: timeout_http_client(),
             binary: binary.into(),
             cache_dir: None,
+            caption_request_slot: Arc::new(Mutex::new(Instant::now())),
+            video_json_handoff: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -116,6 +130,7 @@ impl YtDlpTranscriptSource {
     async fn ytdlp_json(&self, url: impl AsRef<str>) -> youtube_ingest::Result<Value> {
         let mut command = Command::new(&self.binary);
         command
+            .kill_on_drop(true)
             .arg("--skip-download")
             .arg("--dump-json")
             .arg("--no-warnings");
@@ -165,6 +180,22 @@ impl YtDlpTranscriptSource {
         self.ytdlp_json(video_url(video_id)).await
     }
 
+    async fn remember_video_json(&self, video_id: &str, video: Value) {
+        let mut handoff = self.video_json_handoff.lock().await;
+        if handoff.len() >= VIDEO_JSON_HANDOFF_LIMIT {
+            handoff.clear();
+        }
+        handoff.insert(video_id.to_string(), video);
+    }
+
+    async fn take_video_json(&self, video_id: &str) -> Option<Value> {
+        self.video_json_handoff.lock().await.remove(video_id)
+    }
+
+    pub async fn discard_video_json(&self, video_id: &str) {
+        self.take_video_json(video_id).await;
+    }
+
     pub async fn channel_feed(
         &self,
         handle: &str,
@@ -201,6 +232,7 @@ impl YtDlpTranscriptSource {
         let url = channel_tab_url(&handle, tab)?;
         let mut command = Command::new(&self.binary);
         command
+            .kill_on_drop(true)
             .arg("--flat-playlist")
             .arg("--dump-single-json")
             .arg("--no-warnings");
@@ -263,14 +295,31 @@ impl YtDlpTranscriptSource {
         track: &CaptionTrack,
     ) -> youtube_ingest::Result<String> {
         let mut last_error = None;
+        let attempts = env_u8(
+            CAPTION_FETCH_ATTEMPTS_ENV,
+            DEFAULT_CAPTION_FETCH_ATTEMPTS,
+            1,
+            12,
+        );
 
-        for attempt in 1..=CAPTION_FETCH_ATTEMPTS {
+        for attempt in 1..=attempts {
             match self.fetch_caption_once(video_id, track).await {
                 Ok(body) => return Ok(body),
                 Err(error) => {
+                    let delay = caption_retry_delay(attempt, &error);
+                    let retryable = is_retryable_caption_error(&error);
                     last_error = Some(error);
-                    if attempt < CAPTION_FETCH_ATTEMPTS {
-                        sleep(Duration::from_millis(u64::from(attempt) * 500)).await;
+                    if attempt < attempts && retryable {
+                        tracing::warn!(
+                            video_id,
+                            attempt,
+                            attempts,
+                            retry_after_ms = delay.as_millis(),
+                            "caption request failed transiently; backing off"
+                        );
+                        sleep(delay).await;
+                    } else if !retryable {
+                        break;
                     }
                 }
             }
@@ -284,6 +333,7 @@ impl YtDlpTranscriptSource {
         video_id: &str,
         track: &CaptionTrack,
     ) -> youtube_ingest::Result<String> {
+        self.wait_for_caption_request_slot().await;
         let response = self.http.get(&track.url).send().await.map_err(|error| {
             transcript_error(video_id, format!("caption request failed: {error}"))
         })?;
@@ -305,6 +355,80 @@ impl YtDlpTranscriptSource {
 
         Ok(body)
     }
+
+    async fn wait_for_caption_request_slot(&self) {
+        let interval = Duration::from_millis(env_u64(
+            CAPTION_MIN_INTERVAL_MS_ENV,
+            DEFAULT_CAPTION_MIN_INTERVAL_MS,
+            0,
+            60_000,
+        ));
+        if interval.is_zero() {
+            return;
+        }
+
+        let mut next_request = self.caption_request_slot.lock().await;
+        let now = Instant::now();
+        if *next_request > now {
+            sleep(*next_request - now).await;
+        }
+        *next_request = Instant::now() + interval;
+    }
+}
+
+fn is_retryable_caption_error(error: &IngestError) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("429")
+        || message.contains("too many requests")
+        || message.contains("timed out")
+        || message.contains("timeout")
+        || message.contains("connection")
+        || message.contains("request failed")
+        || message.contains("body read failed")
+        || message.contains("502")
+        || message.contains("503")
+        || message.contains("504")
+}
+
+fn caption_retry_delay(attempt: u8, error: &IngestError) -> Duration {
+    if is_rate_limit_error(error) {
+        let base = env_u64(
+            RATE_LIMIT_RETRY_BASE_SECONDS_ENV,
+            DEFAULT_RATE_LIMIT_RETRY_BASE_SECONDS,
+            1,
+            MAX_RATE_LIMIT_RETRY_SECONDS,
+        );
+        let multiplier = 1_u64
+            .checked_shl(u32::from(attempt.saturating_sub(1)))
+            .unwrap_or(u64::MAX);
+        return Duration::from_secs(
+            base.saturating_mul(multiplier)
+                .min(MAX_RATE_LIMIT_RETRY_SECONDS),
+        );
+    }
+
+    Duration::from_millis(u64::from(attempt).saturating_mul(750))
+}
+
+fn is_rate_limit_error(error: &IngestError) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("429") || message.contains("too many requests")
+}
+
+fn env_u8(name: &str, default: u8, min: u8, max: u8) -> u8 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u8>().ok())
+        .unwrap_or(default)
+        .clamp(min, max)
+}
+
+fn env_u64(name: &str, default: u64, min: u64, max: u64) -> u64 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(default)
+        .clamp(min, max)
 }
 
 fn channel_tab_url(handle: &str, tab: &str) -> youtube_ingest::Result<String> {
@@ -321,47 +445,56 @@ fn channel_tab_url(handle: &str, tab: &str) -> youtube_ingest::Result<String> {
 impl VideoMetadataSource for YtDlpTranscriptSource {
     async fn metadata_for_video(&self, video_id: &str) -> youtube_ingest::Result<VideoMetadata> {
         let video = self.video_json(video_id).await?;
-        let title = required_string(&video, "title", video_id)?;
-        let channel_id = optional_string(&video, "channel_id")
-            .or_else(|| optional_string(&video, "channel"))
-            .unwrap_or_else(|| "unknown".to_string());
-        let uploader = optional_string(&video, "uploader")
-            .or_else(|| optional_string(&video, "channel"))
-            .unwrap_or_else(|| channel_id.clone());
-        let handle = optional_string(&video, "uploader_id")
-            .or_else(|| optional_string(&video, "channel"))
-            .unwrap_or_else(|| channel_id.clone());
-        let upload_date = optional_string(&video, "upload_date");
-        let published_at = upload_date.as_deref().and_then(compact_date_to_rfc3339);
-
-        Ok(VideoMetadata {
-            video_id: video_id.to_string(),
-            title,
-            youtuber: Youtuber {
-                id: stable_youtuber_id(&handle, &channel_id),
-                handle,
-                name: uploader,
-                channel_id,
-            },
-            duration_ms: video
-                .get("duration")
-                .and_then(Value::as_f64)
-                .and_then(seconds_to_ms),
-            thumbnail: optional_string(&video, "thumbnail"),
-            published_at,
-            upload_date,
-        })
+        let metadata = metadata_from_video_json(&video, video_id)?;
+        self.remember_video_json(video_id, video).await;
+        Ok(metadata)
     }
+}
+
+fn metadata_from_video_json(
+    video: &Value,
+    video_id: &str,
+) -> youtube_ingest::Result<VideoMetadata> {
+    let title = required_string(video, "title", video_id)?;
+    let channel_id = optional_string(video, "channel_id")
+        .or_else(|| optional_string(video, "channel"))
+        .unwrap_or_else(|| "unknown".to_string());
+    let uploader = optional_string(video, "uploader")
+        .or_else(|| optional_string(video, "channel"))
+        .unwrap_or_else(|| channel_id.clone());
+    let handle = optional_string(video, "uploader_id")
+        .or_else(|| optional_string(video, "channel"))
+        .unwrap_or_else(|| channel_id.clone());
+    let upload_date = optional_string(video, "upload_date");
+    let published_at = upload_date.as_deref().and_then(compact_date_to_rfc3339);
+
+    Ok(VideoMetadata {
+        video_id: video_id.to_string(),
+        title,
+        youtuber: Youtuber {
+            id: stable_youtuber_id(&handle, &channel_id),
+            handle,
+            name: uploader,
+            channel_id,
+        },
+        duration_ms: video
+            .get("duration")
+            .and_then(Value::as_f64)
+            .and_then(seconds_to_ms),
+        thumbnail: optional_string(video, "thumbnail"),
+        published_at,
+        upload_date,
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct YtDlpVideo {
     pub video_id: String,
     pub title: String,
-    pub channel_id: Option<String>,
-    pub channel: Option<String>,
-    pub uploader_id: Option<String>,
-    pub thumbnail: Option<String>,
+    channel_id: Option<String>,
+    channel: Option<String>,
+    uploader_id: Option<String>,
+    thumbnail: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -444,11 +577,18 @@ impl TranscriptSource for YtDlpTranscriptSource {
         video_id: &str,
     ) -> youtube_ingest::Result<Vec<TranscriptSegment>> {
         if let Some(transcript) = self.cached_transcript(video_id)? {
+            self.discard_video_json(video_id).await;
             tracing::info!(video_id, "loaded transcript from cache");
             return Ok(transcript);
         }
 
-        let video = self.video_json(video_id).await?;
+        let video = match self.take_video_json(video_id).await {
+            Some(video) => {
+                tracing::debug!(video_id, "reused yt-dlp metadata response for captions");
+                video
+            }
+            None => self.video_json(video_id).await?,
+        };
         let track = select_caption_track(&video).ok_or_else(|| {
             transcript_error(
                 video_id,
@@ -875,4 +1015,45 @@ mod tests {
         );
         assert!(channel_tab_url("@example", "playlists").is_err());
     }
+
+    #[test]
+    fn retries_rate_limits_and_transient_transport_failures() {
+        assert!(is_retryable_caption_error(&transcript_error(
+            "video",
+            "caption request returned 429 Too Many Requests"
+        )));
+        assert!(is_retryable_caption_error(&transcript_error(
+            "video",
+            "caption request failed: connection reset"
+        )));
+        assert!(!is_retryable_caption_error(&transcript_error(
+            "video",
+            "caption request returned 404 Not Found"
+        )));
+    }
+
+    #[test]
+    fn rate_limit_backoff_grows_and_is_capped() {
+        let error = transcript_error("video", "caption request returned 429 Too Many Requests");
+        let first = caption_retry_delay(1, &error);
+        let fourth = caption_retry_delay(4, &error);
+        let last = caption_retry_delay(12, &error);
+
+        assert!(fourth > first);
+        assert_eq!(last, Duration::from_secs(MAX_RATE_LIMIT_RETRY_SECONDS));
+    }
+}
+#[tokio::test]
+async fn video_json_handoff_is_shared_and_one_shot() {
+    let source = YtDlpTranscriptSource::new();
+    source
+        .remember_video_json("video-id", serde_json::json!({"title": "test"}))
+        .await;
+
+    let clone = source.clone();
+    assert_eq!(
+        clone.take_video_json("video-id").await,
+        Some(serde_json::json!({"title": "test"}))
+    );
+    assert_eq!(source.take_video_json("video-id").await, None);
 }
