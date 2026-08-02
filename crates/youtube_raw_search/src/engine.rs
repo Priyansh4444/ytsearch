@@ -2,8 +2,8 @@ use crate::{
     Error, Result,
     format::{
         BLOCK_RECORD_BYTES, DOCUMENT_RECORD_BYTES, DOCUMENTS_MAGIC, HEADER_BYTES, LEXICON_MAGIC,
-        METADATA_MAGIC, MappedFile, POSTINGS_MAGIC, read_u16, read_u32, read_u64, read_varint,
-        write_header, write_varint,
+        METADATA_MAGIC, MappedFile, POSITIONS_MAGIC, POSTINGS_MAGIC, read_u16, read_u32, read_u64,
+        read_varint, write_header, write_varint,
     },
     fuzzy::{FuzzyCandidate, FuzzyIndex, write_index as write_fuzzy_index},
 };
@@ -13,7 +13,7 @@ use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
     fs::{self, File},
-    io::{BufRead, BufReader, BufWriter, Seek, Write},
+    io::{BufRead, BufReader, BufWriter, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
@@ -26,6 +26,7 @@ const CHANNELS_FILE: &str = "channels.json";
 const VIDEOS_FILE: &str = "videos.json";
 const LEXICON_FILE: &str = "lexicon.bin";
 const POSTINGS_FILE: &str = "postings.bin";
+const POSITIONS_FILE: &str = "positions.bin";
 const DOCUMENTS_FILE: &str = "documents.blocks";
 const METADATA_FILE: &str = "documents.meta";
 const DOCUMENTS_PER_BLOCK: usize = 64;
@@ -48,6 +49,7 @@ const MAX_QUERY_BYTES: usize = 512;
 const MAX_FILTER_VALUE_BYTES: usize = 256;
 const MAX_PAGE_SIZE: u8 = 250;
 const ACTIVE_INCLUDE_FIELDS: &str = "id,video_id,title,text,prev_text,next_text,youtuber_handle,youtuber_name,thumbnail,published_at,duration,t_start_ms,t_end_ms";
+const POSITION_SCORE_BOOST: f32 = 0.15;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BuildReport {
@@ -125,6 +127,13 @@ struct TermBuild {
 struct BuildPosting {
     id: u32,
     frequency: u16,
+    first_position: u16,
+}
+
+#[derive(Clone, Copy)]
+struct TokenBuild {
+    frequency: u16,
+    first_position: u16,
 }
 
 #[derive(Clone, Copy)]
@@ -167,6 +176,7 @@ struct EngineInner {
     lexicon: Lexicon,
     fuzzy: FuzzyIndex,
     postings: MappedFile,
+    positions: PositionIndex,
     documents: MappedFile,
     metadata: DocumentTable,
     index_bytes: u64,
@@ -180,12 +190,19 @@ struct Lexicon {
 
 #[derive(Clone, Copy)]
 struct TermEntry {
+    term: u32,
     text_offset: usize,
     text_length: usize,
     text_frequency: u32,
     title_offset: usize,
     title_length: usize,
     title_frequency: u32,
+}
+
+struct PositionIndex {
+    file: MappedFile,
+    terms: usize,
+    data_start: usize,
 }
 
 struct DocumentTable {
@@ -277,6 +294,7 @@ enum QueryMode {
 struct QueryFields {
     text: bool,
     title: bool,
+    prioritize_position: bool,
 }
 
 #[derive(Default)]
@@ -332,10 +350,11 @@ pub fn build_index(
         } else {
             let video = videos.len() as u32;
             let title_counts = token_counts(&source.title);
-            for (term, frequency) in title_counts {
+            for (term, token) in title_counts {
                 terms.entry(term).or_default().title.push(BuildPosting {
                     id: video,
-                    frequency,
+                    frequency: token.frequency,
+                    first_position: token.first_position,
                 });
             }
             videos.push(VideoMeta {
@@ -356,13 +375,14 @@ pub fn build_index(
         let text_counts = token_counts(&source.text);
         let document_tokens = text_counts
             .values()
-            .map(|frequency| u32::from(*frequency))
+            .map(|token| u32::from(token.frequency))
             .sum::<u32>();
         total_tokens = total_tokens.saturating_add(u64::from(document_tokens));
-        for (term, frequency) in text_counts {
+        for (term, token) in text_counts {
             terms.entry(term).or_default().text.push(BuildPosting {
                 id: document,
-                frequency,
+                frequency: token.frequency,
+                first_position: token.first_position,
             });
         }
 
@@ -418,7 +438,7 @@ pub fn build_index(
         total_tokens as f32 / document_count as f32
     };
     let manifest = Manifest {
-        schema_version: 4,
+        schema_version: 5,
         documents: document_count,
         videos: videos.len() as u32,
         channels: channels.len() as u32,
@@ -557,17 +577,41 @@ fn write_postings(
     let mut terms = terms.into_iter().collect::<Vec<_>>();
     terms.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     let mut postings = BufWriter::new(File::create(index_path.join(POSTINGS_FILE))?);
-    let mut header = Vec::with_capacity(HEADER_BYTES);
-    write_header(&mut header, POSTINGS_MAGIC, terms.len() as u32);
-    postings.write_all(&header)?;
-    let mut position = HEADER_BYTES as u64;
+    let mut postings_header = Vec::with_capacity(HEADER_BYTES);
+    write_header(&mut postings_header, POSTINGS_MAGIC, terms.len() as u32);
+    postings.write_all(&postings_header)?;
+    let mut positions = BufWriter::new(File::create(index_path.join(POSITIONS_FILE))?);
+    let mut positions_header = Vec::with_capacity(HEADER_BYTES);
+    write_header(&mut positions_header, POSITIONS_MAGIC, terms.len() as u32);
+    positions.write_all(&positions_header)?;
+    let position_offsets_count = terms
+        .len()
+        .checked_mul(2)
+        .and_then(|count| count.checked_add(1))
+        .ok_or_else(|| Error::Corrupt("position offset count overflows".to_string()))?;
+    let position_table_bytes = position_offsets_count
+        .checked_mul(4)
+        .ok_or_else(|| Error::Corrupt("position offset table overflows".to_string()))?;
+    positions.write_all(&vec![0_u8; position_table_bytes])?;
+    let mut postings_position = HEADER_BYTES as u64;
+    let mut positions_position = 0_u32;
+    let mut position_offsets = Vec::with_capacity(position_offsets_count);
     let mut lexicon = Vec::with_capacity(terms.len());
 
     for (term, lists) in terms {
         let text = encode_postings(&lists.text);
-        let text_offset = position;
+        let text_offset = postings_position;
         postings.write_all(&text)?;
-        position += text.len() as u64;
+        postings_position += text.len() as u64;
+        let text_positions = encode_first_positions(&lists.text);
+        position_offsets.push(positions_position);
+        positions.write_all(&text_positions)?;
+        positions_position = positions_position
+            .checked_add(
+                u32::try_from(text_positions.len())
+                    .map_err(|_| Error::Corrupt("text positions exceed u32 length".to_string()))?,
+            )
+            .ok_or_else(|| Error::Corrupt("positions file exceeds u32 length".to_string()))?;
         let title = encode_postings(&lists.title);
         let fuzzy_title_frequency = lists.title.iter().fold(0_u32, |frequency, posting| {
             frequency.saturating_add(
@@ -576,9 +620,18 @@ fn write_postings(
                     .map_or(0, |video| video.documents.len() as u32),
             )
         });
-        let title_offset = position;
+        let title_offset = postings_position;
         postings.write_all(&title)?;
-        position += title.len() as u64;
+        postings_position += title.len() as u64;
+        let title_positions = encode_first_positions(&lists.title);
+        position_offsets.push(positions_position);
+        positions.write_all(&title_positions)?;
+        positions_position = positions_position
+            .checked_add(
+                u32::try_from(title_positions.len())
+                    .map_err(|_| Error::Corrupt("title positions exceed u32 length".to_string()))?,
+            )
+            .ok_or_else(|| Error::Corrupt("positions file exceeds u32 length".to_string()))?;
         lexicon.push(LexiconBuildEntry {
             term,
             text_offset,
@@ -590,7 +643,13 @@ fn write_postings(
             fuzzy_title_frequency,
         });
     }
+    position_offsets.push(positions_position);
     postings.flush()?;
+    positions.seek(SeekFrom::Start(HEADER_BYTES as u64))?;
+    for offset in position_offsets {
+        positions.write_all(&offset.to_le_bytes())?;
+    }
+    positions.flush()?;
     write_fuzzy_index(
         index_path,
         lexicon.iter().enumerate().map(|(index, entry)| {
@@ -618,6 +677,14 @@ fn encode_postings(postings: &[BuildPosting]) -> Vec<u8> {
         write_varint(delta, &mut encoded);
         write_varint(u32::from(posting.frequency), &mut encoded);
         previous = posting.id;
+    }
+    encoded
+}
+
+fn encode_first_positions(postings: &[BuildPosting]) -> Vec<u8> {
+    let mut encoded = Vec::with_capacity(postings.len());
+    for posting in postings {
+        write_varint(u32::from(posting.first_position), &mut encoded);
     }
     encoded
 }
@@ -657,7 +724,7 @@ impl RawSearchEngine {
     pub fn open(index_path: &Path) -> Result<Self> {
         let manifest: Manifest =
             serde_json::from_reader(BufReader::new(File::open(index_path.join(MANIFEST_FILE))?))?;
-        if manifest.schema_version != 4 {
+        if manifest.schema_version != 5 {
             return Err(Error::Corrupt(format!(
                 "unsupported schema version {}",
                 manifest.schema_version
@@ -670,6 +737,7 @@ impl RawSearchEngine {
         let lexicon = Lexicon::open(&index_path.join(LEXICON_FILE))?;
         let fuzzy = FuzzyIndex::open(index_path, lexicon.count)?;
         let postings = MappedFile::open(&index_path.join(POSTINGS_FILE), POSTINGS_MAGIC)?;
+        let positions = PositionIndex::open(&index_path.join(POSITIONS_FILE), lexicon.count)?;
         let documents = MappedFile::open(&index_path.join(DOCUMENTS_FILE), DOCUMENTS_MAGIC)?;
         let metadata = DocumentTable::open(&index_path.join(METADATA_FILE))?;
         let counts_match = manifest.documents as usize == metadata.documents
@@ -690,6 +758,7 @@ impl RawSearchEngine {
                 lexicon,
                 fuzzy,
                 postings,
+                positions,
                 documents,
                 metadata,
                 index_bytes: directory_size(index_path)?,
@@ -772,6 +841,7 @@ impl Lexicon {
         Ok((
             term,
             TermEntry {
+                term: index as u32,
                 text_offset: read_u64(entry, fields)? as usize,
                 text_length: read_u32(entry, fields + 8)? as usize,
                 text_frequency: read_u32(entry, fields + 12)?,
@@ -780,6 +850,68 @@ impl Lexicon {
                 title_frequency: read_u32(entry, fields + 28)?,
             },
         ))
+    }
+}
+
+impl PositionIndex {
+    fn open(path: &Path, expected_terms: usize) -> Result<Self> {
+        let file = MappedFile::open(path, POSITIONS_MAGIC)?;
+        let terms = read_u32(file.bytes(), 8)? as usize;
+        if terms != expected_terms {
+            return Err(Error::Corrupt(
+                "position term count does not match lexicon".to_string(),
+            ));
+        }
+        let offsets = terms
+            .checked_mul(2)
+            .and_then(|count| count.checked_add(1))
+            .ok_or_else(|| Error::Corrupt("position offset count overflows".to_string()))?;
+        let table_bytes = offsets
+            .checked_mul(4)
+            .ok_or_else(|| Error::Corrupt("position offset table overflows".to_string()))?;
+        let data_start = HEADER_BYTES
+            .checked_add(table_bytes)
+            .ok_or_else(|| Error::Corrupt("position data offset overflows".to_string()))?;
+        if data_start > file.bytes().len() {
+            return Err(Error::Corrupt(
+                "position offset table is truncated".to_string(),
+            ));
+        }
+        let mut previous = 0_u32;
+        for index in 0..offsets {
+            let offset = read_u32(file.bytes(), HEADER_BYTES + index * 4)?;
+            if offset < previous {
+                return Err(Error::Corrupt(
+                    "position offsets are not monotonic".to_string(),
+                ));
+            }
+            previous = offset;
+        }
+        if data_start.saturating_add(previous as usize) != file.bytes().len() {
+            return Err(Error::Corrupt(
+                "position data boundary is invalid".to_string(),
+            ));
+        }
+        Ok(Self {
+            file,
+            terms,
+            data_start,
+        })
+    }
+
+    fn range(&self, term: u32, title: bool) -> Result<&[u8]> {
+        if term as usize >= self.terms {
+            return Err(Error::Corrupt(
+                "position term is outside the lexicon".to_string(),
+            ));
+        }
+        let index = term as usize * 2 + usize::from(title);
+        let start = read_u32(self.file.bytes(), HEADER_BYTES + index * 4)? as usize;
+        let end = read_u32(self.file.bytes(), HEADER_BYTES + (index + 1) * 4)? as usize;
+        self.file
+            .bytes()
+            .get(self.data_start + start..self.data_start + end)
+            .ok_or_else(|| Error::Corrupt("position range extends beyond file".to_string()))
     }
 }
 
@@ -870,7 +1002,10 @@ impl RawSearchEngine {
         if params.q.trim() == "*" || terms.is_empty() {
             return self.search_all(params);
         }
-        let fields = query_fields(params.query_by.as_deref())?;
+        let fields = query_fields(
+            params.query_by.as_deref(),
+            params.prioritize_token_position.unwrap_or(true),
+        )?;
 
         if terms.len() == 1 {
             return self.search_single_token(params, &terms[0], fields);
@@ -1168,7 +1303,13 @@ impl RawSearchEngine {
             if candidate_term.len() < term.len() {
                 continue;
             }
-            let matches = self.matches_for_split_component(candidate_term, fields)?;
+            let matches = self.matches_for_split_component(
+                candidate_term,
+                QueryFields {
+                    prioritize_position: false,
+                    ..fields
+                },
+            )?;
             output.push(SplitComponent {
                 matches,
                 highlight: candidate_term.to_string(),
@@ -1245,44 +1386,68 @@ impl RawSearchEngine {
         let idf =
             inverse_document_frequency(self.inner.manifest.documents, effective_frequency.max(1));
         let text = if fields.text {
-            self.decode_text_postings(entry, idf)?
+            self.decode_text_postings(entry, idf, fields.prioritize_position)?
         } else {
             Vec::new()
         };
         let title = if fields.title {
-            self.decode_title_postings(entry, idf)?
+            self.decode_title_postings(entry, idf, fields.prioritize_position)?
         } else {
             Vec::new()
         };
         Ok(union_sorted(text, title))
     }
 
-    fn decode_text_postings(&self, entry: TermEntry, idf: f32) -> Result<Vec<DocMatch>> {
+    fn decode_text_postings(
+        &self,
+        entry: TermEntry,
+        idf: f32,
+        prioritize_position: bool,
+    ) -> Result<Vec<DocMatch>> {
         let bytes = self.postings_range(entry.text_offset, entry.text_length)?;
+        let position_bytes = prioritize_position
+            .then(|| self.inner.positions.range(entry.term, false))
+            .transpose()?;
         let mut matches = Vec::with_capacity(entry.text_frequency as usize);
         let mut cursor = 0_usize;
+        let mut position_cursor = 0_usize;
         let mut document = 0_u32;
         while cursor < bytes.len() {
             document = document.saturating_add(read_varint(bytes, &mut cursor, bytes.len())?);
             let frequency = read_varint(bytes, &mut cursor, bytes.len())?;
+            let first_position = position_bytes
+                .map(|positions| read_varint(positions, &mut position_cursor, positions.len()))
+                .transpose()?
+                .unwrap_or_default();
             let record = self.inner.metadata.document(document)?;
             let score = bm25(
                 frequency,
                 record.tokens,
                 self.inner.manifest.average_document_tokens,
-            ) * idf;
+            ) * idf
+                * token_position_multiplier(first_position, prioritize_position);
             matches.push(DocMatch::new(document, score, true));
         }
-        if matches.len() != entry.text_frequency as usize {
+        if matches.len() != entry.text_frequency as usize
+            || position_bytes.is_some_and(|positions| position_cursor != positions.len())
+        {
             return Err(Error::Corrupt(
-                "text posting count does not match lexicon".to_string(),
+                "text posting/position count does not match lexicon".to_string(),
             ));
         }
         Ok(matches)
     }
 
-    fn decode_title_postings(&self, entry: TermEntry, idf: f32) -> Result<Vec<DocMatch>> {
+    fn decode_title_postings(
+        &self,
+        entry: TermEntry,
+        idf: f32,
+        prioritize_position: bool,
+    ) -> Result<Vec<DocMatch>> {
         let bytes = self.postings_range(entry.title_offset, entry.title_length)?;
+        let position_bytes = prioritize_position
+            .then(|| self.inner.positions.range(entry.term, true))
+            .transpose()?;
         let average_docs = self
             .inner
             .manifest
@@ -1292,23 +1457,33 @@ impl RawSearchEngine {
         let mut matches =
             Vec::with_capacity((entry.title_frequency.saturating_mul(average_docs)) as usize);
         let mut cursor = 0_usize;
+        let mut position_cursor = 0_usize;
         let mut video_id = 0_u32;
         let mut postings = 0_u32;
         while cursor < bytes.len() {
             video_id = video_id.saturating_add(read_varint(bytes, &mut cursor, bytes.len())?);
             let frequency = read_varint(bytes, &mut cursor, bytes.len())?;
+            let first_position = position_bytes
+                .map(|positions| read_varint(positions, &mut position_cursor, positions.len()))
+                .transpose()?
+                .unwrap_or_default();
             let video = self.inner.videos.get(video_id as usize).ok_or_else(|| {
                 Error::Corrupt("title posting video is out of bounds".to_string())
             })?;
-            let score = idf * 6.0 * (1.0 + (frequency as f32).ln());
+            let score = idf
+                * 6.0
+                * (1.0 + (frequency as f32).ln())
+                * token_position_multiplier(first_position, prioritize_position);
             for &document in &video.documents {
                 matches.push(DocMatch::new(document, score, false));
             }
             postings += 1;
         }
-        if postings != entry.title_frequency {
+        if postings != entry.title_frequency
+            || position_bytes.is_some_and(|positions| position_cursor != positions.len())
+        {
             return Err(Error::Corrupt(
-                "title posting count does not match lexicon".to_string(),
+                "title posting/position count does not match lexicon".to_string(),
             ));
         }
         Ok(matches)
@@ -1356,7 +1531,15 @@ impl RawSearchEngine {
                 continue;
             }
             let (candidate, entry) = self.inner.lexicon.entry_at(term_id as usize)?;
-            let mut matches = self.matches_for_entry(entry, fields)?;
+            // Edit distance already supplies the fallback's relevance demotion.
+            // Avoid decoding a second posting stream for every fuzzy candidate.
+            let mut matches = self.matches_for_entry(
+                entry,
+                QueryFields {
+                    prioritize_position: false,
+                    ..fields
+                },
+            )?;
             let score_multiplier = match distance {
                 0 => 0.9,
                 1 => 0.65,
@@ -1895,27 +2078,32 @@ fn union_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec<DocMatch> {
     output
 }
 
-fn token_counts(value: &str) -> HashMap<String, u16> {
+fn token_counts(value: &str) -> HashMap<String, TokenBuild> {
     let mut counts = HashMap::new();
     let mut token = String::new();
+    let mut position = 0_u16;
     for character in value.chars() {
         if character.is_alphanumeric() {
             token.extend(character.to_lowercase());
             continue;
         }
-        record_token(&mut counts, &mut token);
+        record_token(&mut counts, &mut token, &mut position);
     }
-    record_token(&mut counts, &mut token);
+    record_token(&mut counts, &mut token, &mut position);
     counts
 }
 
-fn record_token(counts: &mut HashMap<String, u16>, token: &mut String) {
+fn record_token(counts: &mut HashMap<String, TokenBuild>, token: &mut String, position: &mut u16) {
     if token.is_empty() {
         return;
     }
     let owned = std::mem::take(token);
-    let count = counts.entry(owned).or_insert(0_u16);
-    *count = count.saturating_add(1);
+    let entry = counts.entry(owned).or_insert(TokenBuild {
+        frequency: 0,
+        first_position: *position,
+    });
+    entry.frequency = entry.frequency.saturating_add(1);
+    *position = position.saturating_add(1);
 }
 
 fn unique_tokens(value: &str) -> Vec<String> {
@@ -1955,7 +2143,7 @@ fn validate_search_params(params: &SearchParams) -> Result<()> {
         )));
     }
 
-    query_fields(params.query_by.as_deref())?;
+    query_fields(params.query_by.as_deref(), false)?;
     parse_filter(params.filter_by.as_deref())?;
     if let Some(group_by) = params.group_by.as_deref()
         && group_by != "video_id"
@@ -2057,7 +2245,7 @@ fn validate_search_params(params: &SearchParams) -> Result<()> {
         ));
     }
     if let Some(fields) = params.highlight_fields.as_deref() {
-        query_fields(Some(fields))?;
+        query_fields(Some(fields), false)?;
     }
     if params
         .include_fields
@@ -2071,7 +2259,7 @@ fn validate_search_params(params: &SearchParams) -> Result<()> {
     Ok(())
 }
 
-fn query_fields(query_by: Option<&str>) -> Result<QueryFields> {
+fn query_fields(query_by: Option<&str>, prioritize_position: bool) -> Result<QueryFields> {
     let requested = query_by.unwrap_or("text,title");
     let mut text = false;
     let mut title = false;
@@ -2091,7 +2279,11 @@ fn query_fields(query_by: Option<&str>) -> Result<QueryFields> {
             }
         }
     }
-    Ok(QueryFields { text, title })
+    Ok(QueryFields {
+        text,
+        title,
+        prioritize_position,
+    })
 }
 
 fn inverse_document_frequency(documents: u32, frequency: u32) -> f32 {
@@ -2110,6 +2302,13 @@ fn bm25(frequency: u32, document_tokens: u32, average_tokens: f32) -> f32 {
         1.0
     };
     frequency * (K1 + 1.0) / (frequency + K1 * (1.0 - B + B * normalized_length))
+}
+
+fn token_position_multiplier(first_position: u32, enabled: bool) -> f32 {
+    if !enabled {
+        return 1.0;
+    }
+    1.0 + POSITION_SCORE_BOOST / (first_position as f32 + 1.0).sqrt()
 }
 
 fn result_window(params: &SearchParams) -> (usize, usize) {
@@ -2349,6 +2548,24 @@ mod tests {
         (root, engine)
     }
 
+    fn position_engine() -> (TempDir, RawSearchEngine) {
+        let root = TempDir::new().expect("temp dir");
+        let chunks_path = root.path().join("chunks.jsonl");
+        let channels_path = root.path().join("channels.jsonl");
+        let index_path = root.path().join("index");
+        let mut chunks = File::create(&chunks_path).expect("chunks");
+        for document in [
+            json!({"id":"early-1","video_id":"early","title":"Same","text":"target alpha beta gamma","youtuber_handle":"@one","youtuber_name":"One"}),
+            json!({"id":"late-1","video_id":"late","title":"Same","text":"alpha beta gamma target","youtuber_handle":"@two","youtuber_name":"Two"}),
+        ] {
+            writeln!(chunks, "{document}").expect("write chunk");
+        }
+        File::create(&channels_path).expect("channels");
+        build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+        let engine = RawSearchEngine::open(&index_path).expect("open raw index");
+        (root, engine)
+    }
+
     fn grouped_query(query: &str) -> SearchParams {
         SearchParams {
             q: query.to_string(),
@@ -2406,9 +2623,21 @@ mod tests {
     #[test]
     fn match_provenance_does_not_increase_the_hot_candidate_size() {
         assert_eq!(std::mem::size_of::<DocMatch>(), 8);
+        assert_eq!(std::mem::size_of::<BuildPosting>(), 8);
         let transcript = DocMatch::new(42, 1.0, true);
         assert_eq!(transcript.document(), 42);
         assert!(transcript.matches_text());
+    }
+
+    #[test]
+    fn first_token_position_breaks_equal_relevance_ties() {
+        let (_root, engine) = position_engine();
+        let mut query = grouped_query("target");
+        query.query_by = Some("text".to_string());
+        let response = engine.search(&query).expect("position search");
+        assert_eq!(response["grouped_hits"][0]["group_key"][0], "early");
+        assert!(token_position_multiplier(0, true) > token_position_multiplier(3, true));
+        assert_eq!(token_position_multiplier(0, false), 1.0);
     }
 
     #[test]
@@ -2665,7 +2894,7 @@ mod tests {
     #[test]
     fn engagement_normalization_is_bounded_and_handles_missing_metrics() {
         let manifest = Manifest {
-            schema_version: 4,
+            schema_version: 5,
             documents: 0,
             videos: 0,
             channels: 0,
@@ -2893,6 +3122,23 @@ mod tests {
         let engine = RawSearchEngine::open(&root.path().join("index")).expect("open headers");
         assert!(matches!(
             engine.search(&grouped_query("memory")),
+            Err(Error::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn truncated_positions_are_rejected_at_open() {
+        let (root, engine) = test_engine();
+        drop(engine);
+        let positions_path = root.path().join("index").join(POSITIONS_FILE);
+        OpenOptions::new()
+            .write(true)
+            .open(&positions_path)
+            .expect("positions")
+            .set_len(HEADER_BYTES as u64)
+            .expect("truncate positions");
+        assert!(matches!(
+            RawSearchEngine::open(&root.path().join("index")),
             Err(Error::Corrupt(_))
         ));
     }
