@@ -44,6 +44,7 @@ const DEFAULT_SEARCH_RATE_LIMIT_PER_MINUTE: usize = 120;
 struct AppState {
     search: Arc<dyn TranscriptSearchBackend>,
     search_backend: String,
+    engagement_sorts_enabled: bool,
     axiom: Option<AxiomLogger>,
     rate_limiter: Arc<Mutex<RateLimiter>>,
     search_rate_limit_per_minute: usize,
@@ -163,6 +164,10 @@ struct SearchResponse {
 enum SearchSort {
     #[default]
     Relevance,
+    RelevanceEngagement,
+    ViewsDesc,
+    LikesDesc,
+    CommentsDesc,
     PublishedDesc,
     PublishedAsc,
 }
@@ -190,6 +195,9 @@ struct SearchHit {
     youtuber_name: String,
     thumbnail: Option<String>,
     published_at: Option<String>,
+    view_count: u64,
+    like_count: u64,
+    comment_count: u64,
     content_kind: ContentKind,
     t_start_ms: u32,
     t_end_ms: u32,
@@ -207,6 +215,9 @@ struct SearchVideoResult {
     youtuber_name: String,
     thumbnail: Option<String>,
     published_at: Option<String>,
+    view_count: u64,
+    like_count: u64,
+    comment_count: u64,
     content_kind: ContentKind,
     match_count: usize,
     youtube_url: String,
@@ -307,6 +318,7 @@ async fn main() -> Result<(), ApiError> {
     let state = Arc::new(AppState {
         search: search_client,
         search_backend: backend,
+        engagement_sorts_enabled: env_bool("YTSEARCH_ENGAGEMENT_SORTS", false),
         axiom: AxiomLogger::from_env(),
         rate_limiter: Arc::new(Mutex::new(RateLimiter::default())),
         search_rate_limit_per_minute: env_usize(
@@ -521,6 +533,7 @@ async fn search_handler(
         .clamp(1, MAX_PER_PAGE);
     let page = params.page.unwrap_or(1).max(1);
     let mut sort = params.sort.unwrap_or_default();
+    validate_search_sort(sort, state.engagement_sorts_enabled)?;
     let low_signal_query = is_low_signal_query(query);
     if sort == SearchSort::Relevance && low_signal_query {
         sort = SearchSort::PublishedDesc;
@@ -565,6 +578,10 @@ async fn search_handler(
     search_query = match sort {
         SearchSort::PublishedDesc => search_query.sort_by("published_at_timestamp:desc"),
         SearchSort::PublishedAsc => search_query.sort_by("published_at_timestamp:asc"),
+        SearchSort::RelevanceEngagement => search_query.sort_by("engagement_score:desc"),
+        SearchSort::ViewsDesc => search_query.sort_by("view_count:desc"),
+        SearchSort::LikesDesc => search_query.sort_by("like_count:desc"),
+        SearchSort::CommentsDesc => search_query.sort_by("comment_count:desc"),
         SearchSort::Relevance => search_query,
     };
     if use_backend_grouping {
@@ -761,6 +778,10 @@ async fn fetch_lexical_fallback(
             "sort",
             match sort {
                 SearchSort::Relevance => "relevance",
+                SearchSort::RelevanceEngagement => "relevance_engagement",
+                SearchSort::ViewsDesc => "views_desc",
+                SearchSort::LikesDesc => "likes_desc",
+                SearchSort::CommentsDesc => "comments_desc",
                 SearchSort::PublishedDesc => "published_desc",
                 SearchSort::PublishedAsc => "published_asc",
             },
@@ -1445,10 +1466,16 @@ fn video_results_from_hits(
             }
             video.match_count = video.hits.len();
             match sort {
-                SearchSort::Relevance => video.hits.sort_by_cached_key(|hit| {
-                    (Reverse(hit_relevance_score(hit, &terms)), hit.t_start_ms)
-                }),
-                SearchSort::PublishedDesc | SearchSort::PublishedAsc => {
+                SearchSort::Relevance | SearchSort::RelevanceEngagement => {
+                    video.hits.sort_by_cached_key(|hit| {
+                        (Reverse(hit_relevance_score(hit, &terms)), hit.t_start_ms)
+                    })
+                }
+                SearchSort::PublishedDesc
+                | SearchSort::PublishedAsc
+                | SearchSort::ViewsDesc
+                | SearchSort::LikesDesc
+                | SearchSort::CommentsDesc => {
                     video.hits.sort_by_key(|hit| hit.t_start_ms);
                 }
             }
@@ -1490,6 +1517,10 @@ fn video_results_from_hits(
                 .cmp(&right.published_at)
                 .then_with(|| left.title.cmp(&right.title))
         }),
+        SearchSort::RelevanceEngagement
+        | SearchSort::ViewsDesc
+        | SearchSort::LikesDesc
+        | SearchSort::CommentsDesc => {}
     }
 
     videos
@@ -1618,6 +1649,9 @@ impl SearchVideoResult {
             youtuber_name: hit.youtuber_name.clone(),
             thumbnail: hit.thumbnail.clone(),
             published_at: hit.published_at.clone(),
+            view_count: hit.view_count,
+            like_count: hit.like_count,
+            comment_count: hit.comment_count,
             content_kind: hit.content_kind,
             match_count: 0,
             youtube_url: hit.youtube_url.clone(),
@@ -1739,6 +1773,9 @@ mod tests {
             "text": text,
             "youtuber_handle": "@test",
             "youtuber_name": "Test",
+            "view_count": 1_000_000,
+            "like_count": "100000",
+            "comment_count": 10000.0,
             "t_start_ms": 1000,
             "t_end_ms": 2000
         })
@@ -1807,6 +1844,56 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].video_id, "video-a");
         assert_eq!(hits[1].video_id, "video-b");
+        assert_eq!(hits[0].view_count, 1_000_000);
+        assert_eq!(hits[0].like_count, 100_000);
+        assert_eq!(hits[0].comment_count, 10_000);
+    }
+
+    #[test]
+    fn engagement_sorts_are_gated_to_the_experimental_backend() {
+        for sort in [
+            SearchSort::RelevanceEngagement,
+            SearchSort::ViewsDesc,
+            SearchSort::LikesDesc,
+            SearchSort::CommentsDesc,
+        ] {
+            assert!(validate_search_sort(sort, true).is_ok());
+            assert!(matches!(
+                validate_search_sort(sort, false),
+                Err(ApiError::BadRequest(_))
+            ));
+        }
+        for sort in [
+            SearchSort::Relevance,
+            SearchSort::PublishedDesc,
+            SearchSort::PublishedAsc,
+        ] {
+            assert!(validate_search_sort(sort, false).is_ok());
+        }
+    }
+
+    #[test]
+    fn engagement_results_preserve_backend_video_order_and_counts() {
+        let mut popular = test_hit("popular", "Popular", "matching moment");
+        popular.view_count = 9_000_000;
+        popular.like_count = 700_000;
+        popular.comment_count = 40_000;
+        let mut niche = test_hit("niche", "Niche", "matching moment");
+        niche.view_count = 1_000;
+        niche.like_count = 100;
+        niche.comment_count = 10;
+
+        let videos = video_results_from_hits(
+            &[popular, niche],
+            SearchSort::RelevanceEngagement,
+            "matching moment",
+            false,
+        );
+
+        assert_eq!(videos[0].video_id, "popular");
+        assert_eq!(videos[0].view_count, 9_000_000);
+        assert_eq!(videos[0].like_count, 700_000);
+        assert_eq!(videos[0].comment_count, 40_000);
     }
 
     #[test]
@@ -2303,6 +2390,9 @@ impl SearchHit {
             youtuber_name: string_field(document, "youtuber_name")?,
             thumbnail: optional_string_field(document, "thumbnail"),
             published_at: optional_string_field(document, "published_at"),
+            view_count: optional_u64_field(document, "view_count").unwrap_or_default(),
+            like_count: optional_u64_field(document, "like_count").unwrap_or_default(),
+            comment_count: optional_u64_field(document, "comment_count").unwrap_or_default(),
             content_kind,
             t_start_ms,
             t_end_ms,
@@ -2354,6 +2444,10 @@ fn optional_u32_field(document: &Value, field: &'static str) -> Option<u32> {
     document.get(field).and_then(value_as_u32)
 }
 
+fn optional_u64_field(document: &Value, field: &'static str) -> Option<u64> {
+    document.get(field).and_then(value_as_u64)
+}
+
 fn u32_field(document: &Value, field: &'static str) -> Result<u32, ApiError> {
     optional_u32_field(document, field).ok_or(ApiError::UnexpectedSearchShape)
 }
@@ -2369,6 +2463,22 @@ fn value_as_u32(value: &Value) -> Option<u32> {
                     .as_f64()
                     .filter(|value| value.is_finite() && *value >= 0.0)
                     .and_then(|value| u32::try_from(value.round() as i64).ok())
+            }),
+        Value::String(text) => text.parse().ok(),
+        _ => None,
+    }
+}
+
+fn value_as_u64(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(number) => number
+            .as_u64()
+            .or_else(|| number.as_i64().and_then(|value| u64::try_from(value).ok()))
+            .or_else(|| {
+                number
+                    .as_f64()
+                    .filter(|value| value.is_finite() && *value >= 0.0)
+                    .map(|value| value.round() as u64)
             }),
         Value::String(text) => text.parse().ok(),
         _ => None,
@@ -2474,6 +2584,34 @@ fn env_usize(name: &str, default: usize) -> usize {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
+}
+
+fn env_bool(name: &str, default: bool) -> bool {
+    env::var(name)
+        .ok()
+        .and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
+fn validate_search_sort(sort: SearchSort, engagement_sorts_enabled: bool) -> Result<(), ApiError> {
+    if !engagement_sorts_enabled
+        && matches!(
+            sort,
+            SearchSort::RelevanceEngagement
+                | SearchSort::ViewsDesc
+                | SearchSort::LikesDesc
+                | SearchSort::CommentsDesc
+        )
+    {
+        return Err(ApiError::BadRequest(
+            "engagement sorting is unavailable on this search backend".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn collection_env(_backend: &str) -> String {
