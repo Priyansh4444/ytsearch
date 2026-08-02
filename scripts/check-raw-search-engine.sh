@@ -98,6 +98,7 @@ for metric in view_count like_count comment_count; do
     [.grouped_hits[].hits[0].document[$metric]] as $values |
     ($values | length) > 0 and
     all($values[]; type == "number") and
+    any($values[]; . > 0) and
     all(range(1; $values | length); $values[. - 1] >= $values[.])
   ' "$result_file" >/dev/null
 done
@@ -157,6 +158,11 @@ jq -n \
     views_top_10:[$views[0].grouped_hits[].group_key[0]],
     likes_top_10:[$likes[0].grouped_hits[].group_key[0]],
     comments_top_10:[$comments[0].grouped_hits[].group_key[0]],
+    metric_maxima:{
+      views:([$views[0].grouped_hits[].hits[0].document.view_count] | max),
+      likes:([$likes[0].grouped_hits[].hits[0].document.like_count] | max),
+      comments:([$comments[0].grouped_hits[].hits[0].document.comment_count] | max)
+    },
     checks:{raw_alias:true,typo_recovery:true,creator_scope:true,date_sort:true,engagement_sort:true,pagination:true,channel_search:true,authentication:true}
   }
 ' | tee "$OUTPUT"
