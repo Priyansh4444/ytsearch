@@ -8,3 +8,6 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 youtube_ingest = { path = "../youtube_ingest" }
+
+[dev-dependencies]
+serde_json = { workspace = true }

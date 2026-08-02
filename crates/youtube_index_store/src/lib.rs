@@ -182,34 +182,24 @@ pub trait SearchIndexAdmin: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{collections::BTreeMap, mem::size_of};
+    use std::mem::size_of;
 
     fn chunk(video_id: &str) -> TranscriptChunk {
-        TranscriptChunk {
-            id: format!("{video_id}-0"),
-            youtuber_id: "channel".to_string(),
-            youtuber_handle: "@channel".to_string(),
-            youtuber_name: "Channel".to_string(),
-            channel_id: "UC123".to_string(),
-            video_id: video_id.to_string(),
-            title: "Title".to_string(),
-            text: "Transcript".to_string(),
-            prev_text: None,
-            next_text: None,
-            sequence: 0,
-            chapter: None,
-            chapter_index: None,
-            duration: None,
-            t_start_ms: 0,
-            t_end_ms: 1,
-            thumbnail: None,
-            upload_date: None,
-            published_at: None,
-            published_at_timestamp: None,
-            uploader_id: "channel".to_string(),
-            embedding: None,
-            extra: BTreeMap::new(),
-        }
+        serde_json::from_value(serde_json::json!({
+            "id": format!("{video_id}-0"),
+            "youtuber_id": "channel",
+            "youtuber_handle": "@channel",
+            "youtuber_name": "Channel",
+            "channel_id": "UC123",
+            "video_id": video_id,
+            "title": "Title",
+            "text": "Transcript",
+            "sequence": 0,
+            "t_start_ms": 0,
+            "t_end_ms": 1,
+            "uploader_id": "channel"
+        }))
+        .unwrap()
     }
 
     #[test]
