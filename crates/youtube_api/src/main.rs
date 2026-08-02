@@ -186,14 +186,20 @@ struct SearchHit {
     video_id: String,
     title: String,
     text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     prev_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     next_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     text_highlight: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     title_highlight: Option<String>,
     match_kind: MatchKind,
     youtuber_handle: String,
     youtuber_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     thumbnail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     published_at: Option<String>,
     view_count: u64,
     like_count: u64,
@@ -201,6 +207,7 @@ struct SearchHit {
     content_kind: ContentKind,
     t_start_ms: u32,
     t_end_ms: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     timestamp: Option<String>,
     youtube_url: String,
     embed_url: String,
@@ -210,10 +217,13 @@ struct SearchHit {
 struct SearchVideoResult {
     video_id: String,
     title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     title_highlight: Option<String>,
     youtuber_handle: String,
     youtuber_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     thumbnail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     published_at: Option<String>,
     view_count: u64,
     like_count: u64,
@@ -222,6 +232,7 @@ struct SearchVideoResult {
     match_count: usize,
     youtube_url: String,
     embed_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     best_timestamp: Option<String>,
     hits: Vec<SearchHit>,
 }
@@ -1847,6 +1858,48 @@ mod tests {
         assert_eq!(hits[0].view_count, 1_000_000);
         assert_eq!(hits[0].like_count, 100_000);
         assert_eq!(hits[0].comment_count, 10_000);
+    }
+
+    #[test]
+    fn absent_optional_search_fields_are_omitted_from_json() {
+        let mut hit = test_hit("video-a", "Result", "matching moment");
+        hit.prev_text = None;
+        hit.next_text = None;
+        hit.text_highlight = None;
+        hit.title_highlight = None;
+        hit.thumbnail = None;
+        hit.published_at = None;
+        hit.timestamp = None;
+        let hit_json = serde_json::to_value(&hit).expect("serialize hit");
+        for field in [
+            "prev_text",
+            "next_text",
+            "text_highlight",
+            "title_highlight",
+            "thumbnail",
+            "published_at",
+            "timestamp",
+        ] {
+            assert!(
+                hit_json.get(field).is_none(),
+                "unexpected null field {field}"
+            );
+        }
+
+        let mut video = SearchVideoResult::from_hit(&hit);
+        video.best_timestamp = None;
+        let video_json = serde_json::to_value(video).expect("serialize video");
+        for field in [
+            "title_highlight",
+            "thumbnail",
+            "published_at",
+            "best_timestamp",
+        ] {
+            assert!(
+                video_json.get(field).is_none(),
+                "unexpected null field {field}"
+            );
+        }
     }
 
     #[test]
