@@ -74,6 +74,7 @@ impl VoxtypeTranscriptSource {
         let output = timeout(
             PROCESS_TIMEOUT,
             Command::new(&self.config.yt_dlp_binary)
+                .kill_on_drop(true)
                 .arg("--no-warnings")
                 .arg("--extract-audio")
                 .arg("--audio-format")
@@ -122,6 +123,7 @@ impl VoxtypeTranscriptSource {
         let output = timeout(
             CHUNK_TIMEOUT,
             Command::new(&self.config.ffprobe_binary)
+                .kill_on_drop(true)
                 .arg("-v")
                 .arg("error")
                 .arg("-show_entries")
@@ -216,6 +218,7 @@ impl VoxtypeTranscriptSource {
         let output = timeout(
             CHUNK_TIMEOUT,
             Command::new(&self.config.ffmpeg_binary)
+                .kill_on_drop(true)
                 .arg("-y")
                 .arg("-ss")
                 .arg(start_seconds)
@@ -256,7 +259,7 @@ impl VoxtypeTranscriptSource {
         chunk_path: &Path,
     ) -> youtube_ingest::Result<String> {
         let mut command = Command::new(&self.config.voxtype_binary);
-        command.arg("transcribe");
+        command.kill_on_drop(true).arg("transcribe");
         if let Some(engine) = &self.config.voxtype_engine {
             command.arg("--engine").arg(engine);
         }
