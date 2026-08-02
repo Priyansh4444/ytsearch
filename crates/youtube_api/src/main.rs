@@ -45,6 +45,7 @@ struct AppState {
     search: Arc<dyn TranscriptSearchBackend>,
     search_backend: String,
     engagement_sorts_enabled: bool,
+    preserve_backend_relevance_order: bool,
     axiom: Option<AxiomLogger>,
     rate_limiter: Arc<Mutex<RateLimiter>>,
     search_rate_limit_per_minute: usize,
@@ -330,6 +331,10 @@ async fn main() -> Result<(), ApiError> {
         search: search_client,
         search_backend: backend,
         engagement_sorts_enabled: env_bool("YTSEARCH_ENGAGEMENT_SORTS", false),
+        preserve_backend_relevance_order: env_bool(
+            "YTSEARCH_PRESERVE_BACKEND_RELEVANCE_ORDER",
+            false,
+        ),
         axiom: AxiomLogger::from_env(),
         rate_limiter: Arc::new(Mutex::new(RateLimiter::default())),
         search_rate_limit_per_minute: env_usize(
@@ -671,6 +676,7 @@ async fn search_handler(
         search_page_size,
         sort,
         query,
+        state.preserve_backend_relevance_order,
         first_backend_search_ms,
         if video_scope {
             100
@@ -1336,6 +1342,7 @@ async fn collect_visible_videos(
     search_page_size: u8,
     sort: SearchSort,
     query: &str,
+    preserve_backend_relevance_order: bool,
     first_backend_search_ms: u64,
     max_page_fetches: u32,
 ) -> Result<SearchPageResult, ApiError> {
@@ -1362,8 +1369,12 @@ async fn collect_visible_videos(
         let is_empty = page_hits.is_empty();
         combined.extend(page_hits);
         combined = merge_nearby_transcript_hits(dedupe_title_only_hits(combined));
-        let videos =
-            video_results_from_hits(&combined, sort, query, base_query.vector_query.is_some());
+        let videos = video_results_from_hits(
+            &combined,
+            sort,
+            query,
+            base_query.vector_query.is_some() || preserve_backend_relevance_order,
+        );
 
         if videos.len() >= required_videos || is_empty {
             return Ok(page_result_from_videos(
@@ -1398,7 +1409,12 @@ async fn collect_visible_videos(
     }
 
     Ok(page_result_from_videos(
-        video_results_from_hits(&combined, sort, query, base_query.vector_query.is_some()),
+        video_results_from_hits(
+            &combined,
+            sort,
+            query,
+            base_query.vector_query.is_some() || preserve_backend_relevance_order,
+        ),
         local_offset,
         per_page,
         timings,
@@ -1481,6 +1497,7 @@ fn video_results_from_hits(
             }
             video.match_count = video.hits.len();
             match sort {
+                SearchSort::Relevance if preserve_backend_order => {}
                 SearchSort::Relevance | SearchSort::RelevanceEngagement => {
                     video.hits.sort_by_cached_key(|hit| {
                         (Reverse(hit_relevance_score(hit, &terms)), hit.t_start_ms)
@@ -2248,6 +2265,39 @@ mod tests {
             videos.first().map(|video| video.video_id.as_str()),
             Some("exploit")
         );
+    }
+
+    #[test]
+    fn raw_relevance_policy_preserves_backend_video_and_moment_order() {
+        let mut first_moment = test_hit(
+            "backend-first",
+            "A backend-ranked result",
+            "A lower-scoring local substring match.",
+        );
+        first_moment.id = "backend-first-moment-a".to_string();
+        first_moment.t_start_ms = 20_000;
+        let mut second_moment = test_hit(
+            "backend-first",
+            "A backend-ranked result",
+            "linux exploit appears here but was ranked second by the backend.",
+        );
+        second_moment.id = "backend-first-moment-b".to_string();
+        second_moment.t_start_ms = 1_000;
+        let locally_favored = test_hit(
+            "local-first",
+            "How the Linux exploit worked",
+            "This Linux exploit gained local privileges.",
+        );
+        let hits = [first_moment, second_moment, locally_favored];
+
+        let preserved =
+            video_results_from_hits(&hits, SearchSort::Relevance, "linux exploit", true);
+        let legacy = video_results_from_hits(&hits, SearchSort::Relevance, "linux exploit", false);
+
+        assert_eq!(preserved[0].video_id, "backend-first");
+        assert_eq!(preserved[0].hits[0].id, "backend-first-moment-a");
+        assert_eq!(legacy[0].video_id, "local-first");
+        assert_eq!(legacy[1].hits[0].id, "backend-first-moment-b");
     }
 
     #[test]

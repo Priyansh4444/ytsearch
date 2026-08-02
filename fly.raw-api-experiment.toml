@@ -14,6 +14,7 @@ primary_region = 'sjc'
   YTSEARCH_ALLOWED_ORIGINS = 'https://search.experimental.pronsh.dev'
   YTSEARCH_ENGAGEMENT_SORTS = 'true'
   YTSEARCH_BACKEND_LABEL = 'raw'
+  YTSEARCH_PRESERVE_BACKEND_RELEVANCE_ORDER = 'true'
   RUST_LOG = 'youtube_api=info,tower_http=info'
   LOG_FORMAT = 'json'
 
