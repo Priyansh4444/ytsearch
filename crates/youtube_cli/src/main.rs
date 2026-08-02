@@ -1515,7 +1515,9 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
         )));
     }
 
+    let mut failures = Vec::new();
     for handle in handles {
+        let failed_handle = handle.clone();
         let command = IndexYoutuberCommand {
             youtuber: YoutuberArg { handle },
             youtube: command.youtube.clone(),
@@ -1539,10 +1541,21 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
             transcription_chunk_seconds: command.transcription_chunk_seconds,
             voxtype_engine: command.voxtype_engine.clone(),
         };
-        index_youtuber_command(command).await?;
+        if let Err(error) = index_youtuber_command(command).await {
+            tracing::error!(handle = %failed_handle, %error, "YouTuber indexing failed; continuing with remaining creators");
+            failures.push(format!("{failed_handle}: {error}"));
+        }
     }
 
-    Ok(())
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(CliError::Message(format!(
+            "{} YouTuber(s) failed after every requested creator was attempted: {}",
+            failures.len(),
+            failures.join(" | ")
+        )))
+    }
 }
 
 fn validate_rewipe_safety(
