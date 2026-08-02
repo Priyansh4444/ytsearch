@@ -189,13 +189,40 @@ struct DocumentTable {
 
 #[derive(Clone, Copy)]
 struct DocMatch {
-    document: u32,
+    document_with_flags: u32,
     score: f32,
+}
+
+impl DocMatch {
+    const TEXT_MATCH_FLAG: u32 = 1 << 31;
+    const DOCUMENT_MASK: u32 = !Self::TEXT_MATCH_FLAG;
+
+    fn new(document: u32, score: f32, matches_text: bool) -> Self {
+        debug_assert_eq!(document & Self::TEXT_MATCH_FLAG, 0);
+        Self {
+            document_with_flags: document | (u32::from(matches_text) * Self::TEXT_MATCH_FLAG),
+            score,
+        }
+    }
+
+    fn document(self) -> u32 {
+        self.document_with_flags & Self::DOCUMENT_MASK
+    }
+
+    fn matches_text(self) -> bool {
+        self.document_with_flags & Self::TEXT_MATCH_FLAG != 0
+    }
+
+    fn set_matches_text(&mut self, matches_text: bool) {
+        self.document_with_flags =
+            self.document() | (u32::from(matches_text) * Self::TEXT_MATCH_FLAG);
+    }
 }
 
 struct VideoMatches {
     video: u32,
     score: f32,
+    transcript_matches: usize,
     documents: Vec<DocMatch>,
 }
 
@@ -885,7 +912,7 @@ impl RawSearchEngine {
         if params.group_by.as_deref() == Some("video_id") {
             let mut videos = HashSet::with_capacity(threshold);
             for candidate in matches {
-                let record = self.inner.metadata.document(candidate.document)?;
+                let record = self.inner.metadata.document(candidate.document())?;
                 let video = self
                     .inner
                     .videos
@@ -903,7 +930,7 @@ impl RawSearchEngine {
 
         let mut found = 0_usize;
         for candidate in matches {
-            let record = self.inner.metadata.document(candidate.document)?;
+            let record = self.inner.metadata.document(candidate.document())?;
             let video = self
                 .inner
                 .videos
@@ -1195,7 +1222,7 @@ impl RawSearchEngine {
                 record.tokens,
                 self.inner.manifest.average_document_tokens,
             ) * idf;
-            matches.push(DocMatch { document, score });
+            matches.push(DocMatch::new(document, score, true));
         }
         if matches.len() != entry.text_frequency as usize {
             return Err(Error::Corrupt(
@@ -1226,7 +1253,7 @@ impl RawSearchEngine {
             })?;
             let score = idf * 6.0 * (1.0 + (frequency as f32).ln());
             for &document in &video.documents {
-                matches.push(DocMatch { document, score });
+                matches.push(DocMatch::new(document, score, false));
             }
             postings += 1;
         }
@@ -1304,7 +1331,7 @@ impl RawSearchEngine {
         let phrase = phrase.to_ascii_lowercase();
         let mut retained = Vec::with_capacity(matches.len());
         for candidate in matches.drain(..) {
-            let document = self.document_value(candidate.document, cache)?;
+            let document = self.document_value(candidate.document(), cache)?;
             let title_matches = document
                 .get("title")
                 .and_then(Value::as_str)
@@ -1314,10 +1341,10 @@ impl RawSearchEngine {
                 .and_then(Value::as_str)
                 .is_some_and(|value| value.to_ascii_lowercase().contains(&phrase));
             if title_matches || text_matches {
-                retained.push(DocMatch {
-                    score: candidate.score + 8.0,
-                    ..candidate
-                });
+                let mut candidate = candidate;
+                candidate.score += 8.0;
+                candidate.set_matches_text(text_matches);
+                retained.push(candidate);
             }
         }
         *matches = retained;
@@ -1339,7 +1366,7 @@ impl RawSearchEngine {
         let filter = parse_filter(params.filter_by.as_deref());
         let mut groups = HashMap::<u32, VideoMatches>::new();
         for candidate in matches {
-            let record = self.inner.metadata.document(candidate.document)?;
+            let record = self.inner.metadata.document(candidate.document())?;
             let Some(video) = self.inner.videos.get(record.video as usize) else {
                 return Err(Error::Corrupt(
                     "document video is out of bounds".to_string(),
@@ -1351,32 +1378,37 @@ impl RawSearchEngine {
             let group = groups.entry(record.video).or_insert_with(|| VideoMatches {
                 video: record.video,
                 score: candidate.score,
+                transcript_matches: 0,
                 documents: Vec::with_capacity(hits_per_group),
             });
             group.score = group.score.max(candidate.score);
+            group.transcript_matches += usize::from(candidate.matches_text());
             retain_best_document(&mut group.documents, candidate, hits_per_group);
         }
 
         let found = groups.len();
+        let total_moments = groups.values().map(visible_group_moments).sum::<usize>();
         let mut groups = groups.into_values().collect::<Vec<_>>();
         self.sort_groups(&mut groups, params.sort_by.as_deref());
         let (offset, limit) = result_window(params);
         let mut grouped_hits = Vec::with_capacity(limit.min(groups.len()));
         for mut group in groups.into_iter().skip(offset).take(limit) {
+            let group_found = visible_group_moments(&group);
             group.documents.sort_unstable_by(descending_doc_score);
             let video_id = self.inner.videos[group.video as usize].id.clone();
             let mut hits = Vec::with_capacity(group.documents.len());
             for document in group.documents {
-                hits.push(self.hit_value(document.document, terms, cache)?);
+                hits.push(self.hit_value(document.document(), terms, cache)?);
             }
             grouped_hits.push(json!({
                 "group_key": [video_id],
-                "found": hits.len(),
+                "found": group_found,
                 "hits": hits,
             }));
         }
         Ok(json!({
             "found": found,
+            "total_moments": total_moments,
             "out_of": self.inner.manifest.documents,
             "grouped_hits": grouped_hits,
         }))
@@ -1391,21 +1423,28 @@ impl RawSearchEngine {
     ) -> Result<Value> {
         let filter = parse_filter(params.filter_by.as_deref());
         let mut filtered = Vec::with_capacity(matches.len());
+        let mut moment_counts = HashMap::<u32, usize>::new();
         for candidate in matches {
-            let record = self.inner.metadata.document(candidate.document)?;
+            let record = self.inner.metadata.document(candidate.document())?;
             let video = self
                 .inner
                 .videos
                 .get(record.video as usize)
                 .ok_or_else(|| Error::Corrupt("document video is out of bounds".to_string()))?;
             if video_matches_filter(video, filter) {
+                let transcript_matches = moment_counts.entry(record.video).or_default();
+                *transcript_matches += usize::from(candidate.matches_text());
                 filtered.push(candidate);
             }
         }
+        let total_moments = moment_counts
+            .values()
+            .map(|transcript_matches| (*transcript_matches).max(1))
+            .sum::<usize>();
         let mut matches = filtered;
         matches.sort_unstable_by(|left, right| {
-            let left_video = self.video_for_document(left.document);
-            let right_video = self.video_for_document(right.document);
+            let left_video = self.video_for_document(left.document());
+            let right_video = self.video_for_document(right.document());
             match (left_video, right_video) {
                 (Some(left_video), Some(right_video)) => compare_video_sort(
                     left_video,
@@ -1415,18 +1454,19 @@ impl RawSearchEngine {
                     params.sort_by.as_deref(),
                     &self.inner.manifest,
                 )
-                .then_with(|| left.document.cmp(&right.document)),
-                _ => left.document.cmp(&right.document),
+                .then_with(|| left.document().cmp(&right.document())),
+                _ => left.document().cmp(&right.document()),
             }
         });
         let found = matches.len();
         let (offset, limit) = result_window(params);
         let mut hits = Vec::with_capacity(limit.min(matches.len()));
         for candidate in matches.into_iter().skip(offset).take(limit) {
-            hits.push(self.hit_value(candidate.document, terms, cache)?);
+            hits.push(self.hit_value(candidate.document(), terms, cache)?);
         }
         Ok(json!({
             "found": found,
+            "total_moments": total_moments,
             "out_of": self.inner.manifest.documents,
             "hits": hits,
         }))
@@ -1486,12 +1526,13 @@ impl RawSearchEngine {
                 }
                 grouped_hits.push(json!({
                     "group_key": [video.id],
-                    "found": video.documents.len(),
+                    "found": 1,
                     "hits": hits,
                 }));
             }
             return Ok(json!({
                 "found": found,
+                "total_moments": found,
                 "out_of": self.inner.manifest.documents,
                 "grouped_hits": grouped_hits,
             }));
@@ -1533,6 +1574,7 @@ impl RawSearchEngine {
         }
         Ok(json!({
             "found": found,
+            "total_moments": found,
             "out_of": self.inner.manifest.documents,
             "hits": hits,
         }))
@@ -1682,6 +1724,10 @@ fn normalized_log(value: u64, maximum: u64) -> f32 {
     (value as f32).ln_1p() / (maximum as f32).ln_1p()
 }
 
+fn visible_group_moments(group: &VideoMatches) -> usize {
+    group.transcript_matches.max(1)
+}
+
 fn retain_best_document(documents: &mut Vec<DocMatch>, candidate: DocMatch, limit: usize) {
     if documents.len() < limit {
         documents.push(candidate);
@@ -1703,7 +1749,7 @@ fn descending_doc_score(left: &DocMatch, right: &DocMatch) -> Ordering {
     right
         .score
         .total_cmp(&left.score)
-        .then_with(|| left.document.cmp(&right.document))
+        .then_with(|| left.document().cmp(&right.document()))
 }
 
 fn intersect_all(mut lists: Vec<Vec<DocMatch>>) -> Vec<DocMatch> {
@@ -1726,14 +1772,18 @@ fn intersect_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec<DocMatch> 
     let mut left_index = 0_usize;
     let mut right_index = 0_usize;
     while left_index < left.len() && right_index < right.len() {
-        match left[left_index].document.cmp(&right[right_index].document) {
+        match left[left_index]
+            .document()
+            .cmp(&right[right_index].document())
+        {
             Ordering::Less => left_index += 1,
             Ordering::Greater => right_index += 1,
             Ordering::Equal => {
-                output.push(DocMatch {
-                    document: left[left_index].document,
-                    score: left[left_index].score + right[right_index].score,
-                });
+                output.push(DocMatch::new(
+                    left[left_index].document(),
+                    left[left_index].score + right[right_index].score,
+                    left[left_index].matches_text() || right[right_index].matches_text(),
+                ));
                 left_index += 1;
                 right_index += 1;
             }
@@ -1760,16 +1810,17 @@ fn union_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec<DocMatch> {
     loop {
         match (left.peek(), right.peek()) {
             (Some(left_value), Some(right_value)) => {
-                match left_value.document.cmp(&right_value.document) {
+                match left_value.document().cmp(&right_value.document()) {
                     Ordering::Less => output.push(left.next().expect("peeked left")),
                     Ordering::Greater => output.push(right.next().expect("peeked right")),
                     Ordering::Equal => {
                         let left_value = left.next().expect("peeked left");
                         let right_value = right.next().expect("peeked right");
-                        output.push(DocMatch {
-                            document: left_value.document,
-                            score: left_value.score + right_value.score,
-                        });
+                        output.push(DocMatch::new(
+                            left_value.document(),
+                            left_value.score + right_value.score,
+                            left_value.matches_text() || right_value.matches_text(),
+                        ));
                     }
                 }
             }
@@ -2001,7 +2052,7 @@ mod tests {
         let index_path = root.path().join("index");
         let mut chunks = File::create(&chunks_path).expect("chunks");
         for document in [
-            json!({"id":"a-1","video_id":"a","title":"Rust performance","text":"a compact inverted index about relativity","youtuber_handle":"@one","youtuber_name":"One","t_start_ms":1000,"t_end_ms":2000,"published_at_timestamp":20}),
+            json!({"id":"a-1","video_id":"a","title":"Rust performance","text":"a compact inverted search index about relativity","youtuber_handle":"@one","youtuber_name":"One","t_start_ms":1000,"t_end_ms":2000,"published_at_timestamp":20}),
             json!({"id":"a-2","video_id":"a","title":"Rust performance","text":"memory mapped search is fast","youtuber_handle":"@one","youtuber_name":"One","t_start_ms":3000,"t_end_ms":4000,"published_at_timestamp":20}),
             json!({"id":"b-1","video_id":"b","title":"JavaScript runtimes","text":"Bun starts quickly","youtuber_handle":"@Two","youtuber_name":"Two","t_start_ms":1000,"t_end_ms":2000,"published_at_timestamp":10}),
         ] {
@@ -2114,6 +2165,46 @@ mod tests {
                 .expect("snippet")
                 .contains("<mark>")
         );
+    }
+
+    #[test]
+    fn grouped_totals_include_all_moments_beyond_the_return_window() {
+        let (_root, engine) = test_engine();
+        let mut query = grouped_query("search");
+        query.query_by = Some("text".to_string());
+        query.group_limit = Some(1);
+        let response = engine.search(&query).expect("search");
+
+        assert_eq!(response["found"], 1);
+        assert_eq!(response["total_moments"], 2);
+        assert_eq!(response["grouped_hits"][0]["found"], 2);
+        assert_eq!(
+            response["grouped_hits"][0]["hits"]
+                .as_array()
+                .expect("hits")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn match_provenance_does_not_increase_the_hot_candidate_size() {
+        assert_eq!(std::mem::size_of::<DocMatch>(), 8);
+        let transcript = DocMatch::new(42, 1.0, true);
+        assert_eq!(transcript.document(), 42);
+        assert!(transcript.matches_text());
+    }
+
+    #[test]
+    fn title_only_matches_count_once_per_video() {
+        let (_root, engine) = test_engine();
+        let mut query = grouped_query("performance");
+        query.group_limit = Some(1);
+        let response = engine.search(&query).expect("search");
+
+        assert_eq!(response["found"], 1);
+        assert_eq!(response["total_moments"], 1);
+        assert_eq!(response["grouped_hits"][0]["found"], 1);
     }
 
     #[test]
@@ -2329,6 +2420,8 @@ mod tests {
         let second = engine.search(&second).expect("second page");
         assert_eq!(first["found"], 3);
         assert_eq!(second["found"], 3);
+        assert_eq!(first["total_moments"], 3);
+        assert_eq!(second["total_moments"], 3);
         assert_ne!(
             first["grouped_hits"][0]["group_key"][0],
             second["grouped_hits"][0]["group_key"][0]
