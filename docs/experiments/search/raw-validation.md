@@ -23,15 +23,15 @@ The data came from the stopped snapshot clone, accessed only through its
 loopback interface. The clone had no process group or services, was stopped
 again after export, and never joined the serving pool.
 
-| Measurement | Result |
-| --- | ---: |
-| Transcript chunks | 47,860 |
-| Videos | 787 |
-| Channels | 2 |
-| Source JSONL | 34.19 MB |
+| Measurement        |   Result |
+| ------------------ | -------: |
+| Transcript chunks  |   47,860 |
+| Videos             |      787 |
+| Channels           |        2 |
+| Source JSONL       | 34.19 MB |
 | Raw fuzzy-v2 index | 10.54 MB |
-| Terms | 29,416 |
-| Build time | 304 ms |
+| Terms              |   29,416 |
+| Build time         |   304 ms |
 
 ## Deployed four-channel contract
 
@@ -50,6 +50,21 @@ route aliases; and missing-key authentication.
 The builder also recovered missing numeric publication timestamps from the
 existing RFC 3339 `published_at` field through `youtube_time`.
 
+## Engagement v3 deployment
+
+The active four-channel index is schema v3: 420,720 chunks, 2,743 videos,
+59,596 terms, and 73,018,300 bytes. All videos have current public views,
+likes, and comments. The existing contract plus combined engagement, pure
+views, pure likes, and pure comments order passes on the deployed service.
+
+The matched 270-request deployed run measured 96.55 ms external p50,
+120.60 ms p95, 2.082 ms internal mean, 70 CPU ticks, and 33.14 MB ending RSS.
+The pre-engagement baseline measured 108.00 ms, 134.92 ms, 2.010 ms, 67 ticks,
+and 33.09 MB respectively. Network timing improved, while the engine-level
+cost stayed effectively flat. See
+[engagement-ranking.md](engagement-ranking.md) for the ranking formula, index
+delta, isolation boundary, and full results.
+
 ## `blackhole` correctness
 
 Raw treats a compact token as eligible for bounded lexicon splitting. For this
@@ -58,11 +73,11 @@ case it evaluates `blackhole`, `black + hole`, and the narrow plural
 chunk; it does not enable broad edit-distance matching such as `hole` →
 `whole`.
 
-| Scope | Raw found | Typesense found | Same top one | overlap@10 |
-| --- | ---: | ---: | --- | ---: |
-| Matched two-channel corpus | 21 | 17 | Yes | 7 |
-| Veritasium | 6 | 7 | Yes | 6 |
-| Vsauce | 15 | 13 | Yes | 8 |
+| Scope                      | Raw found | Typesense found | Same top one | overlap@10 |
+| -------------------------- | --------: | --------------: | ------------ | ---------: |
+| Matched two-channel corpus |        21 |              17 | Yes          |          7 |
+| Veritasium                 |         6 |               7 | Yes          |          6 |
+| Vsauce                     |        15 |              13 | Yes          |          8 |
 
 Manual literal-phrase review found 21 videos containing `black hole` or
 `black holes`; Raw returned all 21. Typesense's seventh Veritasium result was
@@ -93,11 +108,11 @@ Raw additionally composes a one-edit correction with a compact split when one
 side is already exact in the same chunk. This recovers black-hole intent that
 Typesense misses on this corpus:
 
-| Query | Raw found | Typesense found | Raw top result |
-| --- | ---: | ---: | --- |
-| `blackhloe` | 21 | 0 | “Travel INSIDE a Black Hole” |
-| `blackhle` | 21 | 0 | “Travel INSIDE a Black Hole” |
-| `blakhole` | 22 | 1 | “Travel INSIDE a Black Hole” |
+| Query       | Raw found | Typesense found | Raw top result               |
+| ----------- | --------: | --------------: | ---------------------------- |
+| `blackhloe` |        21 |               0 | “Travel INSIDE a Black Hole” |
+| `blackhle`  |        21 |               0 | “Travel INSIDE a Black Hole” |
+| `blakhole`  |        22 |               1 | “Travel INSIDE a Black Hole” |
 
 The extra `blakhole` result is the control's literal fuzzy match; the 21
 black-hole results rank above it. The composed path requires one exact and one
@@ -110,42 +125,42 @@ The contract harness validates monotonic RFC 3339 timestamps, not merely the
 backend's internal metadata. The relevance, newest, and oldest orders are
 different and deterministic.
 
-| Check | Result |
-| --- | --- |
-| Relevance top result | `3pAnRKD4raY`, “Travel INSIDE a Black Hole” |
-| Newest Raw top result | `piHGnG4LsmQ`, 2025-12-24 |
-| Oldest Raw top result | `KB24FakYVmc`, 2011-04-15 |
-| Global/Veritasium/Vsauce totals | 21 / 6 / 15 videos |
-| Page-one/page-two overlap | 0 |
-| Raw alias equals compatibility route | Yes |
-| Missing authentication | HTTP 401 |
+| Check                                | Result                                      |
+| ------------------------------------ | ------------------------------------------- |
+| Relevance top result                 | `3pAnRKD4raY`, “Travel INSIDE a Black Hole” |
+| Newest Raw top result                | `piHGnG4LsmQ`, 2025-12-24                   |
+| Oldest Raw top result                | `KB24FakYVmc`, 2011-04-15                   |
+| Global/Veritasium/Vsauce totals      | 21 / 6 / 15 videos                          |
+| Page-one/page-two overlap            | 0                                           |
+| Raw alias equals compatibility route | Yes                                         |
+| Missing authentication               | HTTP 401                                    |
 
 The unchanged `youtube_api` returned the same totals and date endpoints after
 its normal nearby-hit merge and reranking. Twenty requests per API case:
 
-| API case | Errors | p50 | p95 |
-| --- | ---: | ---: | ---: |
-| Global relevance | 0 | 2 ms | 3 ms |
-| Veritasium | 0 | 2 ms | 2 ms |
-| Vsauce | 0 | 2 ms | 3 ms |
-| Newest | 0 | 2 ms | 3 ms |
-| Oldest | 0 | 2 ms | 2 ms |
-| Page two | 0 | 2 ms | 3 ms |
+| API case         | Errors |  p50 |  p95 |
+| ---------------- | -----: | ---: | ---: |
+| Global relevance |      0 | 2 ms | 3 ms |
+| Veritasium       |      0 | 2 ms | 2 ms |
+| Vsauce           |      0 | 2 ms | 3 ms |
+| Newest           |      0 | 2 ms | 3 ms |
+| Oldest           |      0 | 2 ms | 2 ms |
+| Page two         |      0 | 2 ms | 3 ms |
 
 ## Final fuzzy-v2 engine measurements
 
 The sequential matrix has nine queries, 10 warmups each, and 50 measured
 requests each. It includes both `blackhole` and `black hole`.
 
-| Measurement | Result |
-| --- | ---: |
-| Searches | 450 |
-| p50 | 1.18 ms |
-| p95 | 2.09 ms |
-| Mean | 1.27 ms |
-| CPU | 0.50 s |
-| Internal mean | 0.86 ms |
-| Warm RSS | about 23 MB |
+| Measurement   |      Result |
+| ------------- | ----------: |
+| Searches      |         450 |
+| p50           |     1.18 ms |
+| p95           |     2.09 ms |
+| Mean          |     1.27 ms |
+| CPU           |      0.50 s |
+| Internal mean |     0.86 ms |
+| Warm RSS      | about 23 MB |
 
 On the fourteen-query typo/prefix matrix, 700 searches measured 1.83 ms p50,
 3.14 ms p95, 1.94 ms mean, and 115 CPU ticks. The matched Typesense 30.2
@@ -182,10 +197,10 @@ token.
 Against the archived pre-split binary on the original eight-query workload,
 the final narrowed implementation pooled 1,200 searches per variant:
 
-| Variant | p50 | p95 | Mean | Median CPU / 400 | Internal mean |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Archived pre-split | 2.08 ms | 6.19 ms | 2.56 ms | 94 ticks | 1.95 ms |
-| Final narrow split | 2.17 ms | 6.61 ms | 2.67 ms | 95 ticks | 1.97 ms |
+| Variant            |     p50 |     p95 |    Mean | Median CPU / 400 | Internal mean |
+| ------------------ | ------: | ------: | ------: | ---------------: | ------------: |
+| Archived pre-split | 2.08 ms | 6.19 ms | 2.56 ms |         94 ticks |       1.95 ms |
+| Final narrow split | 2.17 ms | 6.61 ms | 2.67 ms |         95 ticks |       1.97 ms |
 
 The retained cost is therefore 4.4% p50, 6.8% p95, 4.3% mean, and one CPU tick
 per 400 searches on this noisy HTTP workload. The correctness gain is kept;

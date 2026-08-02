@@ -13,16 +13,16 @@ Typesense-shaped route and an explicit raw route:
 
 The immutable index contains:
 
-| File | Purpose |
-| --- | --- |
-| `lexicon.bin` | Sorted UTF-8 terms and offsets, binary-searched through mmap |
-| `fuzzy.bin` | Compact mmap trie for guarded prefix and Damerau-Levenshtein expansion |
-| `postings.bin` | Delta-varint document/video IDs and term frequencies |
-| `documents.meta` | Fixed-width block, offset, length, video, and token counts |
-| `documents.blocks` | Independent 64-document zstd frames |
-| `videos.json` | Video metadata and compact document membership lists |
-| `channels.json` | Existing channel response documents |
-| `manifest.json` | Version and cross-file count invariants |
+| File               | Purpose                                                                    |
+| ------------------ | -------------------------------------------------------------------------- |
+| `lexicon.bin`      | Sorted UTF-8 terms and offsets, binary-searched through mmap               |
+| `fuzzy.bin`        | Compact mmap trie for guarded prefix and Damerau-Levenshtein expansion     |
+| `postings.bin`     | Delta-varint document/video IDs and term frequencies                       |
+| `documents.meta`   | Fixed-width block, offset, length, video, and token counts                 |
+| `documents.blocks` | Independent 64-document zstd frames                                        |
+| `videos.json`      | Video metadata, engagement counters, and compact document membership lists |
+| `channels.json`    | Existing channel response documents                                        |
+| `manifest.json`    | Version and cross-file count invariants                                    |
 
 Text is indexed once per transcript chunk. Titles are indexed once per video,
 then expanded through that video's document list during query evaluation. This
@@ -46,11 +46,16 @@ is not copied into a process-owned hash map at startup.
 7. Expand progressively to one and then two Damerau-Levenshtein edits using
    the active Typesense length gates. A final compact-token fallback may pair
    one exact split component with one one-edit component in the same chunk.
-8. Group scored chunks by video and retain only the requested top moments.
-9. Decompress and parse document blocks only for returned hits.
+8. Apply an explicit date, engagement, or bounded relevance-plus-engagement
+   order when requested.
+9. Group scored chunks by video and retain only the requested top moments.
+10. Decompress and parse document blocks only for returned hits.
 
 BM25-style text length normalization and a title boost provide the initial
-rank. The unchanged `youtube_api` reranker remains the final public ranking.
+rank. Engagement counters are stored once per video and use logarithmic corpus
+normalization. The combined sort caps engagement at a 20% text-score boost;
+pure views, likes, and comments sorts are separate explicit modes. See
+[engagement-ranking.md](engagement-ranking.md) for the formula and measurements.
 
 ## Safety and corruption behavior
 

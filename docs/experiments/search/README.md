@@ -4,11 +4,11 @@ The search experiments test whether a smaller read backend can satisfy the
 existing Typesense-shaped contract without changing `youtube_api` or adding
 browser code.
 
-| Backend | Implementation | Status |
-| --- | --- | --- |
-| Typesense | Production control | Supported production backend |
-| Tantivy | Archived branch | Retired trial; machine destroyed |
-| Raw | `youtube_raw_search` | Active experiment |
+| Backend   | Implementation       | Status                           |
+| --------- | -------------------- | -------------------------------- |
+| Typesense | Production control   | Supported production backend     |
+| Tantivy   | Archived branch      | Retired trial; machine destroyed |
+| Raw       | `youtube_raw_search` | Active experiment                |
 
 Raw uses `youtube_search_service` for HTTP routing, authentication, metrics,
 and the bounded response cache. Index layout, query evaluation, scoring, and
@@ -22,4 +22,6 @@ Vsauce, sorting, concurrency, and failure-mode evidence.
 [methodology.md](methodology.md) defines how to reproduce the measurements.
 [typesense-compatibility.md](typesense-compatibility.md) traces the active
 Typesense 30.2 typo/prefix implementation, records what Raw adopted, and names
-the remaining parity gaps.
+the remaining parity gaps. [engagement-ranking.md](engagement-ranking.md)
+records the views/likes/comments data path, bounded score, deployed benchmarks,
+and isolated frontend topology.
