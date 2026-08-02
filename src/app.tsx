@@ -45,6 +45,7 @@ import {
 } from "./components/states";
 import { VideoResult } from "./components/video-result";
 import { presentSearchError } from "./search-error";
+import { searchResultCountLabel } from "./result-counts";
 import { BackButton, CopyLinkButton } from "./components/toolbar-actions";
 import type {
   IndexedChannel,
@@ -66,12 +67,6 @@ import {
   routeForHandle,
   withViewTransition,
 } from "./utils";
-
-const pluralize = (count: number, singular: string, plural = `${singular}s`) =>
-  `${count} ${count === 1 ? singular : plural}`;
-
-const videoCountLabel = (returned: number, total: number) =>
-  returned < total ? `${returned} shown of ${total} videos` : pluralize(total, "video");
 
 const sectionVideos = (videos: SearchVideoResult[], kind: "video" | "short") =>
   videos.filter((video) => video.content_kind === kind);
@@ -573,12 +568,8 @@ const App: Component = () => {
                     </span>
                   </div>
                   <span class="text-xs tabular-nums sm:text-sm">
-                    {videoCountLabel(
-                      response().videos.length,
-                      response().total_videos ?? response().videos.length,
-                    )}{" "}
-                    · {pluralize(response().total_moments ?? response().total_found, "moment")} ·{" "}
-                    {response().time_to_first_result_ms} ms to first result
+                    {searchResultCountLabel(response())} · {response().time_to_first_result_ms} ms
+                    to first result
                   </span>
                 </div>
 
