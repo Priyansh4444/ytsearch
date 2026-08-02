@@ -33,6 +33,20 @@ again after export, and never joined the serving pool.
 | Terms | 29,416 |
 | Build time | 304 ms |
 
+## Deployed four-channel contract
+
+The public experiment is available at
+`https://ytsearch-raw-experiment.fly.dev`. Its health route reports the active
+backend without authentication; search routes require the experiment key from
+the ignored local `.search-experiment/search-key` file.
+
+The deployed fuzzy-v2 corpus expands this benchmark to 420,720 chunks, 2,743
+videos, four channels, and 59,596 terms. Its index is 72,441,536 bytes and was
+built in 4,090 ms. The external contract passes global, Veritasium, Vsauce,
+and channel searches; `blackhole`, `blackhloe`, `blakhole`, and `blackhle` typo
+cases; relevance/date ordering; creator scope; grouping; pagination; both
+route aliases; and missing-key authentication.
+
 The builder also recovered missing numeric publication timestamps from the
 existing RFC 3339 `published_at` field through `youtube_time`.
 
@@ -179,7 +193,7 @@ the rejected broad path is not.
 
 ## Correctness evidence and gaps
 
-- 27 Raw tests pass in debug; the release profile and full workspace gate are
+- 28 Raw tests pass in release; the full workspace gate is
   run before handoff.
 - Tests cover grouping, highlights, creator/video filters, relevance/date
   order, compact split and plural recovery, prefix search, transpositions,

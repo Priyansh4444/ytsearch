@@ -15,3 +15,7 @@ rollback before it can become a production proposal.
 
 Production continues to use Typesense unless an experiment document explicitly
 records a completed promotion decision.
+
+## Indexing
+
+- [Fetch, import, and scaling audit](indexing/README.md)
