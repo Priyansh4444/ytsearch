@@ -11,7 +11,13 @@ YOUTUBER="${YOUTUBER:-}"
 RUNS="${RUNS:-10}"
 RESULTS_FILE="${RESULTS_FILE:-}"
 CASE_LABEL="${CASE_LABEL:-default}"
+BACKEND_LABEL="${BACKEND_LABEL:-typesense}"
 ACCEPT_ENCODING="${ACCEPT_ENCODING:-gzip}"
+PAGE="${PAGE:-1}"
+PER_PAGE="${PER_PAGE:-10}"
+SORT="${SORT:-}"
+VIDEO_ID="${VIDEO_ID:-}"
+QUIET="${QUIET:-0}"
 
 if [ -z "$API_BASE_URL" ]; then
   echo "API_BASE_URL or TYPESENSE_FLY_API_BASE_URL is required" >&2
@@ -19,9 +25,15 @@ if [ -z "$API_BASE_URL" ]; then
 fi
 
 encode() { printf '%s' "$1" | jq -sRr @uri; }
-url="${API_BASE_URL%/}/api/search?q=$(encode "$QUERY")&per_page=10"
+url="${API_BASE_URL%/}/api/search?q=$(encode "$QUERY")&per_page=$PER_PAGE&page=$PAGE"
 if [ -n "$YOUTUBER" ]; then
   url="$url&youtuber=$(encode "$YOUTUBER")"
+fi
+if [ -n "$VIDEO_ID" ]; then
+  url="$url&video_id=$(encode "$VIDEO_ID")"
+fi
+if [ -n "$SORT" ]; then
+  url="$url&sort=$(encode "$SORT")"
 fi
 
 run=1
@@ -47,8 +59,10 @@ while [ "$run" -le "$RUNS" ]; do
     total_videos=0
     total_moments=0
   fi
-  row="case=$CASE_LABEL backend=typesense encoding=$ACCEPT_ENCODING http=$http total=${total}s bytes=$bytes first_result_ms=$first_result_ms total_videos=$total_videos total_moments=$total_moments"
-  printf '%s\n' "$row"
+  row="case=$CASE_LABEL backend=$BACKEND_LABEL encoding=$ACCEPT_ENCODING http=$http total=${total}s bytes=$bytes first_result_ms=$first_result_ms total_videos=$total_videos total_moments=$total_moments"
+  if [ "$QUIET" != "1" ]; then
+    printf '%s\n' "$row"
+  fi
   if [ -n "$RESULTS_FILE" ]; then
     printf '%s\n' "$row" >> "$RESULTS_FILE"
   fi

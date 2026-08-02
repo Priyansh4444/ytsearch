@@ -1,0 +1,15 @@
+# Exact, prefix, transposition, deletion, substitution, and two-edit queries.
+blackhole
+blackhloe
+blakhole
+blackhle
+relativty
+relativtyy
+quantm
+quatum
+conscousness
+electromagnitism
+veritasum
+vertasium
+quant
+relat

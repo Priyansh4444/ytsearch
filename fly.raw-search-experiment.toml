@@ -1,0 +1,33 @@
+app = 'ytsearch-raw-experiment'
+primary_region = 'sjc'
+
+[build]
+  dockerfile = 'Dockerfile.raw-search'
+
+[env]
+  RAW_SEARCH_BIND = '0.0.0.0:8108'
+  RAW_SEARCH_INDEX_PATH = '/data/index'
+  RUST_LOG = 'youtube_raw_search=info'
+
+[http_service]
+  internal_port = 8108
+  force_https = true
+  auto_stop_machines = 'suspend'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+[checks]
+  [checks.health]
+    port = 8108
+    type = 'http'
+    interval = '15s'
+    timeout = '2s'
+    grace_period = '10s'
+    method = 'get'
+    path = '/health'
