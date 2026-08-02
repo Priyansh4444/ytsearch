@@ -22,6 +22,7 @@ the four-candidate limit, one-typo minimum length 4, two-typo minimum length 7,
 and `drop_tokens_threshold=1`. The collection has no synonym sets, stemmer,
 locale, infix fields, token separators, symbols-to-index, or default sorting
 field. Those unconfigured capabilities are not Raw promotion requirements.
+The default token-drop mode is `right_to_left`; the active threshold is one.
 
 ## What Typesense implements
 
@@ -43,6 +44,7 @@ Primary source locations:
 
 - [Damerau-Levenshtein row update and pruned ART traversal](https://github.com/typesense/typesense/blob/d45d46baf3996d1de8bf96a87f375cfb43691560/src/art.cpp#L1412)
 - [Progressive fuzzy candidate combinations and per-request term cache](https://github.com/typesense/typesense/blob/d45d46baf3996d1de8bf96a87f375cfb43691560/src/index.cpp#L4831)
+- [Right-to-left then left-to-right token-drop progression](https://github.com/typesense/typesense/blob/d45d46baf3996d1de8bf96a87f375cfb43691560/src/index.cpp#L3600)
 - [Length-based typo-cost guard](https://github.com/typesense/typesense/blob/d45d46baf3996d1de8bf96a87f375cfb43691560/src/index.cpp#L6897)
 - [Space-as-typo split/join resolver](https://github.com/typesense/typesense/blob/d45d46baf3996d1de8bf96a87f375cfb43691560/src/index.cpp#L7955)
 - [Typesense 30 search parameter contract](https://typesense.org/docs/30.0/api/search.html)
@@ -61,7 +63,9 @@ only for guarded prefix/typo fallback.
 | Candidate cap | Four terms per edit distance, ranked by field-weighted posting frequency |
 | Progressive expansion | Exact/split, then prefix, then distance one, then distance two; stop at five grouped results |
 | Prefix search | Guarded fallback when exact/split coverage is below five |
-| Exact priority | Lower-distance stages complete first; prefix/fuzzy scores are demoted |
+| Exact priority | Saturating exact-token count packed into the 8-byte candidate; prefix/fuzzy alternatives contribute zero exact tokens |
+| First-token position | Compact `positions.bin` sidecar; decoded only for exact postings and used as a bounded score multiplier |
+| Token dropping | Conjunctive right-to-left suffix drops, then left-to-right prefix drops, filter-aware threshold one, maximum 20 candidates |
 | Compact split | Same-chunk intersection with narrow plural recovery |
 | Typo plus split | Additional bounded fallback requiring one exact component and one one-edit correction |
 | Highlighting | Uses the actual corrected lexicon terms, not the misspelled input |
@@ -77,16 +81,47 @@ components such as `black + he`, and returns the same top result as
 
 | Typesense behavior | Status | Reason |
 | --- | --- | --- |
-| Full positional scoring | Gap | Raw does not yet store token positions; adding them needs a disk/latency relevance experiment |
+| Phrase/proximity scoring | Partial | Raw stores the first position, not every occurrence; full positional lists need a separate judged experiment |
 | Exhaustive cost combinations | Deliberately bounded | The public query uses default non-exhaustive search |
-| General token dropping | Approximate | Raw's multi-token fallback is simpler and needs differential fixtures before promotion |
 | Arbitrary filter language/faceting | Out of scope | The application uses creator/video equality filters only |
 | Dynamic writes and replication | Out of scope | Raw is a read-only serving index built offline |
 | Locale tokenizers/stemming/synonyms/infix | Not configured | The active collection does not use them |
 
-Positional relevance and multi-token dropping are the important remaining
-search-contract gaps. They should be solved with a judged query set and a
-compact positions representation, not by importing general database machinery.
+Full phrase/proximity ranking and a larger human-judged query set remain the
+important relevance gaps. They should be solved only when the first-position
+sidecar is insufficient, not by importing general database machinery.
+
+## Schema-v5 full-snapshot gate
+
+The retained candidate was rebuilt on the four-channel snapshot: 420,720
+chunks, 2,743 videos, 59,596 terms. The retained engagement-enriched schema v5
+built in 4.419 seconds and is 83,637,146 bytes. The archived zero-counter v4
+index is 74,256,152 bytes, so positions plus populated counter metadata add
+9,380,994 bytes (12.6%).
+
+The v5 HTTP contract passed global and creator-filtered `blackhole`, all three
+composed typo cases, relevance/date/engagement ordering, pagination, channel
+search, authentication, and both route aliases. Multi-word differential cases
+became deliberately narrower: `battery gate incident` fell from 41 loosely
+unioned videos to its one conjunctive match; `why is the sky blue` fell from 61
+to one; `relativity explained simply` fell from 139 to two. Exact-token priority
+then moved the true relativity result ahead of the unrelated `relatively`
+candidate.
+
+Matched local loopback runs used 25 requests per query:
+
+| Workload | Variant | Searches | p50 | p95 | Mean | CPU ticks |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Nine core queries | archived v4 | 225 | 4.39 ms | 7.51 ms | 4.58 ms | 93 |
+| Nine core queries | schema v5 | 225 | 5.19 ms | 7.64 ms | 4.89 ms | 100 |
+| Fourteen typo/prefix queries | archived v4 | 350 | 12.28 ms | 23.58 ms | 12.35 ms | 415 |
+| Fourteen typo/prefix queries | schema v5 | 350 | 11.86 ms | 27.74 ms | 13.04 ms | 439 |
+
+This noisy A/B retains a 1.8% core-p95 cost, 5.6–6.6% mean cost, and 5.8–7.5%
+CPU cost for the corrected search contract. The typo p95 regressed 17.6% in
+this short run while its p50 improved 3.4%; it remains a tail signal to watch,
+not evidence of a stable improvement. Warm RSS after the typo matrix was 52.6
+MB for v4 and 57.6 MB for v5.
 
 ## Same-corpus results
 
@@ -137,9 +172,9 @@ work, not a claim that Rust is inherently faster than C++.
 7. The supported filter and sort shapes are direct metadata checks rather than
    a dynamic query language.
 
-The same specialization also explains the remaining gaps. Raw cannot claim a
-complete replacement until positional relevance, token dropping, full-snapshot
-capacity, and a larger human-judged query suite pass.
+The same specialization also explains the remaining gaps. Full-snapshot
+capacity now passes locally; Raw cannot claim a complete replacement until a
+larger human-judged query suite and shadow-traffic tail measurements pass.
 
 ## Promotion definition
 
@@ -154,5 +189,7 @@ A complete win requires all of the following on a production-shaped snapshot:
 - debug/release, corruption, concurrency, API-contract, and rollback checks;
 - shadow traffic before any production switch.
 
-Current decision: retain fuzzy v2 and continue toward positional and
-multi-token parity. Do not replace production Typesense yet.
+Current decision: retain schema v5 as the Raw promotion candidate. It closes
+the active first-position, exact-priority, and token-drop gaps, but production
+Typesense remains the rollback/control until shadow traffic validates relevance
+and tail latency.

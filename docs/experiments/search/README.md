@@ -21,7 +21,8 @@ matrix. [raw-validation.md](raw-validation.md) contains the current Veritasium,
 Vsauce, sorting, concurrency, and failure-mode evidence.
 [methodology.md](methodology.md) defines how to reproduce the measurements.
 [typesense-compatibility.md](typesense-compatibility.md) traces the active
-Typesense 30.2 typo/prefix implementation, records what Raw adopted, and names
-the remaining parity gaps. [engagement-ranking.md](engagement-ranking.md)
+Typesense 30.2 typo, prefix, exact-priority, position, and token-drop behavior;
+records what Raw adopted; and names the remaining parity gaps.
+[engagement-ranking.md](engagement-ranking.md)
 records the views/likes/comments data path, bounded score, deployed benchmarks,
 and isolated frontend topology.

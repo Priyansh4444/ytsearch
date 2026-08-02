@@ -10,9 +10,11 @@ Against the matched Typesense control it reduced pooled p95 by 71%, CPU by 73%,
 warm RSS by 93%, and disk by 94%. Against Tantivy it reduced pooled p95 by 49%,
 CPU by 38%, warm RSS by 38%, and disk by 52%.
 
-It is not approved as a production replacement. Raw top-one agreement with the
-Typesense oracle is 50%, below the 80% promotion gate, and the corpus is too
-small to prove full-snapshot capacity.
+It is not yet approved as the sole production replacement. The original
+four-query oracle had only 50% top-one agreement, and later manual review found
+the Typesense oracle itself wrong on `battery gate incident`. Schema v5 now
+passes the full available 420,720-chunk snapshot, but the larger human-judged
+suite and shadow-traffic tail gate remain.
 
 Tantivy was retired after this comparison. Its source is preserved on
 `archive/tantivy-experiment` at `3aa3f55`; its only Fly machine was destroyed.
@@ -37,6 +39,16 @@ The updated nine-query run measured 1.18 ms p50 and 2.09 ms p95. On fourteen
 typo/prefix queries Raw measured 1.83/3.14 ms p50/p95 versus Typesense 30.2 at
 3.80/9.12 ms, while recovering `blackhloe` and `blackhle` as black-hole intent
 where the matched Typesense control returned zero.
+
+Schema v5 adds compact first-token positions, packed exact-token priority, and
+filter-aware conjunctive token dropping. On the engagement-enriched
+four-channel snapshot it is 83.64 MB and built in 4.42 seconds. The active HTTP
+contract passes with nonzero views/likes/comments, and broad
+multi-word false-positive sets shrink substantially (`battery gate incident`
+41→1, `why is the sky blue` 61→1). Against archived v4, core p95 moved only
+1.8% (7.51→7.64 ms), while mean/CPU increased about 6–8%; the short typo run's
+tail remains a shadow-traffic gate. Full measurements are in
+[typesense-compatibility.md](typesense-compatibility.md).
 
 ## Full 1,956-video corpus
 

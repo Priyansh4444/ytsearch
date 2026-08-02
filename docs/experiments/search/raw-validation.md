@@ -1,8 +1,9 @@
 # Raw search validation
 
-Measured 2026-08-01 and updated with the fuzzy-v2 audit. This report extends the common backend experiment with a
-real Veritasium/Vsauce corpus and adversarial checks around compact queries,
-creator scope, ranking, dates, concurrency, and malformed index data.
+Measured 2026-08-01 and updated 2026-08-02 through the schema-v5 audit. This
+report extends the common backend experiment with real creator corpora and
+adversarial checks around compact and multi-token queries, creator scope,
+ranking, dates, concurrency, and malformed index data.
 
 ## Contract
 
@@ -179,6 +180,53 @@ plateau run every request succeeded; RSS ended at 66.02 MB with a 66.02 MB
 observed peak. This deliberately measures the new composed typo path rather
 than the cheaper exact `blackhole` path.
 
+## Schema-v5 position and multi-token gate
+
+The four-channel schema-v5 candidate contains 420,720 chunks, 2,743 videos,
+59,596 terms, and 83,637,146 bytes. It built from the 324 MB
+engagement-enriched source JSONL in 4.419 seconds. Positions plus populated
+counter metadata add 12.6% over the archived 74,256,152-byte zero-counter v4
+index. The query hot candidate remains eight bytes: four
+packed bits count exact query tokens, one bit records transcript provenance,
+and 27 bits retain capacity for more than 100 million documents.
+
+Multi-token evaluation no longer falls back to an OR of every query word. It
+expands prefix and typo alternatives within an intersection, then drops suffix
+tokens one at a time before switching direction. The stop threshold is applied
+after creator/video filtering. Four focused fixtures verify longest-subset
+preference, direction switching, filter-aware stopping, and a typo inside a
+retained conjunction. A fifth verifies exact-token priority over a
+higher-frequency correction.
+
+On the production-shaped corpus, representative result counts changed as
+intended:
+
+| Query | Archived broad fallback | Schema v5 |
+| --- | ---: | ---: |
+| `battery gate incident` | 41 | 1 |
+| `why is the sky blue` | 61 | 1 |
+| `relativity explained simply` | 139 | 2 |
+| `black hole event horizon` | 16 | 3 |
+
+The full contract passes with 30 global `blackhole` videos, including 6
+Veritasium and 15 Vsauce results; the extra nine come from the two additional
+channels. `blackhloe`, `blakhole`, and `blackhle` each recover all 30 with the
+same top result. Relevance, newest/oldest, engagement, pure counter sorts,
+pagination, channel lookup, authentication, and both search routes also pass.
+The harness now requires a positive value in every counter-sorted result set;
+this rejected an intermediate v5 build made from the stale zero-counter JSONL
+before it could remain deployed. The corrected public maxima for the
+`blackhole` result set are 34,876,084 views, 1,724,038 likes, and 56,264
+comments.
+
+The matched 225-search core A/B measured v4 at 4.39/7.51/4.58 ms
+p50/p95/mean and v5 at 5.19/7.64/4.89 ms. CPU moved from 93 to 100 ticks. The
+matched 350-search typo A/B measured v4 at 12.28/23.58/12.35 ms and v5 at
+11.86/27.74/13.04 ms; CPU moved from 415 to 439 ticks. The retained contract
+therefore costs 5.6–7.5% in mean/CPU in these runs; the short-run typo p95 is a
+named shadow-traffic gate. Warm RSS after the typo matrix was 52.6 MB for v4
+and 57.6 MB for v5.
+
 ## Optimization and rejected scope
 
 The first split implementation hydrated every candidate to award a phrase
@@ -208,21 +256,21 @@ the rejected broad path is not.
 
 ## Correctness evidence and gaps
 
-- 28 Raw tests pass in release; the full workspace gate is
+- 43 Raw tests and 3 shared-service tests pass in release; the full workspace gate is
   run before handoff.
 - Tests cover grouping, highlights, creator/video filters, relevance/date
   order, compact split and plural recovery, prefix search, transpositions,
   two-edit correction, typo-plus-split recovery, pagination, field selection,
   wildcard/channel search, empty corpora, concurrent clones, stable slicing,
-  overwrite refusal, corrupt magic, truncated postings/documents, manifest
-  mismatches, fuzzy-trie truncation, reference-distance equivalence, integer
-  boundaries, and malformed varints.
+  overwrite refusal, corrupt magic, truncated postings/positions/documents,
+  position-offset validation, manifest mismatches, fuzzy-trie truncation,
+  reference-distance equivalence, integer boundaries, and malformed varints.
 - Clippy passes with warnings denied.
 - Miri and sanitizer tooling were unavailable on this host; mmap behavior is
   protected by the immutable-file safety contract and bounds-checked readers,
   but this is still a named coverage gap.
-- The corpus is 787 videos, not the full snapshot. This proves these creator
-  and query cases, not production-wide relevance.
+- The schema-v5 gate covers the full available 2,743-video snapshot, but it is
+  still not a substitute for judged queries or production shadow traffic.
 - The concurrency driver uses parallel `curl`; throughput includes shell/load
   generator overhead and is retained primarily for errors, CPU, and RSS.
 
