@@ -1,0 +1,310 @@
+use axum::{
+    Json, Router,
+    body::Bytes,
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode, header},
+    response::{IntoResponse, Response},
+    routing::get,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::{
+    collections::VecDeque,
+    fs,
+    net::SocketAddr,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Instant,
+};
+
+const TRANSCRIPT_COLLECTION: &str = "youtube_transcript_chunks";
+const CHANNEL_COLLECTION: &str = "youtube_youtubers";
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SearchParams {
+    pub q: String,
+    #[serde(default)]
+    pub query_by: Option<String>,
+    #[serde(default)]
+    pub filter_by: Option<String>,
+    #[serde(default)]
+    pub group_by: Option<String>,
+    #[serde(default)]
+    pub group_limit: Option<u8>,
+    #[serde(default)]
+    pub per_page: Option<u8>,
+    #[serde(default)]
+    pub page: Option<u32>,
+    #[serde(default)]
+    pub offset: Option<u32>,
+    #[serde(default)]
+    pub limit: Option<u8>,
+    #[serde(default)]
+    pub sort_by: Option<String>,
+    #[serde(default)]
+    pub use_cache: Option<bool>,
+    #[serde(default)]
+    pub cache_ttl: Option<u64>,
+}
+
+pub trait SearchBackend: Send + Sync + 'static {
+    fn name(&self) -> &'static str;
+    fn search(&self, params: &SearchParams) -> Result<Value, String>;
+    fn search_channels(&self, params: &SearchParams) -> Value;
+    fn documents(&self) -> u64;
+    fn index_bytes(&self) -> u64;
+}
+
+pub struct ServerConfig {
+    pub bind: SocketAddr,
+    pub api_key: Option<String>,
+    pub raw_route: bool,
+}
+
+#[derive(Clone)]
+struct AppState {
+    backend: Arc<dyn SearchBackend>,
+    metrics: Arc<Metrics>,
+    started: Instant,
+    api_key: Option<Arc<str>>,
+    cache: Arc<Mutex<SearchCache>>,
+}
+
+#[derive(Default)]
+struct Metrics {
+    searches: AtomicU64,
+    errors: AtomicU64,
+    search_nanos: AtomicU64,
+    cache_hits: AtomicU64,
+}
+
+#[derive(Default)]
+struct SearchCache {
+    entries: VecDeque<CacheEntry>,
+}
+
+struct CacheEntry {
+    key: String,
+    expires: Instant,
+    value: Bytes,
+}
+
+#[derive(Serialize)]
+struct MetricsResponse {
+    backend: &'static str,
+    documents: u64,
+    index_bytes: u64,
+    rss_bytes: u64,
+    cpu_ticks: u64,
+    searches: u64,
+    errors: u64,
+    search_nanos: u64,
+    cache_hits: u64,
+    uptime_seconds: u64,
+}
+
+pub async fn serve(config: ServerConfig, backend: Arc<dyn SearchBackend>) -> std::io::Result<()> {
+    let state = AppState {
+        backend,
+        metrics: Arc::new(Metrics::default()),
+        started: Instant::now(),
+        api_key: config.api_key.map(Arc::from),
+        cache: Arc::new(Mutex::new(SearchCache::default())),
+    };
+    let mut app = Router::new()
+        .route("/health", get(health))
+        .route("/metrics", get(metrics))
+        .route("/collections/{collection}/documents/search", get(search));
+    if config.raw_route {
+        app = app.route(
+            "/raw/collections/{collection}/documents/search",
+            get(search),
+        );
+    }
+    let listener = tokio::net::TcpListener::bind(config.bind).await?;
+    tracing::info!(bind = %config.bind, backend = state.backend.name(), "search experiment ready");
+    axum::serve(listener, app.with_state(state))
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+}
+
+async fn health(State(state): State<AppState>) -> Json<Value> {
+    Json(json!({
+        "ok": true,
+        "backend": state.backend.name(),
+        "documents": state.backend.documents(),
+    }))
+}
+
+async fn metrics(State(state): State<AppState>) -> Json<MetricsResponse> {
+    let (rss_bytes, cpu_ticks) = process_usage();
+    Json(MetricsResponse {
+        backend: state.backend.name(),
+        documents: state.backend.documents(),
+        index_bytes: state.backend.index_bytes(),
+        rss_bytes,
+        cpu_ticks,
+        searches: state.metrics.searches.load(Ordering::Relaxed),
+        errors: state.metrics.errors.load(Ordering::Relaxed),
+        search_nanos: state.metrics.search_nanos.load(Ordering::Relaxed),
+        cache_hits: state.metrics.cache_hits.load(Ordering::Relaxed),
+        uptime_seconds: state.started.elapsed().as_secs(),
+    })
+}
+
+async fn search(
+    State(state): State<AppState>,
+    Path(collection): Path<String>,
+    Query(params): Query<SearchParams>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    let unauthorized = state.api_key.as_deref().is_some_and(|expected| {
+        headers
+            .get("x-typesense-api-key")
+            .and_then(|value| value.to_str().ok())
+            != Some(expected)
+    });
+    if unauthorized {
+        return Err(ServerError::Unauthorized);
+    }
+
+    let started = Instant::now();
+    state.metrics.searches.fetch_add(1, Ordering::Relaxed);
+    let cache_key = params.use_cache.unwrap_or(false).then(|| {
+        format!(
+            "{collection}:{}",
+            serde_json::to_string(&params).unwrap_or_default()
+        )
+    });
+    if let Some(value) = cache_key
+        .as_deref()
+        .and_then(|key| state.cache.lock().ok().and_then(|mut cache| cache.get(key)))
+    {
+        state.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
+        record_elapsed(&state, started);
+        return Ok(json_bytes_response(value));
+    }
+
+    let result = match collection.as_str() {
+        TRANSCRIPT_COLLECTION => state.backend.search(&params),
+        CHANNEL_COLLECTION => Ok(state.backend.search_channels(&params)),
+        _ => return Err(ServerError::NotFound(collection)),
+    };
+    record_elapsed(&state, started);
+    match result {
+        Ok(value) => {
+            let body = Bytes::from(
+                serde_json::to_vec(&value)
+                    .map_err(|error| ServerError::Backend(error.to_string()))?,
+            );
+            if let Some(key) = cache_key {
+                let ttl = params.cache_ttl.unwrap_or(60).clamp(1, 300);
+                if let Ok(mut cache) = state.cache.lock() {
+                    cache.insert(key, body.clone(), ttl);
+                }
+            }
+            Ok(json_bytes_response(body))
+        }
+        Err(error) => {
+            state.metrics.errors.fetch_add(1, Ordering::Relaxed);
+            Err(ServerError::Backend(error))
+        }
+    }
+}
+
+fn record_elapsed(state: &AppState, started: Instant) {
+    state
+        .metrics
+        .search_nanos
+        .fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+}
+
+impl SearchCache {
+    fn get(&mut self, key: &str) -> Option<Bytes> {
+        let now = Instant::now();
+        self.entries.retain(|entry| entry.expires > now);
+        self.entries
+            .iter()
+            .find(|entry| entry.key == key)
+            .map(|entry| entry.value.clone())
+    }
+
+    fn insert(&mut self, key: String, value: Bytes, ttl_seconds: u64) {
+        const CAPACITY: usize = 128;
+        if self.entries.len() == CAPACITY {
+            self.entries.pop_front();
+        }
+        self.entries.push_back(CacheEntry {
+            key,
+            expires: Instant::now() + std::time::Duration::from_secs(ttl_seconds),
+            value,
+        });
+    }
+}
+
+fn json_bytes_response(body: Bytes) -> Response {
+    ([(header::CONTENT_TYPE, "application/json")], body).into_response()
+}
+
+enum ServerError {
+    Backend(String),
+    NotFound(String),
+    Unauthorized,
+}
+
+impl IntoResponse for ServerError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            Self::Backend(error) => (StatusCode::INTERNAL_SERVER_ERROR, error),
+            Self::NotFound(collection) => (
+                StatusCode::NOT_FOUND,
+                format!("unknown collection: {collection}"),
+            ),
+            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "invalid search key".to_string()),
+        };
+        (status, Json(json!({ "message": message }))).into_response()
+    }
+}
+
+fn process_usage() -> (u64, u64) {
+    let rss_pages = fs::read_to_string("/proc/self/statm")
+        .ok()
+        .and_then(|stat| stat.split_whitespace().nth(1)?.parse::<u64>().ok())
+        .unwrap_or_default();
+    let cpu_ticks = fs::read_to_string("/proc/self/stat")
+        .ok()
+        .and_then(|stat| {
+            let close = stat.rfind(')')?;
+            let fields = stat
+                .get(close + 2..)?
+                .split_whitespace()
+                .collect::<Vec<_>>();
+            let user = fields.get(11)?.parse::<u64>().ok()?;
+            let system = fields.get(12)?.parse::<u64>().ok()?;
+            Some(user.saturating_add(system))
+        })
+        .unwrap_or_default();
+    (rss_pages.saturating_mul(4_096), cpu_ticks)
+}
+
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_is_bounded_and_expires_by_contract() {
+        let mut cache = SearchCache::default();
+        for index in 0..140 {
+            cache.insert(index.to_string(), Bytes::from_static(b"{}"), 60);
+        }
+        assert_eq!(cache.entries.len(), 128);
+        assert!(cache.get("0").is_none());
+        assert!(cache.get("139").is_some());
+    }
+}

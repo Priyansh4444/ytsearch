@@ -1,0 +1,13 @@
+[package]
+name = "youtube_search_service"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+axum = "0.8"
+bytes = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["net", "signal"] }
+tracing = { workspace = true }
