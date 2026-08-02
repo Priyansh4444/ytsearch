@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 use reqwest::{Client as HttpClient, StatusCode, Url, header::CONTENT_TYPE};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::HashSet, fmt, time::Duration};
 use thiserror::Error;
 use tokio::time::sleep;
+pub use youtube_index_store::{ChannelDocument as YoutuberDocument, ChunkStats};
 use youtube_ingest::{
     ChunkSink, IngestError, TranscriptChunk, TranscriptChunkPage, TranscriptChunkSource,
 };
@@ -27,6 +27,8 @@ const READINESS_DELAY: Duration = Duration::from_secs(10);
 const REQUIRED_HEALTHY_CHECKS: u8 = 3;
 const EXPORT_PAGE_SIZE_MAX: usize = 250;
 const EXPORT_QUERY_BY: &str = "text";
+
+mod admin;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct TypesenseAdminConfig {
@@ -361,7 +363,9 @@ impl TypesenseAdminClient {
 
     pub async fn chunk_stats_by_youtuber_id(&self, youtuber_id: &str) -> Result<ChunkStats> {
         let indexed_chunks = self.count_chunks_by_youtuber_id(youtuber_id).await?;
-        let indexed_video_ids = self.indexed_video_ids_by_youtuber_id(youtuber_id).await?;
+        let indexed_video_ids = self
+            .indexed_video_ids_vec_by_youtuber_id(youtuber_id)
+            .await?;
         Ok(ChunkStats {
             indexed_videos: indexed_video_ids.len() as u64,
             indexed_chunks,
@@ -416,6 +420,14 @@ impl TypesenseAdminClient {
         &self,
         youtuber_id: &str,
     ) -> Result<HashSet<String>> {
+        Ok(self
+            .indexed_video_ids_vec_by_youtuber_id(youtuber_id)
+            .await?
+            .into_iter()
+            .collect())
+    }
+
+    async fn indexed_video_ids_vec_by_youtuber_id(&self, youtuber_id: &str) -> Result<Vec<String>> {
         let path = format!("collections/{}/documents/search", self.config.collection);
         let mut url = endpoint(&self.config.api_url, &path)?;
         {
@@ -785,26 +797,6 @@ impl TranscriptSearchBackend for TypesenseSearchClient {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypesenseImport {
     pub body: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ChunkStats {
-    pub indexed_videos: u64,
-    pub indexed_chunks: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct YoutuberDocument {
-    pub id: String,
-    pub handle: String,
-    pub name: String,
-    pub channel_id: String,
-    pub uploads_playlist: Option<String>,
-    pub public_video_count: u32,
-    pub indexed_video_count: u32,
-    pub indexed_chunk_count: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub avatar_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

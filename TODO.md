@@ -36,7 +36,8 @@ Raw can replace Typesense as the canonical search index.
 ### P1: canonical write path
 
 - [x] Add a backend-neutral search-index administration contract.
-- [ ] Adapt Typesense administration behind the shared contract during migration.
+- [x] Adapt Typesense administration behind the shared contract during migration.
+- [ ] Route CLI and repair jobs through the shared administration contract.
 - [ ] Add a durable Raw writer with SQLite WAL and idempotency keys.
 - [ ] Add atomic replace/delete video and upsert/delete channel operations.
 - [ ] Add counts, channel statistics, indexed-video pagination, and operation status.

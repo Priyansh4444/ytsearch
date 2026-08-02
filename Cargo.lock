@@ -2380,6 +2380,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "youtube_index_store",
  "youtube_ingest",
  "youtube_search",
 ]
