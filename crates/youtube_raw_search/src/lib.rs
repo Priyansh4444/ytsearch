@@ -19,6 +19,8 @@ pub enum Error {
     ExistingIndex(String),
     #[error("input document is missing {0}")]
     MissingField(&'static str),
+    #[error("invalid index input: {0}")]
+    InvalidInput(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

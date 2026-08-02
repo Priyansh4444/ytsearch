@@ -5,10 +5,10 @@ use std::{fs::File, path::Path};
 pub const LEXICON_MAGIC: &[u8; 8] = b"RAWLEX01";
 pub const POSTINGS_MAGIC: &[u8; 8] = b"RAWPOS01";
 pub const DOCUMENTS_MAGIC: &[u8; 8] = b"RAWDOC01";
-pub const METADATA_MAGIC: &[u8; 8] = b"RAWMET01";
+pub const METADATA_MAGIC: &[u8; 8] = b"RAWMET02";
 pub const FUZZY_MAGIC: &[u8; 8] = b"RAWFUZ01";
 pub const HEADER_BYTES: usize = 16;
-pub const DOCUMENT_RECORD_BYTES: usize = 20;
+pub const DOCUMENT_RECORD_BYTES: usize = 24;
 pub const BLOCK_RECORD_BYTES: usize = 16;
 
 pub struct MappedFile {

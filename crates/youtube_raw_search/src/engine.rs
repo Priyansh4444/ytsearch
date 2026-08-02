@@ -29,6 +29,7 @@ const POSTINGS_FILE: &str = "postings.bin";
 const DOCUMENTS_FILE: &str = "documents.blocks";
 const METADATA_FILE: &str = "documents.meta";
 const DOCUMENTS_PER_BLOCK: usize = 64;
+const MOMENT_COALESCE_WINDOW_MS: u32 = 20_000;
 const METADATA_PREFIX_BYTES: usize = HEADER_BYTES + 8;
 const TYPO_RESULT_THRESHOLD: usize = 5;
 const MAX_FUZZY_TERMS_PER_DISTANCE: usize = 4;
@@ -77,6 +78,8 @@ struct IndexDocument {
     like_count: u64,
     #[serde(default)]
     comment_count: u64,
+    #[serde(default)]
+    t_start_ms: u32,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -127,6 +130,7 @@ struct DocumentRecord {
     length: u32,
     video: u32,
     tokens: u32,
+    t_start_ms: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -222,8 +226,33 @@ impl DocMatch {
 struct VideoMatches {
     video: u32,
     score: f32,
-    transcript_matches: usize,
+    moments: MomentCounter,
     documents: Vec<DocMatch>,
+}
+
+#[derive(Default)]
+struct MomentCounter {
+    clusters: usize,
+    cluster_start_ms: Option<u32>,
+    last_start_ms: Option<u32>,
+}
+
+impl MomentCounter {
+    fn record(&mut self, start_ms: u32) {
+        debug_assert!(self.last_start_ms.is_none_or(|last| last <= start_ms));
+        self.last_start_ms = Some(start_ms);
+        if self
+            .cluster_start_ms
+            .is_none_or(|cluster| start_ms.saturating_sub(cluster) > MOMENT_COALESCE_WINDOW_MS)
+        {
+            self.clusters += 1;
+            self.cluster_start_ms = Some(start_ms);
+        }
+    }
+
+    fn visible(&self) -> usize {
+        self.clusters.max(1)
+    }
 }
 
 struct SplitComponent {
@@ -336,12 +365,22 @@ pub fn build_index(
         let line_bytes = line.as_bytes();
         let offset = block_bytes.len() as u32;
         block_bytes.extend_from_slice(line_bytes);
+        if let Some(previous_document) = videos[video as usize].documents.last().copied() {
+            let previous_start = document_records[previous_document as usize].t_start_ms;
+            if source.t_start_ms < previous_start {
+                return Err(Error::InvalidInput(format!(
+                    "video {} has out-of-order moments: {} follows {}",
+                    videos[video as usize].id, source.t_start_ms, previous_start
+                )));
+            }
+        }
         document_records.push(DocumentRecord {
             block: block_records.len() as u32,
             offset,
             length: line_bytes.len() as u32,
             video,
             tokens: document_tokens,
+            t_start_ms: source.t_start_ms,
         });
         videos[video as usize].documents.push(document);
         block_document_count += 1;
@@ -375,7 +414,7 @@ pub fn build_index(
         total_tokens as f32 / document_count as f32
     };
     let manifest = Manifest {
-        schema_version: 3,
+        schema_version: 4,
         documents: document_count,
         videos: videos.len() as u32,
         channels: channels.len() as u32,
@@ -495,6 +534,7 @@ fn write_metadata(
         output.write_all(&document.length.to_le_bytes())?;
         output.write_all(&document.video.to_le_bytes())?;
         output.write_all(&document.tokens.to_le_bytes())?;
+        output.write_all(&document.t_start_ms.to_le_bytes())?;
     }
     for block in blocks {
         output.write_all(&block.offset.to_le_bytes())?;
@@ -613,7 +653,7 @@ impl RawSearchEngine {
     pub fn open(index_path: &Path) -> Result<Self> {
         let manifest: Manifest =
             serde_json::from_reader(BufReader::new(File::open(index_path.join(MANIFEST_FILE))?))?;
-        if manifest.schema_version != 3 {
+        if manifest.schema_version != 4 {
             return Err(Error::Corrupt(format!(
                 "unsupported schema version {}",
                 manifest.schema_version
@@ -777,6 +817,7 @@ impl DocumentTable {
             length: read_u32(self.file.bytes(), offset + 8)?,
             video: read_u32(self.file.bytes(), offset + 12)?,
             tokens: read_u32(self.file.bytes(), offset + 16)?,
+            t_start_ms: read_u32(self.file.bytes(), offset + 20)?,
         })
     }
 
@@ -1378,11 +1419,13 @@ impl RawSearchEngine {
             let group = groups.entry(record.video).or_insert_with(|| VideoMatches {
                 video: record.video,
                 score: candidate.score,
-                transcript_matches: 0,
+                moments: MomentCounter::default(),
                 documents: Vec::with_capacity(hits_per_group),
             });
             group.score = group.score.max(candidate.score);
-            group.transcript_matches += usize::from(candidate.matches_text());
+            if candidate.matches_text() {
+                group.moments.record(record.t_start_ms);
+            }
             retain_best_document(&mut group.documents, candidate, hits_per_group);
         }
 
@@ -1423,7 +1466,7 @@ impl RawSearchEngine {
     ) -> Result<Value> {
         let filter = parse_filter(params.filter_by.as_deref());
         let mut filtered = Vec::with_capacity(matches.len());
-        let mut moment_counts = HashMap::<u32, usize>::new();
+        let mut moment_counts = HashMap::<u32, MomentCounter>::new();
         for candidate in matches {
             let record = self.inner.metadata.document(candidate.document())?;
             let video = self
@@ -1432,14 +1475,20 @@ impl RawSearchEngine {
                 .get(record.video as usize)
                 .ok_or_else(|| Error::Corrupt("document video is out of bounds".to_string()))?;
             if video_matches_filter(video, filter) {
-                let transcript_matches = moment_counts.entry(record.video).or_default();
-                *transcript_matches += usize::from(candidate.matches_text());
+                if candidate.matches_text() {
+                    moment_counts
+                        .entry(record.video)
+                        .or_default()
+                        .record(record.t_start_ms);
+                } else {
+                    moment_counts.entry(record.video).or_default();
+                }
                 filtered.push(candidate);
             }
         }
         let total_moments = moment_counts
             .values()
-            .map(|transcript_matches| (*transcript_matches).max(1))
+            .map(MomentCounter::visible)
             .sum::<usize>();
         let mut matches = filtered;
         matches.sort_unstable_by(|left, right| {
@@ -1725,7 +1774,7 @@ fn normalized_log(value: u64, maximum: u64) -> f32 {
 }
 
 fn visible_group_moments(group: &VideoMatches) -> usize {
-    group.transcript_matches.max(1)
+    group.moments.visible()
 }
 
 fn retain_best_document(documents: &mut Vec<DocMatch>, candidate: DocMatch, limit: usize) {
@@ -2053,7 +2102,7 @@ mod tests {
         let mut chunks = File::create(&chunks_path).expect("chunks");
         for document in [
             json!({"id":"a-1","video_id":"a","title":"Rust performance","text":"a compact inverted search index about relativity","youtuber_handle":"@one","youtuber_name":"One","t_start_ms":1000,"t_end_ms":2000,"published_at_timestamp":20}),
-            json!({"id":"a-2","video_id":"a","title":"Rust performance","text":"memory mapped search is fast","youtuber_handle":"@one","youtuber_name":"One","t_start_ms":3000,"t_end_ms":4000,"published_at_timestamp":20}),
+            json!({"id":"a-2","video_id":"a","title":"Rust performance","text":"memory mapped search is fast","youtuber_handle":"@one","youtuber_name":"One","t_start_ms":30000,"t_end_ms":31000,"published_at_timestamp":20}),
             json!({"id":"b-1","video_id":"b","title":"JavaScript runtimes","text":"Bun starts quickly","youtuber_handle":"@Two","youtuber_name":"Two","t_start_ms":1000,"t_end_ms":2000,"published_at_timestamp":10}),
         ] {
             writeln!(chunks, "{document}").expect("write chunk");
@@ -2193,6 +2242,15 @@ mod tests {
         let transcript = DocMatch::new(42, 1.0, true);
         assert_eq!(transcript.document(), 42);
         assert!(transcript.matches_text());
+    }
+
+    #[test]
+    fn moment_totals_use_the_same_twenty_second_coalescing_window_as_the_api() {
+        let mut moments = MomentCounter::default();
+        for start in [1_000, 21_000, 21_001, 41_001] {
+            moments.record(start);
+        }
+        assert_eq!(moments.visible(), 2);
     }
 
     #[test]
@@ -2380,7 +2438,7 @@ mod tests {
     #[test]
     fn engagement_normalization_is_bounded_and_handles_missing_metrics() {
         let manifest = Manifest {
-            schema_version: 3,
+            schema_version: 4,
             documents: 0,
             videos: 0,
             channels: 0,
