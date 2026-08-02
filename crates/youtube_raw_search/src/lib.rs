@@ -1,6 +1,7 @@
 mod engine;
 mod format;
 mod fuzzy;
+mod positions;
 
 pub use engine::{BuildReport, RawSearchEngine, SliceReport, build_index, slice_corpus};
 pub use youtube_search_service::SearchParams;

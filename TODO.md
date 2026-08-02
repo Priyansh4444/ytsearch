@@ -21,6 +21,7 @@ Raw can replace Typesense as the canonical search index.
 ### P0: relevance and compatibility
 
 - [ ] Add schema v6 complete positional postings.
+  - [x] Define an allocation-bounded delta codec with corruption and size tests.
   - [ ] Keep first positions in a compact hot sidecar for ordinary queries.
   - [ ] Delta-encode all remaining positions into a cold sidecar.
   - [ ] Checksum and length-check every generation file at startup.
