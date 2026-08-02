@@ -221,6 +221,7 @@ function testEnv(overrides: Record<string, unknown> = {}): Env {
     ASSETS: { fetch: vi.fn().mockResolvedValue(new Response("asset")) },
     PUBLIC_APP_ORIGIN: "https://search.pronsh.dev",
     API_BASE_URL: "https://ytsearch-api-typesense-fly-staging.fly.dev",
+    INDEX_QUEUE_API_BASE_URL: "https://ytsearch-api-typesense-fly-staging.fly.dev",
     FLY_API_BASE_URL: "https://api.machines.dev",
     FLY_APP_NAME: "ytsearch-indexer-staging",
     FLY_MACHINE_ID: "78410e0f165138",

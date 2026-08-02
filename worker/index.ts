@@ -1,4 +1,5 @@
 import { shouldWakeIndexer } from "./wake-policy";
+import { upstreamApiBase } from "./upstream-route";
 import { requestOriginAllowed } from "./origin-policy";
 import { evaluateSearchSchedule } from "../shared/service-schedule";
 import {
@@ -50,7 +51,10 @@ export default {
       return scheduledOfflineResponse();
     }
 
-    const upstreamUrl = new URL(url.pathname + url.search, env.API_BASE_URL);
+    const upstreamUrl = new URL(
+      url.pathname + url.search,
+      upstreamApiBase(url.pathname, env.API_BASE_URL, env.INDEX_QUEUE_API_BASE_URL),
+    );
     const upstreamResponse = await fetch(new Request(upstreamUrl, request));
     if (shouldWakeIndexer(request.method, url.pathname, upstreamResponse.ok)) {
       await env.INDEX_WAKE_QUEUE.send({ reason: "index-request" });
