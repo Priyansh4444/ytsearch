@@ -658,7 +658,7 @@ async fn search_handler(
         },
     )?;
     let totals_raw = ungrouped_totals.as_ref().unwrap_or(&first_raw);
-    let found = backend_found(totals_raw);
+    let found = backend_total_moments(&first_raw).unwrap_or_else(|| backend_found(totals_raw));
     let out_of = backend_out_of(totals_raw);
     let processing_started = Instant::now();
     let mut page_result = collect_visible_videos(
@@ -1436,6 +1436,10 @@ fn backend_found(raw: &Value) -> u64 {
         .unwrap_or_default()
 }
 
+fn backend_total_moments(raw: &Value) -> Option<u64> {
+    raw.get("total_moments").and_then(Value::as_u64)
+}
+
 fn backend_out_of(raw: &Value) -> u64 {
     raw.get("estimatedTotalHits")
         .or_else(|| raw.get("totalHits"))
@@ -2027,6 +2031,22 @@ mod tests {
         let totals = json!({ "found": 35_383, "out_of": 7_129_139 });
         assert_eq!(backend_found(&totals), 35_383);
         assert_eq!(backend_out_of(&totals), 7_129_139);
+    }
+
+    #[test]
+    fn raw_grouped_totals_preserve_all_matching_moments() {
+        let grouped = json!({
+            "found": 15,
+            "total_moments": 41,
+            "grouped_hits": [{ "found": 5, "hits": [{}, {}, {}] }]
+        });
+        let ungrouped = json!({ "found": 99 });
+
+        assert_eq!(backend_total_moments(&grouped), Some(41));
+        assert_eq!(
+            backend_total_moments(&grouped).unwrap_or_else(|| backend_found(&ungrouped)),
+            41
+        );
     }
 
     #[test]
