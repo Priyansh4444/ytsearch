@@ -44,6 +44,7 @@ import {
   WelcomeState,
 } from "./components/states";
 import { VideoResult } from "./components/video-result";
+import { presentSearchError } from "./search-error";
 import { BackButton, CopyLinkButton } from "./components/toolbar-actions";
 import type {
   IndexedChannel,
@@ -544,7 +545,10 @@ const App: Component = () => {
           </Show>
 
           <Show when={!queuedIndexRequest() && availability().search_enabled && result.error}>
-            {(error) => <ErrorState message={String(error())} />}
+            {(error) => {
+              const presentation = presentSearchError(error());
+              return <ErrorState title={presentation.title} message={presentation.message} />;
+            }}
           </Show>
 
           <Show

@@ -78,9 +78,7 @@ function indexRequestDescription(status: IndexRequestStatus, requestId: string):
 export const ErrorState: Component<{ message: string; title?: string }> = (props) => (
   <div class="border border-vesper-red/40 bg-vesper-red/10 p-5 text-vesper-red" role="alert">
     <p class="font-semibold">{props.title ?? "Search failed"}</p>
-    <p class="mt-2 text-sm text-red-100/80">
-      Unable to search. Check your connection and try again.
-    </p>
+    <p class="mt-2 text-sm text-red-100/80">{props.message}</p>
   </div>
 );
 
