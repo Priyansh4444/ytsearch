@@ -1,0 +1,10 @@
+[package]
+name = "youtube_index_store"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+youtube_ingest = { path = "../youtube_ingest" }

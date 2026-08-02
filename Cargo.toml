@@ -5,6 +5,7 @@ members = [
     "crates/youtube_cli",
     "crates/youtube_client",
     "crates/youtube_ingest",
+    "crates/youtube_index_store",
     "crates/youtube_raw_search",
     "crates/youtube_search",
     "crates/youtube_search_service",

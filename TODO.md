@@ -35,7 +35,7 @@ Raw can replace Typesense as the canonical search index.
 
 ### P1: canonical write path
 
-- [ ] Add a backend-neutral search-index administration contract.
+- [x] Add a backend-neutral search-index administration contract.
 - [ ] Adapt Typesense administration behind the shared contract during migration.
 - [ ] Add a durable Raw writer with SQLite WAL and idempotency keys.
 - [ ] Add atomic replace/delete video and upsert/delete channel operations.
@@ -263,4 +263,3 @@ Raw can replace Typesense as the canonical search index.
 - [x] Before replacing queue daemon, confirm existing `ytsearch-indexer-staging` queue daemon state and logs.
 - [x] After replacing queue daemon, confirm only one persistent daemon is processing the JSONL queue. Existing daemon was left running; no replacement daemon started.
 - [x] Record final machine state, frontend URLs, and indexing status.
-

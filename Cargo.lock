@@ -2258,6 +2258,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "youtube_index_store"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "thiserror",
+ "youtube_ingest",
+]
+
+[[package]]
 name = "youtube_ingest"
 version = "0.1.0"
 dependencies = [
