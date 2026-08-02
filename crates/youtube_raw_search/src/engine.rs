@@ -222,12 +222,17 @@ struct DocMatch {
 
 impl DocMatch {
     const TEXT_MATCH_FLAG: u32 = 1 << 31;
-    const DOCUMENT_MASK: u32 = !Self::TEXT_MATCH_FLAG;
+    const EXACT_TOKENS_SHIFT: u32 = 27;
+    const EXACT_TOKENS_MASK: u32 = 0b1111 << Self::EXACT_TOKENS_SHIFT;
+    const MAX_EXACT_TOKENS: u8 = 0b1111;
+    const DOCUMENT_MASK: u32 = (1 << Self::EXACT_TOKENS_SHIFT) - 1;
 
     fn new(document: u32, score: f32, matches_text: bool) -> Self {
-        debug_assert_eq!(document & Self::TEXT_MATCH_FLAG, 0);
+        debug_assert_eq!(document & !Self::DOCUMENT_MASK, 0);
         Self {
-            document_with_flags: document | (u32::from(matches_text) * Self::TEXT_MATCH_FLAG),
+            document_with_flags: document
+                | (1 << Self::EXACT_TOKENS_SHIFT)
+                | (u32::from(matches_text) * Self::TEXT_MATCH_FLAG),
             score,
         }
     }
@@ -241,16 +246,36 @@ impl DocMatch {
     }
 
     fn set_matches_text(&mut self, matches_text: bool) {
-        self.document_with_flags =
-            self.document() | (u32::from(matches_text) * Self::TEXT_MATCH_FLAG);
+        self.document_with_flags = self.document()
+            | (self.document_with_flags & Self::EXACT_TOKENS_MASK)
+            | (u32::from(matches_text) * Self::TEXT_MATCH_FLAG);
+    }
+
+    fn exact_tokens(self) -> u8 {
+        ((self.document_with_flags & Self::EXACT_TOKENS_MASK) >> Self::EXACT_TOKENS_SHIFT) as u8
+    }
+
+    fn set_exact_tokens(&mut self, exact_tokens: u8) {
+        self.document_with_flags = self.document()
+            | (self.document_with_flags & Self::TEXT_MATCH_FLAG)
+            | (u32::from(exact_tokens.min(Self::MAX_EXACT_TOKENS)) << Self::EXACT_TOKENS_SHIFT);
     }
 }
+
+const _: () = assert!(DocMatch::DOCUMENT_MASK >= 100_000_000);
 
 struct VideoMatches {
     video: u32,
     score: f32,
+    exact_tokens: u8,
     moments: MomentCounter,
     documents: Vec<DocMatch>,
+}
+
+#[derive(Clone, Copy)]
+struct RelevanceRank {
+    score: f32,
+    exact_tokens: u8,
 }
 
 #[derive(Default)]
@@ -1245,6 +1270,7 @@ impl RawSearchEngine {
                         // This keeps `blak + hole` and `black + hloe` from ranking the
                         // same corrected intent differently.
                         candidate.score += SPLIT_SCORE_BONUS * 0.5;
+                        candidate.set_exact_tokens(0);
                     }
                     let mut phrase_matches = matches.clone();
                     let phrase =
@@ -1599,6 +1625,7 @@ impl RawSearchEngine {
             };
             for matched in &mut matches {
                 matched.score *= score_multiplier;
+                matched.set_exact_tokens(0);
             }
             alternatives.push(matches);
             highlight_terms.push(candidate.to_string());
@@ -1662,10 +1689,12 @@ impl RawSearchEngine {
             let group = groups.entry(record.video).or_insert_with(|| VideoMatches {
                 video: record.video,
                 score: candidate.score,
+                exact_tokens: candidate.exact_tokens(),
                 moments: MomentCounter::default(),
                 documents: Vec::with_capacity(hits_per_group),
             });
             group.score = group.score.max(candidate.score);
+            group.exact_tokens = group.exact_tokens.max(candidate.exact_tokens());
             if candidate.matches_text() {
                 group.moments.record(record.t_start_ms);
             }
@@ -1740,9 +1769,15 @@ impl RawSearchEngine {
             match (left_video, right_video) {
                 (Some(left_video), Some(right_video)) => compare_video_sort(
                     left_video,
-                    left.score,
+                    RelevanceRank {
+                        score: left.score,
+                        exact_tokens: left.exact_tokens(),
+                    },
                     right_video,
-                    right.score,
+                    RelevanceRank {
+                        score: right.score,
+                        exact_tokens: right.exact_tokens(),
+                    },
                     params.sort_by.as_deref(),
                     &self.inner.manifest,
                 )
@@ -1770,9 +1805,15 @@ impl RawSearchEngine {
             let right_video = &self.inner.videos[right.video as usize];
             compare_video_sort(
                 left_video,
-                left.score,
+                RelevanceRank {
+                    score: left.score,
+                    exact_tokens: left.exact_tokens,
+                },
                 right_video,
-                right.score,
+                RelevanceRank {
+                    score: right.score,
+                    exact_tokens: right.exact_tokens,
+                },
                 sort_by,
                 &self.inner.manifest,
             )
@@ -1797,9 +1838,15 @@ impl RawSearchEngine {
                 let right = &self.inner.videos[*right as usize];
                 compare_video_sort(
                     left,
-                    0.0,
+                    RelevanceRank {
+                        score: 0.0,
+                        exact_tokens: 0,
+                    },
                     right,
-                    0.0,
+                    RelevanceRank {
+                        score: 0.0,
+                        exact_tokens: 0,
+                    },
                     params
                         .sort_by
                         .as_deref()
@@ -1846,9 +1893,15 @@ impl RawSearchEngine {
             match (left_video, right_video) {
                 (Some(left_video), Some(right_video)) => compare_video_sort(
                     left_video,
-                    0.0,
+                    RelevanceRank {
+                        score: 0.0,
+                        exact_tokens: 0,
+                    },
                     right_video,
-                    0.0,
+                    RelevanceRank {
+                        score: 0.0,
+                        exact_tokens: 0,
+                    },
                     params
                         .sort_by
                         .as_deref()
@@ -1973,28 +2026,37 @@ impl RawSearchEngine {
 
 fn compare_video_sort(
     left: &VideoMeta,
-    left_relevance: f32,
+    left_rank: RelevanceRank,
     right: &VideoMeta,
-    right_relevance: f32,
+    right_rank: RelevanceRank,
     sort_by: Option<&str>,
     manifest: &Manifest,
 ) -> Ordering {
-    let ordering = match sort_by {
-        Some("published_at_timestamp:desc") => right
-            .published_at_timestamp
-            .cmp(&left.published_at_timestamp),
-        Some("published_at_timestamp:asc") => left
-            .published_at_timestamp
-            .cmp(&right.published_at_timestamp),
-        Some("view_count:desc") => right.view_count.cmp(&left.view_count),
-        Some("like_count:desc") => right.like_count.cmp(&left.like_count),
-        Some("comment_count:desc") => right.comment_count.cmp(&left.comment_count),
-        Some("engagement_score:desc") => blended_relevance(right_relevance, right, manifest)
-            .total_cmp(&blended_relevance(left_relevance, left, manifest)),
-        _ => right_relevance.total_cmp(&left_relevance),
-    };
+    let ordering =
+        match sort_by {
+            Some("published_at_timestamp:desc") => right
+                .published_at_timestamp
+                .cmp(&left.published_at_timestamp),
+            Some("published_at_timestamp:asc") => left
+                .published_at_timestamp
+                .cmp(&right.published_at_timestamp),
+            Some("view_count:desc") => right.view_count.cmp(&left.view_count),
+            Some("like_count:desc") => right.like_count.cmp(&left.like_count),
+            Some("comment_count:desc") => right.comment_count.cmp(&left.comment_count),
+            Some("engagement_score:desc") => right_rank
+                .exact_tokens
+                .cmp(&left_rank.exact_tokens)
+                .then_with(|| {
+                    blended_relevance(right_rank.score, right, manifest)
+                        .total_cmp(&blended_relevance(left_rank.score, left, manifest))
+                }),
+            _ => right_rank
+                .exact_tokens
+                .cmp(&left_rank.exact_tokens)
+                .then_with(|| right_rank.score.total_cmp(&left_rank.score)),
+        };
     ordering
-        .then_with(|| right_relevance.total_cmp(&left_relevance))
+        .then_with(|| right_rank.score.total_cmp(&left_rank.score))
         .then_with(|| left.id.cmp(&right.id))
 }
 
@@ -2025,22 +2087,26 @@ fn retain_best_document(documents: &mut Vec<DocMatch>, candidate: DocMatch, limi
         documents.push(candidate);
         return;
     }
-    let Some((worst_index, worst)) = documents
-        .iter()
-        .enumerate()
-        .min_by(|left, right| left.1.score.total_cmp(&right.1.score))
-    else {
+    let Some((worst_index, worst)) = documents.iter().enumerate().min_by(|left, right| {
+        left.1
+            .exact_tokens()
+            .cmp(&right.1.exact_tokens())
+            .then_with(|| left.1.score.total_cmp(&right.1.score))
+    }) else {
         return;
     };
-    if candidate.score > worst.score {
+    if candidate.exact_tokens() > worst.exact_tokens()
+        || (candidate.exact_tokens() == worst.exact_tokens() && candidate.score > worst.score)
+    {
         documents[worst_index] = candidate;
     }
 }
 
 fn descending_doc_score(left: &DocMatch, right: &DocMatch) -> Ordering {
     right
-        .score
-        .total_cmp(&left.score)
+        .exact_tokens()
+        .cmp(&left.exact_tokens())
+        .then_with(|| right.score.total_cmp(&left.score))
         .then_with(|| left.document().cmp(&right.document()))
 }
 
@@ -2077,11 +2143,17 @@ fn intersect_sorted_borrowed(left: Vec<DocMatch>, right: &[DocMatch]) -> Vec<Doc
             Ordering::Less => left_index += 1,
             Ordering::Greater => right_index += 1,
             Ordering::Equal => {
-                output.push(DocMatch::new(
+                let mut combined = DocMatch::new(
                     left[left_index].document(),
                     left[left_index].score + right[right_index].score,
                     left[left_index].matches_text() || right[right_index].matches_text(),
-                ));
+                );
+                combined.set_exact_tokens(
+                    left[left_index]
+                        .exact_tokens()
+                        .saturating_add(right[right_index].exact_tokens()),
+                );
+                output.push(combined);
                 left_index += 1;
                 right_index += 1;
             }
@@ -2102,11 +2174,17 @@ fn intersect_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec<DocMatch> 
             Ordering::Less => left_index += 1,
             Ordering::Greater => right_index += 1,
             Ordering::Equal => {
-                output.push(DocMatch::new(
+                let mut combined = DocMatch::new(
                     left[left_index].document(),
                     left[left_index].score + right[right_index].score,
                     left[left_index].matches_text() || right[right_index].matches_text(),
-                ));
+                );
+                combined.set_exact_tokens(
+                    left[left_index]
+                        .exact_tokens()
+                        .saturating_add(right[right_index].exact_tokens()),
+                );
+                output.push(combined);
                 left_index += 1;
                 right_index += 1;
             }
@@ -2139,11 +2217,15 @@ fn union_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec<DocMatch> {
                     Ordering::Equal => {
                         let left_value = left.next().expect("peeked left");
                         let right_value = right.next().expect("peeked right");
-                        output.push(DocMatch::new(
+                        let mut combined = DocMatch::new(
                             left_value.document(),
                             left_value.score + right_value.score,
                             left_value.matches_text() || right_value.matches_text(),
-                        ));
+                        );
+                        combined.set_exact_tokens(
+                            left_value.exact_tokens().max(right_value.exact_tokens()),
+                        );
+                        output.push(combined);
                     }
                 }
             }
@@ -2666,6 +2748,8 @@ mod tests {
             json!({"id":"prefix-pair-1","video_id":"prefix-pair","title":"Alpha beta","text":"paired terms","youtuber_handle":"@one","youtuber_name":"One"}),
             json!({"id":"suffix-pair-1","video_id":"suffix-pair","title":"Beta gamma","text":"paired terms","youtuber_handle":"@two","youtuber_name":"Two"}),
             json!({"id":"single-1","video_id":"single","title":"Alpha alone","text":"one term only","youtuber_handle":"@three","youtuber_name":"Three"}),
+            json!({"id":"exact-relativity-1","video_id":"exact-relativity","title":"Relativity explained","text":"a clear account","youtuber_handle":"@one","youtuber_name":"One"}),
+            json!({"id":"fuzzy-relativity-1","video_id":"fuzzy-relativity","title":"Relatively explained explained explained explained","text":"a repeated account","youtuber_handle":"@two","youtuber_name":"Two"}),
         ] {
             writeln!(chunks, "{document}").expect("write chunk");
         }
@@ -2736,6 +2820,16 @@ mod tests {
         let transcript = DocMatch::new(42, 1.0, true);
         assert_eq!(transcript.document(), 42);
         assert!(transcript.matches_text());
+        assert_eq!(transcript.exact_tokens(), 1);
+        let mut fuzzy = DocMatch::new(42, 2.0, true);
+        fuzzy.set_exact_tokens(0);
+        let union = union_sorted(vec![transcript], vec![fuzzy]);
+        assert_eq!(union[0].exact_tokens(), 1);
+
+        let two_exact = intersect_sorted(vec![transcript], vec![transcript]);
+        assert_eq!(two_exact[0].exact_tokens(), 2);
+        let one_exact = intersect_sorted(vec![transcript], vec![fuzzy]);
+        assert_eq!(one_exact[0].exact_tokens(), 1);
     }
 
     #[test]
@@ -2937,6 +3031,20 @@ mod tests {
 
         assert_eq!(response["found"], 1);
         assert_eq!(response["grouped_hits"][0]["group_key"][0], "prefix-pair");
+    }
+
+    #[test]
+    fn fully_exact_matches_rank_before_higher_frequency_typo_matches() {
+        let (_root, engine) = token_drop_engine();
+        let response = engine
+            .search(&grouped_query("relativity explained"))
+            .expect("exact-priority search");
+
+        assert_eq!(response["found"], 2);
+        assert_eq!(
+            response["grouped_hits"][0]["group_key"][0],
+            "exact-relativity"
+        );
     }
 
     #[test]
