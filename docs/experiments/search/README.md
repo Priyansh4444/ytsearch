@@ -23,6 +23,8 @@ Vsauce, sorting, concurrency, and failure-mode evidence.
 [typesense-compatibility.md](typesense-compatibility.md) traces the active
 Typesense 30.2 typo, prefix, exact-priority, position, and token-drop behavior;
 records what Raw adopted; and names the remaining parity gaps.
+[schema-v6-positions.md](schema-v6-positions.md) records the complete-position
+layout, integrity contract, schema-v5 rollback, and measured non-phrase gate.
 [engagement-ranking.md](engagement-ranking.md)
 records the views/likes/comments data path, bounded score, deployed benchmarks,
 and isolated frontend topology.

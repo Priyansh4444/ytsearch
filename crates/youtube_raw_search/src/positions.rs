@@ -1,8 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "the schema v6 writer and phrase reader land in the next incremental slices"
-)]
-
 use crate::{
     Error, Result,
     format::{read_varint, write_varint},
@@ -38,11 +33,19 @@ pub(crate) fn write_remaining_positions(positions: &[u32], output: &mut Vec<u8>)
 /// A cursor is intentionally tiny and borrows the memory-mapped bytes. Phrase
 /// queries can reuse one caller-owned scratch vector, while ordinary queries
 /// never construct a cursor or touch the cold mapping.
+#[allow(
+    dead_code,
+    reason = "the phrase reader lands in the next incremental slice"
+)]
 pub(crate) struct PositionCursor<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[allow(
+    dead_code,
+    reason = "the phrase reader lands in the next incremental slice"
+)]
 impl<'a> PositionCursor<'a> {
     pub(crate) fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }

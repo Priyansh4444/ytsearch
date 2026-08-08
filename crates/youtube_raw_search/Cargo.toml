@@ -9,6 +9,7 @@ name = "youtube-raw-search"
 path = "src/main.rs"
 
 [dependencies]
+blake3 = "1.8"
 memmap2 = "0.9"
 serde = { workspace = true }
 serde_json = { workspace = true }

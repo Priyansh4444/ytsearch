@@ -1,19 +1,21 @@
 use crate::{
     Error, Result,
     format::{
-        BLOCK_RECORD_BYTES, DOCUMENT_RECORD_BYTES, DOCUMENTS_MAGIC, HEADER_BYTES, LEXICON_MAGIC,
-        METADATA_MAGIC, MappedFile, POSITIONS_MAGIC, POSTINGS_MAGIC, read_u16, read_u32, read_u64,
-        read_varint, write_header, write_varint,
+        BLOCK_RECORD_BYTES, DOCUMENT_RECORD_BYTES, DOCUMENTS_MAGIC, FULL_POSITIONS_MAGIC,
+        HEADER_BYTES, LEXICON_MAGIC, METADATA_MAGIC, MappedFile, POSITION_SPOOL_MAGIC,
+        POSITIONS_MAGIC, POSTINGS_MAGIC, read_u16, read_u32, read_u64, read_varint, write_header,
+        write_varint,
     },
-    fuzzy::{FuzzyCandidate, FuzzyIndex, write_index as write_fuzzy_index},
+    fuzzy::{FUZZY_FILE, FuzzyCandidate, FuzzyIndex, write_index as write_fuzzy_index},
+    positions::write_remaining_positions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     cmp::Ordering,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs::{self, File},
-    io::{BufRead, BufReader, BufWriter, Seek, SeekFrom, Write},
+    io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
@@ -27,6 +29,8 @@ const VIDEOS_FILE: &str = "videos.json";
 const LEXICON_FILE: &str = "lexicon.bin";
 const POSTINGS_FILE: &str = "postings.bin";
 const POSITIONS_FILE: &str = "positions.bin";
+const FULL_POSITIONS_FILE: &str = "positions.full.bin";
+const POSITION_SPOOL_FILE: &str = ".positions.spool";
 const DOCUMENTS_FILE: &str = "documents.blocks";
 const METADATA_FILE: &str = "documents.meta";
 const DOCUMENTS_PER_BLOCK: usize = 64;
@@ -52,6 +56,17 @@ const MAX_FILTER_VALUE_BYTES: usize = 256;
 const MAX_PAGE_SIZE: u8 = 250;
 const ACTIVE_INCLUDE_FIELDS: &str = "id,video_id,title,text,prev_text,next_text,youtuber_handle,youtuber_name,thumbnail,published_at,duration,t_start_ms,t_end_ms";
 const POSITION_SCORE_BOOST: f32 = 0.15;
+const GENERATION_FILES: [&str; 9] = [
+    CHANNELS_FILE,
+    VIDEOS_FILE,
+    LEXICON_FILE,
+    POSTINGS_FILE,
+    POSITIONS_FILE,
+    FULL_POSITIONS_FILE,
+    DOCUMENTS_FILE,
+    METADATA_FILE,
+    FUZZY_FILE,
+];
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BuildReport {
@@ -117,6 +132,14 @@ struct Manifest {
     max_view_count: u64,
     max_like_count: u64,
     max_comment_count: u64,
+    #[serde(default)]
+    files: BTreeMap<String, ManifestFile>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct ManifestFile {
+    bytes: u64,
+    blake3: String,
 }
 
 #[derive(Default)]
@@ -128,14 +151,127 @@ struct TermBuild {
 #[derive(Clone, Copy)]
 struct BuildPosting {
     id: u32,
+    position_offset: u32,
+    position_length: u16,
     frequency: u16,
-    first_position: u16,
 }
 
-#[derive(Clone, Copy)]
 struct TokenBuild {
     frequency: u16,
-    first_position: u16,
+    first_position: u32,
+    tail: Option<u32>,
+}
+
+struct PositionNode {
+    position: u32,
+    previous: Option<u32>,
+}
+
+struct TokenCounts {
+    terms: HashMap<String, TokenBuild>,
+    tails: Vec<PositionNode>,
+}
+
+struct PositionSpoolWriter {
+    output: BufWriter<File>,
+    position: u32,
+    scratch: Vec<u8>,
+}
+
+impl PositionSpoolWriter {
+    fn create(path: &Path) -> Result<Self> {
+        let mut output = BufWriter::new(File::create(path)?);
+        let mut header = Vec::with_capacity(HEADER_BYTES);
+        write_header(&mut header, POSITION_SPOOL_MAGIC, 0);
+        output.write_all(&header)?;
+        Ok(Self {
+            output,
+            position: 0,
+            scratch: Vec::new(),
+        })
+    }
+
+    fn append(&mut self, positions: &[u32]) -> Result<(u32, u16, u16)> {
+        let frequency = u16::try_from(positions.len()).map_err(|_| {
+            Error::InvalidInput("one term occurs more than 65,535 times in a field".to_string())
+        })?;
+        if frequency == 0 {
+            return Err(Error::InvalidInput(
+                "a positional posting must not be empty".to_string(),
+            ));
+        }
+        self.scratch.clear();
+        write_varint(positions[0], &mut self.scratch);
+        write_remaining_positions(positions, &mut self.scratch)?;
+        let length = u16::try_from(self.scratch.len()).map_err(|_| {
+            Error::InvalidInput("one encoded position list exceeds 65,535 bytes".to_string())
+        })?;
+        let offset = self.position;
+        self.output.write_all(&self.scratch)?;
+        self.position = self
+            .position
+            .checked_add(u32::from(length))
+            .ok_or_else(|| Error::InvalidInput("position spool exceeds 4 GiB".to_string()))?;
+        Ok((offset, length, frequency))
+    }
+
+    fn finish(mut self) -> Result<()> {
+        self.output.flush()?;
+        Ok(())
+    }
+}
+
+impl TokenBuild {
+    fn write_positions(&self, tails: &[PositionNode], output: &mut Vec<u32>) -> Result<()> {
+        output.clear();
+        output.push(self.first_position);
+        let mut tail = self.tail;
+        while let Some(index) = tail {
+            let node = tails.get(index as usize).ok_or_else(|| {
+                Error::Corrupt("token position chain is out of bounds".to_string())
+            })?;
+            output.push(node.position);
+            tail = node.previous;
+        }
+        output[1..].reverse();
+        if output.len() != usize::from(self.frequency) {
+            return Err(Error::Corrupt(
+                "token frequency does not match its positions".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn append_token_postings(
+    terms: &mut HashMap<String, TermBuild>,
+    counts: TokenCounts,
+    id: u32,
+    title: bool,
+    spool: &mut PositionSpoolWriter,
+    position_scratch: &mut Vec<u32>,
+) -> Result<()> {
+    let TokenCounts {
+        terms: counts,
+        tails,
+    } = counts;
+    for (term, token) in counts {
+        token.write_positions(&tails, position_scratch)?;
+        let (position_offset, position_length, frequency) = spool.append(position_scratch)?;
+        let posting = BuildPosting {
+            id,
+            position_offset,
+            position_length,
+            frequency,
+        };
+        let lists = terms.entry(term).or_default();
+        if title {
+            lists.title.push(posting);
+        } else {
+            lists.text.push(posting);
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -179,6 +315,7 @@ struct EngineInner {
     fuzzy: FuzzyIndex,
     postings: MappedFile,
     positions: PositionIndex,
+    _full_positions: Option<PositionIndex>,
     documents: MappedFile,
     metadata: DocumentTable,
     index_bytes: u64,
@@ -347,6 +484,9 @@ pub fn build_index(
     let mut document_header = Vec::with_capacity(HEADER_BYTES);
     write_header(&mut document_header, DOCUMENTS_MAGIC, 0);
     document_output.write_all(&document_header)?;
+    let position_spool_path = index_path.join(POSITION_SPOOL_FILE);
+    let mut position_spool = PositionSpoolWriter::create(&position_spool_path)?;
+    let mut position_scratch = Vec::new();
 
     let mut terms: HashMap<String, TermBuild> = HashMap::new();
     let mut videos = Vec::<VideoMeta>::new();
@@ -378,14 +518,15 @@ pub fn build_index(
             video
         } else {
             let video = videos.len() as u32;
-            let title_counts = token_counts(&source.title);
-            for (term, token) in title_counts {
-                terms.entry(term).or_default().title.push(BuildPosting {
-                    id: video,
-                    frequency: token.frequency,
-                    first_position: token.first_position,
-                });
-            }
+            let title_counts = token_counts(&source.title)?;
+            append_token_postings(
+                &mut terms,
+                title_counts,
+                video,
+                true,
+                &mut position_spool,
+                &mut position_scratch,
+            )?;
             videos.push(VideoMeta {
                 id: source.video_id.clone(),
                 handle: source.youtuber_handle.to_ascii_lowercase(),
@@ -401,19 +542,21 @@ pub fn build_index(
         };
 
         let document = document_records.len() as u32;
-        let text_counts = token_counts(&source.text);
+        let text_counts = token_counts(&source.text)?;
         let document_tokens = text_counts
+            .terms
             .values()
             .map(|token| u32::from(token.frequency))
             .sum::<u32>();
         total_tokens = total_tokens.saturating_add(u64::from(document_tokens));
-        for (term, token) in text_counts {
-            terms.entry(term).or_default().text.push(BuildPosting {
-                id: document,
-                frequency: token.frequency,
-                first_position: token.first_position,
-            });
-        }
+        append_token_postings(
+            &mut terms,
+            text_counts,
+            document,
+            false,
+            &mut position_spool,
+            &mut position_scratch,
+        )?;
 
         let line_bytes = line.as_bytes();
         let offset = block_bytes.len() as u32;
@@ -447,6 +590,7 @@ pub fn build_index(
         flush_document_block(&mut document_output, &mut block_bytes, &mut block_records)?;
     }
     document_output.flush()?;
+    position_spool.finish()?;
 
     let channels = read_json_lines(channels_path)?;
     serde_json::to_writer(
@@ -458,7 +602,10 @@ pub fn build_index(
         &videos,
     )?;
     write_metadata(index_path, &document_records, &block_records)?;
-    let term_count = write_postings(index_path, terms, &videos)?;
+    let position_spool = MappedFile::open(&position_spool_path, POSITION_SPOOL_MAGIC)?;
+    let term_count = write_postings(index_path, terms, &videos, &position_spool)?;
+    drop(position_spool);
+    fs::remove_file(&position_spool_path)?;
 
     let document_count = document_records.len() as u32;
     let average_document_tokens = if document_count == 0 {
@@ -467,7 +614,7 @@ pub fn build_index(
         total_tokens as f32 / document_count as f32
     };
     let manifest = Manifest {
-        schema_version: 5,
+        schema_version: 6,
         documents: document_count,
         videos: videos.len() as u32,
         channels: channels.len() as u32,
@@ -489,6 +636,7 @@ pub fn build_index(
             .map(|video| video.comment_count)
             .max()
             .unwrap_or(0),
+        files: build_manifest_files(index_path)?,
     };
     serde_json::to_writer_pretty(
         BufWriter::new(File::create(index_path.join(MANIFEST_FILE))?),
@@ -602,6 +750,7 @@ fn write_postings(
     index_path: &Path,
     terms: HashMap<String, TermBuild>,
     videos: &[VideoMeta],
+    position_spool: &MappedFile,
 ) -> Result<usize> {
     let mut terms = terms.into_iter().collect::<Vec<_>>();
     terms.sort_unstable_by(|left, right| left.0.cmp(&right.0));
@@ -613,6 +762,14 @@ fn write_postings(
     let mut positions_header = Vec::with_capacity(HEADER_BYTES);
     write_header(&mut positions_header, POSITIONS_MAGIC, terms.len() as u32);
     positions.write_all(&positions_header)?;
+    let mut full_positions = BufWriter::new(File::create(index_path.join(FULL_POSITIONS_FILE))?);
+    let mut full_positions_header = Vec::with_capacity(HEADER_BYTES);
+    write_header(
+        &mut full_positions_header,
+        FULL_POSITIONS_MAGIC,
+        terms.len() as u32,
+    );
+    full_positions.write_all(&full_positions_header)?;
     let position_offsets_count = terms
         .len()
         .checked_mul(2)
@@ -622,25 +779,35 @@ fn write_postings(
         .checked_mul(4)
         .ok_or_else(|| Error::Corrupt("position offset table overflows".to_string()))?;
     positions.write_all(&vec![0_u8; position_table_bytes])?;
+    full_positions.write_all(&vec![0_u8; position_table_bytes])?;
     let mut postings_position = HEADER_BYTES as u64;
     let mut positions_position = 0_u32;
+    let mut full_positions_position = 0_u32;
     let mut position_offsets = Vec::with_capacity(position_offsets_count);
+    let mut full_position_offsets = Vec::with_capacity(position_offsets_count);
     let mut lexicon = Vec::with_capacity(terms.len());
+    let mut position_scratch = Vec::with_capacity(5);
 
     for (term, lists) in terms {
         let text = encode_postings(&lists.text);
         let text_offset = postings_position;
         postings.write_all(&text)?;
         postings_position += text.len() as u64;
-        let text_positions = encode_first_positions(&lists.text);
         position_offsets.push(positions_position);
-        positions.write_all(&text_positions)?;
+        full_position_offsets.push(full_positions_position);
+        let (text_first_bytes, text_remaining_bytes) = write_position_lists(
+            &lists.text,
+            position_spool,
+            &mut positions,
+            &mut full_positions,
+            &mut position_scratch,
+        )?;
         positions_position = positions_position
-            .checked_add(
-                u32::try_from(text_positions.len())
-                    .map_err(|_| Error::Corrupt("text positions exceed u32 length".to_string()))?,
-            )
+            .checked_add(text_first_bytes)
             .ok_or_else(|| Error::Corrupt("positions file exceeds u32 length".to_string()))?;
+        full_positions_position = full_positions_position
+            .checked_add(text_remaining_bytes)
+            .ok_or_else(|| Error::Corrupt("full positions file exceeds u32 length".to_string()))?;
         let title = encode_postings(&lists.title);
         let fuzzy_title_frequency = lists.title.iter().fold(0_u32, |frequency, posting| {
             frequency.saturating_add(
@@ -652,15 +819,21 @@ fn write_postings(
         let title_offset = postings_position;
         postings.write_all(&title)?;
         postings_position += title.len() as u64;
-        let title_positions = encode_first_positions(&lists.title);
         position_offsets.push(positions_position);
-        positions.write_all(&title_positions)?;
+        full_position_offsets.push(full_positions_position);
+        let (title_first_bytes, title_remaining_bytes) = write_position_lists(
+            &lists.title,
+            position_spool,
+            &mut positions,
+            &mut full_positions,
+            &mut position_scratch,
+        )?;
         positions_position = positions_position
-            .checked_add(
-                u32::try_from(title_positions.len())
-                    .map_err(|_| Error::Corrupt("title positions exceed u32 length".to_string()))?,
-            )
+            .checked_add(title_first_bytes)
             .ok_or_else(|| Error::Corrupt("positions file exceeds u32 length".to_string()))?;
+        full_positions_position = full_positions_position
+            .checked_add(title_remaining_bytes)
+            .ok_or_else(|| Error::Corrupt("full positions file exceeds u32 length".to_string()))?;
         lexicon.push(LexiconBuildEntry {
             term,
             text_offset,
@@ -673,12 +846,18 @@ fn write_postings(
         });
     }
     position_offsets.push(positions_position);
+    full_position_offsets.push(full_positions_position);
     postings.flush()?;
     positions.seek(SeekFrom::Start(HEADER_BYTES as u64))?;
     for offset in position_offsets {
         positions.write_all(&offset.to_le_bytes())?;
     }
     positions.flush()?;
+    full_positions.seek(SeekFrom::Start(HEADER_BYTES as u64))?;
+    for offset in full_position_offsets {
+        full_positions.write_all(&offset.to_le_bytes())?;
+    }
+    full_positions.flush()?;
     write_fuzzy_index(
         index_path,
         lexicon.iter().enumerate().map(|(index, entry)| {
@@ -694,6 +873,49 @@ fn write_postings(
     Ok(lexicon.len())
 }
 
+fn write_position_lists(
+    postings: &[BuildPosting],
+    spool: &MappedFile,
+    first_positions: &mut BufWriter<File>,
+    remaining_positions: &mut BufWriter<File>,
+    scratch: &mut Vec<u8>,
+) -> Result<(u32, u32)> {
+    let mut first_bytes = 0_u32;
+    let mut remaining_bytes = 0_u32;
+    for posting in postings {
+        let start = HEADER_BYTES
+            .checked_add(posting.position_offset as usize)
+            .ok_or_else(|| Error::Corrupt("position spool offset overflows".to_string()))?;
+        let end = start
+            .checked_add(usize::from(posting.position_length))
+            .ok_or_else(|| Error::Corrupt("position spool range overflows".to_string()))?;
+        let encoded = spool
+            .bytes()
+            .get(start..end)
+            .ok_or_else(|| Error::Corrupt("position spool range is out of bounds".to_string()))?;
+        let mut cursor = 0_usize;
+        let first = read_varint(encoded, &mut cursor, encoded.len())?;
+
+        scratch.clear();
+        write_varint(first, scratch);
+        first_positions.write_all(scratch)?;
+        first_bytes = first_bytes
+            .checked_add(u32::try_from(scratch.len()).map_err(|_| {
+                Error::Corrupt("encoded first position exceeds u32 length".to_string())
+            })?)
+            .ok_or_else(|| Error::Corrupt("first position stream exceeds 4 GiB".to_string()))?;
+
+        let remaining = &encoded[cursor..];
+        remaining_positions.write_all(remaining)?;
+        remaining_bytes = remaining_bytes
+            .checked_add(u32::try_from(remaining.len()).map_err(|_| {
+                Error::Corrupt("encoded remaining positions exceed u32 length".to_string())
+            })?)
+            .ok_or_else(|| Error::Corrupt("remaining position stream exceeds 4 GiB".to_string()))?;
+    }
+    Ok((first_bytes, remaining_bytes))
+}
+
 fn encode_postings(postings: &[BuildPosting]) -> Vec<u8> {
     let mut encoded = Vec::with_capacity(postings.len().saturating_mul(3));
     let mut previous = 0_u32;
@@ -706,14 +928,6 @@ fn encode_postings(postings: &[BuildPosting]) -> Vec<u8> {
         write_varint(delta, &mut encoded);
         write_varint(u32::from(posting.frequency), &mut encoded);
         previous = posting.id;
-    }
-    encoded
-}
-
-fn encode_first_positions(postings: &[BuildPosting]) -> Vec<u8> {
-    let mut encoded = Vec::with_capacity(postings.len());
-    for posting in postings {
-        write_varint(u32::from(posting.first_position), &mut encoded);
     }
     encoded
 }
@@ -753,11 +967,14 @@ impl RawSearchEngine {
     pub fn open(index_path: &Path) -> Result<Self> {
         let manifest: Manifest =
             serde_json::from_reader(BufReader::new(File::open(index_path.join(MANIFEST_FILE))?))?;
-        if manifest.schema_version != 5 {
+        if !matches!(manifest.schema_version, 5 | 6) {
             return Err(Error::Corrupt(format!(
                 "unsupported schema version {}",
                 manifest.schema_version
             )));
+        }
+        if manifest.schema_version == 6 {
+            validate_manifest_files(index_path, &manifest)?;
         }
         let videos: Vec<VideoMeta> =
             serde_json::from_reader(BufReader::new(File::open(index_path.join(VIDEOS_FILE))?))?;
@@ -766,7 +983,20 @@ impl RawSearchEngine {
         let lexicon = Lexicon::open(&index_path.join(LEXICON_FILE))?;
         let fuzzy = FuzzyIndex::open(index_path, lexicon.count)?;
         let postings = MappedFile::open(&index_path.join(POSTINGS_FILE), POSTINGS_MAGIC)?;
-        let positions = PositionIndex::open(&index_path.join(POSITIONS_FILE), lexicon.count)?;
+        let positions = PositionIndex::open(
+            &index_path.join(POSITIONS_FILE),
+            POSITIONS_MAGIC,
+            lexicon.count,
+        )?;
+        let full_positions = (manifest.schema_version >= 6)
+            .then(|| {
+                PositionIndex::open(
+                    &index_path.join(FULL_POSITIONS_FILE),
+                    FULL_POSITIONS_MAGIC,
+                    lexicon.count,
+                )
+            })
+            .transpose()?;
         let documents = MappedFile::open(&index_path.join(DOCUMENTS_FILE), DOCUMENTS_MAGIC)?;
         let metadata = DocumentTable::open(&index_path.join(METADATA_FILE))?;
         let counts_match = manifest.documents as usize == metadata.documents
@@ -788,6 +1018,7 @@ impl RawSearchEngine {
                 fuzzy,
                 postings,
                 positions,
+                _full_positions: full_positions,
                 documents,
                 metadata,
                 index_bytes: directory_size(index_path)?,
@@ -883,8 +1114,8 @@ impl Lexicon {
 }
 
 impl PositionIndex {
-    fn open(path: &Path, expected_terms: usize) -> Result<Self> {
-        let file = MappedFile::open(path, POSITIONS_MAGIC)?;
+    fn open(path: &Path, magic: &[u8; 8], expected_terms: usize) -> Result<Self> {
+        let file = MappedFile::open(path, magic)?;
         let terms = read_u32(file.bytes(), 8)? as usize;
         if terms != expected_terms {
             return Err(Error::Corrupt(
@@ -2289,38 +2520,61 @@ fn union_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec<DocMatch> {
     output
 }
 
-fn token_counts(value: &str) -> HashMap<String, TokenBuild> {
-    let mut counts = HashMap::new();
+fn token_counts(value: &str) -> Result<TokenCounts> {
+    let mut counts = TokenCounts {
+        terms: HashMap::new(),
+        tails: Vec::new(),
+    };
     let mut token = String::new();
-    let mut position = 0_u16;
+    let mut position = 0_u32;
     for character in value.chars() {
         if character.is_alphanumeric() {
             token.extend(character.to_lowercase());
             continue;
         }
-        record_token(&mut counts, &mut token, &mut position);
+        record_token(&mut counts, &mut token, &mut position)?;
     }
-    record_token(&mut counts, &mut token, &mut position);
-    counts
+    record_token(&mut counts, &mut token, &mut position)?;
+    Ok(counts)
 }
 
-fn record_token(counts: &mut HashMap<String, TokenBuild>, token: &mut String, position: &mut u16) {
+fn record_token(counts: &mut TokenCounts, token: &mut String, position: &mut u32) -> Result<()> {
     if token.is_empty() {
-        return;
+        return Ok(());
     }
     let owned = std::mem::take(token);
-    let entry = counts.entry(owned).or_insert(TokenBuild {
-        frequency: 0,
-        first_position: *position,
-    });
-    entry.frequency = entry.frequency.saturating_add(1);
-    *position = position.saturating_add(1);
+    match counts.terms.entry(owned) {
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(TokenBuild {
+                frequency: 1,
+                first_position: *position,
+                tail: None,
+            });
+        }
+        std::collections::hash_map::Entry::Occupied(mut entry) => {
+            let tail = u32::try_from(counts.tails.len()).map_err(|_| {
+                Error::InvalidInput("one field contains more than 4 billion repeats".to_string())
+            })?;
+            counts.tails.push(PositionNode {
+                position: *position,
+                previous: entry.get().tail,
+            });
+            let entry = entry.get_mut();
+            entry.frequency = entry.frequency.checked_add(1).ok_or_else(|| {
+                Error::InvalidInput("one term occurs more than 65,535 times in a field".to_string())
+            })?;
+            entry.tail = Some(tail);
+        }
+    }
+    *position = position
+        .checked_add(1)
+        .ok_or_else(|| Error::InvalidInput("one field exceeds 4 billion tokens".to_string()))?;
+    Ok(())
 }
 
 fn unique_tokens(value: &str) -> Vec<String> {
-    let counts = token_counts(value);
-    let mut seen = HashSet::with_capacity(counts.len());
-    let mut output = Vec::with_capacity(counts.len());
+    let mut seen = HashSet::new();
+    let mut output = Vec::new();
     let mut token = String::new();
     for character in value.chars() {
         if character.is_alphanumeric() {
@@ -2663,6 +2917,67 @@ fn directory_size(path: &Path) -> Result<u64> {
     Ok(bytes)
 }
 
+fn build_manifest_files(index_path: &Path) -> Result<BTreeMap<String, ManifestFile>> {
+    let mut files = BTreeMap::new();
+    for name in GENERATION_FILES {
+        let path = index_path.join(name);
+        let bytes = fs::metadata(&path)?.len();
+        files.insert(
+            name.to_string(),
+            ManifestFile {
+                bytes,
+                blake3: checksum_file(&path)?,
+            },
+        );
+    }
+    Ok(files)
+}
+
+fn validate_manifest_files(index_path: &Path, manifest: &Manifest) -> Result<()> {
+    if manifest.files.len() != GENERATION_FILES.len() {
+        return Err(Error::Corrupt(format!(
+            "manifest records {} generation files, expected {}",
+            manifest.files.len(),
+            GENERATION_FILES.len()
+        )));
+    }
+    for name in GENERATION_FILES {
+        let expected = manifest
+            .files
+            .get(name)
+            .ok_or_else(|| Error::Corrupt(format!("manifest is missing generation file {name}")))?;
+        let path = index_path.join(name);
+        let actual_bytes = fs::metadata(&path)?.len();
+        if actual_bytes != expected.bytes {
+            return Err(Error::Corrupt(format!(
+                "generation file {name} is {actual_bytes} bytes, expected {}",
+                expected.bytes
+            )));
+        }
+        let actual_checksum = checksum_file(&path)?;
+        if actual_checksum != expected.blake3 {
+            return Err(Error::Corrupt(format!(
+                "generation file {name} failed its BLAKE3 checksum"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn checksum_file(path: &Path) -> Result<String> {
+    let mut input = BufReader::new(File::open(path)?);
+    let mut hasher = blake3::Hasher::new();
+    let mut buffer = vec![0_u8; 256 * 1024];
+    loop {
+        let read = input.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
 fn stable_hash(value: &str) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in value.as_bytes() {
@@ -2843,6 +3158,70 @@ mod tests {
     }
 
     #[test]
+    fn schema_six_reconstructs_complete_positions_from_aligned_sidecars() {
+        let root = TempDir::new().expect("temp dir");
+        let chunks_path = root.path().join("chunks.jsonl");
+        let channels_path = root.path().join("channels.jsonl");
+        let index_path = root.path().join("index");
+        writeln!(
+            File::create(&chunks_path).expect("chunks"),
+            "{}",
+            json!({
+                "video_id":"a",
+                "title":"Positions",
+                "text":"one echo two echo echo",
+                "youtuber_handle":"@one"
+            })
+        )
+        .expect("write chunk");
+        File::create(&channels_path).expect("channels");
+        build_index(&chunks_path, &channels_path, &index_path).expect("build");
+        let engine = RawSearchEngine::open(&index_path).expect("open");
+
+        let entry = engine
+            .inner
+            .lexicon
+            .lookup("echo")
+            .expect("lookup")
+            .expect("echo term");
+        let posting_bytes = engine
+            .postings_range(entry.text_offset, entry.text_length)
+            .expect("posting range");
+        let mut posting_cursor = 0;
+        assert_eq!(
+            read_varint(posting_bytes, &mut posting_cursor, posting_bytes.len()).expect("document"),
+            0
+        );
+        let frequency = read_varint(posting_bytes, &mut posting_cursor, posting_bytes.len())
+            .expect("frequency");
+        assert_eq!(posting_cursor, posting_bytes.len());
+
+        let first_bytes = engine
+            .inner
+            .positions
+            .range(entry.term, false)
+            .expect("first positions");
+        let mut first_cursor = 0;
+        let first =
+            read_varint(first_bytes, &mut first_cursor, first_bytes.len()).expect("first position");
+        assert_eq!(first_cursor, first_bytes.len());
+        let remaining = engine
+            .inner
+            ._full_positions
+            .as_ref()
+            .expect("schema 6 positions")
+            .range(entry.term, false)
+            .expect("remaining positions");
+        let mut positions = Vec::new();
+        let mut cursor = crate::positions::PositionCursor::new(remaining);
+        cursor
+            .read_into(first, frequency, &mut positions)
+            .expect("decode positions");
+        cursor.finish().expect("consume position range");
+        assert_eq!(positions, [1, 3, 4]);
+    }
+
+    #[test]
     fn grouped_totals_include_all_moments_beyond_the_return_window() {
         let (_root, engine) = test_engine();
         let mut query = grouped_query("search");
@@ -2865,7 +3244,8 @@ mod tests {
     #[test]
     fn match_provenance_does_not_increase_the_hot_candidate_size() {
         assert_eq!(std::mem::size_of::<DocMatch>(), 8);
-        assert_eq!(std::mem::size_of::<BuildPosting>(), 8);
+        // The extra four bytes are build-only spool coordinates. Query candidates stay compact.
+        assert_eq!(std::mem::size_of::<BuildPosting>(), 12);
         let mut transcript = DocMatch::new(42, 1.0, true);
         assert_eq!(transcript.document(), 42);
         assert!(transcript.matches_text());
@@ -3240,6 +3620,7 @@ mod tests {
             max_view_count: 1_000,
             max_like_count: 100,
             max_comment_count: 10,
+            files: BTreeMap::new(),
         };
         let video = VideoMeta {
             id: "video".to_string(),
@@ -3445,7 +3826,7 @@ mod tests {
     }
 
     #[test]
-    fn truncated_postings_are_rejected_during_query_decoding() {
+    fn truncated_postings_are_rejected_at_open() {
         let (root, engine) = test_engine();
         drop(engine);
         let postings_path = root.path().join("index").join(POSTINGS_FILE);
@@ -3455,9 +3836,8 @@ mod tests {
             .expect("postings")
             .set_len(HEADER_BYTES as u64)
             .expect("truncate postings");
-        let engine = RawSearchEngine::open(&root.path().join("index")).expect("open headers");
         assert!(matches!(
-            engine.search(&grouped_query("memory")),
+            RawSearchEngine::open(&root.path().join("index")),
             Err(Error::Corrupt(_))
         ));
     }
@@ -3480,7 +3860,51 @@ mod tests {
     }
 
     #[test]
-    fn truncated_document_blocks_are_rejected_during_hydration() {
+    fn truncated_full_positions_are_rejected_at_open() {
+        let (root, engine) = test_engine();
+        drop(engine);
+        let positions_path = root.path().join("index").join(FULL_POSITIONS_FILE);
+        OpenOptions::new()
+            .write(true)
+            .open(&positions_path)
+            .expect("full positions")
+            .set_len(HEADER_BYTES as u64)
+            .expect("truncate full positions");
+        assert!(matches!(
+            RawSearchEngine::open(&root.path().join("index")),
+            Err(Error::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn same_length_generation_corruption_is_rejected_at_open() {
+        let (root, engine) = test_engine();
+        drop(engine);
+        let postings_path = root.path().join("index").join(POSTINGS_FILE);
+        let mut postings = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&postings_path)
+            .expect("postings");
+        postings
+            .seek(SeekFrom::Start(HEADER_BYTES as u64))
+            .expect("seek posting");
+        let mut byte = [0_u8; 1];
+        postings.read_exact(&mut byte).expect("read posting");
+        byte[0] ^= 0x01;
+        postings
+            .seek(SeekFrom::Start(HEADER_BYTES as u64))
+            .expect("seek posting again");
+        postings.write_all(&byte).expect("corrupt posting");
+        postings.flush().expect("flush corruption");
+        assert!(matches!(
+            RawSearchEngine::open(&root.path().join("index")),
+            Err(Error::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn truncated_document_blocks_are_rejected_at_open() {
         let (root, engine) = test_engine();
         drop(engine);
         let documents_path = root.path().join("index").join(DOCUMENTS_FILE);
@@ -3490,8 +3914,55 @@ mod tests {
             .expect("documents")
             .set_len(HEADER_BYTES as u64)
             .expect("truncate documents");
-        let engine = RawSearchEngine::open(&root.path().join("index")).expect("open headers");
-        assert!(engine.search(&grouped_query("bun")).is_err());
+        assert!(matches!(
+            RawSearchEngine::open(&root.path().join("index")),
+            Err(Error::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn schema_five_reader_is_a_response_compatible_rollback() {
+        let (root, engine) = test_engine();
+        let expected = ["memory", "bun", "*"]
+            .into_iter()
+            .map(|query| {
+                (
+                    query,
+                    engine
+                        .search(&grouped_query(query))
+                        .expect("schema 6 search"),
+                )
+            })
+            .collect::<Vec<_>>();
+        drop(engine);
+
+        let index_path = root.path().join("index");
+        let manifest_path = index_path.join(MANIFEST_FILE);
+        let mut manifest: Value =
+            serde_json::from_reader(File::open(&manifest_path).expect("manifest"))
+                .expect("manifest JSON");
+        manifest["schema_version"] = json!(5);
+        manifest
+            .as_object_mut()
+            .expect("manifest object")
+            .remove("files");
+        serde_json::to_writer_pretty(
+            File::create(&manifest_path).expect("rewrite manifest"),
+            &manifest,
+        )
+        .expect("write schema 5 manifest");
+        fs::remove_file(index_path.join(FULL_POSITIONS_FILE)).expect("remove v6 sidecar");
+
+        let rollback = RawSearchEngine::open(&index_path).expect("open schema 5 rollback");
+        for (query, expected) in expected {
+            assert_eq!(
+                rollback
+                    .search(&grouped_query(query))
+                    .expect("schema 5 search"),
+                expected,
+                "schema 5 response changed for {query}"
+            );
+        }
     }
 
     #[test]

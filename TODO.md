@@ -20,11 +20,11 @@ Raw can replace Typesense as the canonical search index.
 
 ### P0: relevance and compatibility
 
-- [ ] Add schema v6 complete positional postings.
+- [x] Add schema v6 complete positional postings.
   - [x] Define an allocation-bounded delta codec with corruption and size tests.
-  - [ ] Keep first positions in a compact hot sidecar for ordinary queries.
-  - [ ] Delta-encode all remaining positions into a cold sidecar.
-  - [ ] Checksum and length-check every generation file at startup.
+  - [x] Keep first positions in a compact hot sidecar for ordinary queries.
+  - [x] Delta-encode all remaining positions into a cold sidecar.
+  - [x] Checksum and length-check every generation file at startup.
 - [ ] Add exact quoted phrases, phrase slop, proximity, and early-position ranking.
 - [ ] Finish multi-token fallback parity with a bounded typo/token-drop work budget.
 - [ ] Add quoted/negative terms, duplicate-token semantics, Unicode and numeric rules.
@@ -68,20 +68,20 @@ Raw can replace Typesense as the canonical search index.
 
 ### Non-negotiable performance and resource gates
 
-- [ ] Schema v6 non-phrase p95 is no more than 10% slower than schema v5.
+- [x] Schema v6 non-phrase p95 is no more than 10% slower than schema v5.
 - [ ] Raw p95 latency and CPU/query are each at most 75% of Typesense.
 - [ ] Raw steady-state RSS is at most 60% of Typesense.
 - [ ] Full-snapshot compaction peak RSS stays below 512 MiB.
-- [ ] Complete-position artifact growth is measured and documented.
-- [ ] Benchmarks name corpus, hardware, build mode, concurrency, and cache state.
-- [ ] Every optimization has a correctness invariant and rollback condition.
+- [x] Complete-position artifact growth is measured and documented.
+- [x] Benchmarks name corpus, hardware, build mode, concurrency, and cache state.
+- [x] Every optimization has a correctness invariant and rollback condition.
 - [ ] Experimental browser JavaScript remains at or below 30 KB gzip.
 
 ### Documentation and evidence
 
 - [ ] Keep common experiment outputs in one versioned Markdown report.
-- [ ] Document schema layouts, scoring, visibility, recovery, and rollback.
-- [ ] Record debug/release/Clippy/test/benchmark/RSS/artifact-size results.
+- [ ] Document schema layouts, scoring, visibility, recovery, and rollback. (Schema-v6 layout and rollback are recorded; atomic visibility/recovery remain open.)
+- [x] Record debug/release/Clippy/test/benchmark/RSS/artifact-size results.
 - [ ] Update this ledger in the same commit that completes each item.
 
 ## Regression Log
