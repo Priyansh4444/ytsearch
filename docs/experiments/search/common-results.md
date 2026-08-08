@@ -62,6 +62,14 @@ and 1.8%. See [schema-v6-positions.md](schema-v6-positions.md),
 [quoted-phrase-search.md](quoted-phrase-search.md), and
 [proximity-ranking.md](proximity-ranking.md).
 
+Exact token-start negative terms now reuse the existing sorted postings and
+filter candidates before typo/drop thresholds. The unchanged nine-query A/B
+measured 4.188/7.929/4.483 ms median/p95/mean for the immediate parent and
+4.333/7.388/4.501 ms for the candidate across 900 searches each; CPU was
+353 versus 355 ticks. The separate 300-search matched-exclusion workload had a
+5.075 ms p95 and no errors without adding index bytes. See
+[negative-term-search.md](negative-term-search.md) for semantics and evidence.
+
 ## Full 1,956-video corpus
 
 | Measurement | Raw | Tantivy | Typesense |

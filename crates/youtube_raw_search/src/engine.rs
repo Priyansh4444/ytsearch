@@ -369,6 +369,7 @@ struct PhraseCursor<'a> {
 struct ParsedQuery {
     terms: Vec<String>,
     phrases: Vec<Vec<String>>,
+    excluded_terms: Vec<String>,
 }
 
 struct PhraseFieldMatches {
@@ -1385,24 +1386,26 @@ impl RawSearchEngine {
                 "phrase_slop requires at least one quoted phrase".to_string(),
             ));
         }
-        if params.q.trim() == "*" || parsed.terms.is_empty() {
-            return self.search_all(params);
-        }
         let fields = query_fields(
             params.query_by.as_deref(),
             params.prioritize_token_position.unwrap_or(true),
         )?;
+        let excluded_documents = self.excluded_documents(&parsed.excluded_terms, fields)?;
+        if params.q.trim() == "*" || parsed.terms.is_empty() {
+            return self.search_all(params, &excluded_documents);
+        }
         if !parsed.phrases.is_empty() {
-            return self.search_quoted(params, parsed, fields);
+            return self.search_quoted(params, parsed, fields, &excluded_documents);
         }
         let terms = parsed.terms;
 
         if terms.len() == 1 {
-            return self.search_single_token(params, &terms[0], fields);
+            return self.search_single_token(params, &terms[0], fields, &excluded_documents);
         }
 
         let exact_term_matches = self.exact_term_matches(&terms, fields)?;
         let mut strict_matches = intersect_all_borrowed(&exact_term_matches);
+        retain_not_excluded(&mut strict_matches, &excluded_documents);
         if self.reaches_result_threshold(params, &strict_matches, TYPO_RESULT_THRESHOLD)? {
             self.apply_exact_proximity(&terms, fields, &mut strict_matches)?;
             return self.format_conjunctive(params, terms, strict_matches);
@@ -1411,9 +1414,14 @@ impl RawSearchEngine {
         // Typesense expands the last token as a prefix and tolerates typos before it
         // starts dropping query tokens. Every expansion remains conjunctive: a
         // document must match one alternative for every retained query token.
-        if let Some((matches, highlights)) =
-            self.best_conjunctive_candidate(params, &terms, fields, true, Some(exact_term_matches))?
-        {
+        if let Some((matches, highlights)) = self.best_conjunctive_candidate(
+            params,
+            &terms,
+            fields,
+            true,
+            Some(exact_term_matches),
+            &excluded_documents,
+        )? {
             return self.format_conjunctive(params, highlights, matches);
         }
 
@@ -1422,16 +1430,26 @@ impl RawSearchEngine {
         // useful. Bound both ladders so adversarial long queries cannot multiply
         // fuzzy work without limit.
         for retained in (1..terms.len()).rev().take(MAX_TOKEN_DROP_CANDIDATES) {
-            if let Some((matches, highlights)) =
-                self.best_conjunctive_candidate(params, &terms[..retained], fields, false, None)?
-            {
+            if let Some((matches, highlights)) = self.best_conjunctive_candidate(
+                params,
+                &terms[..retained],
+                fields,
+                false,
+                None,
+                &excluded_documents,
+            )? {
                 return self.format_conjunctive(params, highlights, matches);
             }
         }
         for dropped in 1..terms.len().min(MAX_TOKEN_DROP_CANDIDATES + 1) {
-            if let Some((matches, highlights)) =
-                self.best_conjunctive_candidate(params, &terms[dropped..], fields, true, None)?
-            {
+            if let Some((matches, highlights)) = self.best_conjunctive_candidate(
+                params,
+                &terms[dropped..],
+                fields,
+                true,
+                None,
+                &excluded_documents,
+            )? {
                 return self.format_conjunctive(params, highlights, matches);
             }
         }
@@ -1444,6 +1462,7 @@ impl RawSearchEngine {
         params: &SearchParams,
         parsed: ParsedQuery,
         fields: QueryFields,
+        excluded_documents: &[u32],
     ) -> Result<Value> {
         if self.inner.full_positions.is_none() {
             return Err(Error::InvalidInput(
@@ -1452,6 +1471,7 @@ impl RawSearchEngine {
         }
         let exact_term_matches = self.exact_term_matches(&parsed.terms, fields)?;
         let mut matches = intersect_all_borrowed(&exact_term_matches);
+        retain_not_excluded(&mut matches, excluded_documents);
         let phrase_slop = params.phrase_slop.unwrap_or(0);
         for phrase in &parsed.phrases {
             let targets = self.position_targets(&matches)?;
@@ -1639,12 +1659,14 @@ impl RawSearchEngine {
         params: &SearchParams,
         term: &str,
         fields: QueryFields,
+        excluded_documents: &[u32],
     ) -> Result<Value> {
         let exact = self.matches_for_term(term, fields)?;
         let mut cache = BlockCache::default();
         let (split, split_terms) = self.split_term_matches(term, fields)?;
         let has_exact_split = !split.is_empty();
         let mut matches = union_sorted(exact, split);
+        retain_not_excluded(&mut matches, excluded_documents);
         let mut highlight_terms = Vec::with_capacity(1 + split_terms.len());
         highlight_terms.push(term.to_string());
         highlight_terms.extend(split_terms);
@@ -1654,6 +1676,7 @@ impl RawSearchEngine {
 
         let (prefix, prefix_terms) = self.fuzzy_alternatives(term, fields, 0, None, true)?;
         matches = union_sorted(matches, prefix);
+        retain_not_excluded(&mut matches, excluded_documents);
         highlight_terms.extend(prefix_terms);
         if bounded_typo_distance(term) == 0
             || self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)?
@@ -1668,6 +1691,7 @@ impl RawSearchEngine {
             let (fuzzy_split, fuzzy_split_terms) =
                 self.fuzzy_split_term_matches(term, fields, &mut cache)?;
             matches = union_sorted(matches, fuzzy_split);
+            retain_not_excluded(&mut matches, excluded_documents);
             highlight_terms.extend(fuzzy_split_terms);
             if self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)? {
                 return self.format_matches(params, &highlight_terms, matches, &mut cache);
@@ -1679,6 +1703,7 @@ impl RawSearchEngine {
                 self.fuzzy_alternatives(term, fields, distance, Some(distance), false)?;
             highlight_terms.extend(fuzzy_terms);
             matches = union_sorted(matches, fuzzy);
+            retain_not_excluded(&mut matches, excluded_documents);
             if distance == maximum_distance
                 || self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)?
             {
@@ -1929,6 +1954,7 @@ impl RawSearchEngine {
         fields: QueryFields,
         prefix_last: bool,
         initial_term_matches: Option<Vec<Vec<DocMatch>>>,
+        excluded_documents: &[u32],
     ) -> Result<Option<(Vec<DocMatch>, Vec<String>)>> {
         let maximum_distance = terms
             .iter()
@@ -1970,6 +1996,7 @@ impl RawSearchEngine {
                 }
             }
             let mut matches = intersect_all_borrowed(&term_matches);
+            retain_not_excluded(&mut matches, excluded_documents);
             let enough = self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)?;
             if enough {
                 self.apply_exact_proximity(terms, fields, &mut matches)?;
@@ -2004,6 +2031,27 @@ impl RawSearchEngine {
             )?);
         }
         Ok(term_matches)
+    }
+
+    fn excluded_documents(&self, terms: &[String], fields: QueryFields) -> Result<Vec<u32>> {
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut lists = Vec::with_capacity(terms.len());
+        for term in terms {
+            lists.push(self.matches_for_term(
+                term,
+                QueryFields {
+                    prioritize_position: false,
+                    exact_mask: 0,
+                    ..fields
+                },
+            )?);
+        }
+        Ok(union_all(lists)
+            .into_iter()
+            .map(DocMatch::document)
+            .collect())
     }
 
     fn format_conjunctive(
@@ -2419,7 +2467,7 @@ impl RawSearchEngine {
         });
     }
 
-    fn search_all(&self, params: &SearchParams) -> Result<Value> {
+    fn search_all(&self, params: &SearchParams, excluded_documents: &[u32]) -> Result<Value> {
         let filter = parse_filter(params.filter_by.as_deref())?;
         let (offset, limit) = result_window(params);
         let mut cache = BlockCache::default();
@@ -2429,7 +2477,13 @@ impl RawSearchEngine {
                 .videos
                 .iter()
                 .enumerate()
-                .filter(|(_, video)| video_matches_filter(video, filter))
+                .filter(|(_, video)| {
+                    video_matches_filter(video, filter)
+                        && video
+                            .documents
+                            .iter()
+                            .any(|document| excluded_documents.binary_search(document).is_err())
+                })
                 .map(|(index, _)| index as u32)
                 .collect::<Vec<_>>();
             videos.sort_unstable_by(|left, right| {
@@ -2461,7 +2515,12 @@ impl RawSearchEngine {
             for video_id in videos.into_iter().skip(offset).take(limit) {
                 let video = &self.inner.videos[video_id as usize];
                 let mut hits = Vec::with_capacity(hits_per_group);
-                for &document in video.documents.iter().take(hits_per_group) {
+                for &document in video
+                    .documents
+                    .iter()
+                    .filter(|document| excluded_documents.binary_search(document).is_err())
+                    .take(hits_per_group)
+                {
                     hits.push(self.hit_value(document, &[], &mut cache)?);
                 }
                 grouped_hits.push(json!({
@@ -2480,12 +2539,14 @@ impl RawSearchEngine {
 
         let mut documents = (0..self.inner.manifest.documents)
             .filter(|document| {
-                self.inner
-                    .metadata
-                    .document(*document)
-                    .ok()
-                    .and_then(|record| self.inner.videos.get(record.video as usize))
-                    .is_some_and(|video| video_matches_filter(video, filter))
+                excluded_documents.binary_search(document).is_err()
+                    && self
+                        .inner
+                        .metadata
+                        .document(*document)
+                        .ok()
+                        .and_then(|record| self.inner.videos.get(record.video as usize))
+                        .is_some_and(|video| video_matches_filter(video, filter))
             })
             .collect::<Vec<_>>();
         documents.sort_unstable_by(|left, right| {
@@ -2742,6 +2803,23 @@ fn intersect_all_borrowed(lists: &[Vec<DocMatch>]) -> Vec<DocMatch> {
     intersection
 }
 
+fn retain_not_excluded(matches: &mut Vec<DocMatch>, excluded: &[u32]) {
+    if excluded.is_empty() {
+        return;
+    }
+    let mut excluded_index = 0_usize;
+    matches.retain(|candidate| {
+        let document = candidate.document();
+        while excluded
+            .get(excluded_index)
+            .is_some_and(|excluded_document| *excluded_document < document)
+        {
+            excluded_index += 1;
+        }
+        excluded.get(excluded_index).copied() != Some(document)
+    });
+}
+
 fn intersect_sorted_borrowed(left: Vec<DocMatch>, right: &[DocMatch]) -> Vec<DocMatch> {
     let mut output = Vec::with_capacity(left.len().min(right.len()));
     let mut left_index = 0_usize;
@@ -2902,8 +2980,10 @@ fn record_token(counts: &mut TokenCounts, token: &mut String, position: &mut u32
 
 fn parse_query(value: &str) -> Result<ParsedQuery> {
     let mut seen = HashSet::new();
+    let mut excluded_seen = HashSet::new();
     let mut terms = Vec::new();
     let mut phrases = Vec::new();
+    let mut excluded_terms = Vec::new();
     let mut segment = String::new();
     let mut quoted = false;
     let mut characters = value.chars().peekable();
@@ -2917,7 +2997,15 @@ fn parse_query(value: &str) -> Result<ParsedQuery> {
             continue;
         }
         if character == '"' {
-            record_query_segment(&mut segment, quoted, &mut terms, &mut phrases, &mut seen)?;
+            record_query_segment(
+                &mut segment,
+                quoted,
+                &mut terms,
+                &mut phrases,
+                &mut excluded_terms,
+                &mut seen,
+                &mut excluded_seen,
+            )?;
             quoted = !quoted;
         } else {
             segment.push(character);
@@ -2928,8 +3016,20 @@ fn parse_query(value: &str) -> Result<ParsedQuery> {
             "query contains an unterminated quoted phrase".to_string(),
         ));
     }
-    record_query_segment(&mut segment, false, &mut terms, &mut phrases, &mut seen)?;
-    Ok(ParsedQuery { terms, phrases })
+    record_query_segment(
+        &mut segment,
+        false,
+        &mut terms,
+        &mut phrases,
+        &mut excluded_terms,
+        &mut seen,
+        &mut excluded_seen,
+    )?;
+    Ok(ParsedQuery {
+        terms,
+        phrases,
+        excluded_terms,
+    })
 }
 
 fn record_query_segment(
@@ -2937,11 +3037,13 @@ fn record_query_segment(
     quoted: bool,
     terms: &mut Vec<String>,
     phrases: &mut Vec<Vec<String>>,
+    excluded_terms: &mut Vec<String>,
     seen: &mut HashSet<String>,
+    excluded_seen: &mut HashSet<String>,
 ) -> Result<()> {
-    let tokens = ordered_tokens(segment);
-    segment.clear();
     if quoted {
+        let tokens = ordered_tokens(segment);
+        segment.clear();
         if tokens.is_empty() {
             return Err(Error::InvalidInput(
                 "quoted phrase must contain at least one searchable token".to_string(),
@@ -2959,13 +3061,54 @@ fn record_query_segment(
         }
         phrases.push(tokens);
     } else {
-        for token in tokens {
-            if seen.insert(token.clone()) {
+        for (token, excluded) in signed_tokens(segment)? {
+            if excluded {
+                if excluded_seen.insert(token.clone()) {
+                    excluded_terms.push(token);
+                }
+            } else if seen.insert(token.clone()) {
                 terms.push(token);
             }
         }
+        segment.clear();
     }
     Ok(())
+}
+
+fn signed_tokens(value: &str) -> Result<Vec<(String, bool)>> {
+    let mut output = Vec::new();
+    let mut token = String::new();
+    let mut excluded = false;
+    let mut can_exclude = true;
+    for character in value.chars() {
+        if character.is_alphanumeric() {
+            token.extend(character.to_lowercase());
+            can_exclude = false;
+        } else if character == '-' && token.is_empty() && can_exclude {
+            excluded = true;
+            can_exclude = false;
+        } else {
+            if excluded && token.is_empty() {
+                return Err(Error::InvalidInput(
+                    "negative marker must directly prefix a searchable token".to_string(),
+                ));
+            }
+            if !token.is_empty() {
+                output.push((std::mem::take(&mut token), excluded));
+                excluded = false;
+            }
+            can_exclude = character.is_whitespace();
+        }
+    }
+    if excluded && token.is_empty() {
+        return Err(Error::InvalidInput(
+            "negative marker must directly prefix a searchable token".to_string(),
+        ));
+    }
+    if !token.is_empty() {
+        output.push((token, excluded));
+    }
+    Ok(output)
 }
 
 fn ordered_tokens(value: &str) -> Vec<String> {
@@ -3707,12 +3850,27 @@ mod tests {
         let parsed = parse_query(r#"outside "black black hole" tail"#).expect("parse query");
         assert_eq!(parsed.terms, ["outside", "black", "hole", "tail"]);
         assert_eq!(parsed.phrases, [["black", "black", "hole"]]);
+        assert!(parsed.excluded_terms.is_empty());
 
         let escaped = parse_query(r#"say \"hello\""#).expect("escaped quotes");
         assert_eq!(escaped.terms, ["say", "hello"]);
         assert!(escaped.phrases.is_empty());
+        assert!(escaped.excluded_terms.is_empty());
+
+        let excluded = parse_query("alpha -beta x-ray -beta").expect("negative term");
+        assert_eq!(excluded.terms, ["alpha", "x", "ray"]);
+        assert_eq!(excluded.excluded_terms, ["beta"]);
+
         assert!(parse_query(r#""unterminated"#).is_err());
         assert!(parse_query(r#"empty "" phrase"#).is_err());
+        for invalid in [
+            "alpha - beta",
+            "alpha -",
+            "--alpha",
+            r#"alpha -"beta gamma""#,
+        ] {
+            assert!(parse_query(invalid).is_err(), "accepted {invalid:?}");
+        }
     }
 
     #[test]
@@ -3781,6 +3939,16 @@ mod tests {
                 "duplicate".to_string(),
             ])
         );
+        assert_eq!(
+            ids(r#""black hole" -deep"#, "text", None),
+            HashSet::from(["duplicate".to_string()])
+        );
+        let without_deep = HashSet::from(["duplicate".to_string(), "reversed".to_string()]);
+        assert_eq!(ids("bla -deep", "text", None), without_deep);
+        assert_eq!(ids("blak -deep", "text", None), without_deep);
+        assert_eq!(ids("black missing -deep", "text", None), without_deep);
+        assert!(ids("black -deap", "text", None).contains("adjacent"));
+        assert!(ids("black -lecture", "title", None).is_empty());
         assert!(ids("black hole", "text", None).contains("gapped"));
         for query in ["black hole", "*"] {
             assert!(
@@ -3791,6 +3959,16 @@ mod tests {
                         ..SearchParams::default()
                     })
                     .is_err()
+            );
+        }
+        for query in ["-deep", "* -deep"] {
+            assert_eq!(
+                ids(query, "text", None),
+                HashSet::from([
+                    "duplicate".to_string(),
+                    "reversed".to_string(),
+                    "title".to_string(),
+                ])
             );
         }
     }
