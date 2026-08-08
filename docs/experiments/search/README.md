@@ -25,6 +25,8 @@ Typesense 30.2 typo, prefix, exact-priority, position, and token-drop behavior;
 records what Raw adopted; and names the remaining parity gaps.
 [schema-v6-positions.md](schema-v6-positions.md) records the complete-position
 layout, integrity contract, schema-v5 rollback, and measured non-phrase gate.
+[quoted-phrase-search.md](quoted-phrase-search.md) records the exact quoted
+grammar, streaming position reader, correctness cases, and phrase benchmark.
 [engagement-ranking.md](engagement-ranking.md)
 records the views/likes/comments data path, bounded score, deployed benchmarks,
 and isolated frontend topology.

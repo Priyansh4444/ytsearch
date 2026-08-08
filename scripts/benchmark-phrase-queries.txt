@@ -1,0 +1,5 @@
+# Exact phrase workload for schema-v6 cold-position reads.
+"black hole"
+"event horizon"
+"speed of light"
+"quantum mechanics"

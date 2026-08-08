@@ -33,19 +33,11 @@ pub(crate) fn write_remaining_positions(positions: &[u32], output: &mut Vec<u8>)
 /// A cursor is intentionally tiny and borrows the memory-mapped bytes. Phrase
 /// queries can reuse one caller-owned scratch vector, while ordinary queries
 /// never construct a cursor or touch the cold mapping.
-#[allow(
-    dead_code,
-    reason = "the phrase reader lands in the next incremental slice"
-)]
 pub(crate) struct PositionCursor<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
-#[allow(
-    dead_code,
-    reason = "the phrase reader lands in the next incremental slice"
-)]
 impl<'a> PositionCursor<'a> {
     pub(crate) fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
@@ -103,7 +95,7 @@ impl<'a> PositionCursor<'a> {
         Ok(())
     }
 
-    pub(crate) fn finish(self) -> Result<()> {
+    pub(crate) fn finish(&self) -> Result<()> {
         if self.cursor != self.bytes.len() {
             return Err(Error::Corrupt(
                 "cold position range has trailing bytes".to_string(),

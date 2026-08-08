@@ -26,8 +26,12 @@ Raw can replace Typesense as the canonical search index.
   - [x] Delta-encode all remaining positions into a cold sidecar.
   - [x] Checksum and length-check every generation file at startup.
 - [ ] Add exact quoted phrases, phrase slop, proximity, and early-position ranking.
+  - [x] Parse and execute bounded exact quoted phrases from schema-v6 positions.
+  - [x] Preserve order and duplicate-token semantics inside quoted phrases.
+  - [ ] Add bounded phrase slop and general unquoted proximity ranking.
+  - [ ] Judge and gate proximity/early-position score changes on the oracle.
 - [ ] Finish multi-token fallback parity with a bounded typo/token-drop work budget.
-- [ ] Add quoted/negative terms, duplicate-token semantics, Unicode and numeric rules.
+- [ ] Add quoted/negative terms, duplicate-token semantics, Unicode and numeric rules. (Exact quoted duplicates are complete; negative, Unicode, and numeric rules remain.)
 - [ ] Add safe phrase-aware, configurable multi-snippet highlights and match metadata.
 - [ ] Fail closed on every unknown filter, sort, facet, operator, and malformed value.
 - [ ] Add a versioned 300-query human-judged relevance oracle.

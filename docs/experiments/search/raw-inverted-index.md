@@ -19,6 +19,7 @@ The immutable index contains:
 | `fuzzy.bin`        | Compact mmap trie for guarded prefix and Damerau-Levenshtein expansion     |
 | `postings.bin`     | Delta-varint document/video IDs and term frequencies                       |
 | `positions.bin`    | Compact per-term offsets and first-token-position delta-varint streams     |
+| `positions.full.bin` | Cold remaining-position deltas for phrase/proximity reads                |
 | `documents.meta`   | Fixed-width block, offset, length, video, and token counts                 |
 | `documents.blocks` | Independent 64-document zstd frames                                        |
 | `videos.json`      | Video metadata, engagement counters, and compact document membership lists |
@@ -70,7 +71,8 @@ The only `unsafe` operation creates read-only memory maps. Its contract is that
 an index is immutable after build and the service exposes no write endpoint.
 Every typed read validates file bounds, header magic, version, record counts,
 posting/position counts, monotonic position offsets, block lengths, and
-document ranges before materialization.
+document ranges before materialization. Schema v6 additionally verifies the
+recorded byte length and BLAKE3 checksum of every generation file at open.
 
 Missing numeric publication timestamps are derived from `published_at` through
 the shared `youtube_time` parser during index construction.
@@ -79,7 +81,8 @@ Tests cover varint boundaries and malformed encodings, arbitrary input order,
 grouping, filtering, relevance/date sorting, highlights, compact splitting,
 plural recovery, prefixes, adjacent transpositions, two-edit correction,
 typo-plus-split recovery, conjunctive token dropping in both directions,
-filter-aware stop thresholds, exact-token priority, position ties, pagination,
+filter-aware stop thresholds, exact-token priority, position ties, exact
+quoted phrases including duplicate tokens, pagination,
 field selection, wildcard/channel search, empty corpora, concurrency,
 deterministic slicing, overwrite refusal, and corrupt/truncated files including
 the fuzzy trie and position sidecar.
@@ -99,9 +102,8 @@ cargo run --release -p youtube_raw_search -- serve \
 
 The builder refuses to overwrite a completed index directory. Build into a new
 directory and switch the process only after `RawSearchEngine::open` validates
-all files. Schema v5 adds `positions.bin`; rollback therefore keeps the prior
-binary and index generation together rather than opening a v4 index with a v5
-binary.
+all files. The current binary reads schema v5 as a non-phrase rollback and
+schema v6 for complete positions; quoted queries fail closed on schema v5.
 
 ## Deployment and rollback
 

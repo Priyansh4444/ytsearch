@@ -81,7 +81,7 @@ components such as `black + he`, and returns the same top result as
 
 | Typesense behavior | Status | Reason |
 | --- | --- | --- |
-| Phrase/proximity scoring | Partial | Raw stores the first position, not every occurrence; full positional lists need a separate judged experiment |
+| Phrase/proximity scoring | Partial | Schema v6 supports exact quoted phrases; configurable slop and general unquoted proximity ranking still need a judged experiment |
 | Exhaustive cost combinations | Deliberately bounded | The public query uses default non-exhaustive search |
 | Arbitrary filter language/faceting | Out of scope | The application uses creator/video equality filters only |
 | Dynamic writes and replication | Out of scope | Raw is a read-only serving index built offline |

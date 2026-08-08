@@ -7,7 +7,7 @@ use crate::{
         write_varint,
     },
     fuzzy::{FUZZY_FILE, FuzzyCandidate, FuzzyIndex, write_index as write_fuzzy_index},
-    positions::write_remaining_positions,
+    positions::{PositionCursor, write_remaining_positions},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -56,6 +56,7 @@ const MAX_FILTER_VALUE_BYTES: usize = 256;
 const MAX_PAGE_SIZE: u8 = 250;
 const ACTIVE_INCLUDE_FIELDS: &str = "id,video_id,title,text,prev_text,next_text,youtuber_handle,youtuber_name,thumbnail,published_at,duration,t_start_ms,t_end_ms";
 const POSITION_SCORE_BOOST: f32 = 0.15;
+const MAX_PHRASE_TOKENS: usize = 32;
 const GENERATION_FILES: [&str; 9] = [
     CHANNELS_FILE,
     VIDEOS_FILE,
@@ -315,7 +316,7 @@ struct EngineInner {
     fuzzy: FuzzyIndex,
     postings: MappedFile,
     positions: PositionIndex,
-    _full_positions: Option<PositionIndex>,
+    full_positions: Option<PositionIndex>,
     documents: MappedFile,
     metadata: DocumentTable,
     index_bytes: u64,
@@ -342,6 +343,33 @@ struct PositionIndex {
     file: MappedFile,
     terms: usize,
     data_start: usize,
+}
+
+struct PositionedPostingCursor<'a> {
+    postings: &'a [u8],
+    posting_cursor: usize,
+    first_positions: &'a [u8],
+    first_cursor: usize,
+    remaining_positions: PositionCursor<'a>,
+    previous_id: u32,
+    decoded: u32,
+    expected: u32,
+}
+
+struct PhraseCursor<'a> {
+    postings: PositionedPostingCursor<'a>,
+    id: Option<u32>,
+    positions: Vec<u32>,
+}
+
+struct ParsedQuery {
+    terms: Vec<String>,
+    phrases: Vec<Vec<String>>,
+}
+
+struct PhraseFieldMatches {
+    documents: Vec<u32>,
+    videos: Vec<u32>,
 }
 
 struct DocumentTable {
@@ -1018,7 +1046,7 @@ impl RawSearchEngine {
                 fuzzy,
                 postings,
                 positions,
-                _full_positions: full_positions,
+                full_positions,
                 documents,
                 metadata,
                 index_bytes: directory_size(index_path)?,
@@ -1175,6 +1203,84 @@ impl PositionIndex {
     }
 }
 
+impl<'a> PositionedPostingCursor<'a> {
+    fn new(
+        postings: &'a [u8],
+        first_positions: &'a [u8],
+        remaining_positions: &'a [u8],
+        expected: u32,
+    ) -> Self {
+        Self {
+            postings,
+            posting_cursor: 0,
+            first_positions,
+            first_cursor: 0,
+            remaining_positions: PositionCursor::new(remaining_positions),
+            previous_id: 0,
+            decoded: 0,
+            expected,
+        }
+    }
+
+    fn next_at_least(&mut self, target: u32, positions: &mut Vec<u32>) -> Result<Option<u32>> {
+        loop {
+            if self.posting_cursor == self.postings.len() {
+                if self.decoded != self.expected || self.first_cursor != self.first_positions.len()
+                {
+                    return Err(Error::Corrupt(
+                        "posting and complete-position streams are misaligned".to_string(),
+                    ));
+                }
+                self.remaining_positions.finish()?;
+                positions.clear();
+                return Ok(None);
+            }
+
+            let delta = read_varint(self.postings, &mut self.posting_cursor, self.postings.len())?;
+            if self.decoded > 0 && delta == 0 {
+                return Err(Error::Corrupt(
+                    "posting identifiers must be strictly increasing".to_string(),
+                ));
+            }
+            let id = self
+                .previous_id
+                .checked_add(delta)
+                .ok_or_else(|| Error::Corrupt("posting identifier overflows u32".to_string()))?;
+            let frequency =
+                read_varint(self.postings, &mut self.posting_cursor, self.postings.len())?;
+            let first_position = read_varint(
+                self.first_positions,
+                &mut self.first_cursor,
+                self.first_positions.len(),
+            )?;
+            self.previous_id = id;
+            self.decoded = self
+                .decoded
+                .checked_add(1)
+                .ok_or_else(|| Error::Corrupt("posting count overflows u32".to_string()))?;
+            if self.decoded > self.expected {
+                return Err(Error::Corrupt(
+                    "posting count exceeds the lexicon frequency".to_string(),
+                ));
+            }
+            if id < target {
+                self.remaining_positions.skip(frequency)?;
+                continue;
+            }
+            self.remaining_positions
+                .read_into(first_position, frequency, positions)?;
+            return Ok(Some(id));
+        }
+    }
+}
+
+impl PhraseCursor<'_> {
+    fn advance_to(&mut self, target: u32) -> Result<()> {
+        self.id = self.postings.next_at_least(target, &mut self.positions)?;
+        Ok(())
+    }
+}
+
 impl DocumentTable {
     fn open(path: &Path) -> Result<Self> {
         let file = MappedFile::open(path, METADATA_MAGIC)?;
@@ -1258,14 +1364,18 @@ impl SearchBackend for RawSearchEngine {
 impl RawSearchEngine {
     pub fn search(&self, params: &SearchParams) -> Result<Value> {
         validate_search_params(params)?;
-        let terms = unique_tokens(&params.q);
-        if params.q.trim() == "*" || terms.is_empty() {
+        let parsed = parse_query(&params.q)?;
+        if params.q.trim() == "*" || parsed.terms.is_empty() {
             return self.search_all(params);
         }
         let fields = query_fields(
             params.query_by.as_deref(),
             params.prioritize_token_position.unwrap_or(true),
         )?;
+        if !parsed.phrases.is_empty() {
+            return self.search_quoted(params, parsed, fields);
+        }
+        let terms = parsed.terms;
 
         if terms.len() == 1 {
             return self.search_single_token(params, &terms[0], fields);
@@ -1306,6 +1416,125 @@ impl RawSearchEngine {
         }
 
         self.format_conjunctive(params, terms, Vec::new())
+    }
+
+    fn search_quoted(
+        &self,
+        params: &SearchParams,
+        parsed: ParsedQuery,
+        fields: QueryFields,
+    ) -> Result<Value> {
+        if self.inner.full_positions.is_none() {
+            return Err(Error::InvalidInput(
+                "quoted phrase search requires a schema v6 index".to_string(),
+            ));
+        }
+        let exact_term_matches = self.exact_term_matches(&parsed.terms, fields)?;
+        let mut matches = intersect_all_borrowed(&exact_term_matches);
+        for phrase in &parsed.phrases {
+            let phrase_matches = self.phrase_field_matches(phrase, fields)?;
+            let mut retained = Vec::with_capacity(matches.len());
+            for candidate in matches {
+                let text_phrase = candidate.matches_text()
+                    && phrase_matches
+                        .documents
+                        .binary_search(&candidate.document())
+                        .is_ok();
+                let record = self.inner.metadata.document(candidate.document())?;
+                let title_phrase = phrase_matches.videos.binary_search(&record.video).is_ok();
+                if text_phrase || title_phrase {
+                    retained.push(candidate);
+                }
+            }
+            matches = retained;
+        }
+        self.format_conjunctive(params, parsed.terms, matches)
+    }
+
+    fn phrase_field_matches(
+        &self,
+        phrase: &[String],
+        fields: QueryFields,
+    ) -> Result<PhraseFieldMatches> {
+        Ok(PhraseFieldMatches {
+            documents: if fields.text {
+                self.phrase_ids_for_field(phrase, false)?
+            } else {
+                Vec::new()
+            },
+            videos: if fields.title {
+                self.phrase_ids_for_field(phrase, true)?
+            } else {
+                Vec::new()
+            },
+        })
+    }
+
+    fn phrase_ids_for_field(&self, phrase: &[String], title: bool) -> Result<Vec<u32>> {
+        let full_positions = self.inner.full_positions.as_ref().ok_or_else(|| {
+            Error::InvalidInput("phrase search requires complete positions".to_string())
+        })?;
+        let mut cursors = Vec::with_capacity(phrase.len());
+        for term in phrase {
+            let Some(entry) = self.inner.lexicon.lookup(term)? else {
+                return Ok(Vec::new());
+            };
+            let (offset, length, frequency) = if title {
+                (
+                    entry.title_offset,
+                    entry.title_length,
+                    entry.title_frequency,
+                )
+            } else {
+                (entry.text_offset, entry.text_length, entry.text_frequency)
+            };
+            if frequency == 0 {
+                return Ok(Vec::new());
+            }
+            cursors.push(PhraseCursor {
+                postings: PositionedPostingCursor::new(
+                    self.postings_range(offset, length)?,
+                    self.inner.positions.range(entry.term, title)?,
+                    full_positions.range(entry.term, title)?,
+                    frequency,
+                ),
+                id: None,
+                positions: Vec::new(),
+            });
+        }
+        for cursor in &mut cursors {
+            cursor.advance_to(0)?;
+        }
+
+        let mut matches = Vec::new();
+        while let Some(target) = cursors.iter().filter_map(|cursor| cursor.id).max() {
+            let mut exhausted = false;
+            for cursor in &mut cursors {
+                if cursor.id.is_some_and(|id| id < target) {
+                    cursor.advance_to(target)?;
+                }
+                if cursor.id.is_none() {
+                    exhausted = true;
+                    break;
+                }
+            }
+            if exhausted {
+                break;
+            }
+            if cursors.iter().any(|cursor| cursor.id != Some(target)) {
+                continue;
+            }
+            if exact_phrase_positions_match(&cursors) {
+                matches.push(target);
+            }
+            let Some(next_target) = target.checked_add(1) else {
+                break;
+            };
+            for cursor in &mut cursors {
+                cursor.advance_to(next_target)?;
+            }
+        }
+        Ok(matches)
     }
 
     fn search_single_token(
@@ -2572,29 +2801,102 @@ fn record_token(counts: &mut TokenCounts, token: &mut String, position: &mut u32
     Ok(())
 }
 
-fn unique_tokens(value: &str) -> Vec<String> {
+fn parse_query(value: &str) -> Result<ParsedQuery> {
     let mut seen = HashSet::new();
+    let mut terms = Vec::new();
+    let mut phrases = Vec::new();
+    let mut segment = String::new();
+    let mut quoted = false;
+    let mut characters = value.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\\'
+            && characters
+                .peek()
+                .is_some_and(|next| matches!(next, '"' | '\\'))
+        {
+            segment.push(characters.next().expect("peeked escaped character"));
+            continue;
+        }
+        if character == '"' {
+            record_query_segment(&mut segment, quoted, &mut terms, &mut phrases, &mut seen)?;
+            quoted = !quoted;
+        } else {
+            segment.push(character);
+        }
+    }
+    if quoted {
+        return Err(Error::InvalidInput(
+            "query contains an unterminated quoted phrase".to_string(),
+        ));
+    }
+    record_query_segment(&mut segment, false, &mut terms, &mut phrases, &mut seen)?;
+    Ok(ParsedQuery { terms, phrases })
+}
+
+fn record_query_segment(
+    segment: &mut String,
+    quoted: bool,
+    terms: &mut Vec<String>,
+    phrases: &mut Vec<Vec<String>>,
+    seen: &mut HashSet<String>,
+) -> Result<()> {
+    let tokens = ordered_tokens(segment);
+    segment.clear();
+    if quoted {
+        if tokens.is_empty() {
+            return Err(Error::InvalidInput(
+                "quoted phrase must contain at least one searchable token".to_string(),
+            ));
+        }
+        if tokens.len() > MAX_PHRASE_TOKENS {
+            return Err(Error::InvalidInput(format!(
+                "quoted phrase exceeds {MAX_PHRASE_TOKENS} tokens"
+            )));
+        }
+        for token in &tokens {
+            if seen.insert(token.clone()) {
+                terms.push(token.clone());
+            }
+        }
+        phrases.push(tokens);
+    } else {
+        for token in tokens {
+            if seen.insert(token.clone()) {
+                terms.push(token);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ordered_tokens(value: &str) -> Vec<String> {
     let mut output = Vec::new();
     let mut token = String::new();
     for character in value.chars() {
         if character.is_alphanumeric() {
             token.extend(character.to_lowercase());
-            continue;
+        } else if !token.is_empty() {
+            output.push(std::mem::take(&mut token));
         }
-        push_unique_token(&mut output, &mut seen, &mut token);
     }
-    push_unique_token(&mut output, &mut seen, &mut token);
+    if !token.is_empty() {
+        output.push(token);
+    }
     output
 }
 
-fn push_unique_token(output: &mut Vec<String>, seen: &mut HashSet<String>, token: &mut String) {
-    if token.is_empty() {
-        return;
-    }
-    let owned = std::mem::take(token);
-    if seen.insert(owned.clone()) {
-        output.push(owned);
-    }
+fn exact_phrase_positions_match(cursors: &[PhraseCursor<'_>]) -> bool {
+    let Some(first) = cursors.first() else {
+        return false;
+    };
+    first.positions.iter().copied().any(|start| {
+        cursors.iter().enumerate().skip(1).all(|(index, cursor)| {
+            u32::try_from(index)
+                .ok()
+                .and_then(|offset| start.checked_add(offset))
+                .is_some_and(|expected| cursor.positions.binary_search(&expected).is_ok())
+        })
+    })
 }
 
 fn validate_search_params(params: &SearchParams) -> Result<()> {
@@ -3207,7 +3509,7 @@ mod tests {
         assert_eq!(first_cursor, first_bytes.len());
         let remaining = engine
             .inner
-            ._full_positions
+            .full_positions
             .as_ref()
             .expect("schema 6 positions")
             .range(entry.term, false)
@@ -3219,6 +3521,79 @@ mod tests {
             .expect("decode positions");
         cursor.finish().expect("consume position range");
         assert_eq!(positions, [1, 3, 4]);
+    }
+
+    #[test]
+    fn query_parser_preserves_phrase_order_and_duplicate_tokens() {
+        let parsed = parse_query(r#"outside "black black hole" tail"#).expect("parse query");
+        assert_eq!(parsed.terms, ["outside", "black", "hole", "tail"]);
+        assert_eq!(parsed.phrases, [["black", "black", "hole"]]);
+
+        let escaped = parse_query(r#"say \"hello\""#).expect("escaped quotes");
+        assert_eq!(escaped.terms, ["say", "hello"]);
+        assert!(escaped.phrases.is_empty());
+        assert!(parse_query(r#""unterminated"#).is_err());
+        assert!(parse_query(r#"empty "" phrase"#).is_err());
+    }
+
+    #[test]
+    fn quoted_phrases_require_order_adjacency_and_one_field() {
+        let root = TempDir::new().expect("temp dir");
+        let chunks_path = root.path().join("chunks.jsonl");
+        let channels_path = root.path().join("channels.jsonl");
+        let index_path = root.path().join("index");
+        let mut chunks = File::create(&chunks_path).expect("chunks");
+        for document in [
+            json!({"video_id":"adjacent","title":"A","text":"black hole forms in deep space","youtuber_handle":"@one"}),
+            json!({"video_id":"gapped","title":"B","text":"black deep hole","youtuber_handle":"@one"}),
+            json!({"video_id":"reversed","title":"C","text":"hole black","youtuber_handle":"@one"}),
+            json!({"video_id":"duplicate","title":"D","text":"black black hole","youtuber_handle":"@one"}),
+            json!({"video_id":"title","title":"Black Hole Lecture","text":"astronomy","youtuber_handle":"@one"}),
+        ] {
+            writeln!(chunks, "{document}").expect("write chunk");
+        }
+        File::create(&channels_path).expect("channels");
+        build_index(&chunks_path, &channels_path, &index_path).expect("build");
+        let engine = RawSearchEngine::open(&index_path).expect("open");
+
+        let ids = |query: &str, query_by: &str| {
+            let mut params = grouped_query(query);
+            params.query_by = Some(query_by.to_string());
+            let response = engine.search(&params).expect("phrase search");
+            response["grouped_hits"]
+                .as_array()
+                .expect("groups")
+                .iter()
+                .map(|group| {
+                    group["group_key"][0]
+                        .as_str()
+                        .expect("group key")
+                        .to_string()
+                })
+                .collect::<HashSet<_>>()
+        };
+
+        assert_eq!(
+            ids(r#""black hole""#, "text"),
+            HashSet::from(["adjacent".to_string(), "duplicate".to_string()])
+        );
+        assert_eq!(
+            ids(r#""black black""#, "text"),
+            HashSet::from(["duplicate".to_string()])
+        );
+        assert_eq!(
+            ids(r#""hole black""#, "text"),
+            HashSet::from(["reversed".to_string()])
+        );
+        assert_eq!(
+            ids(r#""black hole" deep"#, "text"),
+            HashSet::from(["adjacent".to_string()])
+        );
+        assert_eq!(
+            ids(r#""black hole""#, "title"),
+            HashSet::from(["title".to_string()])
+        );
+        assert!(ids("black hole", "text").contains("gapped"));
     }
 
     #[test]
@@ -3963,6 +4338,10 @@ mod tests {
                 "schema 5 response changed for {query}"
             );
         }
+        assert!(matches!(
+            rollback.search(&grouped_query(r#""memory mapped""#)),
+            Err(Error::InvalidInput(_))
+        ));
     }
 
     #[test]
