@@ -53,6 +53,8 @@ pub struct SearchParams {
     #[serde(default)]
     pub prioritize_token_position: Option<bool>,
     #[serde(default)]
+    pub phrase_slop: Option<u8>,
+    #[serde(default)]
     pub typo_tokens_threshold: Option<u32>,
     #[serde(default)]
     pub drop_tokens_threshold: Option<u32>,

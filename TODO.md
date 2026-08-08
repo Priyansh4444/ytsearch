@@ -28,7 +28,7 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Add exact quoted phrases, phrase slop, proximity, and early-position ranking.
   - [x] Parse and execute bounded exact quoted phrases from schema-v6 positions.
   - [x] Preserve order and duplicate-token semantics inside quoted phrases.
-  - [ ] Add bounded phrase slop and general unquoted proximity ranking.
+  - [x] Add bounded phrase slop and general unquoted proximity ranking.
   - [ ] Judge and gate proximity/early-position score changes on the oracle.
 - [ ] Finish multi-token fallback parity with a bounded typo/token-drop work budget.
 - [ ] Add quoted/negative terms, duplicate-token semantics, Unicode and numeric rules. (Exact quoted duplicates are complete; negative, Unicode, and numeric rules remain.)

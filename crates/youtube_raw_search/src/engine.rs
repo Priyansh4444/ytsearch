@@ -56,7 +56,11 @@ const MAX_FILTER_VALUE_BYTES: usize = 256;
 const MAX_PAGE_SIZE: u8 = 250;
 const ACTIVE_INCLUDE_FIELDS: &str = "id,video_id,title,text,prev_text,next_text,youtuber_handle,youtuber_name,thumbnail,published_at,duration,t_start_ms,t_end_ms";
 const POSITION_SCORE_BOOST: f32 = 0.15;
+const PROXIMITY_SCORE_BOOST: f32 = 0.20;
+const PROXIMITY_POSITION_BOOST: f32 = 0.05;
+const MAX_PROXIMITY_TOKENS: usize = 10;
 const MAX_PHRASE_TOKENS: usize = 32;
+const MAX_PHRASE_SLOP: u8 = 8;
 const GENERATION_FILES: [&str; 9] = [
     CHANNELS_FILE,
     VIDEOS_FILE,
@@ -370,6 +374,17 @@ struct ParsedQuery {
 struct PhraseFieldMatches {
     documents: Vec<u32>,
     videos: Vec<u32>,
+}
+
+struct PositionTargets {
+    documents: Vec<u32>,
+    videos: Vec<u32>,
+}
+
+#[derive(Clone, Copy)]
+struct PositionalWindow {
+    displacement: u32,
+    max_offset: u32,
 }
 
 struct DocumentTable {
@@ -1365,6 +1380,11 @@ impl RawSearchEngine {
     pub fn search(&self, params: &SearchParams) -> Result<Value> {
         validate_search_params(params)?;
         let parsed = parse_query(&params.q)?;
+        if params.phrase_slop.is_some() && parsed.phrases.is_empty() {
+            return Err(Error::InvalidInput(
+                "phrase_slop requires at least one quoted phrase".to_string(),
+            ));
+        }
         if params.q.trim() == "*" || parsed.terms.is_empty() {
             return self.search_all(params);
         }
@@ -1382,8 +1402,9 @@ impl RawSearchEngine {
         }
 
         let exact_term_matches = self.exact_term_matches(&terms, fields)?;
-        let strict_matches = intersect_all_borrowed(&exact_term_matches);
+        let mut strict_matches = intersect_all_borrowed(&exact_term_matches);
         if self.reaches_result_threshold(params, &strict_matches, TYPO_RESULT_THRESHOLD)? {
+            self.apply_exact_proximity(&terms, fields, &mut strict_matches)?;
             return self.format_conjunctive(params, terms, strict_matches);
         }
 
@@ -1431,8 +1452,11 @@ impl RawSearchEngine {
         }
         let exact_term_matches = self.exact_term_matches(&parsed.terms, fields)?;
         let mut matches = intersect_all_borrowed(&exact_term_matches);
+        let phrase_slop = params.phrase_slop.unwrap_or(0);
         for phrase in &parsed.phrases {
-            let phrase_matches = self.phrase_field_matches(phrase, fields)?;
+            let targets = self.position_targets(&matches)?;
+            let phrase_matches =
+                self.phrase_field_matches(phrase, fields, &targets, phrase_slop)?;
             let mut retained = Vec::with_capacity(matches.len());
             for candidate in matches {
                 let text_phrase = candidate.matches_text()
@@ -1455,27 +1479,115 @@ impl RawSearchEngine {
         &self,
         phrase: &[String],
         fields: QueryFields,
+        targets: &PositionTargets,
+        slop: u8,
     ) -> Result<PhraseFieldMatches> {
         Ok(PhraseFieldMatches {
             documents: if fields.text {
-                self.phrase_ids_for_field(phrase, false)?
+                self.phrase_ids_for_field(phrase, false, &targets.documents, slop)?
             } else {
                 Vec::new()
             },
             videos: if fields.title {
-                self.phrase_ids_for_field(phrase, true)?
+                self.phrase_ids_for_field(phrase, true, &targets.videos, slop)?
             } else {
                 Vec::new()
             },
         })
     }
 
-    fn phrase_ids_for_field(&self, phrase: &[String], title: bool) -> Result<Vec<u32>> {
+    fn phrase_ids_for_field(
+        &self,
+        phrase: &[String],
+        title: bool,
+        targets: &[u32],
+        slop: u8,
+    ) -> Result<Vec<u32>> {
+        self.evaluate_positions_for_field(phrase, title, targets, |target, cursors| {
+            ordered_phrase_positions_match(cursors, slop).then_some(target)
+        })
+    }
+
+    fn position_windows_for_field(
+        &self,
+        terms: &[String],
+        title: bool,
+        targets: &[u32],
+    ) -> Result<Vec<(u32, PositionalWindow)>> {
+        self.evaluate_positions_for_field(terms, title, targets, |target, cursors| {
+            minimum_position_window(cursors).map(|window| (target, window))
+        })
+    }
+
+    fn position_targets(&self, matches: &[DocMatch]) -> Result<PositionTargets> {
+        let mut documents = Vec::with_capacity(matches.len());
+        let mut videos = Vec::with_capacity(matches.len());
+        for candidate in matches {
+            if candidate.matches_text() {
+                documents.push(candidate.document());
+            }
+            videos.push(self.inner.metadata.document(candidate.document())?.video);
+        }
+        videos.sort_unstable();
+        videos.dedup();
+        Ok(PositionTargets { documents, videos })
+    }
+
+    fn apply_exact_proximity(
+        &self,
+        terms: &[String],
+        fields: QueryFields,
+        matches: &mut [DocMatch],
+    ) -> Result<()> {
+        if terms.len() < 2 || matches.is_empty() || self.inner.full_positions.is_none() {
+            return Ok(());
+        }
+        let terms = &terms[..terms.len().min(MAX_PROXIMITY_TOKENS)];
+        let targets = self.position_targets(matches)?;
+        let text_windows = if fields.text {
+            self.position_windows_for_field(terms, false, &targets.documents)?
+        } else {
+            Vec::new()
+        };
+        let title_windows = if fields.title {
+            self.position_windows_for_field(terms, true, &targets.videos)?
+        } else {
+            Vec::new()
+        };
+        for candidate in matches {
+            let text_multiplier = candidate
+                .matches_text()
+                .then(|| positional_window(&text_windows, candidate.document()))
+                .flatten()
+                .map(|window| proximity_multiplier(window, terms.len(), fields.prioritize_position))
+                .unwrap_or(1.0);
+            let record = self.inner.metadata.document(candidate.document())?;
+            let title_multiplier = positional_window(&title_windows, record.video)
+                .map(|window| proximity_multiplier(window, terms.len(), fields.prioritize_position))
+                .unwrap_or(1.0);
+            candidate.score *= text_multiplier.max(title_multiplier);
+        }
+        Ok(())
+    }
+
+    fn evaluate_positions_for_field<T, F>(
+        &self,
+        terms: &[String],
+        title: bool,
+        targets: &[u32],
+        mut evaluate: F,
+    ) -> Result<Vec<T>>
+    where
+        F: FnMut(u32, &[PhraseCursor<'_>]) -> Option<T>,
+    {
+        if targets.is_empty() {
+            return Ok(Vec::new());
+        }
         let full_positions = self.inner.full_positions.as_ref().ok_or_else(|| {
             Error::InvalidInput("phrase search requires complete positions".to_string())
         })?;
-        let mut cursors = Vec::with_capacity(phrase.len());
-        for term in phrase {
+        let mut cursors = Vec::with_capacity(terms.len());
+        for term in terms {
             let Some(entry) = self.inner.lexicon.lookup(term)? else {
                 return Ok(Vec::new());
             };
@@ -1502,39 +1614,24 @@ impl RawSearchEngine {
                 positions: Vec::new(),
             });
         }
-        for cursor in &mut cursors {
-            cursor.advance_to(0)?;
-        }
-
-        let mut matches = Vec::new();
-        while let Some(target) = cursors.iter().filter_map(|cursor| cursor.id).max() {
-            let mut exhausted = false;
+        let mut output = Vec::new();
+        for &target in targets {
             for cursor in &mut cursors {
-                if cursor.id.is_some_and(|id| id < target) {
+                if cursor.id.is_none_or(|id| id < target) {
                     cursor.advance_to(target)?;
                 }
                 if cursor.id.is_none() {
-                    exhausted = true;
-                    break;
+                    return Ok(output);
                 }
-            }
-            if exhausted {
-                break;
             }
             if cursors.iter().any(|cursor| cursor.id != Some(target)) {
                 continue;
             }
-            if exact_phrase_positions_match(&cursors) {
-                matches.push(target);
-            }
-            let Some(next_target) = target.checked_add(1) else {
-                break;
-            };
-            for cursor in &mut cursors {
-                cursor.advance_to(next_target)?;
+            if let Some(value) = evaluate(target, &cursors) {
+                output.push(value);
             }
         }
-        Ok(matches)
+        Ok(output)
     }
 
     fn search_single_token(
@@ -1872,13 +1969,15 @@ impl RawSearchEngine {
                     highlight_terms.extend(fuzzy_terms);
                 }
             }
-            let matches = intersect_all_borrowed(&term_matches);
+            let mut matches = intersect_all_borrowed(&term_matches);
             let enough = self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)?;
             if enough {
+                self.apply_exact_proximity(terms, fields, &mut matches)?;
                 return Ok(Some((matches, highlight_terms)));
             }
             if typo_distance == maximum_distance {
                 return if self.reaches_result_threshold(params, &matches, DROP_RESULT_THRESHOLD)? {
+                    self.apply_exact_proximity(terms, fields, &mut matches)?;
                     Ok(Some((matches, highlight_terms)))
                 } else {
                     Ok(None)
@@ -2885,18 +2984,90 @@ fn ordered_tokens(value: &str) -> Vec<String> {
     output
 }
 
-fn exact_phrase_positions_match(cursors: &[PhraseCursor<'_>]) -> bool {
+fn ordered_phrase_positions_match(cursors: &[PhraseCursor<'_>], slop: u8) -> bool {
     let Some(first) = cursors.first() else {
         return false;
     };
     first.positions.iter().copied().any(|start| {
-        cursors.iter().enumerate().skip(1).all(|(index, cursor)| {
-            u32::try_from(index)
-                .ok()
-                .and_then(|offset| start.checked_add(offset))
-                .is_some_and(|expected| cursor.positions.binary_search(&expected).is_ok())
-        })
+        let mut previous = start;
+        let mut used_slop = 0_u32;
+        for cursor in cursors.iter().skip(1) {
+            let next_index = cursor
+                .positions
+                .partition_point(|position| *position <= previous);
+            let Some(&next) = cursor.positions.get(next_index) else {
+                return false;
+            };
+            used_slop = used_slop.saturating_add(next - previous - 1);
+            if used_slop > u32::from(slop) {
+                return false;
+            }
+            previous = next;
+        }
+        true
     })
+}
+
+fn minimum_position_window(cursors: &[PhraseCursor<'_>]) -> Option<PositionalWindow> {
+    if cursors.len() < 2 || cursors.iter().any(|cursor| cursor.positions.is_empty()) {
+        return None;
+    }
+    let mut indices = vec![0_usize; cursors.len()];
+    let mut best: Option<PositionalWindow> = None;
+    loop {
+        let mut minimum = (0_usize, u32::MAX);
+        let mut maximum = 0_u32;
+        for (cursor_index, (cursor, &position_index)) in cursors.iter().zip(&indices).enumerate() {
+            let position = cursor.positions[position_index];
+            if position < minimum.1 {
+                minimum = (cursor_index, position);
+            }
+            maximum = maximum.max(position);
+        }
+        let window = PositionalWindow {
+            displacement: maximum - minimum.1,
+            max_offset: maximum,
+        };
+        if best.is_none_or(|current| {
+            window.displacement < current.displacement
+                || (window.displacement == current.displacement
+                    && window.max_offset < current.max_offset)
+        }) {
+            best = Some(window);
+        }
+        if window.displacement == cursors.len().saturating_sub(1) as u32 {
+            break;
+        }
+        let minimum_index = &mut indices[minimum.0];
+        *minimum_index += 1;
+        if *minimum_index == cursors[minimum.0].positions.len() {
+            break;
+        }
+    }
+    best
+}
+
+fn positional_window(windows: &[(u32, PositionalWindow)], id: u32) -> Option<PositionalWindow> {
+    windows
+        .binary_search_by_key(&id, |(candidate, _)| *candidate)
+        .ok()
+        .map(|index| windows[index].1)
+}
+
+fn proximity_multiplier(window: PositionalWindow, tokens: usize, prioritize_position: bool) -> f32 {
+    const TYPESENSE_WINDOW: u32 = 10;
+    if window.displacement > TYPESENSE_WINDOW {
+        return 1.0;
+    }
+    let minimum_displacement = tokens.saturating_sub(1) as u32;
+    let extra_gap = window.displacement.saturating_sub(minimum_displacement);
+    let proximity = PROXIMITY_SCORE_BOOST / (extra_gap as f32 + 1.0).sqrt();
+    let position = if prioritize_position {
+        PROXIMITY_POSITION_BOOST / (window.max_offset as f32 + 1.0).sqrt()
+    } else {
+        0.0
+    };
+    1.0 + proximity + position
 }
 
 fn validate_search_params(params: &SearchParams) -> Result<()> {
@@ -2996,6 +3167,14 @@ fn validate_search_params(params: &SearchParams) -> Result<()> {
         return Err(Error::InvalidInput(
             "prioritize_token_position=false is unsupported".to_string(),
         ));
+    }
+    if params
+        .phrase_slop
+        .is_some_and(|slop| slop > MAX_PHRASE_SLOP)
+    {
+        return Err(Error::InvalidInput(format!(
+            "phrase_slop cannot exceed {MAX_PHRASE_SLOP}"
+        )));
     }
     if params.typo_tokens_threshold.is_some_and(|value| value != 5) {
         return Err(Error::InvalidInput(
@@ -3556,9 +3735,10 @@ mod tests {
         build_index(&chunks_path, &channels_path, &index_path).expect("build");
         let engine = RawSearchEngine::open(&index_path).expect("open");
 
-        let ids = |query: &str, query_by: &str| {
+        let ids = |query: &str, query_by: &str, slop: Option<u8>| {
             let mut params = grouped_query(query);
             params.query_by = Some(query_by.to_string());
+            params.phrase_slop = slop;
             let response = engine.search(&params).expect("phrase search");
             response["grouped_hits"]
                 .as_array()
@@ -3574,26 +3754,96 @@ mod tests {
         };
 
         assert_eq!(
-            ids(r#""black hole""#, "text"),
+            ids(r#""black hole""#, "text", None),
             HashSet::from(["adjacent".to_string(), "duplicate".to_string()])
         );
         assert_eq!(
-            ids(r#""black black""#, "text"),
+            ids(r#""black black""#, "text", None),
             HashSet::from(["duplicate".to_string()])
         );
         assert_eq!(
-            ids(r#""hole black""#, "text"),
+            ids(r#""hole black""#, "text", None),
             HashSet::from(["reversed".to_string()])
         );
         assert_eq!(
-            ids(r#""black hole" deep"#, "text"),
+            ids(r#""black hole" deep"#, "text", None),
             HashSet::from(["adjacent".to_string()])
         );
         assert_eq!(
-            ids(r#""black hole""#, "title"),
+            ids(r#""black hole""#, "title", None),
             HashSet::from(["title".to_string()])
         );
-        assert!(ids("black hole", "text").contains("gapped"));
+        assert_eq!(
+            ids(r#""black hole""#, "text", Some(1)),
+            HashSet::from([
+                "adjacent".to_string(),
+                "gapped".to_string(),
+                "duplicate".to_string(),
+            ])
+        );
+        assert!(ids("black hole", "text", None).contains("gapped"));
+        for query in ["black hole", "*"] {
+            assert!(
+                engine
+                    .search(&SearchParams {
+                        q: query.to_string(),
+                        phrase_slop: Some(1),
+                        ..SearchParams::default()
+                    })
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn complete_positions_prefer_the_tightest_bounded_token_window() {
+        let root = TempDir::new().expect("temp dir");
+        let chunks_path = root.path().join("chunks.jsonl");
+        let channels_path = root.path().join("channels.jsonl");
+        let index_path = root.path().join("index");
+        let mut chunks = File::create(&chunks_path).expect("chunks");
+        for document in [
+            json!({"video_id":"wide","title":"Wide","text":"alpha x beta x x x x","youtuber_handle":"@one"}),
+            json!({"video_id":"tight","title":"Tight","text":"alpha x x beta x alpha beta","youtuber_handle":"@one"}),
+        ] {
+            writeln!(chunks, "{document}").expect("write chunk");
+        }
+        File::create(&channels_path).expect("channels");
+        build_index(&chunks_path, &channels_path, &index_path).expect("build");
+        let engine = RawSearchEngine::open(&index_path).expect("open");
+        let mut query = grouped_query("alpha beta");
+        query.query_by = Some("text".to_string());
+        let response = engine.search(&query).expect("proximity search");
+        assert_eq!(response["grouped_hits"][0]["group_key"][0], "tight");
+
+        let exact = proximity_multiplier(
+            PositionalWindow {
+                displacement: 1,
+                max_offset: 1,
+            },
+            2,
+            true,
+        );
+        let gapped = proximity_multiplier(
+            PositionalWindow {
+                displacement: 2,
+                max_offset: 2,
+            },
+            2,
+            true,
+        );
+        assert!(exact > gapped && exact <= 1.25);
+        assert_eq!(
+            proximity_multiplier(
+                PositionalWindow {
+                    displacement: 11,
+                    max_offset: 11,
+                },
+                2,
+                true,
+            ),
+            1.0
+        );
     }
 
     #[test]

@@ -51,9 +51,10 @@ is not copied into a process-owned hash map at startup.
    suffix tokens one at a time, then prefix tokens, stopping at the longest
    filter-visible subset. Each ladder is capped at 20 candidates.
 8. Rank by retained-token count, a packed exact-token mask, BM25/title score,
-   and first-token position. The mask compares exact-token count first and
-   earlier retained query tokens second while sharing the existing 8-byte hot
-   candidate rather than allocating per-hit provenance.
+   a candidate-targeted 10-token proximity window, and early position. The mask
+   compares exact-token count first, then earlier retained query tokens second
+   while sharing the existing 8-byte hot candidate rather than allocating
+   per-hit provenance.
 9. Apply an explicit date, engagement, or bounded relevance-plus-engagement
    order when requested.
 10. Group scored chunks by video and retain only the requested top moments.

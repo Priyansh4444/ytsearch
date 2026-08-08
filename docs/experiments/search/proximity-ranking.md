@@ -1,0 +1,66 @@
+# Raw bounded proximity ranking
+
+Measured 2026-08-08 on the 47,860-chunk, 787-video schema-v6 corpus.
+
+## Compatibility target
+
+Typesense 30.2 calculates proximity from token offsets in a window of at most
+10 query tokens. Its match score ranks token coverage and typo cost ahead of
+proximity, with early token offset as a separate lower-order component. Primary
+sources are the [10-token window implementation](https://github.com/typesense/typesense/blob/d45d46baf3996d1de8bf96a87f375cfb43691560/include/match_score.h#L9-L15)
+and [packed score component order](https://github.com/typesense/typesense/blob/d45d46baf3996d1de8bf96a87f375cfb43691560/include/match_score.h#L49-L60).
+
+Raw retains its exact-token mask and BM25/title score, then applies a bounded
+same-field multiplier only to exact multi-token candidates. It considers at
+most the first 10 retained query tokens. A heap-free sliding window finds the
+minimum displacement containing one occurrence of every term. Windows wider
+than 10 tokens receive no boost. The maximum multiplier is 1.25: up to 20%
+for proximity plus 5% for an early best-window offset. Prefix, typo, split, and
+cross-field-only candidates receive no positional bonus.
+
+The hot posting path already knows the sorted candidate documents. The cold
+reader seeks only those document IDs and their deduplicated video IDs, skips
+intermediate deltas without allocating position lists, and reuses one vector
+per query term. A rejected prototype intersected positional postings across
+the whole corpus: pooled p95 regressed 23.1%, mean 5.4%, and CPU 6.2%. That
+shape was discarded before commit.
+
+## Correctness and relevance evidence
+
+The focused fixture puts the first occurrences farther apart in one document
+but a later pair adjacent; that document must outrank an equal-length document
+whose best pair is gapped. Multipliers are tested for ordering, the 1.25 cap,
+and the no-boost boundary beyond the 10-token window.
+
+The frozen nine-query contract retained identical found counts and ordered top
+results. A 30-query manual physics/computing review changed ordering on 11
+queries. Inspected changes were directionally useful:
+
+- `energy density` moved literal adjacent uses above `energy ... electron density`;
+- `operating system` moved another literal phrase above a broad operating-room/system match;
+- `quantum computer` moved a literal phrase above `Quantum Computing for computer scientists`;
+- `general relativity` and `quantum mechanics` retained their top four.
+
+This review is evidence for retaining the bounded candidate, not a substitute
+for the pending 300-query human-judged oracle.
+
+## Alternating release A/B
+
+Two 50-run rounds per query were run in candidate/control then control/candidate
+order. Each variant served the same schema-v6 mmap generation over loopback,
+with 10 warmups per query and response caching disabled.
+
+| Nine-query workload | Schema-v6 baseline | Candidate-targeted proximity | Change |
+| --- | ---: | ---: | ---: |
+| Searches | 900 | 900 | — |
+| Median | 4.006 ms | 4.205 ms | +5.0% |
+| p95 | 7.740 ms | 7.230 ms | -6.6% |
+| Mean | 4.253 ms | 4.323 ms | +1.7% |
+| CPU ticks | 339 | 345 | +1.8% |
+| Internal mean | 3.186 ms | 3.250 ms | +2.0% |
+
+These short local tails are noisy; the result supports only that the retained
+path passes the 10% p95 guard while adding a small measured mean/CPU cost. Roll
+back if the judged oracle finds an important regression, production-shaped p95
+exceeds baseline by 10%, CPU cost grows beyond 10%, or a non-positional query
+touches the cold sidecar.

@@ -27,6 +27,8 @@ records what Raw adopted; and names the remaining parity gaps.
 layout, integrity contract, schema-v5 rollback, and measured non-phrase gate.
 [quoted-phrase-search.md](quoted-phrase-search.md) records the exact quoted
 grammar, streaming position reader, correctness cases, and phrase benchmark.
+[proximity-ranking.md](proximity-ranking.md) records the Typesense-compatible
+window, rejected full-corpus pass, candidate-targeted fast path, and A/B gate.
 [engagement-ranking.md](engagement-ranking.md)
 records the views/likes/comments data path, bounded score, deployed benchmarks,
 and isolated frontend topology.

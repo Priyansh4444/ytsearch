@@ -52,6 +52,16 @@ mentions, so it remains in the judged-query gate. Against archived v4, core p95 
 tail remains a shadow-traffic gate. Full measurements are in
 [typesense-compatibility.md](typesense-compatibility.md).
 
+Schema v6 adds complete positions with 2.94% artifact growth on the two-channel
+snapshot. Exact quoted phrases and bounded slop are now available, and ordinary
+exact multi-token results receive a guarded same-field proximity score. The
+retained candidate-targeted implementation preserved all ordered top results
+in the frozen nine-query suite; versus the immediate schema-v6 baseline its
+900-search A/B moved p95 from 7.740 to 7.230 ms while mean and CPU rose 1.7%
+and 1.8%. See [schema-v6-positions.md](schema-v6-positions.md),
+[quoted-phrase-search.md](quoted-phrase-search.md), and
+[proximity-ranking.md](proximity-ranking.md).
+
 ## Full 1,956-video corpus
 
 | Measurement | Raw | Tantivy | Typesense |

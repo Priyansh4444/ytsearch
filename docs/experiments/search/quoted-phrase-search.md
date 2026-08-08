@@ -5,27 +5,31 @@ transcript chunks, 787 videos, and 12,261,425 index bytes.
 
 ## Contract
 
-A balanced quoted segment is an exact ordered phrase. The parser preserves
+A balanced quoted segment is an ordered phrase with zero slop by default. The
+Raw-specific `phrase_slop` query parameter accepts 0 through 8 total
+intervening tokens. The parser preserves
 duplicate tokens inside phrases, so `"black black"` requires two adjacent
 occurrences. Multiple quoted segments and unquoted terms are conjunctive, and
 each phrase must occur wholly within one configured field. Quoted queries do
 not use prefix, typo, split, or token-drop fallback. Empty or unterminated
-quotes fail closed, phrases are capped at 32 tokens, and schema-v5 rollback
+quotes and out-of-range slop fail closed, phrases are capped at 32 tokens, and schema-v5 rollback
 generations reject quoted search because they do not contain complete
 positions.
 
-The first implementation deliberately leaves negative terms, configurable
-slop, general unquoted proximity ranking, and phrase-aware multi-snippet
-highlighting open. Ordinary unquoted query behavior is unchanged.
+Negative terms and phrase-aware multi-snippet highlighting remain open.
+General unquoted proximity ranking is measured separately in
+[proximity-ranking.md](proximity-ranking.md).
 
 ## Reader design
 
-Each phrase term gets a small cursor over its posting list, hot first-position
-range, and cold remaining-position range. The cursors advance as a streaming
-multiway intersection. When a common term is below the current candidate ID,
-its cold deltas are validated and skipped without materializing positions.
-Only aligned candidates decode into one reused vector per phrase token. Exact
-adjacency is then checked with binary search over the sorted position vectors.
+The hot posting intersection first produces sorted candidate document and
+video IDs. Each phrase term then gets a small cursor over its posting list,
+hot first-position range, and cold remaining-position range. The cursors seek
+only those candidate IDs. When a common term is below the next candidate, its
+cold deltas are validated and skipped without materializing positions. Only
+aligned candidates decode into one reused vector per phrase token. A greedy
+ordered walk selects the earliest next occurrence, which minimizes consumed
+slop for each possible first occurrence.
 
 This keeps work proportional to the touched posting ranges and bounds
 request-owned position vectors by query length and term frequency. It does not
@@ -43,10 +47,13 @@ positions from the real sidecars. On the real corpus:
 | `"event horizon"` | 4 | `6akmv1bsz1M` |
 | `"speed of light"` | 28 | `ACUuFg9Y9dY` |
 | `"quantum mechanics"` | 12 | `qJZ1Ez28C-A` |
+| `"speed light"`, slop 1 | 28 | `ACUuFg9Y9dY` |
 
 All returned hits in the inspected result windows contained the phrase in the
-transcript or title. `"black hole"` narrows the existing unquoted `black hole`
-result from 21 to 16 videos, as expected for ordered adjacency.
+transcript or title. Both quoted and unquoted `black hole` happen to return 16
+strict conjunctions on this snapshot; the adversarial fixture proves that a
+gapped occurrence is excluded at slop 0 and included at slop 1. The compact
+single-token `blackhole` recovery remains a separate 21-video path.
 
 ## Performance evidence
 
@@ -70,5 +77,5 @@ a stable per-request allocation estimate.
 
 Rollback if exact-phrase fixtures regress, malformed syntax stops failing
 closed, ordinary-query response parity changes, or the future judged oracle
-shows an important relevance loss. Slop and unquoted proximity require their
-own measured ranking gate before this P0 area is complete.
+shows an important relevance loss. Phrase-aware highlighting and the full
+human-judged oracle remain required before this P0 area is complete.
