@@ -132,11 +132,7 @@ function collectVideoIds(path: string): Effect.Effect<string[], Error> {
       const lines = createInterface({ input: corpusInput(path), crlfDelay: Infinity });
       for await (const line of lines) {
         if (!line.trim()) continue;
-        const value: unknown = JSON.parse(line);
-        if (!isRecord(value) || typeof value.video_id !== "string" || !value.video_id) {
-          throw new Error("Corpus document is missing video_id");
-        }
-        ids.add(value.video_id);
+        ids.add(videoIdFromJsonLine(line));
       }
       return [...ids];
     },
@@ -257,17 +253,16 @@ function writeEnrichedCorpus(
       try {
         for await (const line of lines) {
           if (!line.trim()) continue;
-          const value: unknown = JSON.parse(line);
-          if (!isRecord(value) || typeof value.video_id !== "string") {
-            throw new Error("Corpus document is missing video_id");
-          }
-          const metrics = engagement.get(value.video_id);
-          const shouldWriteMetrics = metrics !== undefined && !enrichedVideos.has(value.video_id);
+          const videoId = videoIdFromJsonLine(line);
+          const metrics = engagement.get(videoId);
+          const shouldWriteMetrics = metrics !== undefined && !enrichedVideos.has(videoId);
           if (shouldWriteMetrics) {
-            enrichedVideos.add(value.video_id);
+            enrichedVideos.add(videoId);
             metricRecords += 1;
           }
-          const outputLine = shouldWriteMetrics ? JSON.stringify({ ...value, ...metrics }) : line;
+          const outputLine = shouldWriteMetrics
+            ? JSON.stringify({ ...parseCorpusDocument(line), ...metrics })
+            : line;
           const writable = destination.write(`${outputLine}\n`);
           if (!writable) await once(destination, "drain");
           documents += 1;
@@ -290,6 +285,47 @@ function writeEnrichedCorpus(
 function corpusInput(path: string): Readable {
   const input = createReadStream(path);
   return path.endsWith(".gz") ? input.pipe(createGunzip()) : input;
+}
+
+function videoIdFromJsonLine(line: string): string {
+  const marker = '"video_id"';
+  let cursor = line.indexOf(marker);
+  if (cursor >= 0) {
+    cursor += marker.length;
+    while (cursor < line.length && isJsonWhitespace(line.charCodeAt(cursor))) cursor += 1;
+    if (line.charCodeAt(cursor) === 58) {
+      cursor += 1;
+      while (cursor < line.length && isJsonWhitespace(line.charCodeAt(cursor))) cursor += 1;
+      if (line.charCodeAt(cursor) === 34) {
+        const start = ++cursor;
+        while (cursor < line.length && isVideoIdCode(line.charCodeAt(cursor))) cursor += 1;
+        if (cursor > start && line.charCodeAt(cursor) === 34) return line.slice(start, cursor);
+      }
+    }
+  }
+  return parseCorpusDocument(line).video_id;
+}
+
+function parseCorpusDocument(line: string): Record<string, unknown> & { video_id: string } {
+  const value: unknown = JSON.parse(line);
+  if (!isRecord(value) || typeof value.video_id !== "string" || !value.video_id) {
+    throw new Error("Corpus document is missing video_id");
+  }
+  return value as Record<string, unknown> & { video_id: string };
+}
+
+function isJsonWhitespace(code: number): boolean {
+  return code === 32 || code === 9 || code === 10 || code === 13;
+}
+
+function isVideoIdCode(code: number): boolean {
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    code === 45 ||
+    code === 95
+  );
 }
 
 function chunk<T>(values: readonly T[], size: number): T[][] {

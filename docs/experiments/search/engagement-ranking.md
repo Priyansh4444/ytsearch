@@ -70,6 +70,10 @@ copies all other JSON lines byte-for-byte, and records the number of metric
 records in its report. The builder takes the per-video maximum and the reader
 injects those counters into every returned hit, so ranking and response values
 remain identical without millions of redundant fields or serializations.
+The streaming pass reads compact ASCII `video_id` values directly, validates
+their YouTube identifier grammar, and falls back to full JSON parsing whenever
+field syntax is unexpected. Only first-per-video records are materialized and
+serialized.
 
 ## Bounded combined score
 
