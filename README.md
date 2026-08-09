@@ -1,39 +1,109 @@
 # ytsearch
 
-YouTube transcript indexing and timestamped search built with Rust, Typesense,
-`yt-dlp`, and SolidJS.
+[![CI](https://github.com/Priyansh4444/ytsearch/actions/workflows/ci.yml/badge.svg)](https://github.com/Priyansh4444/ytsearch/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-The active stack uses self-hosted Typesense only. Meilisearch was retired; the
-historical removal and migration context is preserved in
-[`docs/legacy/meilisearch-retirement.md`](docs/legacy/meilisearch-retirement.md).
-Use that retirement commit or a legacy fork if you need to build an adapter for
-old Meilisearch data.
+Self-hosted YouTube transcript search that turns caption matches into
+timestamped moments.
 
-## Quick start
+[Try the live app](https://search.pronsh.dev) ·
+[Self-host ytsearch](docs/self-hosting.md) ·
+[Contribute](CONTRIBUTING.md)
 
-The provider-neutral deployment runs Typesense, the Rust API, one persistent
-queue worker, and the static frontend:
+## Features
+
+- Search video titles and transcript text, with multiple timestamped matches
+  grouped under each video.
+- Filter results by creator and open a match at the relevant point on YouTube.
+- Index public captions with `yt-dlp`; optionally use the YouTube Data API for
+  metadata and discovery fallback.
+- Run the complete stack with Docker Compose or deploy each service separately.
+- Review creator requests before a single queue worker performs
+  non-destructive updates.
+- Keep public search credentials separate from trusted indexing credentials.
+
+The supported search backend is the mutable Raw inverted index. The frontend is
+SolidJS, the public API and indexer are Rust, and a Cloudflare Worker provides
+same-origin API proxying and scheduled infrastructure control.
+
+## How it works
+
+```mermaid
+flowchart LR
+    YT[YouTube metadata and captions] --> INDEXER[Rust indexer]
+    INDEXER --> CHUNKS[Transcript chunker]
+    CHUNKS --> WAL[(Raw SQLite mutation WAL)]
+    WAL --> PUBLISH[Atomic Raw generation publisher]
+    PUBLISH --> API[Rust search API]
+    API --> WEB[SolidJS frontend]
+    WEB -. creator request .-> QUEUE[Approval queue]
+    QUEUE -. approved work .-> INDEXER
+```
+
+`yt-dlp` is the primary discovery and caption source. `YOUTUBE_API_KEY` is an
+optional metadata and discovery fallback; the YouTube Data API does not provide
+captions. Optional local transcription is available only for content you are
+allowed to process.
+
+## Quick start with Docker
+
+Install Docker with Compose and OpenSSL, then run:
 
 ```bash
-export TYPESENSE_SELFHOST_API_KEY="$(openssl rand -hex 24)"
+export RAW_SEARCH_ADMIN_API_KEY="$(openssl rand -hex 24)"
+export RAW_SEARCH_API_KEY="$(openssl rand -hex 24)"
 export YTSEARCH_INDEX_QUEUE_TOKEN="$(openssl rand -hex 24)"
 export PUBLIC_API_BASE_URL=http://localhost:8787
 docker compose up -d --build
-curl -fsS http://localhost:8787/api/youtubers
+curl -fsS http://localhost:8787/api/health
 ```
 
-Open `http://localhost:3000`. See [the self-hosting guide](docs/self-hosting.md)
-for public deployment, cookies, persistence, and bare-process operation.
+Open `http://localhost:3000`. The first boot starts an empty index. Add a
+creator with a non-destructive update, then publish the resulting counts:
+
+```bash
+docker compose exec worker ytsearch \
+  index-youtuber @handle --backend raw --mode update --jobs 1
+```
+
+Replace `@handle` with a YouTube creator handle. Indexing a full channel can
+take time and may be limited by caption availability or YouTube rate limits.
+The command prints progress in the terminal.
+
+The Compose deployment persists Raw mutations and generations, the approval queue, and
+transcript cache in named volumes. See the
+[self-hosting guide](docs/self-hosting.md) before exposing it publicly.
 
 ## Local development
 
+Install:
+
+- Rust stable
+- [Bun](https://bun.sh/) 1.3.14
+- Docker with Compose, or a separately deployed Raw search service
+- `yt-dlp`; `ffmpeg` is also required for optional local transcription
+
+Set up a fresh clone with one command:
+
 ```bash
-bun install
-cp .env.example .env
-bun run api
+bun run setup
 ```
 
-In a second terminal:
+The setup command installs locked dependencies and creates `.env` with random,
+local-only credentials. It never replaces an existing `.env`. You do not need
+Fly, Cloudflare, Axiom, or YouTube credentials for ordinary development.
+
+Start Raw and verify its mutable administration service:
+
+```bash
+docker compose up -d raw-search init-backend
+```
+
+Then start the API and frontend in separate terminals:
+
+```bash
+bun run api
+```
 
 ```bash
 bun run dev
@@ -42,131 +112,109 @@ bun run dev
 The frontend runs at `http://localhost:3000` and proxies `/api` to the Rust API
 at `http://127.0.0.1:8787`.
 
-Minimum backend environment:
+If setup fails, its error names the missing prerequisite. You can rerun it
+safely after installing that tool.
 
-```env
-YTSEARCH_SEARCH_BACKEND=typesense
-TYPESENSE_API_URL=http://127.0.0.1:8108
-TYPESENSE_SEARCH_API_KEY=replace-me
-TYPESENSE_ADMIN_API_KEY=replace-me
-TYPESENSE_COLLECTION=youtube_transcript_chunks
-YTSEARCH_INDEX_QUEUE_TOKEN=replace-me
-```
+## Indexing and queue operations
 
-`yt-dlp` is the primary discovery and caption source. `YOUTUBE_API_KEY` is an
-optional metadata/discovery fallback; it cannot retrieve captions. Set
-`YT_DLP_COOKIES_FILE` when an authorized browser session is required.
-
-## Indexing
-
-Frontend creator requests wait for operator approval before an indexer starts:
+Frontend creator requests wait for operator approval:
 
 ```bash
 scripts/review-index-requests.sh
 ```
 
-See the operations guide for non-interactive approve/reject commands.
-
-Validate and update a creator without deleting existing chunks:
+For direct local indexing:
 
 ```bash
 cargo run --release -p youtube_cli -- validate @handle
 cargo run --release -p youtube_cli -- \
-  index-youtuber @handle --backend typesense --mode update --jobs 1
+  index-youtuber @handle --backend raw --mode update --jobs 1
 ```
 
-Refresh counts from existing backend chunks:
-
-```bash
-cargo run --release -p youtube_cli -- \
-  refresh-youtuber-counts @handle --backend typesense
-```
-
-Destructive rewipe is fail-closed and requires explicit acknowledgement:
+`update` preserves existing chunks and is the normal mode. Destructive rewipe
+is fail-closed and requires both an environment acknowledgement and a CLI flag:
 
 ```bash
 ALLOW_DESTRUCTIVE_REWIPE=1 cargo run --release -p youtube_cli -- \
-  index-youtuber @handle --backend typesense --mode rewipe \
+  index-youtuber @handle --backend raw --mode rewipe \
   --allow-destructive-rewipe --jobs 1
 ```
 
-Official event-only playlists are recorded in
-[`scripts/conference-playlists.tsv`](scripts/conference-playlists.tsv) and can
-be imported resumably with `scripts/index-conference-playlists.sh`.
+Read the [indexing operations guide](docs/indexing-operations-guide.md) for
+queue approval, repair, bulk updates, cookies, and cloud workers.
 
-## Verification
+## Configuration and privacy
+
+The checked-in [`.env.example`](.env.example) documents available settings.
+Important secrets include:
+
+- `RAW_SEARCH_ADMIN_API_KEY`
+- `RAW_SEARCH_API_KEY`
+- `YTSEARCH_INDEX_QUEUE_TOKEN`
+- `YOUTUBE_API_KEY`
+- `YT_DLP_COOKIES_FILE`
+- Cloudflare, Fly, and Axiom credentials
+
+Never put secrets in `VITE_*` variables; Vite embeds them in the browser
+bundle. Keep browser cookie exports outside the repository. Frontend analytics
+are disabled unless `VITE_POSTHOG_KEY` is set.
+
+You are responsible for complying with YouTube's terms, applicable laws, and
+the rights of creators whose content you process. Do not use cookies or local
+transcription to bypass access controls. Review the
+[privacy and YouTube compliance notice](docs/privacy-notice.md) before running
+a public service.
+
+## Development checks
+
+Run the same deterministic suite used by CI:
 
 ```bash
-bun run check                # Format, lint, typecheck, tests, build, and bundle budget
-bun run test:frontend:watch  # focused frontend development
-bun run test:frontend:coverage
-bun run check:responsive       # mocked browser flows at phone/tablet/desktop widths
-scripts/check-rust-dependency-policy.sh # reject duplicate native TLS/OpenSSL clients
-sh -n scripts/cloud-index-queue-entrypoint.sh scripts/fly-run-queue-indexer.sh
+bun run check
 ```
 
-Install the repository-owned pre-commit hook to run the fast deterministic
-subset, including strict Clippy and the local bundle-size performance budget:
+It covers formatting, type-aware linting, TypeScript checks, strict Clippy,
+Rust and frontend tests, mocked browser flows, production builds, bundle
+budgets, dependency policy, and shell syntax. Useful focused commands:
 
 ```bash
+bun run test:frontend:watch
+bun run test:frontend:coverage
+bun run check:responsive
+bun audit
 bun run hooks:install
 ```
 
-The full browser performance check intentionally stays separate because it
-loads the deployed site:
+The deployed-site performance check remains separate:
 
 ```bash
 bun run perf:frontend
 ```
 
-Agent-oriented production diagnostics are intentionally bounded:
+## Documentation
 
-```bash
-scripts/doctor.sh                       # health + one next action on failure
-scripts/agent-status.sh                 # one compact JSON line
-scripts/summarize-indexer-logs.sh       # latest progress + up to 3 errors
-scripts/check-staging-machines.sh       # one invariant summary line
-FORMAT=pretty scripts/agent-status.sh   # human-readable when needed
-VERBOSE=1 scripts/check-typesense-fly.sh
-```
+- [Architecture](docs/architecture.md) — crates, boundaries, and data flow
+- [Search experiments](docs/experiments/search/README.md) — Raw evidence,
+  historical Typesense controls, retired Tantivy results, and rollback evidence
+- [Self-hosting](docs/self-hosting.md) — deployment, persistence, and cookies
+- [Indexing operations](docs/indexing-operations-guide.md) — queue and repair
+  procedures
+- [Deployment](docs/deploy.md) — the maintained Fly and Cloudflare setup
+- [Staging observability](docs/staging-observability.md) — health checks,
+  benchmarks, and logs
+- [Legacy Meilisearch retirement](docs/legacy/meilisearch-retirement.md) —
+  migration history for older forks
 
-Agent shell output can be filtered and benchmarked with RTK; see
-[docs/agent-output-budget.md](docs/agent-output-budget.md).
+## Project status
 
-Reproducible optimization experiments use the bounded protocol in
-[`autoresearch/program.md`](autoresearch/program.md). Establish a correctness,
-serialization, and live-search baseline with:
-
-```bash
-RUNS=10 scripts/autoresearch-baseline.sh
-```
-
-The isolated Karpathy-style vector experiment can be initialized with
-`scripts/autoresearch-init.sh <tag>`; its fixed evaluator is described in
-[`autoresearch/program.md`](autoresearch/program.md).
-
-Measured baselines and the isolated infrastructure experiment queue are in
-[`docs/autoresearch.md`](docs/autoresearch.md).
-The research-backed retrieval and performance review, including current
-measurements and the promotion roadmap, is in
-[`docs/performance-research.md`](docs/performance-research.md).
-Vector-store alternatives, the local Qdrant recall/latency benchmark, and the
-video-frame embedding research are in
-[`docs/vector-search-and-multimodal-research-2026-07-17.md`](docs/vector-search-and-multimodal-research-2026-07-17.md).
-For the measured low-memory semantic-search path and its deployment gate, see
-[`docs/low-resource-semantic-search-2026-07-18.md`](docs/low-resource-semantic-search-2026-07-18.md).
-The owner-review draft for selecting and operating local transcript, frame, and
-temporal embedding models is in
-[`docs/local-multimodal-embedding-model-plan.md`](docs/local-multimodal-embedding-model-plan.md).
-Cold-start, warm concurrent, highly available, and semantic-service cost models
-are in
-[`docs/cold-warm-concurrency-costs-2026-07-17.md`](docs/cold-warm-concurrency-costs-2026-07-17.md).
-
-Operational details are in
-[`docs/indexing-operations-guide.md`](docs/indexing-operations-guide.md),
-[`docs/staging-architecture.md`](docs/staging-architecture.md), and
-[`docs/staging-observability.md`](docs/staging-observability.md).
+ytsearch is an actively developed pre-1.0 project. APIs, schemas, and
+operational workflows may change. The repository includes production-oriented
+safety checks, but self-hosters should review the deployment and compliance
+guides for their own environment.
 
 Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the local
-workflow and safety requirements. Report vulnerabilities privately according to
-[SECURITY.md](SECURITY.md). This project is available under the [MIT License](LICENSE).
+workflow, code map, and test guidance. GitHub provides structured bug and
+feature forms, plus a pull request checklist. Report vulnerabilities privately
+according to [SECURITY.md](SECURITY.md). Source code and documentation are
+available under the [MIT License](LICENSE); the license does not grant rights
+to third-party YouTube content or data.

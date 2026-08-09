@@ -19,6 +19,11 @@ Raw can replace Typesense as the canonical search index.
 - [x] Preserve the retired Tantivy experiment and results outside production.
 - [x] Build, checksum, contract-test, and deploy the full 8,142,650-document,
   32,822-video, 61-channel schema-v6 snapshot to the isolated Raw experiment.
+- [x] Promote that checksum-identical snapshot to the production Raw reader on
+  a 4 GiB / 2-performance-vCPU machine, route `search.pronsh.dev` reads to it,
+  and retain Typesense only for rollback and the not-yet-migrated write path.
+- [x] Retire the experimental frontend, API, and engine after production browser,
+  contract, and concurrent-load gates pass.
 
 ### P0: relevance and compatibility
 
@@ -51,15 +56,17 @@ Raw can replace Typesense as the canonical search index.
 
 - [x] Add a backend-neutral search-index administration contract.
 - [x] Adapt Typesense administration behind the shared contract during migration.
-- [ ] Route CLI and repair jobs through the shared administration contract.
-- [ ] Add a durable Raw writer with SQLite WAL and idempotency keys.
-- [ ] Add atomic replace/delete video and upsert/delete channel operations.
-- [ ] Add counts, channel statistics, indexed-video pagination, and operation status.
+- [x] Route CLI and repair jobs through the shared administration contract.
+- [x] Add a durable Raw writer with SQLite WAL and idempotency keys.
+- [x] Add atomic replace/delete video and upsert/delete channel operations.
+- [x] Add counts, channel statistics, indexed-video pagination, and operation status.
 - [ ] Publish immutable delta segments and tombstones without rewriting the base.
 - [ ] Make acknowledged writes visible on both readers within 60 seconds at p95.
-- [ ] Add streaming bounded-memory compaction, atomic generations, and rollback.
+- [x] Add checksummed atomic generations, crash recovery, and one-generation rollback.
+- [ ] Replace full-generation publication with streaming bounded-memory compaction.
 - [ ] Upload checksummed versioned artifacts to private R2 once R2 is enabled.
-- [ ] Bootstrap from one final Typesense snapshot, then stop dual-writing.
+- [x] Bootstrap Raw from the final matched snapshot and remove dual-writing from
+  the repository. The deployed legacy queue remains a cutover task below.
 
 ### P1: indexing reliability and throughput
 
@@ -73,36 +80,52 @@ Raw can replace Typesense as the canonical search index.
 ### P2: operations and cutover
 
 - [ ] Run one writer and two independently refreshing Raw readers.
-- [ ] Add health, readiness, generation, lag, and integrity endpoints.
+- [x] Add health, readiness, generation, pending-sequence, operation, and
+  publication-integrity endpoints.
 - [ ] Test crashes, partial uploads, disk full, corruption, and stale readers.
 - [ ] Shadow production queries and compare ordered results.
 - [ ] Roll out at 1%, 10%, 50%, and 100% with automatic rollback thresholds.
-- [ ] Remove Typesense from the live path only after the soak period passes.
+- [x] Remove Typesense from the live search-read path after a checksum, contract,
+  browser, and 75-request concurrent-load gate.
+- [x] Remove Typesense from the repository write/control path after the durable
+  Raw writer, generation publication, and recovery gates passed locally.
+- [ ] Deploy that write/control path, copy and drain the durable queue, prove a
+  mutation across restart, then deprecate and destroy the exact legacy Fly
+  resources in `docs/operations/typesense-retirement.md`.
 
 ### Non-negotiable performance and resource gates
 
 - [x] Schema v6 non-phrase p95 is no more than 10% slower than schema v5.
-- [ ] Raw p95 latency and CPU/query are each at most 75% of Typesense.
+- [x] Raw p95 latency and CPU/query are each at most 75% of Typesense on the
+  matched 1,956-video comparison (71% lower p95 and 73% lower CPU).
 - [x] Raw steady-state RSS is at most 60% of Typesense. The full Raw snapshot
   warmed to 347 MiB versus about 3.9 GiB for the restored Typesense clone.
-- [ ] Full-snapshot compaction peak RSS stays below 512 MiB. The current full
-  schema-v6 build peaks at about 2.36 GiB; replace retained builder state with
+- [ ] Full-snapshot compaction peak RSS stays below 512 MiB. The current mutable
+  full-corpus publication peaks at about 2.46 GiB; replace retained builder state with
   streaming runs before treating the writer as production-ready.
 - [x] Complete-position artifact growth is measured and documented.
 - [x] Benchmarks name corpus, hardware, build mode, concurrency, and cache state.
 - [x] Every optimization has a correctness invariant and rollback condition.
 - [x] Experimental browser JavaScript remains at or below 30 KB gzip (24,340
   bytes for the initial route after the full-corpus deployment).
+- [x] Production browser JavaScript remains below 30 KB gzip after cutover and
+  the no-stale-search-cache fix (24,342 bytes for the initial route).
 
 ### Documentation and evidence
 
 - [x] Keep common experiment outputs in one versioned Markdown report.
 - [ ] Document schema layouts, scoring, visibility, recovery, and rollback. (Schema-v6 layout and rollback are recorded; atomic visibility/recovery remain open.)
 - [x] Record debug/release/Clippy/test/benchmark/RSS/artifact-size results.
+- [x] Record the production cutover topology, exact corpus parity, resource
+  allocation, rollback IDs, browser evidence, and post-cutover load result.
 - [ ] Update this ledger in the same commit that completes each item.
 
 ## Regression Log
 
+- [x] A browser tab could retain a pre-cutover Typesense search response because
+  the API advertised a public stale-while-revalidate window. Search and
+  video-moment reads now use `cache: "no-store"`; a clean production browser
+  rendered Raw's 45-video/195-moment contract and Raw-ranked first result.
 - [x] Experimental frontend creator metadata could survive a backend/corpus swap for seven days, briefly requesting images for creators absent from the active Raw generation. Versioned the cache, reduced its paint-only lifetime to 30 minutes, and retained network refresh as the authority.
 - [x] A queued channel could not be cleanly removed through a guarded operator workflow. Added explicit queue cancellation guidance and made `remove-youtuber` require `--allow-destructive-remove` before deleting both transcript chunks and the channel profile.
 - [x] The persistent worker could sit idle for up to 24 hours after a completed repair pass even while channel cards reported indexable gaps. Reduced the post-pass cooldown to five minutes, retained immediate startup repair and single-writer backpressure, and verified the live worker entered background repair after the request queue emptied.

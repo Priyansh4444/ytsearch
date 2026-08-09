@@ -125,22 +125,30 @@ is verified independently from the immutable source backup.
 
 ## Deployment and rollback
 
-The isolated Fly app uses [fly.raw-search-experiment.toml](../../../fly.raw-search-experiment.toml),
-one shared CPU, 256 MB RAM, authentication, zero warm machines, and suspend on
-idle. Schema v5 is deployed at <https://ytsearch-raw-experiment.fly.dev>; the
-frontend/API facade is <https://search.experimental.pronsh.dev>.
+The retired isolated deployment used
+[archived experiment Fly configuration](https://github.com/Priyansh4444/ytsearch/blob/b00c51d/fly.raw-search-experiment.toml). Its
+Worker, API app, and engine app were removed after the production gate, while
+the experiment configuration and results remain in version control.
+
+Production uses [fly.raw-search.toml](../../../fly.raw-search.toml) for the
+4 GiB / 2-performance-vCPU engine and
+[fly.raw-api.toml](../../../fly.raw-api.toml) for the 512 MiB API facade. The
+engine is <https://ytsearch-raw-production.fly.dev>; the user-facing frontend is
+<https://search.pronsh.dev>.
 The Raw API deployment sets `YTSEARCH_PRESERVE_BACKEND_RELEVANCE_ORDER=true`
 so the compatibility layer does not replace the engine's exact-token order;
 the Typesense default remains unchanged.
 
 ```sh
-fly deploy --config fly.raw-search-experiment.toml --ha=false
-fly status --config fly.raw-search-experiment.toml
+fly deploy --config fly.raw-search.toml --ha=false
+fly status --config fly.raw-search.toml
 ```
 
-Experimental rollback keeps the schema-v4 binary/index generation together;
-production rollback remains leaving `TYPESENSE_API_URL` pointed at Typesense.
-Do not resize or delete production Typesense for this experiment.
+Production rollback changes the Worker `API_BASE_URL` back to the retained
+Typesense API and redeploys the last known-good Worker version. Typesense must
+not be deleted until Raw owns durable writes, atomic generation publication,
+recovery, and freshness monitoring. Exact live IDs and the tested rollback
+procedure are recorded in [raw-production-cutover.md](../../operations/raw-production-cutover.md).
 
 See [raw-validation.md](raw-validation.md) for the real-corpus results and
 [typesense-compatibility.md](typesense-compatibility.md) for the Typesense 30.2
