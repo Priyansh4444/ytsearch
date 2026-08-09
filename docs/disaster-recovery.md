@@ -37,7 +37,9 @@ defaults loaded from `.env`. The local URL must be a tunnel to an isolated
 snapshot clone with no public service routes. The command refuses the known
 serving Typesense URL by default and never writes the key into the archive.
 The export contains `youtube_transcript_chunks` and `youtube_youtubers` as
-compressed JSONL plus checksum and document-count manifests.
+compressed JSONL plus checksum and document-count manifests. Typesense's
+native gzip response is retained directly so a full export does not send raw
+JSONL over the snapshot tunnel or recompress it locally.
 
 Copy the completed timestamp directory to independent object storage. Keep at
 least seven daily and three monthly copies. Do not expose the bucket publicly.
