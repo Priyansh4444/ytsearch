@@ -4,8 +4,10 @@ set -eu
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
 
-API_URL="${TYPESENSE_SELFHOST_API_URL:-${TYPESENSE_API_URL:-}}"
-API_KEY="${TYPESENSE_SELFHOST_API_KEY:-${TYPESENSE_ADMIN_API_KEY:-}}"
+# Dedicated overrides make it difficult for a migration export to be silently
+# redirected to the serving URL when load-env.sh loads production defaults.
+API_URL="${TYPESENSE_BACKUP_API_URL:-${TYPESENSE_SELFHOST_API_URL:-${TYPESENSE_API_URL:-}}}"
+API_KEY="${TYPESENSE_BACKUP_API_KEY:-${TYPESENSE_SELFHOST_API_KEY:-${TYPESENSE_ADMIN_API_KEY:-}}}"
 BACKUP_ROOT="${BACKUP_ROOT:-backups}"
 STAMP="${BACKUP_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
 BACKUP_DIR="$BACKUP_ROOT/$STAMP"

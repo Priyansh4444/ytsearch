@@ -24,16 +24,20 @@ was aborted. Restore the newest Fly snapshot into an isolated Typesense Machine
 first, then point the export command at that instance.
 
 ```sh
-TYPESENSE_SELFHOST_API_URL='<isolated-typesense-url>' scripts/backup-typesense.sh
+TYPESENSE_BACKUP_API_URL=http://127.0.0.1:18108 \
+TYPESENSE_BACKUP_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
+BACKUP_ROOT=.search-experiment/backups \
+scripts/backup-typesense.sh
 cd backups/<timestamp>
 sha256sum -c SHA256SUMS
 ```
 
-The backup command refuses the known serving Typesense URL by default. It reads
-the isolated URL and admin key through `scripts/load-env.sh` and never writes
-the key into the archive. The export
-contains `youtube_transcript_chunks` and `youtube_youtubers` as compressed
-JSONL plus checksum and document-count manifests.
+The dedicated backup variables intentionally take precedence over production
+defaults loaded from `.env`. The local URL must be a tunnel to an isolated
+snapshot clone with no public service routes. The command refuses the known
+serving Typesense URL by default and never writes the key into the archive.
+The export contains `youtube_transcript_chunks` and `youtube_youtubers` as
+compressed JSONL plus checksum and document-count manifests.
 
 Copy the completed timestamp directory to independent object storage. Keep at
 least seven daily and three monthly copies. Do not expose the bucket publicly.
