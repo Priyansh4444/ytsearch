@@ -85,6 +85,10 @@ pub trait SearchBackend: Send + Sync + 'static {
     fn search_channels(&self, params: &SearchParams) -> Result<Value, BackendError>;
     fn documents(&self) -> u64;
     fn index_bytes(&self) -> u64;
+
+    fn cache_generation(&self) -> u64 {
+        0
+    }
 }
 
 pub struct ServerConfig {
@@ -136,11 +140,20 @@ struct MetricsResponse {
 }
 
 pub async fn serve(config: ServerConfig, backend: Arc<dyn SearchBackend>) -> std::io::Result<()> {
+    let bind = config.bind;
+    let backend_name = backend.name();
+    let app = router(&config, backend);
+    let listener = tokio::net::TcpListener::bind(bind).await?;
+    tracing::info!(bind = %bind, backend = backend_name, "search experiment ready");
+    serve_router(listener, app).await
+}
+
+pub fn router(config: &ServerConfig, backend: Arc<dyn SearchBackend>) -> Router {
     let state = AppState {
         backend,
         metrics: Arc::new(Metrics::default()),
         started: Instant::now(),
-        api_key: config.api_key.map(Arc::from),
+        api_key: config.api_key.as_deref().map(Arc::from),
         cache: Arc::new(Mutex::new(SearchCache::default())),
     };
     let mut app = Router::new()
@@ -153,9 +166,11 @@ pub async fn serve(config: ServerConfig, backend: Arc<dyn SearchBackend>) -> std
             get(search),
         );
     }
-    let listener = tokio::net::TcpListener::bind(config.bind).await?;
-    tracing::info!(bind = %config.bind, backend = state.backend.name(), "search experiment ready");
-    axum::serve(listener, app.with_state(state))
+    app.with_state(state)
+}
+
+pub async fn serve_router(listener: tokio::net::TcpListener, app: Router) -> std::io::Result<()> {
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
 }
@@ -209,7 +224,8 @@ async fn search(
     }
     let cache_key = params.use_cache.unwrap_or(false).then(|| {
         format!(
-            "{collection}:{}",
+            "{}:{collection}:{}",
+            state.backend.cache_generation(),
             serde_json::to_string(&params).unwrap_or_default()
         )
     });
