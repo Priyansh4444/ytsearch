@@ -1,91 +1,84 @@
-# Production Architecture
+# Production architecture
 
-Typesense remains the search backend. Cloudflare serves the application and
-uses a Queue message to wake the Fly indexer only after an operator approves a
-frontend request.
+Raw is the only target backend. Cloudflare serves the application, proxies the
+Rust API, emits durable wake signals, and controls the scheduled Raw engine.
 
-| Service | Purpose | Keeps running? |
+| Service | Purpose | Lifecycle |
 | --- | --- | --- |
-| Cloudflare Worker | Static application, queue/status proxy, and approved-request wake producer | Yes |
-| Cloudflare Queue | Durable, retryable indexer wake signal | Managed |
-| `ytsearch-api-typesense-fly-staging` | Public search API and authoritative JSONL request queue | Yes |
-| `ytsearch-typesense-staging` | Typesense engine and data volume | 11:45 AM–12:00 AM Pacific, plus indexing overrun |
-| `ytsearch-indexer-staging` | Queue/indexing daemon and transcript cache | Only while work is active |
-
-Production is served at `https://search.pronsh.dev`.
+| Cloudflare Worker | Static app, same-origin API, availability, Fly control | Always available |
+| Cloudflare Queue | Retryable indexer wake signal | Managed |
+| `ytsearch-api-raw-production` | Public search API and authoritative JSONL request queue | Always running |
+| `ytsearch-raw-production` | Reloadable inverted index and mutation publisher | Scheduled |
+| `ytsearch-indexer-raw-production` | Approved indexing, daily update, and gap repair | On demand |
 
 ```mermaid
 flowchart LR
   Browser --> Edge[Cloudflare Worker]
-  Edge --> API[Fly search and pending-request API]
-  API --> Engine[Typesense]
-  Operator[Approval CLI] --> Edge
-  Edge -->|approved only| Wake[Cloudflare Queue]
-  Wake --> Machine[Fly Machines API]
-  Machine --> Indexer[On-demand indexer]
+  Edge --> API[Raw API and JSONL queue]
+  API --> Engine[Mutable Raw engine]
+  Operator --> Edge
+  Edge --> Wake[Cloudflare Queue]
+  Wake --> Fly[Fly Machines API]
+  Fly --> Indexer[One on-demand indexer]
   Indexer --> YouTube[yt-dlp / YouTube]
   Indexer --> Engine
   Indexer --> API
 ```
 
-## Reliability And Cost Rules
+## Reliability rules
 
-1. The JSONL request log remains authoritative. Cloudflare Queue is only a wake
-   signal, so duplicate delivery is harmless and losing an individual signal
-   does not lose a request.
-2. Keep exactly one configured indexer Machine because JSONL has no distributed
-   lock. Its volume persists while the VM stops; it uses shared CPU with 8 GB
-   RAM, `JOBS=1`, and `TYPESENSE_JOBS=1` while active.
-3. The indexer has restart policy `no` and exits after five minutes with no
-   queue, daily refresh, or gap work. The Cloudflare consumer restarts it when
-   a request is accepted, and a six-hour cron sends the same durable wake
-   signal. A timestamp on the indexer volume makes the list-wide refresh run
-   at most once per day; other scheduled wakes non-destructively close
-   indexed/public video gaps.
-4. Public search is available from noon through midnight Pacific Time.
-   Cloudflare begins prewarming Typesense at 11:45 AM because the measured cold
-   load is approximately nine minutes. The static site and request queue remain
-   available continuously. At midnight, search closes immediately and the
-   engine stops after the indexer is no longer active.
-5. The indexer uses `yt-dlp` first. A YouTube Data API key is metadata discovery
-   fallback only; it cannot retrieve transcript captions.
-6. Update mode preserves existing chunks. Refresh indexed-count documents after
-   a completed bulk pass so the frontend's `indexed / public` count stays true.
-7. `TYPESENSE_RESET_PEERS_ON_ERROR=true` is single-node recovery behavior, not
-   high availability. Investigate write pressure whenever it is needed.
-8. Idle gap repair processes one creator at a time and rotates through a
-   persistent cursor. Queue work is checked between creators and remains higher
-   priority; `JOBS=1` preserves the single Typesense writer rule.
-9. `SEARCH_SCHEDULE_MODE=observe` is the safe deployment default. It logs
-   desired lifecycle actions without blocking searches or changing Machine
-   state. Set it to `enforce` only after the observation and isolated lifecycle
-   tests in `docs/deploy.md`.
+1. The API JSONL log is authoritative. Cloudflare Queue delivery may duplicate;
+   a wake never represents the only copy of a request.
+2. Exactly one indexer owns a queue file. Its Machine has restart policy `no`,
+   exits after an idle window, and keeps its transcript-cache volume.
+3. Every video write is an atomic, idempotent complete replacement. The CLI
+   publishes once per creator/bulk batch instead of rebuilding per chunk.
+4. Search stays on the last verified generation during publication. Candidate
+   integrity/open failures leave durable mutations pending for retry.
+5. Daily update and gap repair yield to approved requests. A persistent cursor
+   prevents one unavailable creator/video from starving the list.
+6. Caption fetches are paced and retry transient transport, timeout, 429, and 5xx
+   failures. Exhausted IDs receive a six-hour cooldown by default.
+7. The engine and API queue use separate Fly volumes and recovery checks.
 
-## Search Availability Schedule
+## Availability and cost window
 
-The Worker owns `GET /api/availability` and blocks `/api/search` outside the
-public window only in enforcement mode. Cloudflare Cron runs in UTC, so a
-five-minute trigger evaluates `America/Los_Angeles` in code to follow PST/PDT.
+The Worker owns `GET /api/availability` and evaluates Pacific time. In enforced
+mode it prewarms the engine before noon, allows searches from noon through
+midnight, stops the indexer first at close, then stops Raw on a later
+reconciliation. Direct Raw auto-start is disabled so a request cannot bypass
+the cost boundary.
 
-The Fly Typesense service has `auto_start_machines=false` and
-`min_machines_running=0` in the scheduled configuration. This prevents a
-direct request from bypassing the cost boundary. The exact production Machine
-ID is configured in `wrangler.jsonc`; the stopped cold-benchmark Machine is
-never a lifecycle target.
+The indexer Machine ID is discovered by the unique
+`QUEUE_TARGET_BACKEND=raw` tag. The Raw engine Machine ID is explicit in
+`wrangler.jsonc` so a benchmark Machine can never be scheduled accidentally.
 
-Off-hours indexer wake messages are acknowledged because the JSONL queue on the
-API volume remains authoritative. After Typesense becomes healthy at noon, the
-Worker sends an idempotent `availability-open` wake so approved work resumes.
+## Publication state
 
-## Operator Surfaces
+The Raw volume contains:
+
+- SQLite WAL operations and mutation payloads;
+- an active-generation manifest;
+- the active verified generation;
+- one previous rollback generation;
+- source corpus archives needed for compaction.
+
+Admin counts include pending durable writes. Public search visibility advances
+only when a verified generation becomes active. Full-corpus publication took
+70–80 seconds in the measured experiment and peaked at 2.46 GiB RSS; allocator
+trimming returned the idle process to 138.45 MiB locally.
+
+## Operator surfaces
 
 | Task | Command |
 | --- | --- |
-| Deploy the edge application | `bun run deploy:frontend` |
-| Review index requests | `scripts/review-index-requests.sh` |
+| Deploy edge app | `bun run deploy:frontend` |
+| Review requests | `scripts/review-index-requests.sh` |
 | Machine inventory | `scripts/check-staging-machines.sh` |
-| Queue-worker invariant | `scripts/check-queue-indexers.sh` |
-| Recreate/start the indexer | `ON_DEMAND=1 scripts/fly-run-queue-indexer.sh` |
-| Per-channel status | `scripts/check-indexed-channel-status.sh @handle` |
-| Refresh channel counts | `scripts/refresh-all-backend-counts.sh` |
+| Queue invariant | `scripts/check-queue-indexers.sh` |
+| Recreate/start indexer | `ON_DEMAND=1 scripts/fly-run-queue-indexer.sh` |
+| Creator status | `scripts/check-indexed-channel-status.sh @handle` |
 | Search benchmark | `RUNS=10 scripts/benchmark-search-cases.sh` |
+
+The legacy resource list and irreversible teardown sequence live in
+[Typesense retirement](operations/typesense-retirement.md).

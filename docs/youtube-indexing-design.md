@@ -1,4 +1,9 @@
-# YouTube Transcript Indexing Design
+# Historical YouTube transcript indexing design
+
+> Archived design record: this document describes the original modular
+> Typesense/semantic exploration and is not an operator guide. Raw is the only
+> supported backend. See [Architecture](architecture.md) and
+> [Indexing operations](indexing-operations-guide.md) for the current system.
 
 ## Goal
 

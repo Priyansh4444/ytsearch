@@ -1,55 +1,79 @@
 # Architecture
 
-`ytsearch` is split around replaceable boundaries so search, metadata, caption extraction, transcription, chunking, and storage can evolve independently.
+ytsearch separates ingestion, durable mutations, immutable search generations,
+the public API, and the browser. Raw is the only supported search backend.
+
+## Runtime data flow
+
+```mermaid
+flowchart LR
+  YT[YouTube metadata and captions] --> CLI[Rust indexer]
+  CLI --> ADMIN[Raw admin API]
+  ADMIN --> WAL[(SQLite WAL)]
+  WAL --> PUB[Verified generation publisher]
+  PUB --> GEN[(Immutable mmap generation)]
+  GEN --> ENGINE[Reloadable Raw reader]
+  ENGINE --> API[Rust public API]
+  API --> EDGE[Cloudflare Worker]
+  EDGE --> WEB[Solid frontend]
+```
+
+A complete video replacement is one idempotent WAL operation. Publication
+streams the base corpus and mutations into a candidate, validates checksums and
+opens the candidate, atomically changes the active manifest, then swaps an
+`Arc<RawSearchEngine>` behind an `RwLock`. Queries never read a partially built
+generation.
 
 ## Crates
 
-| Crate | Responsibility | Hotswap boundary |
-| --- | --- | --- |
-| `youtube_client` | Small typed wrapper around YouTube Data API v3 list endpoints. | Replace if moving to generated OpenAPI clients or another metadata provider. |
-| `youtube_sources` | YouTube Data API metadata source plus metadata fallback composition. | Implements `VideoMetadataSource`; does not know about `yt-dlp`. |
-| `youtube_ytdlp` | `yt-dlp` backed public caption transcript source. Parses `json3`/`vtt` into timestamped segments. | Implements `TranscriptSource`; can be replaced by any captions provider. |
-| `youtube_transcribe` | Optional local audio fallback using `yt-dlp` audio extraction, `ffmpeg`, `ffprobe`, and `voxtype`. | Implements `TranscriptSource`; use only when captions are missing and you are allowed to transcribe. |
-| `youtube_ingest` | Core domain model, ports/traits, and transcript chunker. | Defines `VideoMetadataSource`, `TranscriptSource`, `TranscriptChunkSource`, `ChunkSink`, and `EmbeddingSource`. |
-| `youtube_time` | Dependency-free parsing for RFC 3339 publication timestamps and YouTube durations. | Keeps narrow time conversion logic shared without a general-purpose date-time dependency. |
-| `youtube_search` | Shared query type, indexed creator document, and search backend trait. | API-facing hotswap boundary for search backends. |
-| `youtube_typesense` | Typesense schema, admin import/delete/upsert, and search client. | Active backend; implements `ChunkSink` and `TranscriptSearchBackend`. |
-| `youtube_cli` | Operator CLI for validation, indexing, direct video indexing, and CLI search. | Wires sources/sinks together; no core parsing logic should live here. |
-| `youtube_api` | Axum HTTP API for frontend search and indexed channel listing. | Uses `youtube_search::TranscriptSearchBackend`; keep admin actions out of this service. |
-| `youtube_semantic` | Experimental embedding/vector-search abstractions. | Keep optional until semantic search is production-ready. |
+| Crate | Responsibility |
+| --- | --- |
+| `youtube_ingest` | Domain models, source traits, and transcript chunking |
+| `youtube_client` | Narrow YouTube Data API list client |
+| `youtube_sources` | Metadata discovery and fallback composition |
+| `youtube_ytdlp` | Public caption and metadata extraction |
+| `youtube_transcribe` | Optional permitted local transcription fallback |
+| `youtube_time` | RFC 3339 and duration parsing |
+| `youtube_jsonl` | Queue JSONL persistence helpers |
+| `youtube_index_store` | Backend-neutral mutable search administration contract and Raw HTTP client |
+| `youtube_search_client` | Read-only Raw search client and query builder |
+| `youtube_search_service` | Authenticated search/admin HTTP transport and bounded caching |
+| `youtube_raw_search` | Inverted index, ranking, mutation WAL, publication, recovery, and reloadable reader |
+| `youtube_cli` | Validation, channel/video indexing, repair, deletion, and direct search |
+| `youtube_api` | Public search, channel directory, and durable approval queue |
 
-## Data flow
+Retired engine experiments are documented under `docs/experiments/search/` and
+are not workspace dependencies.
 
-```mermaid
-flowchart TD
-    CLI[youtube_cli] --> YT[YouTube Data API via youtube_client]
-    CLI --> META[youtube_sources metadata]
-    CLI --> CAP[youtube_ytdlp captions]
-    CLI --> VOX[youtube_transcribe optional fallback]
-    META --> ING[youtube_ingest chunker]
-    CAP --> ING
-    VOX --> ING
-    ING --> SEARCHADMIN[youtube_typesense admin import]
-    API[youtube_api search-only API] --> SEARCH[youtube_search backend trait]
-    SEARCH --> TYPESENSE[youtube_typesense search client]
-    WEB[Solid frontend] --> API
-```
+## Credential boundary
 
-## Transcript strategy
+- Browsers receive no search, admin, queue, Fly, YouTube, or Axiom secret.
+- `youtube_api` uses only `RAW_SEARCH_API_KEY` for public reads.
+- Indexers use `RAW_SEARCH_ADMIN_API_KEY`; this key never reaches the browser or
+  public API response.
+- `YTSEARCH_INDEX_QUEUE_TOKEN` protects queue review and acknowledgement.
+- The Cloudflare Worker owns Fly lifecycle calls through `FLYIO_TOKEN`.
 
-1. Fetch public captions with `youtube_ytdlp::YtDlpTranscriptSource`.
-2. Parse captions into `TranscriptSegment` values.
-3. Chunk into searchable windows with `youtube_ingest::Chunker`.
-4. Optional fallback: `youtube_transcribe::VoxtypeTranscriptSource` only when captions are unavailable.
+## Frontend structure
 
-## UI structure
+- `src/app.tsx` composes route-level state.
+- `src/app-lifecycle.ts` owns availability and navigation lifecycles.
+- `src/api.ts`, `src/api-schema.ts`, and `src/api-error.ts` own the HTTP boundary.
+- `src/effect-runtime.ts` owns Effect v4 execution and typed failures. It is
+  loaded lazily so the initial route stays below 30 KB gzip.
+- `src/components/` owns presentation and local interaction.
+- `worker/` owns same-origin proxying, queue wakeups, and scheduled Fly control.
 
-The frontend is intentionally split by cognitive load:
+## Operational invariants
 
-- `src/app.tsx` orchestrates route/channel/search state.
-- `src/api.ts` owns HTTP calls.
-- `src/types.ts` owns frontend API types.
-- `src/utils.ts` owns formatting/routing/highlight helpers.
-- `src/components/*` owns view components.
+1. One queue file has exactly one active indexer writer.
+2. Durable mutations are acknowledged before publication; retries reuse stable
+   content-derived idempotency keys.
+3. Search stays on the last verified generation if publication fails.
+4. The queue is authoritative; Cloudflare Queue messages are only wake signals.
+5. Unknown search filters and sorts fail closed.
+6. Raw engine and queue volumes are snapshotted and restored independently.
 
-Avoid putting new feature logic directly into `app.tsx` unless it is app-level orchestration.
+See [Mutable Raw migration](operations/raw-mutable-migration.md) for measured
+resource behavior and [Typesense retirement](operations/typesense-retirement.md)
+for the gated legacy-resource teardown.

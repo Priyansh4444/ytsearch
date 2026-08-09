@@ -4,7 +4,9 @@ This document is a project template and checklist. It is not legal advice. Revie
 
 ## What the app does
 
-ytsearch indexes YouTube creator metadata and transcript-like text into Typesense so users can search timestamped moments and open matching videos in the official embedded YouTube player or on YouTube.
+ytsearch indexes YouTube creator metadata and transcript-like text into its Raw
+inverted index so users can search timestamped moments and open matching videos
+in the official embedded YouTube player or on YouTube.
 
 ## Data sources
 
@@ -14,7 +16,7 @@ The project may process:
 - YouTube video metadata from the YouTube Data API.
 - Public caption/timed text data discovered via `yt-dlp`.
 - Optional locally generated transcripts from downloaded/extracted audio when `--transcribe-missing` is enabled.
-- Typesense search queries submitted by users of the local/frontend API.
+- Search queries submitted by users of the local/frontend API.
 - Server logs produced by the Rust API and CLI.
 
 ## YouTube and Google notices
@@ -102,11 +104,13 @@ If ytsearch is operated publicly, add logic/policy for Made for Kids videos and 
 Never expose:
 
 - `YOUTUBE_API_KEY` in frontend bundles if avoidable
-- `TYPESENSE_ADMIN_API_KEY`
+- `RAW_SEARCH_ADMIN_API_KEY`
+- `RAW_SEARCH_API_KEY`
 - OAuth client secrets
 - refresh tokens
 
-The current frontend talks to `youtube_api`, and `youtube_api` uses only the Typesense search-only key server-side.
+The frontend talks to `youtube_api`, which uses only the Raw search-only key.
+The Raw admin key belongs only in trusted indexing processes.
 
 ## Recommended production checklist
 
@@ -114,7 +118,8 @@ The current frontend talks to `youtube_api`, and `youtube_api` uses only the Typ
 - [ ] Publish terms of use that link to YouTube Terms.
 - [ ] Confirm YouTube API Services compliance.
 - [ ] Decide whether audio fallback is permitted for the intended use case.
-- [ ] Implement retention/deletion for `data/` and Typesense records.
+- [ ] Implement retention/deletion for local files, Raw mutation records, and
+  published generations.
 - [ ] Avoid storing raw audio unless required and permitted.
 - [ ] Keep admin keys server-side only.
 - [ ] Disable autoplay for embeds.

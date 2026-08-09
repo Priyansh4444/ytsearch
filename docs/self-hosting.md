@@ -1,88 +1,120 @@
-# Self-Hosting
+# Self-hosting
 
-ytsearch runs with one self-hosted Typesense node, the Rust API, a queue worker,
-and the Solid frontend. The only provider-specific pieces are a reachable
-Typesense URL and a process supervisor for the API and worker.
+ytsearch runs one mutable Raw engine, one Rust API, one queue worker, and the
+Solid frontend. Docker Compose is the supported local topology.
 
-## Minimal configuration
+## Setup
 
-Copy `.env.example` to `.env` and set:
-
-```env
-TYPESENSE_SELFHOST_API_URL=http://127.0.0.1:8108
-TYPESENSE_SELFHOST_API_KEY=replace-me
-TYPESENSE_COLLECTION=youtube_transcript_chunks
-INDEX_QUEUE_API_BASE_URL=http://127.0.0.1:8787
-YTSEARCH_INDEX_QUEUE_TOKEN=replace-me
-VITE_API_BASE_URL=http://127.0.0.1:8787
-VITE_INDEX_QUEUE_API_BASE_URL=http://127.0.0.1:8787
-```
-
-`yt-dlp` is the primary metadata and caption source. Set `YOUTUBE_API_KEY`
-only when YouTube Data API fallback is desired. Cookies can be supplied with
-`YT_DLP_COOKIES_FILE` when YouTube requires verification.
-
-## Run locally
-
-### Docker Compose
-
-The smallest complete deployment uses the checked-in Compose file. Set two
-private values and start the stack. An idempotent one-shot service creates the
-empty Typesense collections on first boot. The worker polls approved queue
-requests but does not run bulk channel updates unless explicitly enabled:
+Install Rust stable, Bun 1.3.14, Docker Compose, OpenSSL, and `yt-dlp`.
+`ffmpeg` is required only for permitted local transcription.
 
 ```bash
-export TYPESENSE_SELFHOST_API_KEY="$(openssl rand -hex 24)"
-export YTSEARCH_INDEX_QUEUE_TOKEN="$(openssl rand -hex 24)"
-export PUBLIC_API_BASE_URL=http://localhost:8787
+bun run setup
 docker compose up -d --build
 docker compose ps
+```
+
+`bun run setup` creates `.env` only when it does not exist and generates
+separate Raw and queue credentials. To configure by hand:
+
+```env
+RAW_SEARCH_API_URL=http://127.0.0.1:8108
+RAW_SEARCH_API_KEY=replace-with-a-long-random-value
+RAW_SEARCH_ADMIN_API_KEY=replace-with-another-long-random-value
+RAW_SEARCH_COLLECTION=youtube_transcript_chunks
+INDEX_QUEUE_API_BASE_URL=http://127.0.0.1:8787
+YTSEARCH_INDEX_QUEUE_TOKEN=replace-with-a-long-random-value
+```
+
+Check the stack:
+
+```bash
 curl -fsS http://localhost:8108/health
 curl -fsS http://localhost:8787/api/health
 curl -fsS http://localhost:8787/api/youtubers
 ```
 
-To enable the periodic bulk update list, opt in when starting Compose:
+Open `http://localhost:3000`.
+
+## Persistent state
+
+Compose creates three named volumes:
+
+- `raw-mutable-data`: SQLite WAL, published generations, and rollback state;
+- `queue-data`: authoritative JSONL approval queue;
+- `transcript-cache`: fetched captions, failure cooldowns, and repair cursor.
+
+Back up all three. The immutable base corpus files used by
+`Dockerfile.raw-search` must also be available to rebuild the image. Production
+data under `.search-experiment/` is intentionally gitignored and is not part of
+a clean source checkout; self-hosters must build their own base generation and
+source archives before building that image.
+
+## Index a creator
 
 ```bash
-DAILY_UPDATE_ENABLED=1 DAILY_UPDATE_INITIAL_DELAY_SECONDS=0 docker compose up -d worker
+docker compose exec worker ytsearch \
+  index-youtuber @handle --backend raw --mode update --jobs 1
 ```
 
-Open `http://localhost:3000`. Persistent named volumes retain Typesense data,
-the JSONL queue, and transcript cache. Only the frontend and API ports need to
-be public; keep Typesense private outside local development.
+The command writes complete-video replacements with stable idempotency keys and
+publishes once after the channel batch. `update` is the normal mode. Rewipe is
+destructive and requires both the CLI flag and environment acknowledgement.
 
-Set `PUBLIC_API_BASE_URL` to the browser-reachable HTTPS API origin before
-building on a remote host. Optional `YOUTUBE_API_KEY`, `YT_DLP_COOKIES_FILE`,
-`VITE_POSTHOG_KEY`, and `VITE_POSTHOG_HOST` values pass through without being
-required.
+## Queue operations
 
-### Bare processes
-
-Start Typesense, then run the API and frontend in separate terminals:
+Frontend submissions remain pending until an operator reviews them:
 
 ```bash
-bun install
+scripts/review-index-requests.sh
+```
+
+Keep exactly one queue worker for a JSONL queue file. Public submissions default
+to six requests per client per minute and 10,000 retained rows; tune
+`YTSEARCH_INDEX_REQUEST_RATE_LIMIT_PER_MINUTE` and
+`YTSEARCH_INDEX_QUEUE_MAX_ITEMS` deliberately.
+
+Periodic full-list repair is opt-in:
+
+```bash
+DAILY_UPDATE_ENABLED=1 DAILY_UPDATE_INITIAL_DELAY_SECONDS=0 \
+  docker compose up -d worker
+```
+
+## Bare-process development
+
+Start Raw through Compose, then run API and frontend separately:
+
+```bash
+docker compose up -d raw-search init-backend
 bun run api
 bun run dev
 ```
 
-Run one persistent queue worker with `QUEUE_DAEMON=1`, `QUEUE_LOOP=1`, and
-`DAILY_UPDATE_ENABLED=1`. Keep exactly one worker attached to a queue file.
-For a first update, set `DAILY_UPDATE_INITIAL_DELAY_SECONDS=0`; subsequent
-updates use `DAILY_UPDATE_INTERVAL_SECONDS` (normally 86400).
+Raw administration requires `RAW_SEARCH_ADMIN_API_KEY`. Public API processes
+should receive only `RAW_SEARCH_API_KEY` unless they explicitly host a trusted
+administration route.
 
-Bootstrap a creator directly with:
+## Cookies and transcription
 
-```bash
-cargo run -p youtube_cli -- index-youtuber @handle --backend typesense --mode update
+Use only cookies from an authorized session and only for content you may
+process. Keep exports outside the repository and mount them read-only:
+
+```yaml
+services:
+  worker:
+    environment:
+      YT_DLP_COOKIES_FILE: /run/secrets/yt-dlp-cookies.txt
+    volumes:
+      - /absolute/path/to/cookies.txt:/run/secrets/yt-dlp-cookies.txt:ro
 ```
 
-For a bare-process installation, initialize empty collections once before
-starting the API:
+The YouTube Data API is a discovery/metadata fallback; it does not provide
+captions. Do not use transcription or cookies to bypass access controls.
 
-```bash
-cargo run -p youtube_cli -- init-backend --backend typesense
-```
+## Recovery
 
-Queue administration routes require `YTSEARCH_INDEX_QUEUE_TOKEN`.
+Restore the base corpus, Raw mutable volume, queue volume, and transcript cache
+into an isolated stack first. Require generation integrity, exact queue IDs,
+known searches, one publish/restart mutation, and a clean browser check before
+routing traffic. See [Disaster recovery](disaster-recovery.md).

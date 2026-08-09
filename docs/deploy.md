@@ -1,98 +1,127 @@
 # Deployment
 
-ytsearch needs four processes: Typesense, `youtube-api`, one queue worker, and
-a static frontend. The supported provider-neutral path is `compose.yaml`; see
-`docs/self-hosting.md`.
+The production target has four components:
 
-## Fly staging
+| Component | Fly/Cloudflare name | Persistent state |
+| --- | --- | --- |
+| Raw engine | `ytsearch-raw-production` | 20 GB `raw_mutable_data` volume |
+| Public API and queue | `ytsearch-api-raw-production` | 1 GB `raw_api_queue_data` volume |
+| On-demand indexer | `ytsearch-indexer-raw-production` | Transcript cache and repair cursor |
+| Frontend and scheduler | Cloudflare Worker `ytsearch-search` | Cloudflare Queue wake messages |
 
-Active apps:
+The checked-in configuration is the target configuration. The deployed legacy
+queue must be copied before the Worker is redeployed; follow
+[Typesense retirement](operations/typesense-retirement.md) in order.
 
-- `ytsearch-typesense-staging`: persistent Typesense engine.
-- `ytsearch-api-typesense-fly-staging`: public API and JSONL queue owner.
-- `ytsearch-indexer-staging`: one on-demand update/queue worker, woken by the
-  Cloudflare Queue consumer and stopped after an idle window.
-
-Deploy the API:
+## Prerequisites
 
 ```bash
-flyctl deploy --config fly.typesense-api.toml \
-  --app ytsearch-api-typesense-fly-staging --primary-region sjc
+flyctl auth whoami
+bunx wrangler whoami
 ```
 
-Stage worker secrets without printing them, then deliberately recreate the
-worker so raw Machine file secrets are mounted:
+Generate separate 24-byte-or-longer public and admin keys. Never print existing
+production secrets or put them in `VITE_*` variables.
+
+## 1. Raw engine
+
+Create the volume once, stage secrets, then deploy:
 
 ```bash
-YOUTUBE_API_FALLBACK=auto scripts/fly-set-indexer-secrets.sh
+flyctl volumes create raw_mutable_data --app ytsearch-raw-production \
+  --region sjc --size 20
+flyctl secrets set --app ytsearch-raw-production \
+  RAW_SEARCH_API_KEY="$RAW_SEARCH_API_KEY" \
+  RAW_SEARCH_ADMIN_API_KEY="$RAW_SEARCH_ADMIN_API_KEY"
+flyctl deploy --config fly.raw-search.toml --ha=false
+```
+
+Verify the public health endpoint and the authenticated admin readiness route.
+Then perform one idempotent replacement, publish it, restart the Machine, and
+verify the operation and search result remain visible.
+
+## 2. Raw API queue
+
+Create its volume before deploying or accepting requests:
+
+```bash
+flyctl volumes create raw_api_queue_data --app ytsearch-api-raw-production \
+  --region sjc --size 1
+flyctl secrets set --app ytsearch-api-raw-production \
+  RAW_SEARCH_API_KEY="$RAW_SEARCH_API_KEY" \
+  YTSEARCH_INDEX_QUEUE_TOKEN="$YTSEARCH_INDEX_QUEUE_TOKEN"
+flyctl deploy --config fly.raw-api.toml --ha=false
+```
+
+Copy every retained legacy JSONL row before changing the Worker queue origin.
+Compare IDs and statuses on both APIs; do not rely only on row counts.
+
+## 3. Indexer
+
+Stage the Raw URL/admin key plus optional YouTube and cookie inputs, then create
+exactly one on-demand Machine:
+
+```bash
+scripts/fly-set-indexer-secrets.sh
+ON_DEMAND=1 scripts/fly-run-queue-indexer.sh
 scripts/check-queue-indexers.sh
-scripts/fly-run-queue-indexers.sh
 ```
 
-The public API remains warm. Typesense follows the scheduled availability
-policy described in `docs/staging-architecture.md`. The indexer uses
-conservative single-writer concurrency because indexing and public search share
-one engine.
+The configured Machine must have `QUEUE_TARGET_BACKEND=raw`, restart policy
+`no`, and a persistent transcript cache. A Cloudflare Queue message wakes it;
+the API JSONL queue remains authoritative.
 
-## Cloudflare Pages
+## 4. Cloudflare Worker
 
-The browser build needs only public values:
-
-```env
-VITE_API_BASE_URL=https://api.example.com
-VITE_INDEX_QUEUE_API_BASE_URL=https://api.example.com
-VITE_POSTHOG_KEY=
-VITE_POSTHOG_HOST=https://us.i.posthog.com
-```
-
-The public Worker only serves `PUBLIC_APP_ORIGIN` (configured as
-`https://search.pronsh.dev`) and localhost development hosts. The Rust API CORS
-allowlist is controlled by comma-separated `YTSEARCH_ALLOWED_ORIGINS` and also
-always permits `localhost`, `127.0.0.1`, and `::1` for local development. Do not
-add Pages preview or `workers.dev` origins to production.
-
-Deploy the production branch:
+`wrangler.jsonc` sends both search and queue routes to
+`ytsearch-api-raw-production`, controls the one Raw engine Machine, and resolves
+the one Raw indexer by its environment tag.
 
 ```bash
+bun run check:precommit
 scripts/cloudflare-worker-deploy.sh
 ```
 
-The committed Worker configuration starts in observation mode:
+The Worker enforces the Pacific search window. `observe` logs desired lifecycle
+changes without starting/stopping Machines; `enforce` is production mode.
 
-```json
-"SEARCH_SCHEDULE_MODE": "observe"
-```
-
-Observation mode neither blocks search nor starts/stops Fly Machines. Before
-changing it to `enforce`:
-
-1. Observe at least 48 hours of `typesense_schedule_observed` events.
-2. Confirm `FLY_TYPESENSE_MACHINE_ID` is the production Machine, not a
-   benchmark Machine.
-3. Exercise start, health, and graceful stop against an isolated Machine.
-4. Confirm the production node is healthy before noon for one scheduled cycle.
-5. Deploy `fly.typesense.toml` with automatic starts disabled.
-6. Change the Worker mode to `enforce` and deploy it.
-7. Observe two complete prewarm/open/stop cycles.
-
-Emergency rollback:
-
-```bash
-flyctl machine start MACHINE_ID --app ytsearch-typesense-staging
-```
-
-Then restore `auto_start_machines=true`, `min_machines_running=1`, change the
-Worker to observation mode, and redeploy both configurations.
-
-Never expose Typesense admin keys, queue tokens, YouTube keys, cookies, or
-Axiom tokens in `VITE_*` variables.
-
-## Checks
+## Cutover gates
 
 ```bash
 scripts/check-frontend-backends.sh
 scripts/check-staging-machines.sh
 scripts/check-queue-indexers.sh
-curl -fsS https://ytsearch-typesense-staging.fly.dev/health
-curl -fsS https://search.pronsh.dev/api/availability | jq .
+scripts/check-raw-search-engine.sh
+bun run perf:bundle
 ```
+
+Also verify in a clean browser:
+
+- global `blackhole`;
+- `blackhole` scoped to Veritasium and Vsauce;
+- the Cursor typo regression;
+- all engagement/date sorts;
+- exact totals and “show more” disappearance;
+- one approved creator request through publication and engine restart;
+- initial JavaScript no greater than 30 KB gzip.
+
+Run a bounded concurrent search load while publishing and require zero errors.
+
+## Retirement and rollback
+
+Only after every gate passes, stop the legacy writer/API/engine, mark the exact
+Machines with `scripts/deprecate-typesense-fly.sh`, observe a bounded rollback
+window, and destroy the resources listed in the retirement ledger.
+
+Before destruction, rollback is a Worker configuration redeploy plus a restart
+of the retained legacy engine/API. After destruction, rollback is the previous
+verified Raw generation selected through the atomic manifest.
+
+## Secret rules
+
+- `RAW_SEARCH_API_KEY`: Raw engine and Rust API only.
+- `RAW_SEARCH_ADMIN_API_KEY`: Raw engine and trusted indexers only.
+- `YTSEARCH_INDEX_QUEUE_TOKEN`: Rust API, indexer, and operator tools only.
+- `FLYIO_TOKEN`: Cloudflare Worker and authorized operator environment only.
+- `YOUTUBE_API_KEY` and cookie files: indexer only.
+- Axiom ingest and query keys remain separate.

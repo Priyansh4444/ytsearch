@@ -46,11 +46,12 @@ the final irreversible stage.
 
 Current Fly list pricing for `sjc` is $0.1027/hour for the Raw engine and
 $0.0053/hour for the API. At the enforced 12-hour daily search window, compute
-is approximately $36.97 + $3.81 = $40.78 per 30 days. A 20 GB Fly Volume costs
-$3/month at $0.15/GB-month, producing an expected mutable-stack baseline of
-about $43.78/month before bandwidth, snapshot bytes above the included tier,
+is approximately $36.97 + $3.81 = $40.78 per 30 days. The 20 GB engine volume
+costs $3/month and the 1 GB API queue volume costs $0.15/month at
+$0.15/GB-month, producing an expected mutable-stack baseline of about
+$43.93/month before bandwidth, snapshot bytes above the included tier,
 stopped-rootfs bytes, and Cloudflare usage. Always-on compute would instead be
-approximately $80.73/month including that volume.
+approximately $80.88/month including both volumes.
 
 ## Design
 

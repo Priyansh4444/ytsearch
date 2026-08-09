@@ -1,94 +1,85 @@
-# Disaster Recovery
+# Disaster recovery
 
-Last verified: 2026-07-15.
+Last updated: 2026-08-09.
 
-## Recovery Layers
+## Recovery assets
 
-Production uses two independent recovery layers:
+Keep independent copies of:
 
-1. Fly takes daily encrypted snapshots of the Typesense and queue volumes. Both
-   critical volumes retain 30 days, and an on-demand snapshot was scheduled on
-   2026-07-15.
-2. `scripts/backup-typesense.sh` exports provider-neutral JSONL archives. These
-   archives can rebuild the collections with `scripts/restore-typesense.sh`, so
-   recovery does not depend on Fly's volume format.
+1. the immutable base transcript/channel gzip archives;
+2. the Raw 20 GB mutable volume, including SQLite WAL and generation manifests;
+3. the API 1 GB queue volume;
+4. the indexer transcript-cache volume;
+5. checked-in source/configuration at the deployed commit.
 
-Fly snapshots protect against a Machine or volume-host failure. JSONL exports
-must be copied off Fly to protect against account, provider, or regional loss.
+Fly volume snapshots protect against Machine and volume-host failure. Copy
+checksummed base archives and periodic queue/mutation exports to private
+off-provider object storage to cover account, provider, and regional loss.
 
-## Create and Verify an Export
+## Snapshot inventory
 
-Do not export the full collection from the serving Typesense process. A live
-test on 2026-07-15 pushed a health-check search from 99 ms to 5.7 seconds and
-was aborted. Restore the newest Fly snapshot into an isolated Typesense Machine
-first, then point the export command at that instance.
+Resolve live IDs instead of copying IDs from old reports:
 
-```sh
-TYPESENSE_BACKUP_API_URL=http://127.0.0.1:18108 \
-TYPESENSE_BACKUP_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
-BACKUP_ROOT=.search-experiment/backups \
-scripts/backup-typesense.sh
-cd backups/<timestamp>
-sha256sum -c SHA256SUMS
+```bash
+flyctl volumes list --app ytsearch-raw-production
+flyctl volumes list --app ytsearch-api-raw-production
+flyctl volumes list --app ytsearch-indexer-raw-production
 ```
 
-The dedicated backup variables intentionally take precedence over production
-defaults loaded from `.env`. The local URL must be a tunnel to an isolated
-snapshot clone with no public service routes. The command refuses the known
-serving Typesense URL by default and never writes the key into the archive.
-The export contains `youtube_transcript_chunks` and `youtube_youtubers` as
-compressed JSONL plus checksum and document-count manifests. Typesense's
-native gzip response is retained directly so a full export does not send raw
-JSONL over the snapshot tunnel or recompress it locally.
+List snapshots with:
 
-Copy the completed timestamp directory to independent object storage. Keep at
-least seven daily and three monthly copies. Do not expose the bucket publicly.
-
-Cloudflare R2 is the intended target because its Standard storage free tier
-currently includes 10 GB-month and egress is free. R2 is not yet enabled on the
-Cloudflare account; Wrangler currently returns API error `10042`. Enable R2 in
-the dashboard once, create a private `ytsearch-backups` bucket, then upload each
-completed backup directory. Pricing and limits can change, so verify the
-[current R2 pricing](https://developers.cloudflare.com/r2/pricing/) first.
-
-## Restore Drill
-
-Create an empty isolated Typesense instance with the same collection schemas.
-Never test a restore against production. Then run:
-
-```sh
-TYPESENSE_SELFHOST_API_URL=http://127.0.0.1:8108 \
-TYPESENSE_SELFHOST_API_KEY='<isolated-admin-key>' \
-scripts/restore-typesense.sh backups/<timestamp>
+```bash
+flyctl volumes snapshots list VOLUME_ID --app APP_NAME
 ```
 
-After import, verify:
+Never restore over the only production copy. Create a new isolated volume and
+Machine first.
 
-- both collection document counts match `COUNTS.tsv`;
-- `scripts/check-indexed-channel-status.sh` reports expected creator counts;
-- the fixed search suite returns stable video and moment totals;
-- a browser search opens the expected timestamp.
+## Isolated restore drill
 
-Run this drill quarterly. An untested archive is not a reliable backup.
+1. Restore the Raw mutable snapshot and the exact base archives into an isolated
+   app with no public routes.
+2. Start `serve-mutable` with new temporary public/admin keys.
+3. Require health/readiness success, active-generation checksum validation, and
+   no failed/pending recovery operation.
+4. Compare document, video, and channel counts with the recorded manifest.
+5. Run global/channel `blackhole`, typo, quoted phrase, negative term,
+   pagination, engagement, and date-sort cases.
+6. Apply an idempotent test-video replacement, publish, and verify visibility.
+7. Restart the Machine and repeat the search and operation-status checks.
+8. Delete the test video, publish, restart, and verify absence.
+9. Restore the queue snapshot separately and compare every request ID/status,
+   not only the number of rows.
 
-## Fly Snapshot Restore
+Run the drill quarterly and after a schema/publication change. An archive that
+has not passed open, mutation, publication, and restart tests is not a recovery
+asset.
 
-Fly automatically takes daily snapshots. The current volume IDs are:
+## Failure handling
 
-- Typesense: `vol_v8e6yy17jo63nplv`
-- API queue: `vol_vwnydd578odzzo8v`
+- Machine crash: restart on the same volume; Raw opens the manifest-selected
+  generation and resumes pending publication.
+- Candidate corruption or partial build: keep serving the previous verified
+  generation; remove only the failed candidate after evidence is captured.
+- Mutable-volume loss: restore the latest snapshot, then replay independently
+  retained mutation operations newer than the snapshot.
+- Queue-volume loss: restore its snapshot, reconcile request IDs against
+  published channel/video state, then start the single writer.
+- Base archive loss: restore the checksummed off-provider copy before attempting
+  another compaction.
+- Region/provider loss: provision all three apps in an isolated replacement
+  region, pass the full cutover gate, then change the Worker origin.
 
-List snapshots with `fly volumes snapshots list <volume-id> --app <app>`. Restore
-into a new volume or Machine first; do not overwrite the only production copy.
-Fly documents the current commands in its
-[snapshot guide](https://fly.io/docs/volumes/snapshots/).
+## Objectives
 
-## Recovery Objectives
+- Machine crash: no acknowledged-write loss; recovery within one restart.
+- Volume-host loss: recovery-point objective under 24 hours until more frequent
+  snapshots/exports are configured.
+- Queue loss: no request is acknowledged complete until its Raw operation and
+  resulting published generation are verifiable.
+- Search recovery: the previous verified generation remains the immediate
+  rollback target.
 
-- Machine crash: automatic restart, no data restore expected.
-- Volume-host loss: restore the newest Fly snapshot; recovery-point objective is
-  under 24 hours.
-- Fly account or regional loss: restore the newest off-provider JSONL export;
-  recovery-point objective is under 24 hours after daily uploads are automated.
-- Lost queue entries: restore the 1 GB queue-volume snapshot, then reconcile
-  indexed/public creator counts before restarting the single writer.
+Cloudflare R2 is the intended private off-provider target once enabled. Verify
+current [R2 pricing](https://developers.cloudflare.com/r2/pricing/) and enable
+retention/lifecycle rules before relying on it.
