@@ -291,57 +291,6 @@ struct DocMatch {
     score: f32,
 }
 
-impl DocMatch {
-    const TEXT_MATCH_FLAG: u32 = 1 << 31;
-    const EXACT_MASK_SHIFT: u32 = 27;
-    const EXACT_MASK_BITS: u32 = 0b1111 << Self::EXACT_MASK_SHIFT;
-    const DOCUMENT_MASK: u32 = (1 << Self::EXACT_MASK_SHIFT) - 1;
-
-    fn new(document: u32, score: f32, matches_text: bool) -> Self {
-        Self::with_exact_mask(document, score, matches_text, 1)
-    }
-
-    fn with_exact_mask(document: u32, score: f32, matches_text: bool, exact_mask: u8) -> Self {
-        debug_assert_eq!(document & !Self::DOCUMENT_MASK, 0);
-        Self {
-            document_with_flags: document
-                | (u32::from(exact_mask & 0b1111) << Self::EXACT_MASK_SHIFT)
-                | (u32::from(matches_text) * Self::TEXT_MATCH_FLAG),
-            score,
-        }
-    }
-
-    fn document(self) -> u32 {
-        self.document_with_flags & Self::DOCUMENT_MASK
-    }
-
-    fn matches_text(self) -> bool {
-        self.document_with_flags & Self::TEXT_MATCH_FLAG != 0
-    }
-
-    fn set_matches_text(&mut self, matches_text: bool) {
-        self.document_with_flags = self.document()
-            | (self.document_with_flags & Self::EXACT_MASK_BITS)
-            | (u32::from(matches_text) * Self::TEXT_MATCH_FLAG);
-    }
-
-    fn exact_mask(self) -> u8 {
-        ((self.document_with_flags & Self::EXACT_MASK_BITS) >> Self::EXACT_MASK_SHIFT) as u8
-    }
-
-    fn exact_tokens(self) -> u8 {
-        self.exact_mask().count_ones() as u8
-    }
-
-    fn set_exact_mask(&mut self, exact_mask: u8) {
-        self.document_with_flags = self.document()
-            | (self.document_with_flags & Self::TEXT_MATCH_FLAG)
-            | (u32::from(exact_mask & 0b1111) << Self::EXACT_MASK_SHIFT);
-    }
-}
-
-const _: () = assert!(DocMatch::DOCUMENT_MASK >= 100_000_000);
-
 struct VideoMatches {
     video: u32,
     score: f32,
