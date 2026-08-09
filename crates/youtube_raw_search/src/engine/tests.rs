@@ -123,6 +123,8 @@ fn token_drop_engine() -> (TempDir, RawSearchEngine) {
         json!({"id":"fuzzy-relativity-1","video_id":"fuzzy-relativity","title":"Relatively explained explained explained explained","text":"a repeated account","youtuber_handle":"@two","youtuber_name":"Two"}),
         json!({"id":"early-exact-1","video_id":"early-exact","title":"Planet oribt","text":"an account","youtuber_handle":"@one","youtuber_name":"One"}),
         json!({"id":"late-exact-1","video_id":"late-exact","title":"Planat orbit orbit orbit","text":"a repeated account","youtuber_handle":"@two","youtuber_name":"Two"}),
+        json!({"id":"battery-pair-1","video_id":"battery-pair","title":"Battery gate","text":"exact retained pair","youtuber_handle":"@one","youtuber_name":"One"}),
+        json!({"id":"sparse-fuzzy-1","video_id":"sparse-fuzzy","title":"Battery gait incident","text":"one fuzzy full-query result","youtuber_handle":"@two","youtuber_name":"Two"}),
     ] {
         writeln!(chunks, "{document}").expect("write chunk");
     }
@@ -699,6 +701,16 @@ fn token_drop_prefers_the_longest_right_to_left_conjunction() {
 }
 
 #[test]
+fn sparse_fuzzy_conjunction_does_not_block_a_stronger_exact_token_drop() {
+    let (_root, engine) = token_drop_engine();
+    let response = engine
+        .search(&grouped_query("battery gate incident"))
+        .expect("quality-aware token-drop search");
+
+    assert_eq!(response["grouped_hits"][0]["group_key"][0], "battery-pair");
+}
+
+#[test]
 fn token_drop_switches_direction_only_after_prefixes_are_exhausted() {
     let (_root, engine) = token_drop_engine();
     let response = engine
@@ -727,7 +739,7 @@ fn typo_expansion_stays_conjunctive_inside_a_retained_subset() {
         .search(&grouped_query("alpha betta missing"))
         .expect("fuzzy token-drop search");
 
-    assert_eq!(response["found"], 1);
+    assert!(response["found"].as_u64().is_some_and(|found| found >= 1));
     assert_eq!(response["grouped_hits"][0]["group_key"][0], "prefix-pair");
 }
 

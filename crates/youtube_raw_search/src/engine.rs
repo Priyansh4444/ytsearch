@@ -1065,7 +1065,13 @@ impl RawSearchEngine {
                 return Ok(Some((matches, highlight_terms)));
             }
             if typo_distance == maximum_distance {
-                return if self.reaches_result_threshold(params, &matches, DROP_RESULT_THRESHOLD)? {
+                let tracked_query_tokens = terms.len().min(4) as u8;
+                let has_complete_exact_match = matches
+                    .iter()
+                    .any(|candidate| candidate.exact_tokens() >= tracked_query_tokens);
+                let has_sparse_result =
+                    self.reaches_result_threshold(params, &matches, DROP_RESULT_THRESHOLD)?;
+                return if has_complete_exact_match && has_sparse_result {
                     self.apply_exact_proximity(terms, fields, &mut matches)?;
                     Ok(Some((matches, highlight_terms)))
                 } else {
