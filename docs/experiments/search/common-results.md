@@ -64,6 +64,9 @@ comparison: the Raw generation contains 8.14 million documents while the
 available Typesense restore contains 7.16 million. They demonstrate a large
 margin on this host, but the production decision still requires matched
 snapshots, concurrent load, and tail-latency gates.
+The temporary Typesense comparison machine and its dedicated 10 GB clone
+volume were destroyed after the measurements were captured; the production
+Typesense machine was not changed.
 
 The first full-snapshot differential contains seven real cases. Mean ordered
 overlap@10 is 7.71, and top-one agreement is 4/7. A sparse fuzzy fallback bug
