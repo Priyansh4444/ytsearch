@@ -106,6 +106,21 @@ directory and switch the process only after `RawSearchEngine::open` validates
 all files. The current binary reads schema v5 as a non-phrase rollback and
 schema v6 for complete positions; quoted queries fail closed on schema v5.
 
+For a full snapshot, keep the provider-neutral backup compressed and stream it
+through a FIFO so the multi-gigabyte JSONL corpus is never duplicated on disk:
+
+```sh
+scripts/build-raw-generation-from-backup.sh \
+  .search-experiment/backups/<timestamp> \
+  .search-experiment/raw-index-<timestamp>
+```
+
+The wrapper verifies backup checksums, compares document/channel counts, and
+records elapsed time and sampled peak RSS for the release binary. It only
+builds a versioned candidate; activation remains a separate,
+rollback-preserving operation after the search contract and resource gates
+pass.
+
 ## Deployment and rollback
 
 The isolated Fly app uses [fly.raw-search-experiment.toml](../../../fly.raw-search-experiment.toml),
