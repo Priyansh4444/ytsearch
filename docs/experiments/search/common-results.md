@@ -20,6 +20,71 @@ Tantivy was retired after this comparison. Its source is preserved on
 `archive/tantivy-experiment` at `3aa3f55`; its only Fly machine was destroyed.
 Raw is the sole active replacement experiment.
 
+## Full-corpus Raw rollout (2026-08-09)
+
+The isolated Raw frontend now uses a schema-v6 generation built from the full
+available transcript export. This is an experimental deployment, not a
+production cutover.
+
+| Measurement | Full Raw result |
+| --- | ---: |
+| Transcript documents | 8,142,650 |
+| Distinct videos | 32,822 |
+| Creator channels | 61 |
+| Lexicon terms | 293,152 |
+| Index size | 1,444,907,196 bytes |
+| Release build time | 88.99 s |
+| Builder peak RSS | 2,473,776 KiB (about 2.36 GiB) |
+| Warm search RSS | 363,622,400 bytes (about 347 MiB) |
+| Fly allocation | 512 MiB, one shared vCPU, `sjc` |
+
+The engagement enrichment streamed all 8,142,650 input documents and resolved
+metadata for 32,821 of 32,822 requested videos. One unavailable video remains
+explicitly recorded rather than silently receiving fabricated metrics. The
+850,118,690-byte gzip artifact passed gzip integrity validation and has SHA-256
+`ff45cca577d217e0971cbaeab4de70e10ecd6c0d39073a51c74c4a58cb8cd4e0`.
+
+The full contract passes authentication, aliases, creator scoping, channel
+search, typo recovery, pagination, date ordering, and views/likes/comments/
+combined-engagement ordering. The fixed `blackhole` checks found 317 videos
+globally, 7 for Veritasium, and 15 for Vsauce. `blackhloe`, `blakhole`, and
+`blackhle` recovered 272, 273, and 272 videos respectively.
+
+### Full-snapshot latency and relevance sample
+
+The direct-engine latency run used nine queries with 15 warm sequential
+requests per query. Raw's median of per-query medians was 13.192 ms versus
+215.859 ms for the restored Typesense snapshot, a 16.36x ratio of those two
+summary values. The geometric mean per-query speedup was 15.46x, with every
+query between 9.70x and 25.73x. Raw consumed 230 Linux CPU ticks and
+2.231 seconds of measured internal search work for the 135 requests.
+
+These latency results are directional rather than a perfect matched-corpus
+comparison: the Raw generation contains 8.14 million documents while the
+available Typesense restore contains 7.16 million. They demonstrate a large
+margin on this host, but the production decision still requires matched
+snapshots, concurrent load, and tail-latency gates.
+
+The first full-snapshot differential contains seven real cases. Mean ordered
+overlap@10 is 7.71, and top-one agreement is 4/7. A sparse fuzzy fallback bug
+was discovered on `battery gate incident`: Raw initially returned two weak
+matches while Typesense returned fourteen. Requiring every tracked query token
+to match exactly before accepting the full-query fuzzy set caused Raw to use
+ordered token dropping instead; the corrected query returns fifteen videos
+with 9/10 overlap. This is useful evidence, but seven cases do not satisfy the
+planned 300-query human-judged oracle.
+
+Public rollout checks passed through both layers:
+
+- Raw engine: <https://ytsearch-raw-experiment.fly.dev/health>
+- Raw API: <https://ytsearch-api-raw-experiment.fly.dev/api/youtubers>
+- Experimental frontend: <https://search.experimental.pronsh.dev>
+
+The first cold boot of the 1.45 GB container generation spent roughly three
+minutes hashing and validating every artifact before binding the port. Warm
+suspend/resume is faster, but index generations need volume or object-storage
+distribution before code-only deploys and cold starts are operationally sound.
+
 ## Latest Raw validation
 
 The follow-up [Raw validation](raw-validation.md) uses 47,860 chunks from 787

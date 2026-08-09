@@ -17,6 +17,8 @@ Raw can replace Typesense as the canonical search index.
 - [x] Rank with text relevance plus likes, views, comments, and recency.
 - [x] Keep the experimental browser entry bundle below the 30 KB gzip limit.
 - [x] Preserve the retired Tantivy experiment and results outside production.
+- [x] Build, checksum, contract-test, and deploy the full 8,142,650-document,
+  32,822-video, 61-channel schema-v6 snapshot to the isolated Raw experiment.
 
 ### P0: relevance and compatibility
 
@@ -39,8 +41,11 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Add safe phrase-aware, configurable multi-snippet highlights and match metadata.
 - [x] Fail closed on every unknown filter, sort, facet, operator, and malformed value in the active application contract.
 - [ ] Add a versioned 300-query human-judged relevance oracle.
-- [ ] Cover global and channel-specific `blackhole` searches for Veritasium and Vsauce.
+- [x] Cover global and channel-specific `blackhole` searches for Veritasium and Vsauce.
 - [ ] Differential-test the complete application contract against Typesense.
+  - [x] Run the first full-snapshot seven-case ordered top-10 differential;
+    mean overlap is 7.71/10 and top-one agreement is 4/7.
+  - [ ] Expand the differential to the versioned 300-query human-judged oracle.
 
 ### P1: canonical write path
 
@@ -78,16 +83,20 @@ Raw can replace Typesense as the canonical search index.
 
 - [x] Schema v6 non-phrase p95 is no more than 10% slower than schema v5.
 - [ ] Raw p95 latency and CPU/query are each at most 75% of Typesense.
-- [ ] Raw steady-state RSS is at most 60% of Typesense.
-- [ ] Full-snapshot compaction peak RSS stays below 512 MiB.
+- [x] Raw steady-state RSS is at most 60% of Typesense. The full Raw snapshot
+  warmed to 347 MiB versus about 3.9 GiB for the restored Typesense clone.
+- [ ] Full-snapshot compaction peak RSS stays below 512 MiB. The current full
+  schema-v6 build peaks at about 2.36 GiB; replace retained builder state with
+  streaming runs before treating the writer as production-ready.
 - [x] Complete-position artifact growth is measured and documented.
 - [x] Benchmarks name corpus, hardware, build mode, concurrency, and cache state.
 - [x] Every optimization has a correctness invariant and rollback condition.
-- [ ] Experimental browser JavaScript remains at or below 30 KB gzip.
+- [x] Experimental browser JavaScript remains at or below 30 KB gzip (24,340
+  bytes for the initial route after the full-corpus deployment).
 
 ### Documentation and evidence
 
-- [ ] Keep common experiment outputs in one versioned Markdown report.
+- [x] Keep common experiment outputs in one versioned Markdown report.
 - [ ] Document schema layouts, scoring, visibility, recovery, and rollback. (Schema-v6 layout and rollback are recorded; atomic visibility/recovery remain open.)
 - [x] Record debug/release/Clippy/test/benchmark/RSS/artifact-size results.
 - [ ] Update this ledger in the same commit that completes each item.
@@ -120,6 +129,8 @@ Raw can replace Typesense as the canonical search index.
 ## Product/UI Behavior
 
 - [x] Video cards show three moments initially and reveal additional returned moments incrementally; useful/not-useful feedback is attached to each moment instead of the whole video.
+- [x] Hide “Show all moments” when the result has no fourth moment, including
+  the exact three-hit boundary case.
 - [x] Verify browser Back and toolbar Back clear the submitted result surface after a channel-scoped search on the deployed frontend. Playwright verified both paths leave zero result cards and an empty query.
 - [x] Verify the global "Currently indexing @handle" toast appears for five seconds while a queue worker is actively adding that channel's videos. Browser-verified on production with the `@marimo-team` name and avatar.
 - [x] Results header shows total matching moments across the full result set, not just moments returned on the current page.
@@ -219,6 +230,8 @@ Raw can replace Typesense as the canonical search index.
 ## Live Frontend Verification
 
 - [x] `https://search.pronsh.dev` serves the Cloudflare Worker frontend and proxies the active Typesense Fly API.
+- [x] `https://search.experimental.pronsh.dev` serves the Raw frontend and the
+  deployed API exposes all 61 creators from the full snapshot.
 - [x] Production shows total moments/videos, time to first result, and separated Videos/Shorts.
 - [x] Frontend indexed/public counts update correctly after queue/indexing runs. Browser/API verified with `@marimo-team`.
 - [x] Frontend shows all the channels indexed and not only a subset. API pagination and production frontend currently expose all 41 searchable channels; `@` suggestions use that complete list.
@@ -233,6 +246,8 @@ Raw can replace Typesense as the canonical search index.
 - [x] `bun run frontend:check`
 - [x] `sh -n scripts/cloud-index-queue-entrypoint.sh scripts/fly-run-queue-indexer.sh`
 - [x] `scripts/check-frontend-backends.sh`
+- [x] Deployment guard follows Vite lazy chunks and checks both production and
+  experimental same-origin API paths.
 - [x] `scripts/check-staging-machines.sh`
 - [x] `scripts/check-indexed-channel-status.sh @vsauce @thePrimagen @t3dotgg`
 
