@@ -78,11 +78,19 @@ target/release/youtube-raw-search build \
   "$CHUNKS_PIPE" "$CHANNELS_JSONL" "$OUTPUT_DIR" \
   >"$OUTPUT_DIR/build-report.json" &
 build_pid="$!"
-peak_rss_kb=0
+peak_builder_rss_kb=0
+peak_decompressor_rss_kb=0
+peak_total_rss_kb=0
 while kill -0 "$build_pid" 2>/dev/null; do
-  current_rss_kb="$(awk '$1 == "VmRSS:" { print $2 }' "/proc/$build_pid/status" 2>/dev/null || true)"
-  if [[ "$current_rss_kb" =~ ^[0-9]+$ && "$current_rss_kb" -gt "$peak_rss_kb" ]]; then
-    peak_rss_kb="$current_rss_kb"
+  builder_rss_kb="$(awk '$1 == "VmRSS:" { print $2 }' "/proc/$build_pid/status" 2>/dev/null || true)"
+  decompressor_rss_kb="$(awk '$1 == "VmRSS:" { print $2 }' "/proc/$producer_pid/status" 2>/dev/null || true)"
+  [[ "$builder_rss_kb" =~ ^[0-9]+$ ]] || builder_rss_kb=0
+  [[ "$decompressor_rss_kb" =~ ^[0-9]+$ ]] || decompressor_rss_kb=0
+  ((builder_rss_kb <= peak_builder_rss_kb)) || peak_builder_rss_kb="$builder_rss_kb"
+  ((decompressor_rss_kb <= peak_decompressor_rss_kb)) || peak_decompressor_rss_kb="$decompressor_rss_kb"
+  total_rss_kb="$((builder_rss_kb + decompressor_rss_kb))"
+  if ((total_rss_kb > peak_total_rss_kb)); then
+    peak_total_rss_kb="$total_rss_kb"
   fi
   sleep 0.1
 done
@@ -101,8 +109,10 @@ fi
 elapsed_ms="$((($(date +%s%N) - started_ns) / 1000000))"
 jq -n \
   --argjson elapsed_ms "$elapsed_ms" \
-  --argjson peak_rss_kb "$peak_rss_kb" \
-  '{elapsed_ms:$elapsed_ms,peak_rss_kb:$peak_rss_kb}' \
+  --argjson peak_rss_kb "$peak_total_rss_kb" \
+  --argjson peak_builder_rss_kb "$peak_builder_rss_kb" \
+  --argjson peak_decompressor_rss_kb "$peak_decompressor_rss_kb" \
+  '{elapsed_ms:$elapsed_ms,peak_rss_kb:$peak_rss_kb,peak_builder_rss_kb:$peak_builder_rss_kb,peak_decompressor_rss_kb:$peak_decompressor_rss_kb}' \
   >"$OUTPUT_DIR/build-resources.json"
 jq . "$OUTPUT_DIR/build-report.json"
 
