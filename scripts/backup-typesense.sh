@@ -22,16 +22,26 @@ if printf '%s' "$API_URL" | grep -q 'ytsearch-typesense-staging.fly.dev' && [ "$
   exit 1
 fi
 
+# Keep the admin key out of process listings and diagnostic command output.
+AUTH_HEADER_FILE="$(mktemp)"
+chmod 600 "$AUTH_HEADER_FILE"
+printf 'X-TYPESENSE-API-KEY: %s\n' "$API_KEY" >"$AUTH_HEADER_FILE"
+cleanup() {
+  rm -f "$AUTH_HEADER_FILE"
+}
+trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
+
 mkdir -p "$BACKUP_DIR"
 : >"$BACKUP_DIR/COUNTS.tsv"
 for collection in $COLLECTIONS; do
   curl -fsS --retry 3 --retry-all-errors \
-    -H "X-TYPESENSE-API-KEY: $API_KEY" \
+    -H "@$AUTH_HEADER_FILE" \
     "${API_URL%/}/collections/$collection" |
     jq 'del(.created_at, .num_documents)' >"$BACKUP_DIR/$collection.schema.json"
   output="$BACKUP_DIR/$collection.jsonl.gz"
   curl -fsS --retry 3 --retry-all-errors \
-    -H "X-TYPESENSE-API-KEY: $API_KEY" \
+    -H "@$AUTH_HEADER_FILE" \
     -H 'Accept-Encoding: gzip' \
     --output "$output" \
     "${API_URL%/}/collections/$collection/documents/export"
