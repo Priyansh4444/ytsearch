@@ -37,7 +37,7 @@ Raw can replace Typesense as the canonical search index.
   - [x] Add exact negative phrases with grouped-search semantics.
   - [ ] Finish Unicode normalization and numerical-token typo rules.
 - [ ] Add safe phrase-aware, configurable multi-snippet highlights and match metadata.
-- [ ] Fail closed on every unknown filter, sort, facet, operator, and malformed value.
+- [x] Fail closed on every unknown filter, sort, facet, operator, and malformed value in the active application contract.
 - [ ] Add a versioned 300-query human-judged relevance oracle.
 - [ ] Cover global and channel-specific `blackhole` searches for Veritasium and Vsauce.
 - [ ] Differential-test the complete application contract against Typesense.

@@ -32,6 +32,8 @@ window, rejected full-corpus pass, candidate-targeted fast path, and A/B gate.
 [negative-term-search.md](negative-term-search.md) records exact term and phrase
 exclusion, malformed-query rejection, grouped wildcard behavior, and the
 ordinary/cold-position performance gates.
+[request-validation.md](request-validation.md) records the fail-closed HTTP,
+transcript, channel, filter, pagination, projection, and cache contract.
 [engagement-ranking.md](engagement-ranking.md)
 records the views/likes/comments data path, bounded score, deployed benchmarks,
 and isolated frontend topology.

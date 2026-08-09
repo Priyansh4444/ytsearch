@@ -84,7 +84,7 @@ components such as `black + he`, and returns the same top result as
 | --- | --- | --- |
 | Phrase/proximity scoring | Partial | Schema v6 supports ordered quoted phrases, bounded slop, and a guarded 10-token same-field proximity window; the 300-query judged oracle remains open |
 | Exhaustive cost combinations | Deliberately bounded | The public query uses default non-exhaustive search |
-| Arbitrary filter language/faceting | Out of scope | The application uses creator/video equality filters only |
+| Arbitrary filter language/faceting | Out of scope | The application uses creator/video equality filters only; every other field/operator and all facet parameters fail closed |
 | Dynamic writes and replication | Out of scope | Raw is a read-only serving index built offline |
 | Locale tokenizers/stemming/synonyms/infix | Not configured | The active collection does not use them |
 

@@ -40,6 +40,24 @@ search() {
   curl "${args[@]}"
 }
 
+search_channel() {
+  local query="$1"
+  local output="$2"
+  local args=(
+    --fail --silent --show-error --get
+    "${RAW_URL%/}${CHANNEL_ROUTE}"
+    --data-urlencode "q=$query"
+    --data-urlencode 'query_by=name,handle'
+    --data-urlencode 'page=1'
+    --data-urlencode 'per_page=10'
+    --output "$output"
+  )
+  if [[ -n "$RAW_API_KEY" ]]; then
+    args+=(-H "X-TYPESENSE-API-KEY: $RAW_API_KEY")
+  fi
+  curl "${args[@]}"
+}
+
 TRANSCRIPT_ROUTE='/collections/youtube_transcript_chunks/documents/search'
 RAW_TRANSCRIPT_ROUTE='/raw/collections/youtube_transcript_chunks/documents/search'
 CHANNEL_ROUTE='/collections/youtube_youtubers/documents/search'
@@ -118,7 +136,7 @@ if jq -e '.found > 1' "$RAW_CHECK_TMP/global.json" >/dev/null; then
   [[ "$first_id" != "$second_id" ]]
 fi
 
-search "$CHANNEL_ROUTE" veritasium '' '' 0 10 "$RAW_CHECK_TMP/channel.json"
+search_channel veritasium "$RAW_CHECK_TMP/channel.json"
 jq -e '.found > 0 and any(.hits[].document.handle; ascii_downcase == "@veritasium")' \
   "$RAW_CHECK_TMP/channel.json" >/dev/null
 

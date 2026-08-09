@@ -21,6 +21,7 @@ use std::{
 
 const TRANSCRIPT_COLLECTION: &str = "youtube_transcript_chunks";
 const CHANNEL_COLLECTION: &str = "youtube_youtubers";
+const MAX_CACHE_TTL_SECONDS: u64 = 300;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -81,7 +82,7 @@ pub enum BackendError {
 pub trait SearchBackend: Send + Sync + 'static {
     fn name(&self) -> &'static str;
     fn search(&self, params: &SearchParams) -> Result<Value, BackendError>;
-    fn search_channels(&self, params: &SearchParams) -> Value;
+    fn search_channels(&self, params: &SearchParams) -> Result<Value, BackendError>;
     fn documents(&self) -> u64;
     fn index_bytes(&self) -> u64;
 }
@@ -201,6 +202,11 @@ async fn search(
 
     let started = Instant::now();
     state.metrics.searches.fetch_add(1, Ordering::Relaxed);
+    if let Err(error) = validate_cache_params(&params) {
+        state.metrics.errors.fetch_add(1, Ordering::Relaxed);
+        record_elapsed(&state, started);
+        return Err(ServerError::Backend(error));
+    }
     let cache_key = params.use_cache.unwrap_or(false).then(|| {
         format!(
             "{collection}:{}",
@@ -218,7 +224,7 @@ async fn search(
 
     let result = match collection.as_str() {
         TRANSCRIPT_COLLECTION => state.backend.search(&params),
-        CHANNEL_COLLECTION => Ok(state.backend.search_channels(&params)),
+        CHANNEL_COLLECTION => state.backend.search_channels(&params),
         _ => return Err(ServerError::NotFound(collection)),
     };
     record_elapsed(&state, started);
@@ -228,7 +234,7 @@ async fn search(
                 ServerError::Backend(BackendError::Internal(error.to_string()))
             })?);
             if let Some(key) = cache_key {
-                let ttl = params.cache_ttl.unwrap_or(60).clamp(1, 300);
+                let ttl = params.cache_ttl.unwrap_or(60);
                 if let Ok(mut cache) = state.cache.lock() {
                     cache.insert(key, body.clone(), ttl);
                 }
@@ -240,6 +246,23 @@ async fn search(
             Err(ServerError::Backend(error))
         }
     }
+}
+
+fn validate_cache_params(params: &SearchParams) -> Result<(), BackendError> {
+    let Some(ttl) = params.cache_ttl else {
+        return Ok(());
+    };
+    if params.use_cache != Some(true) {
+        return Err(BackendError::InvalidInput(
+            "cache_ttl requires use_cache=true".to_string(),
+        ));
+    }
+    if !(1..=MAX_CACHE_TTL_SECONDS).contains(&ttl) {
+        return Err(BackendError::InvalidInput(format!(
+            "cache_ttl must be between 1 and {MAX_CACHE_TTL_SECONDS} seconds"
+        )));
+    }
+    Ok(())
 }
 
 fn record_elapsed(state: &AppState, started: Instant) {
@@ -330,8 +353,10 @@ mod tests {
 
     #[test]
     fn unknown_search_parameters_fail_closed() {
-        let uri = "/?q=blackhole&unsupported=true".parse().expect("URI");
-        assert!(Query::<SearchParams>::try_from_uri(&uri).is_err());
+        for query in ["unsupported=true", "facet_by=video_id", "infix=always"] {
+            let uri = format!("/?q=blackhole&{query}").parse().expect("URI");
+            assert!(Query::<SearchParams>::try_from_uri(&uri).is_err());
+        }
     }
 
     #[test]
@@ -350,5 +375,21 @@ mod tests {
         assert_eq!(cache.entries.len(), 128);
         assert!(cache.get("0").is_none());
         assert!(cache.get("139").is_some());
+    }
+
+    #[test]
+    fn cache_parameters_fail_closed_instead_of_clamping() {
+        let mut params = SearchParams {
+            q: "blackhole".to_string(),
+            cache_ttl: Some(60),
+            ..SearchParams::default()
+        };
+        assert!(validate_cache_params(&params).is_err());
+        params.use_cache = Some(true);
+        assert!(validate_cache_params(&params).is_ok());
+        for ttl in [0, MAX_CACHE_TTL_SECONDS + 1] {
+            params.cache_ttl = Some(ttl);
+            assert!(validate_cache_params(&params).is_err());
+        }
     }
 }

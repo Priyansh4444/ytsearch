@@ -75,6 +75,13 @@ candidate across 900 searches each; mean/CPU rose 1.1%/1.4%. A separate
 300-search phrase workload measured 7.210 ms p95, 97 CPU ticks, and no errors,
 again without changing the index artifact.
 
+Fail-closed request validation now covers transcript and channel routes before
+cache lookup. The release contract script passed on the 47,860-chunk snapshot;
+explicit `facet_by`, invalid/unbound cache TTL, list filter, and channel-sort
+probes each returned HTTP 400. See
+[request-validation.md](request-validation.md) for the accepted parameter
+surface and malformed-value matrix.
+
 ## Full 1,956-video corpus
 
 | Measurement | Raw | Tantivy | Typesense |

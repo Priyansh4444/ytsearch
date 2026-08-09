@@ -1375,8 +1375,11 @@ impl SearchBackend for RawSearchEngine {
         })
     }
 
-    fn search_channels(&self, params: &SearchParams) -> Value {
-        RawSearchEngine::search_channels(self, params)
+    fn search_channels(&self, params: &SearchParams) -> std::result::Result<Value, BackendError> {
+        RawSearchEngine::search_channels(self, params).map_err(|error| match error {
+            Error::InvalidInput(message) => BackendError::InvalidInput(message),
+            error => BackendError::Internal(error.to_string()),
+        })
     }
 
     fn documents(&self) -> u64 {
@@ -2719,7 +2722,8 @@ impl RawSearchEngine {
         Ok(serde_json::from_slice(bytes)?)
     }
 
-    pub fn search_channels(&self, params: &SearchParams) -> Value {
+    pub fn search_channels(&self, params: &SearchParams) -> Result<Value> {
+        validate_channel_search_params(params)?;
         let query = params.q.trim().to_ascii_lowercase();
         let mut channels = self
             .inner
@@ -2750,7 +2754,7 @@ impl RawSearchEngine {
             .take(limit)
             .map(|document| json!({ "document": document }))
             .collect::<Vec<_>>();
-        json!({ "found": found, "out_of": found, "hits": hits })
+        Ok(json!({ "found": found, "out_of": found, "hits": hits }))
     }
 }
 
@@ -3331,16 +3335,7 @@ fn proximity_multiplier(window: PositionalWindow, tokens: usize, prioritize_posi
 }
 
 fn validate_search_params(params: &SearchParams) -> Result<()> {
-    let query = params.q.trim();
-    if query.is_empty() {
-        return Err(Error::InvalidInput("q cannot be empty".to_string()));
-    }
-    if params.q.len() > MAX_QUERY_BYTES {
-        return Err(Error::InvalidInput(format!(
-            "q exceeds {MAX_QUERY_BYTES} bytes"
-        )));
-    }
-
+    validate_query_and_window(params)?;
     query_fields(params.query_by.as_deref(), false)?;
     parse_filter(params.filter_by.as_deref())?;
     if let Some(group_by) = params.group_by.as_deref()
@@ -3355,24 +3350,13 @@ fn validate_search_params(params: &SearchParams) -> Result<()> {
             "group_limit must be at least 1".to_string(),
         ));
     }
-    for (name, value) in [
-        ("group_limit", params.group_limit),
-        ("per_page", params.per_page),
-        ("limit", params.limit),
-    ] {
-        if value.is_some_and(|value| value > MAX_PAGE_SIZE) {
-            return Err(Error::InvalidInput(format!(
-                "{name} cannot exceed {MAX_PAGE_SIZE}"
-            )));
-        }
-    }
-    if params.limit.is_some() && (params.page.is_some() || params.per_page.is_some()) {
-        return Err(Error::InvalidInput(
-            "limit/offset cannot be combined with page/per_page".to_string(),
-        ));
-    }
-    if params.offset.is_some() && params.limit.is_none() {
-        return Err(Error::InvalidInput("offset requires limit".to_string()));
+    if params
+        .group_limit
+        .is_some_and(|value| value > MAX_PAGE_SIZE)
+    {
+        return Err(Error::InvalidInput(format!(
+            "group_limit cannot exceed {MAX_PAGE_SIZE}"
+        )));
     }
     if let Some(sort_by) = params.sort_by.as_deref()
         && !matches!(
@@ -3479,14 +3463,97 @@ fn validate_search_params(params: &SearchParams) -> Result<()> {
     Ok(())
 }
 
+fn validate_query_and_window(params: &SearchParams) -> Result<()> {
+    let query = params.q.trim();
+    if query.is_empty() {
+        return Err(Error::InvalidInput("q cannot be empty".to_string()));
+    }
+    if params.q.len() > MAX_QUERY_BYTES {
+        return Err(Error::InvalidInput(format!(
+            "q exceeds {MAX_QUERY_BYTES} bytes"
+        )));
+    }
+
+    for (name, value) in [("per_page", params.per_page), ("limit", params.limit)] {
+        if value.is_some_and(|value| value > MAX_PAGE_SIZE) {
+            return Err(Error::InvalidInput(format!(
+                "{name} cannot exceed {MAX_PAGE_SIZE}"
+            )));
+        }
+    }
+    if params.limit.is_some() && (params.page.is_some() || params.per_page.is_some()) {
+        return Err(Error::InvalidInput(
+            "limit/offset cannot be combined with page/per_page".to_string(),
+        ));
+    }
+    if params.offset.is_some() && params.limit.is_none() {
+        return Err(Error::InvalidInput("offset requires limit".to_string()));
+    }
+    Ok(())
+}
+
+fn validate_channel_search_params(params: &SearchParams) -> Result<()> {
+    validate_query_and_window(params)?;
+    if params
+        .query_by
+        .as_deref()
+        .is_some_and(|fields| fields != "name,handle")
+    {
+        return Err(Error::InvalidInput(
+            "channel query_by must be name,handle".to_string(),
+        ));
+    }
+    for (name, present) in [
+        ("query_by_weights", params.query_by_weights.is_some()),
+        ("filter_by", params.filter_by.is_some()),
+        ("group_by", params.group_by.is_some()),
+        ("group_limit", params.group_limit.is_some()),
+        ("sort_by", params.sort_by.is_some()),
+        ("text_match_type", params.text_match_type.is_some()),
+        (
+            "prioritize_exact_match",
+            params.prioritize_exact_match.is_some(),
+        ),
+        (
+            "prioritize_token_position",
+            params.prioritize_token_position.is_some(),
+        ),
+        ("phrase_slop", params.phrase_slop.is_some()),
+        (
+            "typo_tokens_threshold",
+            params.typo_tokens_threshold.is_some(),
+        ),
+        (
+            "drop_tokens_threshold",
+            params.drop_tokens_threshold.is_some(),
+        ),
+        ("drop_tokens_mode", params.drop_tokens_mode.is_some()),
+        ("split_join_tokens", params.split_join_tokens.is_some()),
+        ("highlight_fields", params.highlight_fields.is_some()),
+        ("include_fields", params.include_fields.is_some()),
+    ] {
+        if present {
+            return Err(Error::InvalidInput(format!(
+                "unsupported channel search parameter: {name}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn query_fields(query_by: Option<&str>, prioritize_position: bool) -> Result<QueryFields> {
     let requested = query_by.unwrap_or("text,title");
     let mut text = false;
     let mut title = false;
     for field in requested.split(',').map(str::trim) {
         match field {
-            "text" => text = true,
-            "title" => title = true,
+            "text" if !text => text = true,
+            "title" if !title => title = true,
+            "text" | "title" => {
+                return Err(Error::InvalidInput(format!(
+                    "query_by contains duplicate field: {field}"
+                )));
+            }
             "" => {
                 return Err(Error::InvalidInput(
                     "query_by cannot contain an empty field".to_string(),
@@ -3551,12 +3618,42 @@ fn parse_filter(filter: Option<&str>) -> Result<Option<(&str, &str)>> {
     let (field, value) = filter
         .split_once(":=")
         .ok_or_else(|| Error::InvalidInput("filter_by must use an exact := filter".to_string()))?;
-    let value = value.trim().trim_matches('`');
     let field = field.trim();
     if !matches!(field, "video_id" | "youtuber_handle") {
         return Err(Error::InvalidInput(format!(
             "unsupported filter_by field: {field}"
         )));
+    }
+    let value = value.trim();
+    if value.contains(":=")
+        || value.contains("&&")
+        || value.contains("||")
+        || value.chars().any(|character| {
+            matches!(
+                character,
+                '[' | ']' | '(' | ')' | '{' | '}' | ',' | '<' | '>'
+            )
+        })
+    {
+        return Err(Error::InvalidInput(
+            "compound filter_by expressions are unsupported".to_string(),
+        ));
+    }
+    let value = match (value.strip_prefix('`'), value.strip_suffix('`')) {
+        (Some(without_prefix), Some(_)) => without_prefix
+            .strip_suffix('`')
+            .ok_or_else(|| Error::InvalidInput("filter_by has malformed backticks".to_string()))?,
+        (None, None) => value,
+        _ => {
+            return Err(Error::InvalidInput(
+                "filter_by has malformed backticks".to_string(),
+            ));
+        }
+    };
+    if value.contains('`') {
+        return Err(Error::InvalidInput(
+            "filter_by has malformed backticks".to_string(),
+        ));
     }
     if value.is_empty() {
         return Err(Error::InvalidInput(
@@ -4289,6 +4386,7 @@ mod tests {
         let (_root, engine) = test_engine();
         for (field, value, expected) in [
             ("query_by", "text,description", "unsupported query_by field"),
+            ("query_by", "text,text", "duplicate field"),
             (
                 "filter_by",
                 "published_at:=2026",
@@ -4316,6 +4414,26 @@ mod tests {
         let mut malformed_filter = grouped_query("search");
         malformed_filter.filter_by = Some("video_id:abc".to_string());
         assert!(engine.search(&malformed_filter).is_err());
+        for filter in [
+            "video_id:=abc && youtuber_handle:=@one",
+            "video_id:=[abc,def]",
+            "video_id:=abc:=def",
+            "video_id:=`abc",
+            "video_id:=abc`",
+        ] {
+            malformed_filter.filter_by = Some(filter.to_string());
+            assert!(
+                engine.search(&malformed_filter).is_err(),
+                "accepted {filter}"
+            );
+        }
+
+        let mut quoted_filter = grouped_query("*");
+        quoted_filter.filter_by = Some("video_id:=`a`".to_string());
+        assert_eq!(
+            engine.search(&quoted_filter).expect("quoted filter")["found"],
+            1
+        );
 
         let mut conflicting_window = grouped_query("search");
         conflicting_window.per_page = Some(10);
@@ -4662,23 +4780,35 @@ mod tests {
             1
         );
 
-        let channels = engine.search_channels(&SearchParams {
-            q: "sauce".to_string(),
-            query_by: None,
-            filter_by: None,
-            group_by: None,
-            group_limit: None,
-            per_page: Some(1),
-            page: Some(1),
-            offset: None,
-            limit: None,
-            sort_by: None,
-            use_cache: None,
-            cache_ttl: None,
-            ..SearchParams::default()
-        });
+        let channels = engine
+            .search_channels(&SearchParams {
+                q: "sauce".to_string(),
+                query_by: Some("name,handle".to_string()),
+                filter_by: None,
+                group_by: None,
+                group_limit: None,
+                per_page: Some(1),
+                page: Some(1),
+                offset: None,
+                limit: None,
+                sort_by: None,
+                use_cache: None,
+                cache_ttl: None,
+                ..SearchParams::default()
+            })
+            .expect("channel search");
         assert_eq!(channels["found"], 1);
         assert_eq!(channels["hits"][0]["document"]["handle"], "@vsauce");
+
+        let mut invalid_channel = SearchParams {
+            q: "sauce".to_string(),
+            query_by: Some("text,title".to_string()),
+            ..SearchParams::default()
+        };
+        assert!(engine.search_channels(&invalid_channel).is_err());
+        invalid_channel.query_by = Some("name,handle".to_string());
+        invalid_channel.sort_by = Some("name:asc".to_string());
+        assert!(engine.search_channels(&invalid_channel).is_err());
     }
 
     #[test]
