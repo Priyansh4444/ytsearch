@@ -34,7 +34,7 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Add quoted/negative terms, duplicate-token semantics, Unicode and numeric rules.
   - [x] Preserve exact duplicate-token semantics inside quoted phrases.
   - [x] Add exact token-start negative terms with pre-threshold exclusion.
-  - [ ] Add exact negative phrases with grouped-search semantics.
+  - [x] Add exact negative phrases with grouped-search semantics.
   - [ ] Finish Unicode normalization and numerical-token typo rules.
 - [ ] Add safe phrase-aware, configurable multi-snippet highlights and match metadata.
 - [ ] Fail closed on every unknown filter, sort, facet, operator, and malformed value.

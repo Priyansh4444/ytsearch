@@ -370,6 +370,17 @@ struct ParsedQuery {
     terms: Vec<String>,
     phrases: Vec<Vec<String>>,
     excluded_terms: Vec<String>,
+    excluded_phrases: Vec<Vec<String>>,
+}
+
+#[derive(Default)]
+struct QueryParser {
+    seen: HashSet<String>,
+    excluded_seen: HashSet<String>,
+    terms: Vec<String>,
+    phrases: Vec<Vec<String>>,
+    excluded_terms: Vec<String>,
+    excluded_phrases: Vec<Vec<String>>,
 }
 
 struct PhraseFieldMatches {
@@ -1390,7 +1401,8 @@ impl RawSearchEngine {
             params.query_by.as_deref(),
             params.prioritize_token_position.unwrap_or(true),
         )?;
-        let excluded_documents = self.excluded_documents(&parsed.excluded_terms, fields)?;
+        let excluded_documents =
+            self.excluded_documents(&parsed.excluded_terms, &parsed.excluded_phrases, fields)?;
         if params.q.trim() == "*" || parsed.terms.is_empty() {
             return self.search_all(params, &excluded_documents);
         }
@@ -1477,22 +1489,30 @@ impl RawSearchEngine {
             let targets = self.position_targets(&matches)?;
             let phrase_matches =
                 self.phrase_field_matches(phrase, fields, &targets, phrase_slop)?;
-            let mut retained = Vec::with_capacity(matches.len());
-            for candidate in matches {
-                let text_phrase = candidate.matches_text()
-                    && phrase_matches
-                        .documents
-                        .binary_search(&candidate.document())
-                        .is_ok();
-                let record = self.inner.metadata.document(candidate.document())?;
-                let title_phrase = phrase_matches.videos.binary_search(&record.video).is_ok();
-                if text_phrase || title_phrase {
-                    retained.push(candidate);
-                }
-            }
-            matches = retained;
+            matches = self.retain_position_phrase_matches(matches, &phrase_matches)?;
         }
         self.format_conjunctive(params, parsed.terms, matches)
+    }
+
+    fn retain_position_phrase_matches(
+        &self,
+        matches: Vec<DocMatch>,
+        phrase_matches: &PhraseFieldMatches,
+    ) -> Result<Vec<DocMatch>> {
+        let mut retained = Vec::with_capacity(matches.len());
+        for candidate in matches {
+            let text_phrase = candidate.matches_text()
+                && phrase_matches
+                    .documents
+                    .binary_search(&candidate.document())
+                    .is_ok();
+            let record = self.inner.metadata.document(candidate.document())?;
+            let title_phrase = phrase_matches.videos.binary_search(&record.video).is_ok();
+            if text_phrase || title_phrase {
+                retained.push(candidate);
+            }
+        }
+        Ok(retained)
     }
 
     fn phrase_field_matches(
@@ -2033,22 +2053,68 @@ impl RawSearchEngine {
         Ok(term_matches)
     }
 
-    fn excluded_documents(&self, terms: &[String], fields: QueryFields) -> Result<Vec<u32>> {
-        if terms.is_empty() {
-            return Ok(Vec::new());
+    fn excluded_documents(
+        &self,
+        terms: &[String],
+        phrases: &[Vec<String>],
+        fields: QueryFields,
+    ) -> Result<Vec<u32>> {
+        let mut excluded = if terms.is_empty() {
+            Vec::new()
+        } else {
+            let mut lists = Vec::with_capacity(terms.len());
+            for term in terms {
+                lists.push(self.matches_for_term(
+                    term,
+                    QueryFields {
+                        prioritize_position: false,
+                        exact_mask: 0,
+                        ..fields
+                    },
+                )?);
+            }
+            union_all(lists)
+                .into_iter()
+                .map(DocMatch::document)
+                .collect()
+        };
+        if !phrases.is_empty() && self.inner.full_positions.is_none() {
+            return Err(Error::InvalidInput(
+                "negative phrase search requires a schema v6 index".to_string(),
+            ));
         }
-        let mut lists = Vec::with_capacity(terms.len());
-        for term in terms {
-            lists.push(self.matches_for_term(
+        for phrase in phrases {
+            excluded = union_sorted_ids(excluded, self.excluded_phrase_documents(phrase, fields)?);
+        }
+        Ok(excluded)
+    }
+
+    fn excluded_phrase_documents(
+        &self,
+        phrase: &[String],
+        fields: QueryFields,
+    ) -> Result<Vec<u32>> {
+        let mut term_matches = Vec::with_capacity(phrase.len());
+        for (index, term) in phrase.iter().enumerate() {
+            if phrase[..index].contains(term) {
+                continue;
+            }
+            term_matches.push(self.matches_for_term(
                 term,
                 QueryFields {
-                    prioritize_position: false,
                     exact_mask: 0,
                     ..fields
                 },
             )?);
         }
-        Ok(union_all(lists)
+        let candidates = intersect_all_borrowed(&term_matches);
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        let targets = self.position_targets(&candidates)?;
+        let phrase_matches = self.phrase_field_matches(phrase, fields, &targets, 0)?;
+        Ok(self
+            .retain_position_phrase_matches(candidates, &phrase_matches)?
             .into_iter()
             .map(DocMatch::document)
             .collect())
@@ -2889,6 +2955,34 @@ fn union_all(mut lists: Vec<Vec<DocMatch>>) -> Vec<DocMatch> {
     union
 }
 
+fn union_sorted_ids(left: Vec<u32>, right: Vec<u32>) -> Vec<u32> {
+    let mut output = Vec::with_capacity(left.len().saturating_add(right.len()));
+    let mut left = left.into_iter().peekable();
+    let mut right = right.into_iter().peekable();
+    loop {
+        match (left.peek(), right.peek()) {
+            (Some(left_value), Some(right_value)) => match left_value.cmp(right_value) {
+                Ordering::Less => output.push(left.next().expect("peeked left")),
+                Ordering::Greater => output.push(right.next().expect("peeked right")),
+                Ordering::Equal => {
+                    output.push(left.next().expect("peeked left"));
+                    right.next();
+                }
+            },
+            (Some(_), None) => {
+                output.extend(left);
+                break;
+            }
+            (None, Some(_)) => {
+                output.extend(right);
+                break;
+            }
+            (None, None) => break,
+        }
+    }
+    output
+}
+
 fn union_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec<DocMatch> {
     let mut output = Vec::with_capacity(left.len().saturating_add(right.len()));
     let mut left = left.into_iter().peekable();
@@ -2979,13 +3073,11 @@ fn record_token(counts: &mut TokenCounts, token: &mut String, position: &mut u32
 }
 
 fn parse_query(value: &str) -> Result<ParsedQuery> {
-    let mut seen = HashSet::new();
-    let mut excluded_seen = HashSet::new();
-    let mut terms = Vec::new();
-    let mut phrases = Vec::new();
-    let mut excluded_terms = Vec::new();
+    let mut parser = QueryParser::default();
     let mut segment = String::new();
     let mut quoted = false;
+    let mut quote_excluded = false;
+    let mut allow_leading_exclusion = true;
     let mut characters = value.chars().peekable();
     while let Some(character) = characters.next() {
         if character == '\\'
@@ -2997,16 +3089,15 @@ fn parse_query(value: &str) -> Result<ParsedQuery> {
             continue;
         }
         if character == '"' {
-            record_query_segment(
-                &mut segment,
-                quoted,
-                &mut terms,
-                &mut phrases,
-                &mut excluded_terms,
-                &mut seen,
-                &mut excluded_seen,
-            )?;
-            quoted = !quoted;
+            if quoted {
+                record_quoted_segment(&mut segment, quote_excluded, &mut parser)?;
+                quoted = false;
+                allow_leading_exclusion = false;
+            } else {
+                quote_excluded = take_negative_phrase_marker(&mut segment, allow_leading_exclusion);
+                record_unquoted_segment(&mut segment, allow_leading_exclusion, &mut parser)?;
+                quoted = true;
+            }
         } else {
             segment.push(character);
         }
@@ -3016,70 +3107,96 @@ fn parse_query(value: &str) -> Result<ParsedQuery> {
             "query contains an unterminated quoted phrase".to_string(),
         ));
     }
-    record_query_segment(
-        &mut segment,
-        false,
-        &mut terms,
-        &mut phrases,
-        &mut excluded_terms,
-        &mut seen,
-        &mut excluded_seen,
-    )?;
+    record_unquoted_segment(&mut segment, allow_leading_exclusion, &mut parser)?;
     Ok(ParsedQuery {
-        terms,
-        phrases,
-        excluded_terms,
+        terms: parser.terms,
+        phrases: parser.phrases,
+        excluded_terms: parser.excluded_terms,
+        excluded_phrases: parser.excluded_phrases,
     })
 }
 
-fn record_query_segment(
+fn record_quoted_segment(
     segment: &mut String,
-    quoted: bool,
-    terms: &mut Vec<String>,
-    phrases: &mut Vec<Vec<String>>,
-    excluded_terms: &mut Vec<String>,
-    seen: &mut HashSet<String>,
-    excluded_seen: &mut HashSet<String>,
+    excluded: bool,
+    parser: &mut QueryParser,
 ) -> Result<()> {
-    if quoted {
-        let tokens = ordered_tokens(segment);
-        segment.clear();
-        if tokens.is_empty() {
-            return Err(Error::InvalidInput(
-                "quoted phrase must contain at least one searchable token".to_string(),
-            ));
-        }
-        if tokens.len() > MAX_PHRASE_TOKENS {
-            return Err(Error::InvalidInput(format!(
-                "quoted phrase exceeds {MAX_PHRASE_TOKENS} tokens"
-            )));
-        }
-        for token in &tokens {
-            if seen.insert(token.clone()) {
-                terms.push(token.clone());
+    let tokens = ordered_tokens(segment);
+    segment.clear();
+    if tokens.is_empty() {
+        return Err(Error::InvalidInput(
+            "quoted phrase must contain at least one searchable token".to_string(),
+        ));
+    }
+    if tokens.len() > MAX_PHRASE_TOKENS {
+        return Err(Error::InvalidInput(format!(
+            "quoted phrase exceeds {MAX_PHRASE_TOKENS} tokens"
+        )));
+    }
+    if excluded {
+        if tokens.len() == 1 {
+            let token = tokens.into_iter().next().expect("one quoted token");
+            if parser.excluded_seen.insert(token.clone()) {
+                parser.excluded_terms.push(token);
             }
+        } else if !parser.excluded_phrases.contains(&tokens) {
+            parser.excluded_phrases.push(tokens);
         }
-        phrases.push(tokens);
     } else {
-        for (token, excluded) in signed_tokens(segment)? {
-            if excluded {
-                if excluded_seen.insert(token.clone()) {
-                    excluded_terms.push(token);
-                }
-            } else if seen.insert(token.clone()) {
-                terms.push(token);
+        for token in &tokens {
+            if parser.seen.insert(token.clone()) {
+                parser.terms.push(token.clone());
             }
         }
-        segment.clear();
+        parser.phrases.push(tokens);
     }
     Ok(())
 }
 
-fn signed_tokens(value: &str) -> Result<Vec<(String, bool)>> {
+fn record_unquoted_segment(
+    segment: &mut String,
+    allow_leading_exclusion: bool,
+    parser: &mut QueryParser,
+) -> Result<()> {
+    for (token, excluded) in signed_tokens(segment, allow_leading_exclusion)? {
+        if excluded {
+            if parser.excluded_seen.insert(token.clone()) {
+                parser.excluded_terms.push(token);
+            }
+        } else if parser.seen.insert(token.clone()) {
+            parser.terms.push(token);
+        }
+    }
+    segment.clear();
+    Ok(())
+}
+
+fn take_negative_phrase_marker(segment: &mut String, allow_leading_exclusion: bool) -> bool {
+    let Some(marker_index) = segment.len().checked_sub(1) else {
+        return false;
+    };
+    if segment.as_bytes()[marker_index] != b'-' {
+        return false;
+    }
+    let valid = if marker_index == 0 {
+        allow_leading_exclusion
+    } else {
+        segment[..marker_index]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace)
+    };
+    if valid {
+        segment.truncate(marker_index);
+    }
+    valid
+}
+
+fn signed_tokens(value: &str, allow_leading_exclusion: bool) -> Result<Vec<(String, bool)>> {
     let mut output = Vec::new();
     let mut token = String::new();
     let mut excluded = false;
-    let mut can_exclude = true;
+    let mut can_exclude = allow_leading_exclusion;
     for character in value.chars() {
         if character.is_alphanumeric() {
             token.extend(character.to_lowercase());
@@ -3851,24 +3968,35 @@ mod tests {
         assert_eq!(parsed.terms, ["outside", "black", "hole", "tail"]);
         assert_eq!(parsed.phrases, [["black", "black", "hole"]]);
         assert!(parsed.excluded_terms.is_empty());
+        assert!(parsed.excluded_phrases.is_empty());
 
         let escaped = parse_query(r#"say \"hello\""#).expect("escaped quotes");
         assert_eq!(escaped.terms, ["say", "hello"]);
         assert!(escaped.phrases.is_empty());
         assert!(escaped.excluded_terms.is_empty());
+        assert!(escaped.excluded_phrases.is_empty());
 
         let excluded = parse_query("alpha -beta x-ray -beta").expect("negative term");
         assert_eq!(excluded.terms, ["alpha", "x", "ray"]);
         assert_eq!(excluded.excluded_terms, ["beta"]);
+        assert!(excluded.excluded_phrases.is_empty());
+
+        let excluded_phrase =
+            parse_query(r#"outside -"black black hole" -"tail""#).expect("negative phrases");
+        assert_eq!(excluded_phrase.terms, ["outside"]);
+        assert_eq!(excluded_phrase.excluded_terms, ["tail"]);
+        assert_eq!(
+            excluded_phrase.excluded_phrases,
+            [["black", "black", "hole"]]
+        );
+
+        let adjacent = parse_query(r#""alpha"-beta"#).expect("adjacent hyphen");
+        assert_eq!(adjacent.terms, ["alpha", "beta"]);
+        assert!(adjacent.excluded_terms.is_empty());
 
         assert!(parse_query(r#""unterminated"#).is_err());
         assert!(parse_query(r#"empty "" phrase"#).is_err());
-        for invalid in [
-            "alpha - beta",
-            "alpha -",
-            "--alpha",
-            r#"alpha -"beta gamma""#,
-        ] {
+        for invalid in ["alpha - beta", "alpha -", "--alpha", r#"alpha - "beta""#] {
             assert!(parse_query(invalid).is_err(), "accepted {invalid:?}");
         }
     }
@@ -3943,6 +4071,31 @@ mod tests {
             ids(r#""black hole" -deep"#, "text", None),
             HashSet::from(["duplicate".to_string()])
         );
+        assert_eq!(
+            ids(r#"black -"deep space""#, "text", None),
+            HashSet::from([
+                "duplicate".to_string(),
+                "gapped".to_string(),
+                "reversed".to_string(),
+            ])
+        );
+        assert_eq!(
+            ids(r#""black hole" -"deep space""#, "text", None),
+            HashSet::from(["duplicate".to_string()])
+        );
+        assert_eq!(
+            ids(r#""black hole" -"deep hole""#, "text", Some(1)),
+            HashSet::from(["adjacent".to_string(), "duplicate".to_string()])
+        );
+        assert_eq!(
+            ids(r#"black -"black black""#, "text", None),
+            HashSet::from([
+                "adjacent".to_string(),
+                "gapped".to_string(),
+                "reversed".to_string(),
+            ])
+        );
+        assert!(ids(r#"black -"black hole""#, "title", None).is_empty());
         let without_deep = HashSet::from(["duplicate".to_string(), "reversed".to_string()]);
         assert_eq!(ids("bla -deep", "text", None), without_deep);
         assert_eq!(ids("blak -deep", "text", None), without_deep);
@@ -3950,7 +4103,7 @@ mod tests {
         assert!(ids("black -deap", "text", None).contains("adjacent"));
         assert!(ids("black -lecture", "title", None).is_empty());
         assert!(ids("black hole", "text", None).contains("gapped"));
-        for query in ["black hole", "*"] {
+        for query in ["black hole", "*", r#"-"black hole""#] {
             assert!(
                 engine
                     .search(&SearchParams {
@@ -3966,6 +4119,16 @@ mod tests {
                 ids(query, "text", None),
                 HashSet::from([
                     "duplicate".to_string(),
+                    "reversed".to_string(),
+                    "title".to_string(),
+                ])
+            );
+        }
+        for query in [r#"-"black hole""#, r#"* -"black hole""#] {
+            assert_eq!(
+                ids(query, "text", None),
+                HashSet::from([
+                    "gapped".to_string(),
                     "reversed".to_string(),
                     "title".to_string(),
                 ])
@@ -4067,6 +4230,15 @@ mod tests {
         assert_eq!(two_exact[0].exact_mask(), 0b1100);
         let one_exact = intersect_sorted(vec![transcript], vec![fuzzy]);
         assert_eq!(one_exact[0].exact_tokens(), 1);
+    }
+
+    #[test]
+    fn sorted_exclusion_union_deduplicates_without_reordering() {
+        assert_eq!(
+            union_sorted_ids(vec![1, 3, 7], vec![2, 3, 8]),
+            [1, 2, 3, 7, 8]
+        );
+        assert_eq!(union_sorted_ids(Vec::new(), vec![4, 9]), [4, 9]);
     }
 
     #[test]
@@ -4770,6 +4942,18 @@ mod tests {
             rollback.search(&grouped_query(r#""memory mapped""#)),
             Err(Error::InvalidInput(_))
         ));
+        assert!(matches!(
+            rollback.search(&grouped_query(r#"bun -"memory mapped""#)),
+            Err(Error::InvalidInput(_))
+        ));
+        assert_eq!(
+            rollback
+                .search(&grouped_query(r#"bun -"memory""#))
+                .expect("single-token negative quote"),
+            rollback
+                .search(&grouped_query("bun -memory"))
+                .expect("negative term")
+        );
     }
 
     #[test]

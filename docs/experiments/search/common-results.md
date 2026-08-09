@@ -69,6 +69,11 @@ measured 4.188/7.929/4.483 ms median/p95/mean for the immediate parent and
 353 versus 355 ticks. The separate 300-search matched-exclusion workload had a
 5.075 ms p95 and no errors without adding index bytes. See
 [negative-term-search.md](negative-term-search.md) for semantics and evidence.
+Exact negative phrases now use candidate-targeted schema-v6 position streams.
+Their unchanged-query gate measured 7.654 ms parent p95 versus 7.593 ms for the
+candidate across 900 searches each; mean/CPU rose 1.1%/1.4%. A separate
+300-search phrase workload measured 7.210 ms p95, 97 CPU ticks, and no errors,
+again without changing the index artifact.
 
 ## Full 1,956-video corpus
 

@@ -68,7 +68,7 @@ only for guarded prefix/typo fallback.
 | Token dropping | Conjunctive right-to-left suffix drops, then left-to-right prefix drops, filter-aware threshold one, maximum 20 candidates |
 | Compact split | Same-chunk intersection with narrow plural recovery |
 | Typo plus split | Additional bounded fallback requiring one exact component and one one-edit correction |
-| Exact negative terms | Token-start `-term` uses exact title/text postings and filters before typo/drop thresholds; negative-only queries use wildcard search, while malformed and negative-phrase forms fail closed |
+| Exact negative terms and phrases | Token-start `-term` and `-"phrase"` use exact title/text postings and filter before typo/drop thresholds; negative-only queries use wildcard search and malformed markers fail closed |
 | Highlighting | Uses the actual corrected lexicon terms, not the misspelled input |
 
 The typo-plus-split fallback intentionally improves on the control for this
@@ -83,7 +83,6 @@ components such as `black + he`, and returns the same top result as
 | Typesense behavior | Status | Reason |
 | --- | --- | --- |
 | Phrase/proximity scoring | Partial | Schema v6 supports ordered quoted phrases, bounded slop, and a guarded 10-token same-field proximity window; the 300-query judged oracle remains open |
-| Negative phrases | Not implemented | Exact token exclusions are complete; grouped negative-phrase semantics still fail closed |
 | Exhaustive cost combinations | Deliberately bounded | The public query uses default non-exhaustive search |
 | Arbitrary filter language/faceting | Out of scope | The application uses creator/video equality filters only |
 | Dynamic writes and replication | Out of scope | Raw is a read-only serving index built offline |
