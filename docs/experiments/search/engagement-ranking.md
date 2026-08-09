@@ -33,7 +33,8 @@ to output or logs.
 The enrichment command accepts plain JSONL or `.jsonl.gz` input and output. A
 full-snapshot migration uses gzip-to-gzip streaming, retaining only distinct
 video IDs and their three counters in memory rather than materializing the
-multi-gigabyte corpus:
+multi-gigabyte corpus. Its JSON report includes elapsed time and sampled peak
+process RSS:
 
 ```sh
 bun scripts/enrich-search-engagement.ts \

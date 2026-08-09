@@ -77,8 +77,29 @@ const program = Effect.gen(function* () {
   };
 });
 
-const result = await Effect.runPromise(program);
-process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+const startedAt = performance.now();
+let peakRssBytes = process.memoryUsage().rss;
+const memorySampler = setInterval(() => {
+  peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss);
+}, 100);
+memorySampler.unref();
+try {
+  const result = await Effect.runPromise(program);
+  peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss);
+  process.stdout.write(
+    `${JSON.stringify(
+      {
+        ...result,
+        elapsed_ms: Math.round(performance.now() - startedAt),
+        peak_rss_bytes: peakRssBytes,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+} finally {
+  clearInterval(memorySampler);
+}
 
 function collectVideoIds(path: string): Effect.Effect<string[], Error> {
   return Effect.tryPromise({
