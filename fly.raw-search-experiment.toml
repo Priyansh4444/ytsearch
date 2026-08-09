@@ -18,7 +18,8 @@ primary_region = 'sjc'
   processes = ['app']
 
 [[vm]]
-  memory = '256mb'
+  # The full 8.14M-document schema-v6 index warms to ~347 MB RSS.
+  memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
 
