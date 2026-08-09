@@ -27,10 +27,6 @@ pub struct VoxtypeTranscriptSource {
 }
 
 impl VoxtypeTranscriptSource {
-    pub fn new() -> Self {
-        Self::with_config(TranscriptionConfig::default())
-    }
-
     pub fn with_config(config: TranscriptionConfig) -> Self {
         Self { config }
     }
@@ -289,12 +285,6 @@ impl VoxtypeTranscriptSource {
     }
 }
 
-impl Default for VoxtypeTranscriptSource {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[async_trait]
 impl TranscriptSource for VoxtypeTranscriptSource {
     async fn transcript_for_video(
@@ -307,13 +297,13 @@ impl TranscriptSource for VoxtypeTranscriptSource {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptionConfig {
-    pub cache_dir: PathBuf,
-    pub chunk_seconds: u32,
-    pub yt_dlp_binary: String,
-    pub ffmpeg_binary: String,
-    pub ffprobe_binary: String,
-    pub voxtype_binary: String,
-    pub voxtype_engine: Option<String>,
+    cache_dir: PathBuf,
+    chunk_seconds: u32,
+    yt_dlp_binary: String,
+    ffmpeg_binary: String,
+    ffprobe_binary: String,
+    voxtype_binary: String,
+    voxtype_engine: Option<String>,
 }
 
 impl TranscriptionConfig {

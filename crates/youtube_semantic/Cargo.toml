@@ -2,11 +2,10 @@
 name = "youtube_semantic"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [dependencies]
-async-trait = { workspace = true }
 thiserror = { workspace = true }
-youtube_ingest = { path = "../youtube_ingest" }
 
 [dev-dependencies]
 reqwest.workspace = true

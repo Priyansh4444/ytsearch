@@ -168,7 +168,7 @@ fn best_thumbnail(thumbnails: Option<&Value>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn stable_youtuber_id(handle: &str, channel_id: &str) -> String {
+pub fn stable_youtuber_id(handle: &str, channel_id: &str) -> String {
     let source = handle.strip_prefix('@').unwrap_or(handle);
     let source = if source.is_empty() {
         channel_id

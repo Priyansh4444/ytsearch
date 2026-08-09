@@ -582,8 +582,8 @@ pub(super) fn proximity_multiplier(
     tokens: usize,
     prioritize_position: bool,
 ) -> f32 {
-    const TYPESENSE_WINDOW: u32 = 10;
-    if window.displacement > TYPESENSE_WINDOW {
+    const COMPATIBILITY_PROXIMITY_WINDOW: u32 = 10;
+    if window.displacement > COMPATIBILITY_PROXIMITY_WINDOW {
         return 1.0;
     }
     let minimum_displacement = tokens.saturating_sub(1) as u32;

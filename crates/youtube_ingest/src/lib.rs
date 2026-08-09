@@ -3,12 +3,9 @@ mod error;
 mod model;
 mod ports;
 
-pub use chunker::{Chunker, DEFAULT_CHUNK_SECONDS};
+pub use chunker::Chunker;
 pub use error::{IngestError, Result};
 pub use model::{
     DurationMs, TimestampMs, TranscriptChunk, TranscriptSegment, VideoMetadata, Youtuber,
 };
-pub use ports::{
-    ChunkSink, EmbeddingSource, TranscriptChunkPage, TranscriptChunkSource, TranscriptSource,
-    VideoMetadataSource,
-};
+pub use ports::{TranscriptSource, VideoMetadataSource};

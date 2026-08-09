@@ -1,10 +1,10 @@
-use reqwest::{Client as HttpClient, Method, StatusCode};
+use reqwest::{Client as HttpClient, StatusCode};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use std::{collections::BTreeMap, fmt, time::Duration};
+use std::{collections::BTreeMap, time::Duration};
 use url::Url;
 
-pub const DEFAULT_BASE_URL: &str = "https://www.googleapis.com/youtube/v3/";
+const DEFAULT_BASE_URL: &str = "https://www.googleapis.com/youtube/v3/";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error)]
@@ -22,69 +22,44 @@ pub enum YouTubeError {
 pub type Result<T> = std::result::Result<T, YouTubeError>;
 
 #[derive(Clone, Debug)]
-pub enum Auth {
-    ApiKey(String),
-    None,
-}
-
-#[derive(Clone, Debug)]
 pub struct YouTubeClient {
     http: HttpClient,
     base_url: Url,
-    auth: Auth,
+    api_key: String,
 }
 
 impl YouTubeClient {
     pub fn with_api_key(api_key: impl Into<String>) -> Result<Self> {
-        Self::new(Auth::ApiKey(api_key.into()))
-    }
-
-    pub fn unauthenticated() -> Result<Self> {
-        Self::new(Auth::None)
-    }
-
-    pub fn new(auth: Auth) -> Result<Self> {
-        Self::with_http_client(timeout_http_client(), auth)
-    }
-
-    pub fn with_http_client(http: HttpClient, auth: Auth) -> Result<Self> {
         Ok(Self {
-            http,
+            http: timeout_http_client(),
             base_url: Url::parse(DEFAULT_BASE_URL)?,
-            auth,
+            api_key: api_key.into(),
         })
     }
 
-    pub fn endpoint(&self, resource: Resource, method: ApiMethod) -> RequestBuilder<'_> {
-        RequestBuilder::new(self, resource, method)
-    }
-
     pub fn list(&self, resource: ListResource) -> RequestBuilder<'_> {
-        self.endpoint(resource.into(), ApiMethod::List)
+        RequestBuilder::new(self, resource)
     }
 
-    fn url_for(&self, resource: Resource, method: ApiMethod) -> Result<Url> {
-        Ok(self.base_url.join(resource.path(method))?)
+    fn url_for(&self, resource: ListResource) -> Result<Url> {
+        Ok(self.base_url.join(resource.path())?)
     }
 
     async fn execute<T: DeserializeOwned>(
         &self,
-        resource: Resource,
-        method: ApiMethod,
+        resource: ListResource,
         query: &Query,
     ) -> Result<T> {
-        let mut url = self.url_for(resource, method)?;
+        let mut url = self.url_for(resource)?;
         {
             let mut pairs = url.query_pairs_mut();
             for (key, value) in &query.params {
                 pairs.append_pair(key, value);
             }
-            if let Auth::ApiKey(key) = &self.auth {
-                pairs.append_pair("key", key);
-            }
+            pairs.append_pair("key", &self.api_key);
         }
 
-        let response = self.http.request(method.http_method(), url).send().await?;
+        let response = self.http.get(url).send().await?;
         let status = response.status();
         let body = response.json::<Value>().await?;
         if !status.is_success() {
@@ -110,8 +85,12 @@ impl Query {
         self
     }
 
-    pub fn part(self, parts: impl IntoParts) -> Self {
-        self.set("part", parts.into_parts())
+    pub fn part<I, S>(self, parts: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.set("part", join(parts))
     }
 
     pub fn fields(self, fields: impl ToString) -> Self {
@@ -133,17 +112,15 @@ impl Query {
 
 pub struct RequestBuilder<'a> {
     client: &'a YouTubeClient,
-    resource: Resource,
-    method: ApiMethod,
+    resource: ListResource,
     query: Query,
 }
 
 impl<'a> RequestBuilder<'a> {
-    fn new(client: &'a YouTubeClient, resource: Resource, method: ApiMethod) -> Self {
+    fn new(client: &'a YouTubeClient, resource: ListResource) -> Self {
         Self {
             client,
             resource,
-            method,
             query: Query::new(),
         }
     }
@@ -153,206 +130,26 @@ impl<'a> RequestBuilder<'a> {
         self
     }
 
-    pub async fn send<T: DeserializeOwned>(self) -> Result<T> {
-        self.client
-            .execute(self.resource, self.method, &self.query)
-            .await
-    }
-
     pub async fn page(self) -> Result<Page<Value>> {
-        self.send().await
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ApiMethod {
-    List,
-    Insert,
-    Update,
-    Delete,
-    Set,
-    Unset,
-    GetRating,
-    Rate,
-    ReportAbuse,
-    Download,
-    MarkAsSpam,
-    SetModerationStatus,
-    Transition,
-    Bind,
-    InsertCuepoint,
-    BatchGetStats,
-    Get,
-}
-
-impl ApiMethod {
-    pub fn http_method(self) -> Method {
-        match self {
-            Self::List | Self::GetRating | Self::Download | Self::BatchGetStats | Self::Get => {
-                Method::GET
-            }
-            Self::Delete => Method::DELETE,
-            Self::Update => Method::PUT,
-            Self::Insert | Self::ReportAbuse | Self::Bind | Self::InsertCuepoint => Method::POST,
-            Self::Set
-            | Self::Unset
-            | Self::Rate
-            | Self::MarkAsSpam
-            | Self::SetModerationStatus
-            | Self::Transition => Method::POST,
-        }
+        self.client.execute(self.resource, &self.query).await
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ListResource {
-    Activities,
-    Captions,
-    ChannelSections,
     Channels,
-    CommentThreads,
-    Comments,
-    I18nLanguages,
-    I18nRegions,
-    LiveBroadcasts,
-    LiveChatMessages,
-    LiveChatModerators,
-    LiveStreams,
-    Members,
-    MembershipsLevels,
-    PlaylistImages,
     PlaylistItems,
-    Playlists,
     Search,
-    Subscriptions,
-    SuperChatEvents,
-    ThirdPartyLinks,
-    VideoAbuseReportReasons,
-    VideoCategories,
     Videos,
 }
 
-impl From<ListResource> for Resource {
-    fn from(value: ListResource) -> Self {
-        match value {
-            ListResource::Activities => Self::Activities,
-            ListResource::Captions => Self::Captions,
-            ListResource::ChannelSections => Self::ChannelSections,
-            ListResource::Channels => Self::Channels,
-            ListResource::CommentThreads => Self::CommentThreads,
-            ListResource::Comments => Self::Comments,
-            ListResource::I18nLanguages => Self::I18nLanguages,
-            ListResource::I18nRegions => Self::I18nRegions,
-            ListResource::LiveBroadcasts => Self::LiveBroadcasts,
-            ListResource::LiveChatMessages => Self::LiveChatMessages,
-            ListResource::LiveChatModerators => Self::LiveChatModerators,
-            ListResource::LiveStreams => Self::LiveStreams,
-            ListResource::Members => Self::Members,
-            ListResource::MembershipsLevels => Self::MembershipsLevels,
-            ListResource::PlaylistImages => Self::PlaylistImages,
-            ListResource::PlaylistItems => Self::PlaylistItems,
-            ListResource::Playlists => Self::Playlists,
-            ListResource::Search => Self::Search,
-            ListResource::Subscriptions => Self::Subscriptions,
-            ListResource::SuperChatEvents => Self::SuperChatEvents,
-            ListResource::ThirdPartyLinks => Self::ThirdPartyLinks,
-            ListResource::VideoAbuseReportReasons => Self::VideoAbuseReportReasons,
-            ListResource::VideoCategories => Self::VideoCategories,
-            ListResource::Videos => Self::Videos,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Resource {
-    AbuseReports,
-    Activities,
-    Captions,
-    ChannelBanners,
-    ChannelSections,
-    Channels,
-    CommentThreads,
-    Comments,
-    I18nLanguages,
-    I18nRegions,
-    LiveBroadcasts,
-    LiveChatBans,
-    LiveChatMessages,
-    LiveChatModerators,
-    LiveStreams,
-    Members,
-    MembershipsLevels,
-    PlaylistImages,
-    PlaylistItems,
-    Playlists,
-    Search,
-    Subscriptions,
-    SuperChatEvents,
-    Tests,
-    ThirdPartyLinks,
-    Thumbnails,
-    VideoAbuseReportReasons,
-    VideoCategories,
-    VideoTrainability,
-    Videos,
-    Watermarks,
-}
-
-impl Resource {
-    pub fn path(self, method: ApiMethod) -> &'static str {
-        match (self, method) {
-            (Self::ChannelBanners, ApiMethod::Insert) => "channelBanners/insert",
-            (Self::Comments, ApiMethod::MarkAsSpam) => "comments/markAsSpam",
-            (Self::Comments, ApiMethod::SetModerationStatus) => "comments/setModerationStatus",
-            (Self::LiveBroadcasts, ApiMethod::Bind) => "liveBroadcasts/bind",
-            (Self::LiveBroadcasts, ApiMethod::InsertCuepoint) => "liveBroadcasts/cuepoint",
-            (Self::LiveBroadcasts, ApiMethod::Transition) => "liveBroadcasts/transition",
-            (Self::LiveChatMessages, ApiMethod::Transition) => "liveChat/messages/transition",
-            (Self::Thumbnails, ApiMethod::Set) => "thumbnails/set",
-            (Self::Videos, ApiMethod::BatchGetStats) => "videos:batchGetStats",
-            (Self::Videos, ApiMethod::GetRating) => "videos/getRating",
-            (Self::Videos, ApiMethod::Rate) => "videos/rate",
-            (Self::Videos, ApiMethod::ReportAbuse) => "videos/reportAbuse",
-            (Self::Watermarks, ApiMethod::Set) => "watermarks/set",
-            (Self::Watermarks, ApiMethod::Unset) => "watermarks/unset",
-            (Self::Captions, ApiMethod::Download) => "captions/{id}",
-            (resource, _) => resource.base_path(),
-        }
-    }
-
-    pub fn base_path(self) -> &'static str {
+impl ListResource {
+    fn path(self) -> &'static str {
         match self {
-            Self::AbuseReports => "abuseReports",
-            Self::Activities => "activities",
-            Self::Captions => "captions",
-            Self::ChannelBanners => "channelBanners",
-            Self::ChannelSections => "channelSections",
             Self::Channels => "channels",
-            Self::CommentThreads => "commentThreads",
-            Self::Comments => "comments",
-            Self::I18nLanguages => "i18nLanguages",
-            Self::I18nRegions => "i18nRegions",
-            Self::LiveBroadcasts => "liveBroadcasts",
-            Self::LiveChatBans => "liveChat/bans",
-            Self::LiveChatMessages => "liveChat/messages",
-            Self::LiveChatModerators => "liveChat/moderators",
-            Self::LiveStreams => "liveStreams",
-            Self::Members => "members",
-            Self::MembershipsLevels => "membershipsLevels",
-            Self::PlaylistImages => "playlistImages",
             Self::PlaylistItems => "playlistItems",
-            Self::Playlists => "playlists",
             Self::Search => "search",
-            Self::Subscriptions => "subscriptions",
-            Self::SuperChatEvents => "superChatEvents",
-            Self::Tests => "tests",
-            Self::ThirdPartyLinks => "thirdPartyLinks",
-            Self::Thumbnails => "thumbnails",
-            Self::VideoAbuseReportReasons => "videoAbuseReportReasons",
-            Self::VideoCategories => "videoCategories",
-            Self::VideoTrainability => "videoTrainability",
             Self::Videos => "videos",
-            Self::Watermarks => "watermarks",
         }
     }
 }
@@ -360,62 +157,9 @@ impl Resource {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Page<T = Value> {
-    pub kind: Option<String>,
-    pub etag: Option<String>,
     pub next_page_token: Option<String>,
-    pub prev_page_token: Option<String>,
-    pub page_info: Option<PageInfo>,
     #[serde(default)]
     pub items: Vec<T>,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PageInfo {
-    pub total_results: Option<u64>,
-    pub results_per_page: Option<u64>,
-}
-
-pub trait IntoParts {
-    fn into_parts(self) -> String;
-}
-
-impl IntoParts for &str {
-    fn into_parts(self) -> String {
-        self.to_string()
-    }
-}
-
-impl IntoParts for String {
-    fn into_parts(self) -> String {
-        self
-    }
-}
-
-impl<const N: usize> IntoParts for [&str; N] {
-    fn into_parts(self) -> String {
-        join(self)
-    }
-}
-
-impl IntoParts for &[&str] {
-    fn into_parts(self) -> String {
-        join(self.iter().copied())
-    }
-}
-
-impl IntoParts for Vec<&str> {
-    fn into_parts(self) -> String {
-        join(self)
-    }
-}
-
-impl IntoParts for Vec<String> {
-    fn into_parts(self) -> String {
-        join(self)
-    }
 }
 
 fn timeout_http_client() -> HttpClient {
@@ -435,12 +179,6 @@ where
         .map(|value| value.as_ref().to_string())
         .collect::<Vec<_>>()
         .join(",")
-}
-
-impl fmt::Display for Resource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.base_path())
-    }
 }
 
 #[cfg(test)]
@@ -476,16 +214,10 @@ mod tests {
 
     #[test]
     fn default_base_url_keeps_youtube_v3_prefix() {
-        let client = YouTubeClient::unauthenticated().unwrap();
+        let client = YouTubeClient::with_api_key("test-key").unwrap();
+        let url = client.url_for(ListResource::Videos).unwrap();
 
-        let url = client
-            .url_for(Resource::Videos, ApiMethod::GetRating)
-            .unwrap();
-
-        assert_eq!(
-            url.as_str(),
-            "https://www.googleapis.com/youtube/v3/videos/getRating"
-        );
+        assert_eq!(url.as_str(), "https://www.googleapis.com/youtube/v3/videos");
     }
 
     #[tokio::test]

@@ -2,18 +2,12 @@ use crate::{IngestError, Result, TimestampMs, TranscriptChunk, TranscriptSegment
 use std::{collections::BTreeMap, fmt::Write};
 use youtube_time::parse_rfc3339_timestamp;
 
-pub const DEFAULT_CHUNK_SECONDS: u32 = 5;
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Chunker {
     window_ms: TimestampMs,
 }
 
 impl Chunker {
-    pub fn five_seconds() -> Self {
-        Self::new(DEFAULT_CHUNK_SECONDS)
-    }
-
     pub fn new(window_seconds: u32) -> Self {
         let safe_seconds = window_seconds.max(1);
         Self {
@@ -216,9 +210,7 @@ mod tests {
             },
         ];
 
-        let chunks = Chunker::five_seconds()
-            .chunks(&metadata(), &transcript)
-            .unwrap();
+        let chunks = Chunker::new(5).chunks(&metadata(), &transcript).unwrap();
 
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].id, "abc123_0");
@@ -236,9 +228,7 @@ mod tests {
             text: "  hello\n\t  world  ".to_string(),
         }];
 
-        let chunks = Chunker::five_seconds()
-            .chunks(&metadata(), &transcript)
-            .unwrap();
+        let chunks = Chunker::new(5).chunks(&metadata(), &transcript).unwrap();
 
         assert_eq!(chunks[0].text, "hello world");
     }
@@ -251,7 +241,7 @@ mod tests {
             text: "   ".to_string(),
         }];
 
-        let error = Chunker::five_seconds()
+        let error = Chunker::new(5)
             .chunks(&metadata(), &transcript)
             .unwrap_err();
 
