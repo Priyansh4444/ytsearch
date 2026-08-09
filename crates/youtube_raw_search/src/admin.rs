@@ -118,7 +118,12 @@ impl AdminState {
         loop {
             let publisher = Arc::clone(&self.publisher);
             let store = Arc::clone(&self.store);
-            let result = tokio::task::spawn_blocking(move || publisher.publish(&store)).await;
+            let result = tokio::task::spawn_blocking(move || {
+                let result = publisher.publish(&store);
+                release_builder_heap();
+                result
+            })
+            .await;
             match result {
                 Ok(Ok(Some(generation))) => {
                     let sequence = generation.sequence;
@@ -161,6 +166,22 @@ impl AdminState {
         }
     }
 }
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn release_builder_heap() {
+    unsafe extern "C" {
+        fn malloc_trim(pad: usize) -> std::ffi::c_int;
+    }
+    // SAFETY: glibc documents malloc_trim as process-wide and thread-safe. All
+    // builder-owned allocations have been dropped before this call; live query
+    // allocations are not invalidated, only unused allocator pages are returned.
+    unsafe {
+        malloc_trim(0);
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn release_builder_heap() {}
 
 pub fn router(state: AdminState) -> Router {
     Router::new()
