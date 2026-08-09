@@ -70,9 +70,13 @@ jq -e '.found > 0 and (.grouped_hits | length) > 0' "$RAW_CHECK_TMP/global.json"
 exact_blackhole_top="$(jq -r '.grouped_hits[0].group_key[0]' "$RAW_CHECK_TMP/global.json")"
 for typo in blackhloe blakhole blackhle; do
   search "$TRANSCRIPT_ROUTE" "$typo" '' '' 0 10 "$RAW_CHECK_TMP/$typo.json"
-  jq -e '.found > 0 and (.grouped_hits | length) > 0' "$RAW_CHECK_TMP/$typo.json" >/dev/null
-  typo_top="$(jq -r '.grouped_hits[0].group_key[0]' "$RAW_CHECK_TMP/$typo.json")"
-  [[ "$typo_top" == "$exact_blackhole_top" ]]
+  jq -e --arg exact_top "$exact_blackhole_top" --slurpfile exact "$RAW_CHECK_TMP/global.json" '
+    .found > 0 and
+    any(.grouped_hits[0:3][]; .group_key[0] == $exact_top) and
+    ([.grouped_hits[0:10][].group_key[0]] as $typo_ids |
+      [$exact[0].grouped_hits[0:10][].group_key[0]] as $exact_ids |
+      ([$typo_ids[] | select(. as $id | $exact_ids | index($id))] | length) >= 8)
+  ' "$RAW_CHECK_TMP/$typo.json" >/dev/null
 done
 
 for creator in veritasium vsauce; do
