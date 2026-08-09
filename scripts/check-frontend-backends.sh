@@ -11,6 +11,8 @@ PER_PAGE="${PER_PAGE:-3}"
 CURL_MAX_TIME="${CURL_MAX_TIME:-15}"
 
 TYPESENSE_FRONTEND_URL="${TYPESENSE_FRONTEND_URL:-${TYPESENSE_FLY_FRONTEND_URL:-https://search.pronsh.dev}}"
+RAW_EXPERIMENTAL_FRONTEND_URL="${RAW_EXPERIMENTAL_FRONTEND_URL:-https://search.experimental.pronsh.dev}"
+RAW_FLY_API_BASE_URL="${RAW_FLY_API_BASE_URL:-https://ytsearch-api-raw-experiment.fly.dev}"
 
 required_env() {
   name="$1"
@@ -72,6 +74,7 @@ check_frontend_config() {
   expected_api_url="$3"
   html_file="/tmp/ytsearch-check-frontend.html"
   bundle_file="/tmp/ytsearch-check-frontend.js"
+  chunk_file="/tmp/ytsearch-check-frontend-chunk.js"
 
   curl -fsS --max-time "$CURL_MAX_TIME" "$frontend_url" >"$html_file"
   asset_path="$(sed -n 's/.*src="\([^"?]*assets\/index-[^"]*\.js\)".*/\1/p' "$html_file" | head -n 1)"
@@ -82,6 +85,18 @@ check_frontend_config() {
 
   asset_path="${asset_path#/}"
   curl -fsS --max-time "$CURL_MAX_TIME" "${frontend_url%/}/$asset_path" >"$bundle_file"
+  asset_directory="${asset_path%/*}"
+  # Vite may move the Effect runtime and its API constants into a lazy chunk.
+  # Inspect direct entry imports too, otherwise a healthy split build looks
+  # indistinguishable from a bundle with no configured API routes.
+  grep -oE '\./[A-Za-z0-9._-]+\.js' "$bundle_file" | sort -u |
+    while IFS= read -r chunk_path; do
+      chunk_path="${chunk_path#./}"
+      curl -fsS --max-time "$CURL_MAX_TIME" \
+        "${frontend_url%/}/$asset_directory/$chunk_path" >"$chunk_file"
+      printf '\n' >>"$bundle_file"
+      cat "$chunk_file" >>"$bundle_file"
+    done
   if grep -q 'ytsearch-index-queue-staging.fly.dev' "$bundle_file"; then
     echo "$label failed: bundle still references the retired queue API" >&2
     exit 1
@@ -105,3 +120,8 @@ check_url "frontend typesense" "$TYPESENSE_FRONTEND_URL"
 check_frontend_config "frontend typesense" "$TYPESENSE_FRONTEND_URL" "$TYPESENSE_FLY_API_BASE_URL"
 check_api "frontend typesense" "$TYPESENSE_FRONTEND_URL"
 check_url "frontend typesense queue" "$TYPESENSE_FLY_API_BASE_URL/api/index-status"
+
+check_url "frontend raw" "$RAW_EXPERIMENTAL_FRONTEND_URL"
+check_frontend_config "frontend raw" "$RAW_EXPERIMENTAL_FRONTEND_URL" "$RAW_FLY_API_BASE_URL"
+check_api "frontend raw" "$RAW_EXPERIMENTAL_FRONTEND_URL"
+check_url "frontend raw directory" "$RAW_EXPERIMENTAL_FRONTEND_URL/api/youtubers"
