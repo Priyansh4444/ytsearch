@@ -1379,6 +1379,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -2387,9 +2388,11 @@ name = "youtube_index_store"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
  "youtube_ingest",
 ]
 

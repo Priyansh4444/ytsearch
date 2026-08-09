@@ -5,9 +5,15 @@ edition = "2024"
 
 [dependencies]
 async-trait = { workspace = true }
+reqwest = { workspace = true, optional = true, features = ["query"] }
 serde = { workspace = true }
+serde_json = { workspace = true, optional = true }
 thiserror = { workspace = true }
 youtube_ingest = { path = "../youtube_ingest" }
 
+[features]
+http-client = ["dep:reqwest", "dep:serde_json"]
+
 [dev-dependencies]
 serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt"] }

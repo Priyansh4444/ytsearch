@@ -4,6 +4,11 @@ use std::num::NonZeroU16;
 use thiserror::Error;
 use youtube_ingest::TranscriptChunk;
 
+#[cfg(feature = "http-client")]
+mod http;
+#[cfg(feature = "http-client")]
+pub use http::{RawIndexAdminClient, RawIndexAdminConfig};
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ChannelDocument {
     pub id: String,
@@ -139,6 +144,17 @@ impl<'a> VideoReplacement<'a> {
 #[async_trait]
 pub trait SearchIndexAdmin: Send + Sync {
     async fn readiness(&self) -> Result<BackendReadiness, IndexStoreError>;
+
+    async fn publish(&self) -> Result<BackendReadiness, IndexStoreError> {
+        self.readiness().await
+    }
+
+    async fn channel(&self, _channel_id: &str) -> Result<Option<ChannelDocument>, IndexStoreError> {
+        Err(IndexStoreError::Unavailable {
+            backend: "index",
+            message: "channel lookup is not implemented by this backend".to_string(),
+        })
+    }
 
     async fn replace_video(
         &self,
