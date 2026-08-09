@@ -10,7 +10,8 @@ Against the matched Typesense control it reduced pooled p95 by 71%, CPU by 73%,
 warm RSS by 93%, and disk by 94%. Against Tantivy it reduced pooled p95 by 49%,
 CPU by 38%, warm RSS by 38%, and disk by 52%.
 
-It is not yet approved as the sole production replacement. The original
+Raw became the production search reader on 2026-08-09. It is not yet approved
+as the sole production writer or control plane. The original
 four-query oracle had only 50% top-one agreement, and later manual review found
 the Typesense oracle itself wrong on `battery gate incident`. Schema v5 now
 passes the full available 420,720-chunk snapshot, but the larger human-judged
@@ -22,9 +23,9 @@ Raw is the sole active replacement experiment.
 
 ## Full-corpus Raw rollout (2026-08-09)
 
-The isolated Raw frontend now uses a schema-v6 generation built from the full
-available transcript export. This is an experimental deployment, not a
-production cutover.
+The schema-v6 generation was first validated in isolation, then promoted
+checksum-identically to the production Raw reader after exact corpus parity,
+contract, browser, and concurrent-load gates passed.
 
 | Measurement | Full Raw result |
 | --- | ---: |
@@ -36,7 +37,8 @@ production cutover.
 | Release build time | 88.99 s |
 | Builder peak RSS | 2,473,776 KiB (about 2.36 GiB) |
 | Warm search RSS | 363,622,400 bytes (about 347 MiB) |
-| Fly allocation | 512 MiB, one shared vCPU, `sjc` |
+| Experimental Fly allocation | 512 MiB, one shared vCPU, `sjc` |
+| Production Fly allocation | 4 GiB, two performance vCPUs, `sjc` |
 
 The engagement enrichment streamed all 8,142,650 input documents and resolved
 metadata for 32,821 of 32,822 requested videos. One unavailable video remains
@@ -77,11 +79,45 @@ ordered token dropping instead; the corrected query returns fifteen videos
 with 9/10 overlap. This is useful evidence, but seven cases do not satisfy the
 planned 300-query human-judged oracle.
 
-Public rollout checks passed through both layers:
+Production rollout checks passed through all layers:
 
-- Raw engine: <https://ytsearch-raw-experiment.fly.dev/health>
-- Raw API: <https://ytsearch-api-raw-experiment.fly.dev/api/youtubers>
-- Experimental frontend: <https://search.experimental.pronsh.dev>
+- Raw engine: <https://ytsearch-raw-production.fly.dev/health>
+- Raw API: <https://ytsearch-api-raw-production.fly.dev/api/youtubers>
+- Production frontend: <https://search.pronsh.dev>
+
+The production engine contains 8,142,650 documents and 32,822 distinct video
+IDs. An authoritative Typesense `facet_by=video_id` export and the Raw
+`videos.json` list had zero sorted-ID differences. Both API facades exposed the
+same 61 creators and channel counts at cutover. The Raw machine is exactly half
+the provisioned Typesense size: 4 GiB / 2 performance vCPUs versus 8 GiB / 4.
+
+The post-cutover public load gate sent 75 requests across five queries and
+three sort modes at five-way concurrency: zero errors, 225 ms mean, 366 ms p95,
+and 373 ms maximum including Cloudflare, Fly API, and network time. Engine
+metrics immediately afterward reported 373,096,448 RSS bytes, 73 engine
+searches, zero errors, and 2.031 seconds of internal search work. A clean shared
+browser rendered `curspr/@cursor_ai` as 12 of 45 videos and 42 of 195 matching
+moments, with `Our designer built an operating system with Cursor` ranked
+first and all seven Raw sort choices available.
+
+The experimental Worker, API, and engine were retired only after those checks.
+Typesense remains available as a rollback artifact and the deployed legacy API
+still owns the indexing queue until the Raw volumes/indexer are cut over. The
+repository no longer contains a Typesense runtime or dual-write path.
+
+### Mutable full-corpus publication
+
+The durable Raw writer stores idempotent complete-video/channel operations in
+SQLite WAL, builds and verifies a candidate, activates it through an atomic
+manifest, retains one rollback generation, and swaps the serving reader.
+
+On the 8,142,650-document corpus, two real delete/publication cycles completed
+in about 70 and 80 seconds. Search visibility changed correctly after each
+publication, publication errors remained zero, peak RSS was 2,576,420 KiB
+(2.46 GiB), and peak mutable disk with one prior generation was about 8.7 GB.
+After explicitly releasing allocator pages, steady RSS settled at 141,772 KiB
+(138.45 MiB). See
+[the full-corpus mutable report](raw-mutable-full-corpus-2026-08-09.md).
 
 The first cold boot of the 1.45 GB container generation spent roughly three
 minutes hashing and validating every artifact before binding the port. Warm
