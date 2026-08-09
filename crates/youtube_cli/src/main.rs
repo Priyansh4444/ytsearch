@@ -16,11 +16,11 @@ use youtube_index_store::{
     SearchIndexAdmin, VideoReplacement,
 };
 use youtube_ingest::{Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource};
+use youtube_search_client::{DEFAULT_COLLECTION, TextSearchQuery};
 use youtube_sources::{
     FallbackMetadataSource, YouTubeMetadataSource, stable_youtuber_id as youtuber_id_from_handle,
 };
 use youtube_transcribe::{TranscriptionConfig, VoxtypeTranscriptSource};
-use youtube_typesense::{DEFAULT_COLLECTION, TextSearchQuery};
 use youtube_ytdlp::{YtDlpTranscriptSource, YtDlpVideo};
 
 mod args;
@@ -32,7 +32,7 @@ enum CliError {
     #[error("youtube api failed: {0}")]
     YouTube(#[from] youtube_client::YouTubeError),
     #[error("search query failed: {0}")]
-    Search(#[from] youtube_typesense::TypesenseError),
+    Search(#[from] youtube_search_client::SearchError),
     #[error("search index administration failed: {0}")]
     IndexStore(#[from] IndexStoreError),
     #[error("ingest failed: {0}")]

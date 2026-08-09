@@ -2346,8 +2346,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
- "youtube_search",
- "youtube_typesense",
+ "youtube_search_client",
 ]
 
 [[package]]
@@ -2365,9 +2364,9 @@ dependencies = [
  "youtube_client",
  "youtube_index_store",
  "youtube_ingest",
+ "youtube_search_client",
  "youtube_sources",
  "youtube_transcribe",
- "youtube_typesense",
  "youtube_ytdlp",
 ]
 
@@ -2433,13 +2432,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "youtube_search"
+name = "youtube_search_client"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "serde",
+ "reqwest",
  "serde_json",
  "thiserror",
+ "tokio",
+ "youtube_index_store",
 ]
 
 [[package]]
@@ -2504,21 +2504,6 @@ dependencies = [
  "tokio",
  "tracing",
  "youtube_ingest",
-]
-
-[[package]]
-name = "youtube_typesense"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "youtube_index_store",
- "youtube_ingest",
- "youtube_search",
 ]
 
 [[package]]

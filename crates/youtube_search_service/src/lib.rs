@@ -207,7 +207,7 @@ async fn search(
 ) -> Result<Response, ServerError> {
     let unauthorized = state.api_key.as_deref().is_some_and(|expected| {
         headers
-            .get("x-typesense-api-key")
+            .get("x-raw-search-key")
             .and_then(|value| value.to_str().ok())
             != Some(expected)
     });

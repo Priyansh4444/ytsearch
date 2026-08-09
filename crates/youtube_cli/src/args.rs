@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use youtube_client::YouTubeClient;
 use youtube_index_store::{RawIndexAdminClient, RawIndexAdminConfig};
-use youtube_typesense::{DEFAULT_COLLECTION, TypesenseSearchClient, TypesenseSearchConfig};
+use youtube_search_client::{DEFAULT_COLLECTION, SearchClient, SearchClientConfig};
 
 use super::{CliError, ContentKindFilter};
 
@@ -415,10 +415,7 @@ impl SearchAdminArgs {
 }
 
 impl SearchQueryArgs {
-    pub(super) fn client(
-        &self,
-        collection: impl Into<String>,
-    ) -> Result<TypesenseSearchClient, CliError> {
+    pub(super) fn client(&self, collection: impl Into<String>) -> Result<SearchClient, CliError> {
         let api_url = self
             .api_url
             .clone()
@@ -429,8 +426,8 @@ impl SearchQueryArgs {
             .clone()
             .or_else(|| std::env::var("RAW_SEARCH_API_KEY").ok())
             .ok_or_else(|| CliError::Message("missing Raw search key".to_string()))?;
-        Ok(TypesenseSearchClient::new(
-            TypesenseSearchConfig::new(api_url, search_api_key).with_collection(collection),
-        ))
+        Ok(SearchClient::new(
+            SearchClientConfig::new(api_url, search_api_key).with_collection(collection),
+        )?)
     }
 }

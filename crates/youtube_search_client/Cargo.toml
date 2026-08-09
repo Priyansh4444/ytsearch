@@ -1,0 +1,14 @@
+[package]
+name = "youtube_search_client"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+reqwest = { workspace = true, features = ["query"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+youtube_index_store = { path = "../youtube_index_store" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt"] }

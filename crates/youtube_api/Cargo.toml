@@ -2,6 +2,7 @@
 name = "youtube_api"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [[bin]]
 name = "youtube-api"
@@ -18,5 +19,4 @@ tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thr
 tower-http = { version = "0.6.11", features = ["compression-gzip", "cors", "trace"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-youtube_search = { path = "../youtube_search" }
-youtube_typesense = { path = "../youtube_typesense" }
+youtube_search_client = { path = "../youtube_search_client" }

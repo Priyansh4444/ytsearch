@@ -22,5 +22,5 @@ youtube_ingest = { path = "../youtube_ingest" }
 youtube_index_store = { path = "../youtube_index_store", features = ["http-client"] }
 youtube_sources = { path = "../youtube_sources" }
 youtube_transcribe = { path = "../youtube_transcribe" }
-youtube_typesense = { path = "../youtube_typesense" }
+youtube_search_client = { path = "../youtube_search_client" }
 youtube_ytdlp = { path = "../youtube_ytdlp" }
