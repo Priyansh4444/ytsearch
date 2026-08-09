@@ -8,7 +8,8 @@ fi
 
 BACKUP_DIR="$1"
 OUTPUT_DIR="$2"
-CHUNKS_ARCHIVE="$BACKUP_DIR/youtube_transcript_chunks.jsonl.gz"
+SOURCE_CHUNKS_ARCHIVE="$BACKUP_DIR/youtube_transcript_chunks.jsonl.gz"
+CHUNKS_ARCHIVE="${RAW_CHUNKS_ARCHIVE:-$SOURCE_CHUNKS_ARCHIVE}"
 CHANNELS_ARCHIVE="$BACKUP_DIR/youtube_youtubers.jsonl.gz"
 
 case "$OUTPUT_DIR" in
@@ -18,7 +19,7 @@ case "$OUTPUT_DIR" in
     ;;
 esac
 
-for path in "$CHUNKS_ARCHIVE" "$CHANNELS_ARCHIVE" "$BACKUP_DIR/COUNTS.tsv" "$BACKUP_DIR/SHA256SUMS"; do
+for path in "$SOURCE_CHUNKS_ARCHIVE" "$CHUNKS_ARCHIVE" "$CHANNELS_ARCHIVE" "$BACKUP_DIR/COUNTS.tsv" "$BACKUP_DIR/SHA256SUMS"; do
   if [[ ! -f "$path" ]]; then
     echo "missing backup artifact: $path" >&2
     exit 2
@@ -40,6 +41,20 @@ done
   cd "$BACKUP_DIR"
   sha256sum -c SHA256SUMS
 )
+if [[ "$CHUNKS_ARCHIVE" != "$SOURCE_CHUNKS_ARCHIVE" ]]; then
+  CHUNKS_CHECKSUM="${RAW_CHUNKS_SHA256_FILE:-$CHUNKS_ARCHIVE.sha256}"
+  if [[ ! -f "$CHUNKS_CHECKSUM" || "$(dirname "$CHUNKS_CHECKSUM")" != "$(dirname "$CHUNKS_ARCHIVE")" ]]; then
+    echo "custom chunks archive requires a checksum file beside it: $CHUNKS_CHECKSUM" >&2
+    exit 2
+  fi
+  expected_chunks_sha256="$(awk 'NR == 1 { print $1 }' "$CHUNKS_CHECKSUM")"
+  actual_chunks_sha256="$(sha256sum "$CHUNKS_ARCHIVE" | awk '{ print $1 }')"
+  if [[ ! "$expected_chunks_sha256" =~ ^[0-9a-f]{64}$ || "$actual_chunks_sha256" != "$expected_chunks_sha256" ]]; then
+    echo "custom chunks archive failed its SHA-256 checksum: $CHUNKS_ARCHIVE" >&2
+    exit 1
+  fi
+fi
+gzip -t "$CHUNKS_ARCHIVE"
 
 expected_documents="$(awk -F '\t' '$1 == "youtube_transcript_chunks" { print $2 }' "$BACKUP_DIR/COUNTS.tsv")"
 expected_channels="$(awk -F '\t' '$1 == "youtube_youtubers" { print $2 }' "$BACKUP_DIR/COUNTS.tsv")"
@@ -125,9 +140,10 @@ fi
 
 jq -n \
   --arg backup_dir "$BACKUP_DIR" \
+  --arg chunks_archive "$CHUNKS_ARCHIVE" \
   --argjson documents "$actual_documents" \
   --argjson channels "$actual_channels" \
-  '{backup_dir:$backup_dir,documents:$documents,channels:$channels,validated_at:(now | todateiso8601)}' \
+  '{backup_dir:$backup_dir,chunks_archive:$chunks_archive,documents:$documents,channels:$channels,validated_at:(now | todateiso8601)}' \
   >"$OUTPUT_DIR/build-source.json"
 
 echo "$OUTPUT_DIR"

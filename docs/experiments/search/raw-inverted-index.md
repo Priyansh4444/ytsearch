@@ -110,7 +110,8 @@ For a full snapshot, keep the provider-neutral backup compressed and stream it
 through a FIFO so the multi-gigabyte JSONL corpus is never duplicated on disk:
 
 ```sh
-scripts/build-raw-generation-from-backup.sh \
+RAW_CHUNKS_ARCHIVE=.search-experiment/backups/<timestamp>/youtube_transcript_chunks.engagement.jsonl.gz \
+  scripts/build-raw-generation-from-backup.sh \
   .search-experiment/backups/<timestamp> \
   .search-experiment/raw-index-<timestamp>
 ```
@@ -119,7 +120,8 @@ The wrapper verifies backup checksums, compares document/channel counts, and
 records elapsed time and sampled peak RSS for the release binary. It only
 builds a versioned candidate; activation remains a separate,
 rollback-preserving operation after the search contract and resource gates
-pass.
+pass. A custom enriched chunks archive must have a sibling `.sha256` file and
+is verified independently from the immutable source backup.
 
 ## Deployment and rollback
 

@@ -39,6 +39,8 @@ multi-gigabyte corpus:
 bun scripts/enrich-search-engagement.ts \
   youtube_transcript_chunks.jsonl.gz \
   youtube_transcript_chunks.engagement.jsonl.gz
+sha256sum youtube_transcript_chunks.engagement.jsonl.gz \
+  > youtube_transcript_chunks.engagement.jsonl.gz.sha256
 ```
 
 The builder consolidates each counter once per video, using the maximum seen
