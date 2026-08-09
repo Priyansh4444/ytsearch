@@ -27,7 +27,6 @@ export function saveRecentSearch(
     query: request.query.trim(),
     youtuber: normalizeHandle(request.youtuber),
     sort: request.sort,
-    mode: request.mode,
     searchedAt,
   };
   const key = recentKey(recent);
@@ -57,7 +56,6 @@ function recentKey(search: RecentSearch): string {
     search.query.trim().toLocaleLowerCase(),
     normalizeHandle(search.youtuber),
     search.sort,
-    search.mode,
   ].join("\u0000");
 }
 
@@ -69,7 +67,6 @@ function isRecentSearch(value: unknown): value is RecentSearch {
     candidate.query.trim().length > 0 &&
     typeof candidate.youtuber === "string" &&
     isSearchSort(candidate.sort) &&
-    ["lexical", "semantic"].includes(candidate.mode ?? "") &&
     typeof candidate.searchedAt === "string"
   );
 }

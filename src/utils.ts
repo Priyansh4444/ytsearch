@@ -1,7 +1,10 @@
+import { loadEffectRuntime } from "./effect-loader";
+
 export type HighlightPart = {
   text: string;
   highlighted: boolean;
 };
+let entityDecoder: HTMLTextAreaElement | undefined;
 
 export function creatorFromPath(): string | null {
   const firstSegment = window.location.pathname.split("/").filter(Boolean)[0]?.trim();
@@ -47,19 +50,8 @@ export function formatDate(value: string | undefined): string {
 }
 
 export async function copyToClipboard(value: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value);
-    return;
-  }
-
-  const textarea = document.createElement("textarea");
-  textarea.value = value;
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.append(textarea);
-  textarea.select();
-  document.execCommand("copy");
-  textarea.remove();
+  const { runCopyToClipboard } = await loadEffectRuntime();
+  await runCopyToClipboard(value);
 }
 
 export function highlightedParts(
@@ -67,11 +59,11 @@ export function highlightedParts(
   highlight: string | undefined,
   query: string,
 ): HighlightPart[] {
-  if (highlight) return partsFromTypesenseSnippet(highlight);
+  if (highlight) return partsFromTaggedSnippet(highlight);
   return partsFromQuery(text, query);
 }
 
-function partsFromTypesenseSnippet(snippet: string): HighlightPart[] {
+function partsFromTaggedSnippet(snippet: string): HighlightPart[] {
   const parts: HighlightPart[] = [];
   const regex = /<mark>(.*?)<\/mark>/gis;
   let lastIndex = 0;
@@ -121,7 +113,7 @@ function escapeRegex(value: string): string {
 }
 
 function decodeEntities(value: string): string {
-  const element = document.createElement("textarea");
-  element.innerHTML = value;
-  return element.value;
+  entityDecoder ??= document.createElement("textarea");
+  entityDecoder.innerHTML = value;
+  return entityDecoder.value;
 }

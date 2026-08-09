@@ -1,16 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const posthog = vi.hoisted(() => {
-  const capture = vi.fn();
-  const client = { capture };
-  const constructor = vi.fn(function PostHog() {
-    return client;
-  });
-  return { capture, client, constructor };
-});
+const runtime = vi.hoisted(() => ({
+  capture: vi.fn().mockResolvedValue(undefined),
+}));
 
-vi.mock("posthog-js-lite", () => ({
-  default: posthog.constructor,
+vi.mock("./effect-loader", () => ({
+  loadEffectRuntime: () => Promise.resolve({ runCaptureAnalyticsEvent: runtime.capture }),
 }));
 
 describe("analytics", () => {
@@ -24,43 +19,47 @@ describe("analytics", () => {
   it("queues an early search event and excludes the query text", async () => {
     const analytics = await import("./analytics");
 
-    analytics.initializeAnalytics();
     analytics.captureSearchSubmitted({
       query: "private search text",
       youtuber: "@example",
       page: 1,
       sort: "relevance",
-      mode: "lexical",
     });
+    analytics.initializeAnalytics();
 
-    await vi.waitFor(() => expect(posthog.capture).toHaveBeenCalledTimes(2));
-    expect(posthog.capture).toHaveBeenNthCalledWith(1, "search_submitted", {
-      query_length: 19,
-      query_terms: 3,
-      filtered_to_channel: true,
-      sort: "relevance",
-      page: 1,
-    });
-    expect(posthog.capture).toHaveBeenNthCalledWith(2, "page_view", { path: "/" });
-    expect(JSON.stringify(posthog.capture.mock.calls)).not.toContain("private search text");
+    await vi.waitFor(() => expect(runtime.capture).toHaveBeenCalledTimes(2));
+    expect(runtime.capture).toHaveBeenNthCalledWith(
+      1,
+      { apiKey: "phc_test_project", apiHost: "https://analytics.example.com" },
+      "search_submitted",
+      {
+        query_length: 19,
+        query_terms: 3,
+        filtered_to_channel: true,
+        sort: "relevance",
+        page: 1,
+      },
+    );
+    expect(runtime.capture).toHaveBeenNthCalledWith(
+      2,
+      { apiKey: "phc_test_project", apiHost: "https://analytics.example.com" },
+      "page_view",
+      { path: "/" },
+    );
+    expect(JSON.stringify(runtime.capture.mock.calls)).not.toContain("private search text");
   });
 
-  it("initializes once with the privacy-preserving production settings", async () => {
+  it("initializes once and uses the configured capture host", async () => {
     const analytics = await import("./analytics");
 
     analytics.initializeAnalytics();
     analytics.initializeAnalytics();
 
-    await vi.waitFor(() => expect(posthog.constructor).toHaveBeenCalledOnce());
-    const [key, config] = posthog.constructor.mock.calls[0]!;
-    expect(key).toBe("phc_test_project");
-    expect(config).toMatchObject({
-      host: "https://analytics.example.com",
-      autocapture: false,
-      captureHistoryEvents: false,
-      disableRemoteFeatureFlags: true,
-      persistence: "localStorage",
-      preloadFeatureFlags: false,
-    });
+    await vi.waitFor(() => expect(runtime.capture).toHaveBeenCalledOnce());
+    expect(runtime.capture).toHaveBeenCalledWith(
+      { apiKey: "phc_test_project", apiHost: "https://analytics.example.com" },
+      "page_view",
+      { path: "/" },
+    );
   });
 });

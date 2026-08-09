@@ -7,7 +7,7 @@ import {
 } from "./search-sorts";
 
 describe("search sorts", () => {
-  test("keeps engagement choices exclusive to the experimental UI", () => {
+  test("gates engagement choices behind the production feature flag", () => {
     expect(searchSortOptions(false).map(([value]) => value)).toEqual([
       "relevance",
       "published_desc",

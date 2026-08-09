@@ -11,7 +11,6 @@ const request = (query: string, page = 1) => ({
   youtuber: "@Example",
   page,
   sort: "relevance" as const,
-  mode: "lexical" as const,
 });
 
 describe("recent searches", () => {
@@ -29,7 +28,6 @@ describe("recent searches", () => {
         query: "Rust testing",
         youtuber: "@Example",
         sort: "relevance",
-        mode: "lexical",
         searchedAt: "2026-07-26T20:00:00Z",
       },
     ]);

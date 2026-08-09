@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import type { Component } from "solid-js";
 import { highlightedParts } from "../utils";
 
@@ -7,7 +7,7 @@ export const HighlightedText: Component<{
   highlight?: string;
   query: string;
 }> = (props) => {
-  const parts = () => highlightedParts(props.text, props.highlight, props.query);
+  const parts = createMemo(() => highlightedParts(props.text, props.highlight, props.query));
 
   return (
     <>

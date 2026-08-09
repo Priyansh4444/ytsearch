@@ -26,7 +26,7 @@ export const ChannelAvatar: Component<{
   const avatarUrl = () => {
     const channel = props.channel;
     if (imageFailed() || !channel?.channel_id || !channel.avatar_url) return undefined;
-    return `${API_BASE_URL}/api/channel-images/${encodeURIComponent(channel.channel_id)}?v=${imageVersion(channel.avatar_url)}`;
+    return `${API_BASE_URL}/api/channel-images/${encodeURIComponent(channel.channel_id)}?v=${imageVersion(channel.avatar_url)}&s=96`;
   };
 
   return (
@@ -46,9 +46,12 @@ export const ChannelAvatar: Component<{
         <img
           src={avatarUrl()}
           alt={`${props.channel?.name ?? "Channel"} profile picture`}
+          width="96"
+          height="96"
           class={`${sizeClass()} ${outlineClass()} aspect-square max-w-none shrink-0 rounded-full object-cover`}
           style={transitionStyle()}
           loading={props.size === "compact" ? "lazy" : "eager"}
+          decoding="async"
           onError={() => setImageFailed(true)}
         />
       )}

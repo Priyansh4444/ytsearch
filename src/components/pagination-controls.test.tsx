@@ -7,6 +7,7 @@ const response = (hasNextPage: boolean): SearchResponse => ({
   query: "solid",
   total_moments: 1,
   total_videos: 1,
+  totals_approximate: false,
   total_found: 1,
   out_of: 1,
   time_to_first_result_ms: 1,

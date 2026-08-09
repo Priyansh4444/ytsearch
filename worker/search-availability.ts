@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import {
   evaluateSearchSchedule,
   nextPublicOpening,
@@ -27,32 +28,38 @@ export type SearchAvailability = {
 
 type AvailabilityEnvironment = {
   SEARCH_SCHEDULE_MODE?: string;
-  TYPESENSE_HEALTH_URL: string;
+  RAW_SEARCH_HEALTH_URL: string;
 };
 
 export function scheduleEnforced(env: AvailabilityEnvironment): boolean {
   return env.SEARCH_SCHEDULE_MODE === "enforce";
 }
 
-export async function searchAvailability(
+export const searchAvailabilityEffect = (
   env: AvailabilityEnvironment,
   now = new Date(),
-): Promise<SearchAvailability> {
-  const schedule = evaluateSearchSchedule(now);
-  const enforced = scheduleEnforced(env);
-  if (enforced && schedule.phase !== "open") {
-    return availability(
-      schedule.phase === "prewarm" ? "prewarming" : "scheduled_offline",
-      false,
-      enforced,
-      schedule,
-    );
-  }
+): Effect.Effect<SearchAvailability> =>
+  Effect.gen(function* () {
+    const schedule = evaluateSearchSchedule(now);
+    const enforced = scheduleEnforced(env);
+    if (enforced && schedule.phase !== "open") {
+      return availability(
+        schedule.phase === "prewarm" ? "prewarming" : "scheduled_offline",
+        false,
+        enforced,
+        schedule,
+      );
+    }
 
-  const healthy = await typesenseHealthy(env);
-  const status = healthy ? "ready" : schedule.phase === "open" ? "starting" : "degraded";
-  return availability(status, healthy, enforced, schedule);
-}
+    const healthy = yield* rawSearchHealthyEffect(env);
+    const status = healthy ? "ready" : schedule.phase === "open" ? "starting" : "degraded";
+    return availability(status, healthy, enforced, schedule);
+  });
+
+export const searchAvailability = (
+  env: AvailabilityEnvironment,
+  now = new Date(),
+): Promise<SearchAvailability> => Effect.runPromise(searchAvailabilityEffect(env, now));
 
 export function scheduledOfflineResponse(now = new Date()): Response {
   const availableAt = nextPublicOpening(now);
@@ -76,17 +83,22 @@ export function scheduledOfflineResponse(now = new Date()): Response {
   );
 }
 
-export async function typesenseHealthy(env: AvailabilityEnvironment): Promise<boolean> {
-  try {
-    const response = await fetch(env.TYPESENSE_HEALTH_URL, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(2_000),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
+export const rawSearchHealthyEffect = (env: AvailabilityEnvironment): Effect.Effect<boolean> =>
+  Effect.tryPromise({
+    try: (signal) =>
+      fetch(env.RAW_SEARCH_HEALTH_URL, {
+        headers: { Accept: "application/json" },
+        signal,
+      }),
+    catch: () => false,
+  }).pipe(
+    Effect.timeout("2 seconds"),
+    Effect.map((response) => response.ok),
+    Effect.catch(() => Effect.succeed(false)),
+  );
+
+export const rawSearchHealthy = (env: AvailabilityEnvironment): Promise<boolean> =>
+  Effect.runPromise(rawSearchHealthyEffect(env));
 
 function availability(
   status: SearchAvailabilityStatus,

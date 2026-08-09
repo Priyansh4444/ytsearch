@@ -7,7 +7,20 @@ export const LoadingState: Component = () => (
   <div class="grid gap-2" role="status" aria-label="Loading search results">
     <For each={[0, 1, 2]}>
       {() => (
-        <div class="h-40 border border-vesper-border bg-vesper-panel motion-safe:animate-pulse" />
+        <div
+          class="grid overflow-hidden border border-vesper-border bg-vesper-panel motion-safe:animate-pulse xl:grid-cols-[minmax(32rem,40rem)_1fr]"
+          aria-hidden="true"
+        >
+          <div class="aspect-video bg-vesper-panel2" />
+          <div class="flex flex-col gap-4 p-4">
+            <div class="h-6 w-3/4 bg-white/10" />
+            <div class="h-4 w-2/5 bg-white/5" />
+            <div class="mt-auto grid gap-2">
+              <div class="h-16 bg-white/5" />
+              <div class="h-16 bg-white/5" />
+            </div>
+          </div>
+        </div>
       )}
     </For>
   </div>

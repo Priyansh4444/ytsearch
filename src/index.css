@@ -32,7 +32,18 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  overflow-x: hidden;
   background: #050505;
+}
+
+.overflow-wrap-anywhere {
+  overflow-wrap: anywhere;
+}
+
+@supports (padding: env(safe-area-inset-bottom)) {
+  body {
+    padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
+  }
 }
 
 button,
@@ -112,6 +123,86 @@ select {
 .search-submit:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 2px var(--color-vesper-bg);
+}
+
+.search-result-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 32rem;
+}
+
+.video-poster {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--color-vesper-panel2), #000000);
+}
+
+.video-poster-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.8;
+  outline: 1px solid oklch(1 0 0 / 0.1);
+  outline-offset: -1px;
+  transition:
+    opacity 150ms ease-out,
+    scale 150ms ease-out;
+}
+
+.video-poster-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background-color: rgb(0 0 0 / 15%);
+  transition: background-color 150ms ease-out;
+}
+
+.video-poster-play {
+  display: grid;
+  width: 3.5rem;
+  height: 3.5rem;
+  place-items: center;
+  border-radius: 9999px;
+  background-color: rgb(0 0 0 / 75%);
+  color: #ffffff;
+  box-shadow:
+    0 10px 15px -3px rgb(0 0 0 / 35%),
+    0 0 0 1px rgb(255 255 255 / 20%);
+  transition:
+    background-color 150ms ease-out,
+    scale 150ms ease-out;
+}
+
+.video-poster:hover .video-poster-image {
+  opacity: 0.95;
+  scale: 1.015;
+}
+
+.video-poster:hover .video-poster-overlay {
+  background-color: rgb(0 0 0 / 5%);
+}
+
+.video-poster:hover .video-poster-play {
+  background-color: rgb(0 0 0 / 90%);
+  scale: 1.05;
+}
+
+.copy-icon {
+  display: grid;
+  place-items: center;
+  transition:
+    opacity 300ms cubic-bezier(0.2, 0, 0, 1),
+    filter 300ms cubic-bezier(0.2, 0, 0, 1),
+    scale 300ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.copy-icon-hidden {
+  scale: 0.25;
+  opacity: 0;
+  filter: blur(4px);
 }
 
 @media (forced-colors: active) {
@@ -206,7 +297,6 @@ select {
     transform 120ms cubic-bezier(0.22, 1, 0.36, 1),
     color 180ms ease,
     filter 180ms ease;
-  will-change: transform;
 }
 
 .channel-swarm-item img,
@@ -219,7 +309,6 @@ select {
   transition:
     opacity 180ms ease,
     scale 180ms ease,
-    border-color 180ms ease,
     box-shadow 180ms ease;
 }
 
@@ -304,9 +393,29 @@ select {
   .animate-spin {
     animation: none;
   }
+
+  .video-poster-image,
+  .video-poster-overlay,
+  .video-poster-play,
+  .copy-icon {
+    transition: none;
+  }
 }
 
 @media (max-width: 639px) {
+  .search-form-grid {
+    gap: 0.625rem;
+  }
+
+  .search-options,
+  .search-submit {
+    width: 100%;
+  }
+
+  .search-submit {
+    min-height: 2.75rem;
+  }
+
   .channel-swarm {
     inset: 0.5rem -0.5rem;
     min-height: calc(100% - 1rem);

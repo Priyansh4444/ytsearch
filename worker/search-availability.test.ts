@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { searchAvailability } from "./search-availability";
+import * as Effect from "effect/Effect";
+import { searchAvailability, rawSearchHealthyEffect } from "./search-availability";
 
-const healthUrl = "https://typesense.internal/health";
+const healthUrl = "https://raw.internal/health";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -15,7 +16,7 @@ describe("search availability", () => {
     const result = await searchAvailability(
       {
         SEARCH_SCHEDULE_MODE: "enforce",
-        TYPESENSE_HEALTH_URL: healthUrl,
+        RAW_SEARCH_HEALTH_URL: healthUrl,
       },
       new Date(now),
     );
@@ -40,7 +41,7 @@ describe("search availability", () => {
     const result = await searchAvailability(
       {
         SEARCH_SCHEDULE_MODE: "enforce",
-        TYPESENSE_HEALTH_URL: healthUrl,
+        RAW_SEARCH_HEALTH_URL: healthUrl,
       },
       new Date("2026-01-15T20:00:00Z"),
     );
@@ -58,7 +59,7 @@ describe("search availability", () => {
     const result = await searchAvailability(
       {
         SEARCH_SCHEDULE_MODE: "observe",
-        TYPESENSE_HEALTH_URL: healthUrl,
+        RAW_SEARCH_HEALTH_URL: healthUrl,
       },
       new Date("2026-01-15T18:00:00Z"),
     );
@@ -69,5 +70,13 @@ describe("search availability", () => {
       search_enabled: false,
       enforced: false,
     });
+  });
+
+  it("turns transport failures into an unhealthy result", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network unavailable")));
+
+    await expect(
+      Effect.runPromise(rawSearchHealthyEffect({ RAW_SEARCH_HEALTH_URL: healthUrl })),
+    ).resolves.toBe(false);
   });
 });

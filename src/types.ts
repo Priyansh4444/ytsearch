@@ -3,8 +3,8 @@ export type SearchHit = {
   video_id: string;
   title: string;
   text: string;
-  prev_text?: string;
-  next_text?: string;
+  prev_text?: string | null;
+  next_text?: string | null;
   text_highlight?: string;
   title_highlight?: string;
   match_kind: "transcript" | "title";
@@ -49,19 +49,19 @@ export type SearchSort =
   | "comments_desc"
   | "published_desc"
   | "published_asc";
-export type SearchMode = "lexical" | "semantic";
 
 export type SearchResponse = {
   query: string;
   total_moments: number;
   total_videos: number;
+  totals_approximate: boolean;
   total_found: number;
   out_of: number;
   time_to_first_result_ms: number;
   page: number;
   per_page: number;
   sort: SearchSort;
-  mode: SearchMode;
+  mode: "lexical";
   has_next_page: boolean;
   hits: SearchHit[];
   videos: SearchVideoResult[];
@@ -72,7 +72,6 @@ export type SearchRequest = {
   youtuber: string;
   page: number;
   sort: SearchSort;
-  mode: SearchMode;
 };
 
 export type SearchAvailabilityStatus =

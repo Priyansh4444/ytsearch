@@ -1,11 +1,11 @@
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createSignal, onCleanup } from "solid-js";
 import type { Component } from "solid-js";
 import { searchVideoMoments } from "../api";
 import { capture } from "../analytics";
 import type { SearchHit, SearchVideoResult } from "../types";
 import { copyToClipboard, formatDate } from "../utils";
 import { HighlightedText } from "./highlighted-text";
-import { ChevronDownIcon, LoaderCircleIcon, ThumbsDownIcon, ThumbsUpIcon } from "./icons";
+import { ChevronDownIcon, LoaderCircleIcon, PlayIcon, ThumbsDownIcon, ThumbsUpIcon } from "./icons";
 import { CopyLinkButton } from "./toolbar-actions";
 
 export const VideoResult: Component<{ video: SearchVideoResult; query: string; rank: number }> = (
@@ -15,20 +15,38 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
   const [showAllMoments, setShowAllMoments] = createSignal(false);
   const [momentsLoading, setMomentsLoading] = createSignal(false);
   const [momentsError, setMomentsError] = createSignal<string>();
+  const momentsController = new AbortController();
+  onCleanup(() => momentsController.abort());
   const visibleHits = () => (showAllMoments() ? allHits() : allHits().slice(0, 3));
   const hasHiddenMoments = () => Math.max(props.video.match_count, allHits().length) > 3;
   const [selectedHitId, setSelectedHitId] = createSignal<string>();
+  const [playerActive, setPlayerActive] = createSignal(false);
   const selectedHit = () =>
     visibleHits().find((hit) => hit.id === selectedHitId()) ??
     visibleHits()[0] ??
     props.video.hits[0];
+  const playerUrl = () => autoplayEmbedUrl(selectedHit()?.embed_url ?? props.video.embed_url);
+  const posterThumbnail = () =>
+    (props.video.thumbnail ?? selectedHit()?.thumbnail)?.replace(
+      /^(https:\/\/i\.ytimg\.com\/vi\/[^/]+\/)(?:maxres|sd|hq720)default\.jpg(?:\?.*)?$/,
+      "$1hqdefault.jpg",
+    );
   const [copied, setCopied] = createSignal(false);
+  const activatePlayer = () => {
+    if (playerActive()) return;
+    setPlayerActive(true);
+    capture("result_player_opened", resultProperties(props));
+  };
   const expandMoments = async () => {
     if (momentsLoading()) return;
     setMomentsLoading(true);
     setMomentsError(undefined);
     try {
-      const response = await searchVideoMoments(props.query, props.video.video_id);
+      const response = await searchVideoMoments(
+        props.query,
+        props.video.video_id,
+        momentsController.signal,
+      );
       const completeVideo = response.videos.find(
         (video) => video.video_id === props.video.video_id,
       );
@@ -53,31 +71,67 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
   };
 
   return (
-    <article class="border border-vesper-border bg-vesper-panel transition-colors duration-300 hover:border-vesper-dim">
-      <div class="grid gap-0 xl:grid-cols-[minmax(32rem,40rem)_1fr]">
-        <div class="relative bg-vesper-bg">
-          <iframe
-            class="aspect-video w-full"
-            src={selectedHit()?.embed_url ?? props.video.embed_url}
-            title={`YouTube player for ${props.video.title}`}
-            loading="lazy"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-            referrerpolicy="strict-origin-when-cross-origin"
-            allowfullscreen
-          />
+    <article class="search-result-card min-w-0 max-w-full overflow-hidden border border-vesper-border bg-vesper-panel transition-colors duration-150 hover:border-vesper-dim">
+      <div class="grid min-w-0 max-w-full gap-0 xl:grid-cols-[minmax(32rem,40rem)_1fr]">
+        <div class="relative min-w-0 bg-vesper-bg">
+          <Show
+            when={playerActive()}
+            fallback={
+              <button
+                type="button"
+                class="pressable video-poster"
+                aria-label={`Play ${props.video.title} at ${selectedHit()?.timestamp ?? "the first match"}`}
+                onClick={activatePlayer}
+              >
+                <Show when={posterThumbnail()}>
+                  {(thumbnail) => (
+                    <img
+                      src={thumbnail()}
+                      alt=""
+                      width="1280"
+                      height="720"
+                      loading="lazy"
+                      decoding="async"
+                      class="video-poster-image"
+                    />
+                  )}
+                </Show>
+                <span class="video-poster-overlay">
+                  <span class="video-poster-play">
+                    <PlayIcon
+                      class="translate-x-px"
+                      size={24}
+                      stroke-width="2"
+                      aria-hidden="true"
+                    />
+                  </span>
+                </span>
+              </button>
+            }
+          >
+            <iframe
+              class="aspect-video w-full"
+              src={playerUrl()}
+              title={`YouTube player for ${props.video.title}`}
+              loading="lazy"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              referrerpolicy="strict-origin-when-cross-origin"
+              allowfullscreen
+            />
+          </Show>
           <span class="absolute bottom-2 start-2 bg-vesper-bg/90 px-2 py-1 text-xs font-semibold tabular-nums text-vesper-yellow ring-1 ring-vesper-border">
             {selectedHit()?.timestamp ?? "title"}
           </span>
         </div>
 
-        <div class="flex flex-col gap-3 p-4">
-          <div class="flex items-start justify-between gap-4">
+        <div class="flex min-w-0 max-w-full flex-col gap-3 p-4">
+          <div class="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
             <div class="min-w-0">
               <a
                 href={props.video.youtube_url}
                 target="_blank"
                 rel="noreferrer"
-                class="text-lg font-semibold leading-snug text-white transition-colors hover:text-vesper-yellow"
+                class="block break-words text-lg font-semibold leading-snug text-white transition-colors hover:text-vesper-yellow"
                 onClick={() => capture("result_opened", resultProperties(props))}
               >
                 <HighlightedText
@@ -86,7 +140,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
                   query={props.query}
                 />
               </a>
-              <p class="mt-1 text-sm text-vesper-muted">
+              <p class="mt-1 break-words text-sm text-vesper-muted">
                 {props.video.youtuber_name} · {props.video.youtuber_handle}
                 <Show when={props.video.published_at}>
                   {" "}
@@ -97,7 +151,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
                 {(summary) => <p class="mt-1 text-xs tabular-nums text-vesper-dim">{summary()}</p>}
               </Show>
             </div>
-            <div class="flex shrink-0 items-center gap-2">
+            <div class="flex w-full shrink-0 items-center gap-2 sm:w-auto">
               <CopyLinkButton
                 copied={copied()}
                 onClick={() => void copyVideoLink()}
@@ -107,7 +161,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
                 href={selectedHit()?.youtube_url ?? props.video.youtube_url}
                 target="_blank"
                 rel="noreferrer"
-                class="pressable inline-flex h-10 items-center border border-vesper-control bg-vesper-bg px-3 text-sm font-medium text-vesper-green hover:border-vesper-green"
+                class="pressable inline-flex h-10 min-w-0 flex-1 items-center justify-center border border-vesper-control bg-vesper-bg px-3 text-sm font-medium text-vesper-green hover:border-vesper-green sm:flex-none"
                 onClick={() => capture("result_opened", resultProperties(props))}
               >
                 Open on YouTube
@@ -126,6 +180,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
                   selected={hit.id === selectedHit()?.id}
                   onSelect={() => {
                     setSelectedHitId(hit.id);
+                    activatePlayer();
                     capture("result_timestamp_selected", {
                       ...resultProperties(props),
                       match_kind: hit.match_kind,
@@ -187,6 +242,12 @@ function engagementSummary(video: SearchVideoResult): string | undefined {
   return present.length > 0 ? present.join(" · ") : undefined;
 }
 
+function autoplayEmbedUrl(value: string): string {
+  const url = new URL(value);
+  url.searchParams.set("autoplay", "1");
+  return url.toString();
+}
+
 const TranscriptExcerpt: Component<{
   hit: SearchHit;
   query: string;
@@ -209,7 +270,7 @@ const TranscriptExcerpt: Component<{
 
   return (
     <div
-      class={`grid grid-cols-[1fr_auto] items-stretch border bg-vesper-bg transition-colors ${
+      class={`grid min-w-0 max-w-full grid-cols-[minmax(0,1fr)_auto] items-stretch border bg-vesper-bg transition-colors ${
         props.selected
           ? "border-vesper-yellow"
           : "border-vesper-border hover:border-vesper-yellow/70"
@@ -218,7 +279,7 @@ const TranscriptExcerpt: Component<{
       <button
         type="button"
         onClick={props.onSelect}
-        class="pressable min-w-0 p-3 text-left text-sm leading-6 text-white"
+        class="pressable min-w-0 overflow-wrap-anywhere p-3 text-left text-sm leading-6 text-white"
       >
         <Show
           when={props.hit.match_kind === "transcript"}

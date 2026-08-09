@@ -8,7 +8,7 @@ const ENGAGEMENT_SORTS = [
   "comments_desc",
 ] as const;
 
-export const engagementSortsEnabled = import.meta.env.VITE_EXPERIMENTAL_RAW_SEARCH === "true";
+export const engagementSortsEnabled = import.meta.env.VITE_ENGAGEMENT_SORTS === "true";
 
 export const searchSortOptions = (engagement = engagementSortsEnabled) =>
   engagement

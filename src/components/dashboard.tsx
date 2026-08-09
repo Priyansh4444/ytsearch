@@ -10,7 +10,7 @@ const number = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
 const integer = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
 export const Dashboard: Component = () => {
-  const [snapshot, { refetch }] = createResource(dashboardData);
+  const [snapshot, { refetch }] = createResource(() => dashboardData());
   const metrics = createMemo(() => calculateDashboardMetrics(snapshot()?.channels ?? []));
   const channels = createMemo(() =>
     [...(snapshot()?.channels ?? [])].sort(
@@ -23,10 +23,15 @@ export const Dashboard: Component = () => {
   onMount(() => {
     const previousTitle = document.title;
     document.title = "Dashboard · YouTube Search";
-    const interval = window.setInterval(() => void refetch(), 60_000);
+    const refreshVisiblePage = () => {
+      if (!document.hidden) void refetch();
+    };
+    const interval = window.setInterval(refreshVisiblePage, 60_000);
+    document.addEventListener("visibilitychange", refreshVisiblePage);
     onCleanup(() => {
       document.title = previousTitle;
       window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshVisiblePage);
     });
   });
 

@@ -1,20 +1,18 @@
 import { For, Show, createEffect, createSignal } from "solid-js";
 import type { Component } from "solid-js";
-import type { IndexedChannel, SearchMode, SearchSort } from "../types";
+import type { IndexedChannel, SearchSort } from "../types";
 import { searchSortOptions } from "../search-sorts";
 import { ChannelAvatar, indexedCountLabel } from "./channel-profile";
 
 export const SearchForm: Component<{
   query: string;
   sort: SearchSort;
-  searchMode: SearchMode;
-  semanticSearchEnabled: boolean;
   searchAvailable: boolean;
+  busy?: boolean;
   home: boolean;
   selectedChannelName?: string;
   onQueryInput: (query: string) => void;
   onSortChange: (sort: SearchSort) => void;
-  onSearchModeChange: (mode: SearchMode) => void;
   mode: "search" | "request" | "channel";
   onSubmit: () => void;
   channelSuggestions: IndexedChannel[];
@@ -96,19 +94,6 @@ export const SearchForm: Component<{
           />
           <Show when={props.mode === "search"}>
             <div class="search-options flex min-w-0 gap-2">
-              <Show when={props.semanticSearchEnabled}>
-                <select
-                  value={props.searchMode}
-                  onChange={(event) =>
-                    props.onSearchModeChange(event.currentTarget.value as SearchMode)
-                  }
-                  aria-label="Search mode"
-                  class="min-w-0 flex-1 border border-vesper-control bg-vesper-bg px-3 py-3 text-base text-white transition-colors focus:border-vesper-yellow sm:text-sm"
-                >
-                  <option value="lexical">Keyword</option>
-                  <option value="semantic">Semantic</option>
-                </select>
-              </Show>
               <select
                 value={props.sort}
                 onChange={(event) => props.onSortChange(event.currentTarget.value as SearchSort)}
@@ -123,11 +108,12 @@ export const SearchForm: Component<{
           </Show>
           <button
             type="submit"
-            disabled={props.mode === "search" && !props.searchAvailable}
-            class={`pressable search-submit border px-6 py-3 font-semibold text-vesper-bg ${
+            disabled={props.mode === "search" && (!props.searchAvailable || props.busy)}
+            aria-busy={props.busy}
+            class={`pressable search-submit min-w-28 border px-6 py-3 font-semibold text-vesper-bg ${
               props.mode === "request"
                 ? "border-vesper-green bg-vesper-green hover:bg-vesper-blue"
-                : !props.searchAvailable
+                : !props.searchAvailable || props.busy
                   ? "cursor-not-allowed border-vesper-control bg-vesper-dim text-vesper-bg"
                   : "border-vesper-yellow bg-vesper-yellow hover:bg-vesper-orange"
             }`}
@@ -136,9 +122,11 @@ export const SearchForm: Component<{
               ? "Request index"
               : props.mode === "channel"
                 ? "Open channel"
-                : !props.searchAvailable
-                  ? "Available at noon"
-                  : "Search"}
+                : props.busy
+                  ? "Searching…"
+                  : !props.searchAvailable
+                    ? "Available at noon"
+                    : "Search"}
           </button>
         </div>
         <Show when={suggestionsVisible()}>

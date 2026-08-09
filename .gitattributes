@@ -1,0 +1,2 @@
+# Wrangler owns this generated file and currently emits one metadata line with a trailing space.
+worker-configuration.d.ts whitespace=-blank-at-eol

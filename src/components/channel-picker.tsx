@@ -46,6 +46,7 @@ export const ChannelPicker: Component<{
         const offset = magneticOffset(event.clientX - centerX, event.clientY - centerY);
         if (offset.x === 0 && offset.y === 0) continue;
         nextActiveElements.add(element);
+        element.style.willChange = "transform";
         element.style.setProperty("--magnet-x", `${offset.x}px`);
         element.style.setProperty("--magnet-y", `${offset.y}px`);
       }
@@ -60,9 +61,16 @@ export const ChannelPicker: Component<{
   const releaseSwarm = () => {
     for (const element of activeElements) resetMagnet(element);
     activeElements.clear();
+    if (stage) stage.dataset.cursorActive = "false";
   };
 
   onMount(() => {
+    if (
+      !window.matchMedia("(pointer: fine)").matches ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
     // Track over the whole viewport so the magnetic field remains continuous
     // while the swarm canvas itself stays pointer-transparent.
     window.addEventListener("pointermove", moveSwarm, { passive: true });
@@ -124,6 +132,7 @@ function positionChannels(channels: IndexedChannel[]): SwarmItem[] {
 }
 
 function resetMagnet(element: HTMLAnchorElement) {
+  element.style.removeProperty("will-change");
   element.style.setProperty("--magnet-x", "0px");
   element.style.setProperty("--magnet-y", "0px");
 }

@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test.use({ timezoneId: "America/Los_Angeles" });
+
 const channel = {
   id: "example",
   handle: "@example",
@@ -10,10 +12,26 @@ const channel = {
   indexed_chunk_count: 50,
 };
 
+const searchMoment = {
+  id: "moment1",
+  video_id: "video1",
+  title: "Reliable Rust testing",
+  text: "A practical approach to Rust testing.",
+  match_kind: "transcript",
+  youtuber_handle: "@example",
+  youtuber_name: "Example Creator",
+  content_kind: "video",
+  t_start_ms: 12_000,
+  timestamp: "0:12",
+  youtube_url: "https://www.youtube.com/watch?v=video1&t=12s",
+  embed_url: "about:blank",
+};
+
 const searchResponse = {
   query: "rust testing",
   total_moments: 1,
   total_videos: 1,
+  totals_approximate: false,
   total_found: 1,
   out_of: 1,
   time_to_first_result_ms: 8,
@@ -22,7 +40,7 @@ const searchResponse = {
   sort: "relevance",
   mode: "lexical",
   has_next_page: false,
-  hits: [],
+  hits: [searchMoment],
   videos: [
     {
       video_id: "video1",
@@ -34,22 +52,7 @@ const searchResponse = {
       youtube_url: "https://www.youtube.com/watch?v=video1&t=12s",
       embed_url: "about:blank",
       best_timestamp: "0:12",
-      hits: [
-        {
-          id: "moment1",
-          video_id: "video1",
-          title: "Reliable Rust testing",
-          text: "A practical approach to Rust testing.",
-          match_kind: "transcript",
-          youtuber_handle: "@example",
-          youtuber_name: "Example Creator",
-          content_kind: "video",
-          t_start_ms: 12_000,
-          timestamp: "0:12",
-          youtube_url: "https://www.youtube.com/watch?v=video1&t=12s",
-          embed_url: "about:blank",
-        },
-      ],
+      hits: [searchMoment],
     },
   ],
 };
@@ -114,6 +117,10 @@ test("loads channels and completes a basic search", async ({ page }) => {
   await expect(page.getByRole("link", { name: /Reliable Rust testing/ })).toBeVisible();
   await expect(page.getByText("All channels", { exact: true })).toBeVisible();
   await expect(page.getByText("1 video · 1 moment · 8 ms to first result")).toBeVisible();
+  await expect(page.locator("iframe")).toHaveCount(0);
+  await page.getByRole("button", { name: "Play Reliable Rust testing at 0:12" }).click();
+  await expect(page.locator("iframe")).toHaveCount(1);
+  await expect(page.locator("iframe")).toHaveAttribute("src", /autoplay=1/);
 });
 
 test("searches battery gate within @t3dotgg", async ({ page }) => {
@@ -163,7 +170,7 @@ test("closed homepage renders immediately with private recent searches", async (
 
   await page.goto("/?q=bookmarked");
 
-  await expect(page.getByText(/Search hours: 12:00 PM–12:00 AM Pacific/)).toBeVisible();
+  await expect(page.getByText(/Search returns at 12:00 PM in 2h 0m 0s/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Available at noon" })).toBeDisabled();
   await expect(page.getByRole("heading", { name: "Recent searches" })).not.toBeVisible();
   await expect(page.locator(".animate-pulse")).toHaveCount(0);
@@ -285,23 +292,6 @@ for (const viewport of [
     expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
   });
 }
-
-test("semantic mode remains opt-in and is sent to the API", async ({ page }) => {
-  await page.goto("/");
-  const mode = page.getByRole("combobox", { name: "Search mode" });
-  await expect(mode).toHaveValue("lexical");
-  await mode.selectOption("semantic");
-
-  const requestPromise = page.waitForRequest(
-    (request) => request.url().includes("/api/search?") && request.url().includes("mode=semantic"),
-  );
-  await page.getByRole("combobox", { name: "Search transcripts" }).fill("security bug");
-  await page.getByRole("button", { name: "Search" }).click();
-  await requestPromise;
-
-  await expect(page).toHaveURL(/mode=semantic/);
-  await expect(page.locator("article")).toHaveCount(1);
-});
 
 test("dashboard reports catalog and operational metrics", async ({ page }) => {
   await page.goto("/dashboard");

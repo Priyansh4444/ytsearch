@@ -1,0 +1,14 @@
+diff --git a/dist/SchemaAST.d.ts b/dist/SchemaAST.d.ts
+index 56012be2ace8b836c862b1cd2fbf0706fba3c56f..bbfc61f96a59d5b71a7945c25141a3c97ff9d1e8 100644
+--- a/dist/SchemaAST.d.ts
++++ b/dist/SchemaAST.d.ts
+@@ -1562,4 +1562,9 @@ export declare const resolveTitle: (ast: AST) => string | undefined;
+  * @since 4.0.0
+  */
+ export declare const resolveDescription: (ast: AST) => string | undefined;
++/** @internal */
++export type Sentinel = {
++    readonly key: PropertyKey;
++    readonly literal: LiteralValue | symbol;
++};
+ //# sourceMappingURL=SchemaAST.d.ts.map

@@ -15,18 +15,25 @@ export const BackButton: Component<{ onClick: () => void }> = (props) => (
 
 export const CopyLinkButton: Component<{ copied: boolean; onClick: () => void; label?: string }> = (
   props,
-) => (
-  <button
-    type="button"
-    onClick={props.onClick}
-    class="pressable inline-flex size-10 items-center justify-center border border-vesper-control bg-vesper-panel text-vesper-muted hover:border-vesper-yellow hover:text-white"
-    aria-label={props.label ?? "Copy link"}
-    title={props.label ?? "Copy link"}
-  >
-    {props.copied ? (
-      <CheckIcon size={16} aria-hidden="true" />
-    ) : (
-      <CopyIcon size={16} aria-hidden="true" />
-    )}
-  </button>
-);
+) => {
+  const label = () => props.label ?? "Copy link";
+  const stateClass = (active: boolean) => (active ? "" : "copy-icon-hidden");
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      class="pressable inline-flex size-10 items-center justify-center border border-vesper-control bg-vesper-panel text-vesper-muted hover:border-vesper-yellow hover:text-white"
+      aria-label={props.copied ? `${label()} copied` : label()}
+      title={props.copied ? "Copied" : label()}
+    >
+      <span class="relative grid size-4 place-items-center">
+        <span class={`copy-icon absolute inset-0 ${stateClass(props.copied)}`}>
+          <CheckIcon size={16} aria-hidden="true" />
+        </span>
+        <span class={`copy-icon ${stateClass(!props.copied)}`}>
+          <CopyIcon size={16} aria-hidden="true" />
+        </span>
+      </span>
+    </button>
+  );
+};

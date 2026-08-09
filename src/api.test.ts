@@ -5,6 +5,7 @@ const emptySearch = (query = "rust"): SearchResponse => ({
   query,
   total_moments: 0,
   total_videos: 0,
+  totals_approximate: false,
   total_found: 0,
   out_of: 0,
   time_to_first_result_ms: 1,
@@ -38,7 +39,6 @@ describe("frontend API client", () => {
       youtuber: "@example",
       page: 2,
       sort: "published_desc",
-      mode: "lexical",
     });
 
     const url = new URL(String(fetchMock.mock.calls[0]?.[0]), "http://localhost");
@@ -47,12 +47,78 @@ describe("frontend API client", () => {
       per_page: "12",
       page: "2",
       sort: "published_desc",
-      mode: "lexical",
       youtuber: "@example",
     });
   });
 
-  test("retries one transient gateway failure and caches the successful result", async () => {
+  test("accepts search responses from backends that omit legacy approximate totals", async () => {
+    const response = { ...emptySearch() };
+    delete (response as Partial<SearchResponse>).totals_approximate;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(response)));
+    const { searchTranscripts } = await import("./api");
+
+    await expect(
+      searchTranscripts({
+        query: "rust",
+        youtuber: "",
+        page: 1,
+        sort: "relevance",
+      }),
+    ).resolves.toMatchObject({ totals_approximate: false });
+  });
+
+  test("accepts null context at transcript boundaries from older API images", async () => {
+    const boundaryHit = {
+      id: "cursor-video_0",
+      video_id: "cursor-video",
+      title: "Cursor",
+      text: "Cursor transcript boundary",
+      prev_text: null,
+      next_text: null,
+      match_kind: "transcript" as const,
+      youtuber_handle: "@cursor_ai",
+      youtuber_name: "Cursor",
+      content_kind: "video" as const,
+      t_start_ms: 0,
+      youtube_url: "https://www.youtube.com/watch?v=cursor-video&t=0s",
+      embed_url: "https://www.youtube-nocookie.com/embed/cursor-video?start=0&rel=0",
+    };
+    const response = {
+      ...emptySearch("curspr"),
+      total_moments: 1,
+      total_videos: 1,
+      total_found: 1,
+      hits: [boundaryHit],
+      videos: [
+        {
+          video_id: "cursor-video",
+          title: "Cursor",
+          youtuber_handle: "@cursor_ai",
+          youtuber_name: "Cursor",
+          content_kind: "video",
+          match_count: 1,
+          youtube_url: boundaryHit.youtube_url,
+          embed_url: boundaryHit.embed_url,
+          hits: [boundaryHit],
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(response)));
+    const { searchTranscripts } = await import("./api");
+
+    await expect(
+      searchTranscripts({
+        query: "curspr",
+        youtuber: "@cursor_ai",
+        page: 1,
+        sort: "relevance",
+      }),
+    ).resolves.toMatchObject({
+      hits: [{ prev_text: null, next_text: null }],
+    });
+  });
+
+  test("retries one transient gateway failure", async () => {
     const response = emptySearch();
     const fetchMock = vi
       .fn()
@@ -65,12 +131,58 @@ describe("frontend API client", () => {
       youtuber: "",
       page: 1,
       sort: "relevance" as const,
-      mode: "lexical" as const,
     };
 
     await expect(searchTranscripts(request)).resolves.toEqual(response);
-    await expect(searchTranscripts(request)).resolves.toEqual(response);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("reuses identical searches briefly for search-ahead submission", async () => {
+    let resolveFetch: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { searchTranscripts } = await import("./api");
+    const request = {
+      query: "rust",
+      youtuber: "",
+      page: 1,
+      sort: "relevance" as const,
+    };
+
+    const first = searchTranscripts(request);
+    const second = searchTranscripts(request);
+    expect(first).toBe(second);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+
+    resolveFetch?.(Response.json(emptySearch()));
+    await expect(first).resolves.toEqual(emptySearch());
+    await expect(searchTranscripts(request)).resolves.toEqual(emptySearch());
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  test("coalesces concurrent indexed-channel refreshes", async () => {
+    let resolveFetch: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { indexedChannels } = await import("./api");
+
+    const first = indexedChannels();
+    const second = indexedChannels();
+    expect(first).toBe(second);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+
+    resolveFetch?.(Response.json({ channels: [] }));
+    await expect(first).resolves.toEqual([]);
   });
 
   test("surfaces backend JSON errors to the interface", async () => {
@@ -108,7 +220,6 @@ describe("frontend API client", () => {
         youtuber: "",
         page: 1,
         sort: "relevance",
-        mode: "lexical",
       }),
     ).rejects.toMatchObject({
       code: "scheduled_offline",
@@ -119,6 +230,15 @@ describe("frontend API client", () => {
 
   test("rejects malformed successful JSON with actionable context", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("not-json", { status: 200 })));
+    const { indexedChannels } = await import("./api");
+
+    await expect(indexedChannels()).rejects.toThrow(
+      "Channel list returned an invalid response (HTTP 200)",
+    );
+  });
+
+  test("rejects well-formed JSON that violates the response schema", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ channels: [{ id: 42 }] })));
     const { indexedChannels } = await import("./api");
 
     await expect(indexedChannels()).rejects.toThrow(

@@ -32,12 +32,28 @@ const video: SearchVideoResult = {
   youtuber_name: "Creator",
   content_kind: "video",
   match_count: hits.length,
+  thumbnail: "https://i.ytimg.com/vi/video-1/maxresdefault.jpg",
   youtube_url: "https://youtube.test/watch?v=video-1",
   embed_url: "https://youtube.test/embed/video-1",
   hits,
 };
 
 describe("VideoResult", () => {
+  test("defers the YouTube player until the poster is activated", () => {
+    render(() => <VideoResult video={video} query="moment" rank={1} />);
+
+    expect(screen.queryByTitle("YouTube player for Test video")).not.toBeInTheDocument();
+    expect(document.querySelector("img")).toHaveAttribute(
+      "src",
+      "https://i.ytimg.com/vi/video-1/hqdefault.jpg",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Play Test video at 0:00" }));
+    expect(screen.getByTitle("YouTube player for Test video")).toHaveAttribute(
+      "src",
+      "https://youtube.test/embed/video-1?start=0&autoplay=1",
+    );
+  });
+
   test("loads and reveals every transcript moment", async () => {
     searchVideoMoments.mockResolvedValue({ videos: [video] });
     render(() => <VideoResult video={video} query="moment" rank={1} />);
@@ -47,7 +63,7 @@ describe("VideoResult", () => {
     await waitFor(() =>
       expect(screen.getAllByRole("button", { name: /Moment \d/ })).toHaveLength(7),
     );
-    expect(searchVideoMoments).toHaveBeenCalledWith("moment", "video-1");
+    expect(searchVideoMoments).toHaveBeenCalledWith("moment", "video-1", expect.any(AbortSignal));
     expect(screen.queryByRole("button", { name: "Show all moments" })).not.toBeInTheDocument();
   });
 

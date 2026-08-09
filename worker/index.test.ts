@@ -108,8 +108,36 @@ describe("scheduled search availability", () => {
     expect(response.headers.get("x-upstream")).toBe("yes");
     expect(fetchMock).toHaveBeenCalledOnce();
     expect((fetchMock.mock.calls[0][0] as Request).url).toContain(
-      "ytsearch-api-typesense-fly-staging.fly.dev/api/search?q=rust",
+      "ytsearch-api-raw-staging.fly.dev/api/search?q=rust",
     );
+    expect(fetchMock.mock.calls[0][1]).toEqual({
+      cf: {
+        cacheEverything: true,
+        cacheTtlByStatus: {
+          "200-299": 30,
+          "300-399": 0,
+          "400-499": 0,
+          "500-599": 0,
+        },
+      },
+    });
+  });
+
+  test("does not edge-cache cross-origin search responses", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T20:00:00Z"));
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ query: "rust", videos: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await worker.fetch(
+      new Request("https://search.pronsh.dev/api/search?q=rust", {
+        headers: { Origin: "http://localhost:5173" },
+      }),
+      testEnv(),
+    );
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][1]).toBeUndefined();
   });
 
   test("returns normalized availability without provider identifiers", async () => {
@@ -134,7 +162,7 @@ describe("scheduled search availability", () => {
     expect(text).not.toContain("fly-token");
   });
 
-  test("starts only the configured Typesense machine during prewarm", async () => {
+  test("starts only the configured Raw machine during prewarm", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(Response.json({ state: "stopped" }))
@@ -146,37 +174,63 @@ describe("scheduled search availability", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
-      "/apps/ytsearch-typesense-staging/machines/8147deb94937e8",
+      "/apps/ytsearch-raw-production/machines/8147deb94937e8",
     );
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
-      "/apps/ytsearch-typesense-staging/machines/8147deb94937e8/start",
+      "/apps/ytsearch-raw-production/machines/8147deb94937e8/start",
     );
     expect(fetchMock.mock.calls.join(" ")).not.toContain("d8de466f330468");
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("typesense_schedule_started"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("raw_search_schedule_started"));
   });
 
-  test("defers midnight shutdown until the indexer stops", async () => {
+  test("stops the indexer before Raw after midnight", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(Response.json({ state: "started" }))
-      .mockResolvedValueOnce(Response.json({ state: "started" }));
+      .mockResolvedValueOnce(Response.json([indexerMachine("started")]))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     await worker.scheduled(scheduledController("*/5 * * * *", "2026-07-27T07:00:00Z"), testEnv());
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/stop"))).toBe(false);
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("typesense_schedule_stop_deferred_indexer"),
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain(
+      "/apps/ytsearch-indexer-raw-production/machines/current-indexer/stop",
     );
+    expect(fetchMock.mock.calls[2]?.[1]).toEqual({
+      method: "POST",
+      headers: { Authorization: "Bearer fly-token" },
+      signal: expect.any(AbortSignal),
+    });
+    expect(fetchMock.mock.calls.join(" ")).not.toContain(
+      "/apps/ytsearch-raw-production/machines/8147deb94937e8/stop",
+    );
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("indexer_schedule_stop_requested"));
   });
 
-  test("stops Typesense after midnight when the indexer is stopped", async () => {
+  test("waits for an indexer stop to finish before stopping Raw", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(Response.json({ state: "started" }))
-      .mockResolvedValueOnce(Response.json({ state: "stopped" }))
+      .mockResolvedValueOnce(Response.json([indexerMachine("stopping")]));
+    vi.stubGlobal("fetch", fetchMock);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await worker.scheduled(scheduledController("*/5 * * * *", "2026-07-27T07:05:00Z"), testEnv());
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/stop"))).toBe(false);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("raw_search_schedule_stop_deferred_indexer"),
+    );
+  });
+
+  test("stops Raw after midnight when the indexer is stopped", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ state: "started" }))
+      .mockResolvedValueOnce(Response.json([indexerMachine("stopped")]))
       .mockResolvedValueOnce(Response.json({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -185,7 +239,7 @@ describe("scheduled search availability", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain(
-      "/apps/ytsearch-typesense-staging/machines/8147deb94937e8/stop",
+      "/apps/ytsearch-raw-production/machines/8147deb94937e8/stop",
     );
   });
 
@@ -209,6 +263,64 @@ describe("scheduled search availability", () => {
     expect(fetch).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("indexer_wake_deferred"));
   });
+
+  test("resolves and starts the current queue Machine during open hours", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T20:00:00Z"));
+    const ack = vi.fn();
+    const retry = vi.fn();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json([indexerMachine("stopped")]))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await worker.queue(
+      {
+        messages: [{ body: { reason: "index-request" }, attempts: 1, ack, retry }],
+      } as unknown as MessageBatch<WakeMessage>,
+      testEnv(),
+    );
+
+    expect(ack).toHaveBeenCalledOnce();
+    expect(retry).not.toHaveBeenCalled();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "https://api.machines.dev/v1/apps/ytsearch-indexer-raw-production/machines",
+    );
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      "/apps/ytsearch-indexer-raw-production/machines/current-indexer/start",
+    );
+  });
+
+  test("retries instead of choosing between duplicate queue Machines", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T20:00:00Z"));
+    const ack = vi.fn();
+    const retry = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          Response.json([
+            indexerMachine("stopped"),
+            indexerMachine("stopped", "duplicate-indexer"),
+          ]),
+        ),
+    );
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await worker.queue(
+      {
+        messages: [{ body: { reason: "index-request" }, attempts: 1, ack, retry }],
+      } as unknown as MessageBatch<WakeMessage>,
+      testEnv(),
+    );
+
+    expect(ack).not.toHaveBeenCalled();
+    expect(retry).toHaveBeenCalledWith({ delaySeconds: 30 });
+  });
 });
 
 type WakeMessage = {
@@ -220,22 +332,25 @@ function testEnv(overrides: Record<string, unknown> = {}): Env {
     INDEX_WAKE_QUEUE: { send: vi.fn().mockResolvedValue(undefined) },
     ASSETS: { fetch: vi.fn().mockResolvedValue(new Response("asset")) },
     PUBLIC_APP_ORIGIN: "https://search.pronsh.dev",
-    API_BASE_URL: "https://ytsearch-api-typesense-fly-staging.fly.dev",
-    INDEX_QUEUE_API_BASE_URL: "https://ytsearch-api-typesense-fly-staging.fly.dev",
+    API_BASE_URL: "https://ytsearch-api-raw-staging.fly.dev",
+    INDEX_QUEUE_API_BASE_URL: "https://ytsearch-api-raw-staging.fly.dev",
     FLY_API_BASE_URL: "https://api.machines.dev",
-    FLY_APP_NAME: "ytsearch-indexer-staging",
-    FLY_MACHINE_ID: "78410e0f165138",
-    FLY_TYPESENSE_APP_NAME: "ytsearch-typesense-staging",
-    FLY_TYPESENSE_MACHINE_ID: "8147deb94937e8",
-    TYPESENSE_HEALTH_URL: "https://ytsearch-typesense-staging.fly.dev/health",
-    SEARCH_TIME_ZONE: "America/Los_Angeles",
-    SEARCH_OPEN_LOCAL_TIME: "12:00",
-    SEARCH_CLOSE_LOCAL_TIME: "00:00",
-    SEARCH_PREWARM_MINUTES: "15",
+    FLY_APP_NAME: "ytsearch-indexer-raw-production",
+    FLY_RAW_SEARCH_APP_NAME: "ytsearch-raw-production",
+    FLY_RAW_SEARCH_MACHINE_ID: "8147deb94937e8",
+    RAW_SEARCH_HEALTH_URL: "https://ytsearch-raw-production.fly.dev/health",
     SEARCH_SCHEDULE_MODE: "enforce",
     FLYIO_TOKEN: "fly-token",
     ...overrides,
   } as unknown as Env;
+}
+
+function indexerMachine(state: string, id = "current-indexer") {
+  return {
+    id,
+    state,
+    config: { env: { QUEUE_TARGET_BACKEND: "raw" } },
+  };
 }
 
 function scheduledController(cron: string, instant: string): ScheduledController {

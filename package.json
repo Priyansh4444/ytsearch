@@ -1,27 +1,40 @@
 {
   "name": "ytsearch",
   "version": "0.1.0",
+  "private": true,
   "description": "Self-hosted YouTube transcript search",
+  "homepage": "https://search.pronsh.dev",
+  "bugs": {
+    "url": "https://github.com/Priyansh4444/ytsearch/issues"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Priyansh4444/ytsearch.git"
+  },
   "type": "module",
   "scripts": {
     "start": "vite",
+    "setup": "scripts/setup-dev.sh",
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit && tsc --project worker/tsconfig.json",
-    "test": "bun run test:rust && bun run test:frontend",
+    "test": "bun run test:rust && bun run test:frontend && bun run test:worker",
     "test:rust": "cargo test --workspace",
     "test:frontend": "vitest run",
     "test:frontend:watch": "vitest",
     "test:frontend:coverage": "vitest run --coverage",
+    "test:worker": "CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false vitest run --config vitest.worker.config.ts",
     "test:e2e": "playwright test",
     "perf:frontend": "bun run build && bun scripts/check-frontend-performance.ts",
     "perf:bundle": "bun scripts/check-bundle-performance.ts",
+    "perf:worker": "bun scripts/check-worker-performance.ts",
     "check": "scripts/check-all.sh",
     "check:all": "bun run check",
-    "check:precommit": "bun run format:check && bun run lint && bun run typecheck && cargo fmt --check && cargo clippy --workspace --all-targets --all-features -- -D warnings && bun run test:frontend && bun run build && bun run perf:bundle",
+    "check:precommit": "bun run format:check && bun run lint && bun run typecheck && bun run check:docs && CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false bunx wrangler types --check && cargo fmt --check && cargo clippy --workspace --all-targets --all-features -- -D warnings && bun run test:frontend:coverage && bun run test:worker && bun run build && bun run perf:bundle && bun run perf:worker",
     "check:rust:isolation": "scripts/check-rust-packages.sh",
     "check:analytics": "bun scripts/check-frontend-analytics.ts",
+    "check:docs": "bun scripts/check-markdown-links.ts",
     "check:responsive": "playwright test tests/e2e/core-flows.spec.ts",
     "frontend:check": "bun run typecheck && bun run format:check && bun run lint && bun run build",
     "deploy:frontend": "scripts/cloudflare-worker-deploy.sh",
@@ -29,14 +42,15 @@
     "serve": "vite preview",
     "api": "cargo run --release -p youtube_api",
     "lint": "oxlint --type-aware --import-plugin --deny-warnings .",
-    "format": "oxfmt --write package.json index.html src worker shared tests scripts vite.config.ts vitest.config.ts playwright.config.ts tsconfig.json wrangler.jsonc .oxfmtrc.json .oxlintrc.json",
-    "format:check": "oxfmt --check package.json index.html src worker shared tests scripts vite.config.ts vitest.config.ts playwright.config.ts tsconfig.json wrangler.jsonc .oxfmtrc.json .oxlintrc.json"
+    "format": "oxfmt --write package.json index.html src worker shared tests scripts vite.config.ts vitest.config.ts vitest.worker.config.ts playwright.config.ts tsconfig.json wrangler.jsonc .oxfmtrc.json .oxlintrc.json",
+    "format:check": "oxfmt --check package.json index.html src worker shared tests scripts vite.config.ts vitest.config.ts vitest.worker.config.ts playwright.config.ts tsconfig.json wrangler.jsonc .oxfmtrc.json .oxlintrc.json"
   },
   "dependencies": {
-    "posthog-js-lite": "^4.10.0",
+    "effect": "4.0.0-beta.102",
     "solid-js": "^1.9.14"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.19.0",
     "@playwright/test": "^1.62.0",
     "@solidjs/testing-library": "^0.8.10",
     "@tailwindcss/vite": "^4.3.3",
@@ -47,12 +61,19 @@
     "oxfmt": "^0.61.0",
     "oxlint": "^1.76.0",
     "oxlint-tsgolint": "^7.0.2001",
+    "postcss": "^8.5.25",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vite": "^8.1.5",
     "vite-plugin-solid": "^2.11.14",
     "vitest": "^4.1.10",
-    "wrangler": "^4.115.0"
+    "wrangler": "4.118.0"
   },
-  "packageManager": "bun@1.3.14"
+  "overrides": {
+    "postcss": "^8.5.25"
+  },
+  "packageManager": "bun@1.3.14",
+  "patchedDependencies": {
+    "effect@4.0.0-beta.102": "patches/effect@4.0.0-beta.102.patch"
+  }
 }

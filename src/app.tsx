@@ -6,23 +6,11 @@ import {
   createResource,
   createSignal,
   onCleanup,
-  onMount,
 } from "solid-js";
 import type { Component } from "solid-js";
-import {
-  clearIndexStatusCache,
-  fetchSearchAvailability,
-  indexStatus,
-  indexedChannels,
-  requestIndex,
-  searchTranscripts,
-} from "./api";
-import {
-  capture,
-  captureSearchLoaded,
-  captureSearchSubmitted,
-  initializeAnalytics,
-} from "./analytics";
+import { indexStatus, indexedChannels, requestIndex, searchTranscripts } from "./api";
+import { capture, captureSearchLoaded, captureSearchSubmitted } from "./analytics";
+import { useAppLifecycle } from "./app-lifecycle";
 import { ChannelPicker } from "./components/channel-picker";
 import { AvailabilityNotice } from "./components/availability-notice";
 import { ChannelAvatar } from "./components/channel-profile";
@@ -50,16 +38,13 @@ import { BackButton, CopyLinkButton } from "./components/toolbar-actions";
 import type {
   IndexedChannel,
   RecentSearch,
-  SearchAvailability,
-  SearchMode,
   SearchRequest,
   SearchSort,
   SearchVideoResult,
 } from "./types";
-import { isAvailableSearchSort } from "./search-sorts";
 import { cacheChannels, loadCachedChannels } from "./channel-cache";
 import { clearRecentSearches, loadRecentSearches, saveRecentSearch } from "./recent-searches";
-import { evaluateSearchSchedule } from "../shared/service-schedule";
+import { provisionalAvailability, searchStateFromLocation, writeSearchUrl } from "./search-route";
 import {
   copyToClipboard,
   creatorFromPath,
@@ -74,56 +59,7 @@ const sectionVideos = (videos: SearchVideoResult[], kind: "video" | "short") =>
 const unknownVideos = (videos: SearchVideoResult[]) =>
   videos.filter((video) => video.content_kind === "unknown");
 
-const semanticSearchEnabled = import.meta.env.VITE_SEMANTIC_SEARCH_ENABLED === "true";
 const supportUrl = import.meta.env.VITE_KOFI_URL?.trim() || "https://ko-fi.com/pronsh";
-
-const provisionalAvailability = (now = new Date()): SearchAvailability => {
-  const schedule = evaluateSearchSchedule(now);
-  return {
-    status:
-      schedule.phase === "open"
-        ? "starting"
-        : schedule.phase === "prewarm"
-          ? "prewarming"
-          : "scheduled_offline",
-    search_enabled: schedule.phase === "open",
-    enforced: true,
-    schedule_phase: schedule.phase,
-    time_zone: "America/Los_Angeles",
-    daily_window: {
-      opens: "12:00",
-      closes: "00:00",
-      label: "12:00 PM–12:00 AM Pacific Time",
-    },
-    next_transition_at: schedule.nextTransitionAt,
-  };
-};
-
-const searchStateFromLocation = (): SearchRequest | undefined => {
-  const params = new URLSearchParams(window.location.search);
-  const query = params.get("q")?.trim();
-  if (!query) return undefined;
-  const sort = (params.get("sort") ?? "relevance") as SearchSort;
-  const mode = (params.get("mode") ?? "lexical") as SearchMode;
-  const page = Number(params.get("page") ?? "1");
-  return {
-    query,
-    youtuber: normalizeHandle(params.get("youtuber") ?? creatorFromPath() ?? ""),
-    page: Number.isFinite(page) && page > 0 ? Math.floor(page) : 1,
-    sort: isAvailableSearchSort(sort) ? sort : "relevance",
-    mode: mode === "semantic" ? "semantic" : "lexical",
-  };
-};
-
-const writeSearchUrl = (request: SearchRequest) => {
-  const params = new URLSearchParams();
-  params.set("q", request.query);
-  if (request.youtuber) params.set("youtuber", normalizeHandle(request.youtuber));
-  if (request.sort !== "relevance") params.set("sort", request.sort);
-  if (request.mode !== "lexical") params.set("mode", request.mode);
-  if (request.page > 1) params.set("page", String(request.page));
-  window.history.pushState({}, "", `/?${params.toString()}`);
-};
 
 const App: Component = () => {
   const initialSearch = searchStateFromLocation();
@@ -131,8 +67,8 @@ const App: Component = () => {
     initialSearch?.youtuber ? normalizeHandle(initialSearch.youtuber) : creatorFromPath(),
   );
   const [channels, setChannels] = createSignal<IndexedChannel[] | undefined>(loadCachedChannels());
-  const refreshChannels = async () => {
-    const refreshed = await indexedChannels();
+  const refreshChannels = async (signal?: AbortSignal) => {
+    const refreshed = await indexedChannels(signal);
     setChannels(refreshed);
     cacheChannels(refreshed);
     return refreshed;
@@ -143,7 +79,6 @@ const App: Component = () => {
   const [youtuber, setYoutuber] = createSignal(initialSearch?.youtuber ?? routeHandle() ?? "");
   const [page, setPage] = createSignal(initialSearch?.page ?? 1);
   const [sort, setSort] = createSignal<SearchSort>(initialSearch?.sort ?? "relevance");
-  const [searchMode, setSearchMode] = createSignal<SearchMode>(initialSearch?.mode ?? "lexical");
   const [submitted, setSubmitted] = createSignal<SearchRequest | undefined>(initialSearch);
   const [pendingIndexHandle, setPendingIndexHandle] = createSignal<string>();
   const [indexRequestError, setIndexRequestError] = createSignal<string>();
@@ -157,7 +92,13 @@ const App: Component = () => {
   const executableSearch = createMemo(() =>
     availability().search_enabled ? submitted() : undefined,
   );
-  const [result] = createResource(executableSearch, (request) => searchTranscripts(request));
+  let searchController: AbortController | undefined;
+  const [result] = createResource(executableSearch, (request) => {
+    searchController?.abort();
+    searchController = new AbortController();
+    return searchTranscripts(request, searchController.signal);
+  });
+  onCleanup(() => searchController?.abort());
 
   const selectedChannel = createMemo(() => {
     const selectedHandle = normalizeHandle(youtuber());
@@ -194,7 +135,6 @@ const App: Component = () => {
       setQuery(searchState?.query ?? "");
       setYoutuber(searchState?.youtuber ?? nextHandle ?? "");
       setSort(searchState?.sort ?? "relevance");
-      setSearchMode(searchState?.mode ?? "lexical");
       setPage(searchState?.page ?? 1);
       setSubmitted(searchState);
       setPendingIndexHandle(undefined);
@@ -203,59 +143,13 @@ const App: Component = () => {
       setIndexingToast(undefined);
     });
 
-  onMount(() => {
-    initializeAnalytics();
-    window.addEventListener("popstate", syncRoute);
-    let disposed = false;
-    let shownRequestId = "";
-    let previousStatus = "idle";
-    let toastTimeout: number | undefined;
-    const refreshAvailability = () => {
-      setAvailability(provisionalAvailability());
-      void fetchSearchAvailability()
-        .then((value) => {
-          if (disposed) return;
-          setAvailability(value);
-          if (value.search_enabled) void refreshChannels().catch(() => undefined);
-        })
-        .catch(() => undefined);
-    };
-    const checkStatus = () => {
-      clearIndexStatusCache();
-      void indexStatus()
-        .then((status) => {
-          if (disposed) return;
-          if (availability().search_enabled && status.status !== previousStatus)
-            void refreshChannels().catch(() => undefined);
-          if (availability().search_enabled && ["running", "queued"].includes(status.status))
-            void refreshChannels().catch(() => undefined);
-          previousStatus = status.status;
-          if (
-            !["running", "queued"].includes(status.status) ||
-            !status.request_id ||
-            status.request_id === shownRequestId
-          )
-            return;
-          shownRequestId = status.request_id;
-          setIndexingToast(status.handle);
-          setIndexingChannelPreview(status.channel);
-          if (toastTimeout) window.clearTimeout(toastTimeout);
-          toastTimeout = window.setTimeout(() => setIndexingToast(undefined), 5_000);
-        })
-        .catch(() => undefined);
-    };
-    refreshAvailability();
-    checkStatus();
-    if (availability().search_enabled) void refreshChannels().catch(() => undefined);
-    const interval = window.setInterval(checkStatus, 15_000);
-    const availabilityInterval = window.setInterval(refreshAvailability, 60_000);
-    onCleanup(() => {
-      disposed = true;
-      window.removeEventListener("popstate", syncRoute);
-      window.clearInterval(interval);
-      window.clearInterval(availabilityInterval);
-      if (toastTimeout) window.clearTimeout(toastTimeout);
-    });
+  useAppLifecycle({
+    availability,
+    setAvailability,
+    refreshChannels,
+    setIndexingToast,
+    setIndexingChannelPreview,
+    syncRoute,
   });
 
   const selectChannel = (handle: string) => {
@@ -325,7 +219,6 @@ const App: Component = () => {
         youtuber: mentionedChannel()!.handle,
         page: nextPage,
         sort: sort(),
-        mode: searchMode(),
       };
       captureSearchSubmitted(request);
       setYoutuber(request.youtuber);
@@ -346,7 +239,6 @@ const App: Component = () => {
       youtuber: youtuber(),
       page: nextPage,
       sort: sort(),
-      mode: searchMode(),
     };
     setPendingIndexHandle(undefined);
     captureSearchSubmitted(request);
@@ -355,8 +247,7 @@ const App: Component = () => {
       current?.query === request.query &&
       current.youtuber === request.youtuber &&
       current.page === request.page &&
-      current.sort === request.sort &&
-      current.mode === request.mode
+      current.sort === request.sort
     ) {
       return;
     }
@@ -410,7 +301,6 @@ const App: Component = () => {
       normalizedQuery.startsWith("@") && !mentionedChannel() ? "index" : "search";
     const currentYoutuber = mentionedChannel()?.handle ?? youtuber();
     const currentSort = sort();
-    const currentSearchMode = searchMode();
     const currentSubmitted = submitted();
     if (currentFormMode !== "search" || searchQuery.length < 2 || !availability().search_enabled)
       return;
@@ -418,32 +308,21 @@ const App: Component = () => {
       currentSubmitted?.query === searchQuery &&
       currentSubmitted.youtuber === currentYoutuber &&
       currentSubmitted.sort === currentSort &&
-      currentSubmitted.mode === currentSearchMode &&
       currentSubmitted.page === 1
     ) {
       return;
     }
 
-    const controller = new AbortController();
     const timeout = window.setTimeout(() => {
-      void searchTranscripts(
-        {
-          query: searchQuery,
-          youtuber: currentYoutuber,
-          page: 1,
-          sort: currentSort,
-          mode: currentSearchMode,
-        },
-        { signal: controller.signal },
-      ).catch((error) => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-      });
+      void searchTranscripts({
+        query: searchQuery,
+        youtuber: currentYoutuber,
+        page: 1,
+        sort: currentSort,
+      }).catch(() => undefined);
     }, 900);
 
-    onCleanup(() => {
-      window.clearTimeout(timeout);
-      controller.abort();
-    });
+    onCleanup(() => window.clearTimeout(timeout));
   });
 
   let lastTrackedResponse = "";
@@ -451,7 +330,7 @@ const App: Component = () => {
     const request = submitted();
     const response = result();
     if (!request || !response) return;
-    const key = `${request.query}\u0000${request.youtuber}\u0000${request.sort}\u0000${request.mode}\u0000${request.page}`;
+    const key = `${request.query}\u0000${request.youtuber}\u0000${request.sort}\u0000${request.page}`;
     if (key === lastTrackedResponse) return;
     lastTrackedResponse = key;
     captureSearchLoaded(request, response);
@@ -464,7 +343,6 @@ const App: Component = () => {
     setQuery(recent.query);
     setYoutuber(recent.youtuber);
     setSort(recent.sort);
-    setSearchMode(recent.mode);
     setPage(1);
     if (!availability().search_enabled) {
       setSubmitted(undefined);
@@ -478,7 +356,8 @@ const App: Component = () => {
 
   return (
     <main class="flex min-h-svh flex-col overflow-clip bg-vesper-bg text-vesper-text">
-      <div class="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
+      <h1 class="sr-only">Search YouTube transcripts</h1>
+      <div class="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 px-4 py-4 [padding-bottom:calc(1rem+env(safe-area-inset-bottom))] sm:px-6 sm:py-6 lg:px-8">
         <section
           class={`relative ${
             hasSearchSurface() ? "flex flex-col gap-4" : "flex flex-1 flex-col justify-center gap-5"
@@ -505,15 +384,13 @@ const App: Component = () => {
           <SearchForm
             query={query()}
             sort={sort()}
-            searchMode={searchMode()}
-            semanticSearchEnabled={semanticSearchEnabled}
             searchAvailable={availability().search_enabled}
+            busy={result.loading}
             home={!hasSearchSurface()}
             selectedChannelName={selectedChannel()?.name}
             mode={formMode()}
             onQueryInput={setQuery}
             onSortChange={setSort}
-            onSearchModeChange={setSearchMode}
             onSubmit={() => runSearch(1)}
             channelSuggestions={channelSuggestions()}
             onChannelSelect={selectChannel}
@@ -558,7 +435,7 @@ const App: Component = () => {
           >
             {(response) => (
               <div class="flex flex-col gap-5">
-                <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-white/10 pb-3 text-sm text-vesper-muted">
+                <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-white/10 pb-3 text-sm text-vesper-muted">
                   <div class="flex flex-wrap items-center gap-2">
                     <span class="font-medium text-white">{response().query}</span>
                     <span class="border border-white/10 bg-vesper-panel px-2 py-0.5 text-xs uppercase tracking-[0.12em] text-vesper-dim">
@@ -635,7 +512,7 @@ const App: Component = () => {
       <Show when={indexingToast()}>
         {(handle) => (
           <div
-            class="fixed end-5 bottom-5 z-50 flex max-w-[calc(100vw-2.5rem)] items-center gap-3 border border-vesper-green bg-vesper-panel px-4 py-3 text-sm text-white shadow-xl"
+            class="fixed inset-x-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-50 flex items-center gap-3 border border-vesper-green bg-vesper-panel px-4 py-3 text-sm text-white shadow-xl sm:end-5 sm:inset-x-auto sm:max-w-[calc(100vw-2.5rem)]"
             role="status"
           >
             <ChannelAvatar channel={indexingChannel()} size="compact" />
@@ -653,7 +530,7 @@ const App: Component = () => {
           href={supportUrl}
           target="_blank"
           rel="noreferrer"
-          class="text-vesper-muted transition-colors hover:text-vesper-yellow"
+          class="inline-flex min-h-11 items-center text-vesper-muted transition-colors hover:text-vesper-yellow"
         >
           Support on Ko-fi ↗
         </a>
@@ -672,9 +549,9 @@ const ResultSection: Component<{
 }> = (props) => (
   <Show when={props.videos.length > 0}>
     <section class="flex flex-col gap-3">
-      <div class="border-b border-white/10 pb-2 text-sm font-medium uppercase tracking-[0.12em] text-vesper-dim">
+      <h2 class="border-b border-white/10 pb-2 text-sm font-medium uppercase tracking-[0.12em] text-vesper-dim">
         {props.title} · {props.videos.length} on {props.totalLabel}
-      </div>
+      </h2>
       <div class="grid gap-2">
         <For each={props.videos}>
           {(video, index) => <VideoResult video={video} query={props.query} rank={index() + 1} />}

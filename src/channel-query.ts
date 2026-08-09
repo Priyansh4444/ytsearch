@@ -26,10 +26,7 @@ export function resolveChannelMention(channels: IndexedChannel[], query: string)
   const exact = channels.find(
     (channel) => normalizeHandle(channel.handle) === normalizeHandle(token),
   );
-  return (
-    exact ??
-    (channelSuggestions(channels, query).length === 1
-      ? channelSuggestions(channels, query)[0]
-      : undefined)
-  );
+  if (exact) return exact;
+  const suggestions = channelSuggestions(channels, query);
+  return suggestions.length === 1 ? suggestions[0] : undefined;
 }
