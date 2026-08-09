@@ -51,6 +51,14 @@ describe("VideoResult", () => {
     expect(screen.queryByRole("button", { name: "Show all moments" })).not.toBeInTheDocument();
   });
 
+  test("does not offer to load moments when every match is already visible", () => {
+    const completeVideo = { ...video, match_count: 3, hits: hits.slice(0, 3) };
+
+    render(() => <VideoResult video={completeVideo} query="moment" rank={1} />);
+
+    expect(screen.queryByRole("button", { name: "Show all moments" })).not.toBeInTheDocument();
+  });
+
   test("records feedback against the selected moment", () => {
     render(() => <VideoResult video={video} query="moment" rank={2} />);
 

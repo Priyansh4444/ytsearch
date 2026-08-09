@@ -16,6 +16,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
   const [momentsLoading, setMomentsLoading] = createSignal(false);
   const [momentsError, setMomentsError] = createSignal<string>();
   const visibleHits = () => (showAllMoments() ? allHits() : allHits().slice(0, 3));
+  const hasHiddenMoments = () => Math.max(props.video.match_count, allHits().length) > 3;
   const [selectedHitId, setSelectedHitId] = createSignal<string>();
   const selectedHit = () =>
     visibleHits().find((hit) => hit.id === selectedHitId()) ??
@@ -133,7 +134,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
                 />
               )}
             </For>
-            <Show when={!showAllMoments()}>
+            <Show when={!showAllMoments() && hasHiddenMoments()}>
               <button
                 type="button"
                 onClick={() => void expandMoments()}
