@@ -46,7 +46,8 @@ for collection in $COLLECTIONS; do
     --output "$output" \
     "${API_URL%/}/collections/$collection/documents/export"
   gzip -t "$output"
-  printf '%s\t%s\n' "$collection" "$(gzip -dc "$output" | wc -l)" >>"$BACKUP_DIR/COUNTS.tsv"
+  record_count="$(gzip -dc "$output" | awk 'NF { count += 1 } END { print count + 0 }')"
+  printf '%s\t%s\n' "$collection" "$record_count" >>"$BACKUP_DIR/COUNTS.tsv"
 done
 
 (
