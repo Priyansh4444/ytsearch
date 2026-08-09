@@ -30,6 +30,17 @@ most 50 IDs. It enriched all 420,720 transcript documents; no video was
 missing. The API key is required through the environment and is never written
 to output or logs.
 
+The enrichment command accepts plain JSONL or `.jsonl.gz` input and output. A
+full-snapshot migration uses gzip-to-gzip streaming, retaining only distinct
+video IDs and their three counters in memory rather than materializing the
+multi-gigabyte corpus:
+
+```sh
+bun scripts/enrich-search-engagement.ts \
+  youtube_transcript_chunks.jsonl.gz \
+  youtube_transcript_chunks.engagement.jsonl.gz
+```
+
 The builder consolidates each counter once per video, using the maximum seen
 across its chunks. The three `u64` counters live in video metadata rather than
 postings or per-document metadata. Search hits receive the counters only when

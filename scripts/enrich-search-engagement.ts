@@ -1,6 +1,10 @@
 import { createReadStream, createWriteStream } from "node:fs";
+import { rm } from "node:fs/promises";
 import { once } from "node:events";
 import { createInterface } from "node:readline";
+import type { Readable } from "node:stream";
+import { finished } from "node:stream/promises";
+import { createGunzip, createGzip } from "node:zlib";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -35,6 +39,9 @@ const decodeVideoStats = Schema.decodeUnknownEffect(VideoStatsResponseSchema);
 
 const [inputPath, outputPath] = process.argv.slice(2);
 const apiKey = process.env.YOUTUBE_API_KEY?.trim();
+const videoStatsApiUrl =
+  process.env.YOUTUBE_VIDEO_STATS_API_URL?.trim() ||
+  "https://www.googleapis.com/youtube/v3/videos:batchGetStats";
 
 const program = Effect.gen(function* () {
   if (!inputPath || !outputPath) {
@@ -53,7 +60,7 @@ const program = Effect.gen(function* () {
   const batches = chunk(videoIds, BATCH_SIZE);
   const batchResults = yield* Effect.forEach(
     batches,
-    (batch) => fetchEngagementBatch(batch, apiKey),
+    (batch) => fetchEngagementBatch(batch, apiKey, videoStatsApiUrl),
     { concurrency: FETCH_CONCURRENCY },
   );
   const engagement = new Map(batchResults.flatMap((batch) => batch));
@@ -77,7 +84,7 @@ function collectVideoIds(path: string): Effect.Effect<string[], Error> {
   return Effect.tryPromise({
     try: async () => {
       const ids = new Set<string>();
-      const lines = createInterface({ input: createReadStream(path), crlfDelay: Infinity });
+      const lines = createInterface({ input: corpusInput(path), crlfDelay: Infinity });
       for await (const line of lines) {
         if (!line.trim()) continue;
         const value: unknown = JSON.parse(line);
@@ -95,10 +102,11 @@ function collectVideoIds(path: string): Effect.Effect<string[], Error> {
 function fetchEngagementBatch(
   videoIds: readonly string[],
   key: string,
+  apiUrl: string,
   attempt = 1,
 ): Effect.Effect<Array<[string, Engagement]>, Error> {
   const request = Effect.gen(function* () {
-    const url = new URL("https://www.googleapis.com/youtube/v3/videos:batchGetStats");
+    const url = new URL(apiUrl);
     url.searchParams.set("part", "statistics");
     url.searchParams.set("id", videoIds.join(","));
     url.searchParams.set("key", key);
@@ -130,7 +138,7 @@ function fetchEngagementBatch(
   return request.pipe(
     Effect.catch(() =>
       Effect.sleep(250 * 2 ** (attempt - 1)).pipe(
-        Effect.andThen(fetchEngagementBatch(videoIds, key, attempt + 1)),
+        Effect.andThen(fetchEngagementBatch(videoIds, key, apiUrl, attempt + 1)),
       ),
     ),
   );
@@ -143,8 +151,12 @@ function writeEnrichedCorpus(
 ): Effect.Effect<number, Error> {
   return Effect.tryPromise({
     try: async () => {
-      const lines = createInterface({ input: createReadStream(input), crlfDelay: Infinity });
-      const destination = createWriteStream(output, { flags: "wx" });
+      const lines = createInterface({ input: corpusInput(input), crlfDelay: Infinity });
+      const outputFile = createWriteStream(output, { flags: "wx" });
+      const destination = output.endsWith(".gz") ? createGzip({ level: 1 }) : outputFile;
+      if (destination !== outputFile) destination.pipe(outputFile);
+      const destinationDone = finished(destination);
+      const outputDone = destination === outputFile ? destinationDone : finished(outputFile);
       let documents = 0;
       try {
         for await (const line of lines) {
@@ -163,15 +175,23 @@ function writeEnrichedCorpus(
           documents += 1;
         }
         destination.end();
-        await once(destination, "finish");
+        await Promise.all([destinationDone, outputDone]);
         return documents;
       } catch (error) {
         destination.destroy();
+        outputFile.destroy();
+        await Promise.allSettled([destinationDone, outputDone]);
+        await rm(output, { force: true });
         throw error;
       }
     },
     catch: asError,
   });
+}
+
+function corpusInput(path: string): Readable {
+  const input = createReadStream(path);
+  return path.endsWith(".gz") ? input.pipe(createGunzip()) : input;
 }
 
 function chunk<T>(values: readonly T[], size: number): T[][] {
