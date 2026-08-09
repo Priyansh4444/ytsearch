@@ -1,5 +1,5 @@
 import { createReadStream, createWriteStream } from "node:fs";
-import { rm } from "node:fs/promises";
+import { appendFile, readFile, rm } from "node:fs/promises";
 import { once } from "node:events";
 import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
@@ -9,8 +9,8 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 const BATCH_SIZE = 50;
-const FETCH_CONCURRENCY = 2;
-const FETCH_ATTEMPTS = 3;
+const FETCH_CONCURRENCY = 1;
+const FETCH_ATTEMPTS = 8;
 
 const VideoStatsResponseSchema = Schema.Struct({
   items: Schema.optionalKey(
@@ -35,6 +35,16 @@ type Engagement = {
   comment_count: number;
 };
 
+class VideoStatsHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly retryAfterMs: number | undefined,
+    detail: string,
+  ) {
+    super(`YouTube statistics request returned HTTP ${status}${detail ? `: ${detail}` : ""}`);
+  }
+}
+
 const decodeVideoStats = Schema.decodeUnknownEffect(VideoStatsResponseSchema);
 
 const [inputPath, outputPath] = process.argv.slice(2);
@@ -42,6 +52,8 @@ const apiKey = process.env.YOUTUBE_API_KEY?.trim();
 const videoStatsApiUrl =
   process.env.YOUTUBE_VIDEO_STATS_API_URL?.trim() ||
   "https://www.googleapis.com/youtube/v3/videos:batchGetStats";
+const engagementCachePath =
+  process.env.ENGAGEMENT_CACHE_PATH?.trim() || `${outputPath}.stats.jsonl`;
 
 const program = Effect.gen(function* () {
   if (!inputPath || !outputPath) {
@@ -57,19 +69,30 @@ const program = Effect.gen(function* () {
   }
 
   const videoIds = yield* collectVideoIds(inputPath);
-  const batches = chunk(videoIds, BATCH_SIZE);
-  const batchResults = yield* Effect.forEach(
-    batches,
-    (batch) => fetchEngagementBatch(batch, apiKey, videoStatsApiUrl),
-    { concurrency: FETCH_CONCURRENCY },
+  const engagement = yield* loadEngagementCache(engagementCachePath);
+  const cachedVideos = engagement.size;
+  const batches = chunk(
+    videoIds.filter((videoId) => !engagement.has(videoId)),
+    BATCH_SIZE,
   );
-  const engagement = new Map(batchResults.flatMap((batch) => batch));
+  yield* Effect.forEach(
+    batches,
+    (batch) =>
+      Effect.gen(function* () {
+        const results = yield* fetchEngagementBatch(batch, apiKey, videoStatsApiUrl);
+        yield* appendEngagementCache(engagementCachePath, results);
+        for (const [videoId, metrics] of results) engagement.set(videoId, metrics);
+      }),
+    { concurrency: FETCH_CONCURRENCY, discard: true },
+  );
   const written = yield* writeEnrichedCorpus(inputPath, outputPath, engagement);
 
   return {
     input: inputPath,
     output: outputPath,
+    cache: engagementCachePath,
     requested_videos: videoIds.length,
+    cached_videos: cachedVideos,
     enriched_videos: engagement.size,
     missing_videos: videoIds.length - engagement.size,
     written_documents: written.documents,
@@ -137,8 +160,16 @@ function fetchEngagementBatch(
       catch: asError,
     });
     if (!response.ok) {
+      const detail = yield* Effect.tryPromise({
+        try: () => response.text(),
+        catch: asError,
+      });
       return yield* Effect.fail(
-        new Error(`YouTube statistics request returned HTTP ${response.status}`),
+        new VideoStatsHttpError(
+          response.status,
+          retryAfterMilliseconds(response.headers.get("Retry-After")),
+          detail.replace(/\s+/g, " ").trim().slice(0, 180),
+        ),
       );
     }
     const body = yield* Effect.tryPromise({
@@ -158,12 +189,53 @@ function fetchEngagementBatch(
 
   if (attempt >= FETCH_ATTEMPTS) return request;
   return request.pipe(
-    Effect.catch(() =>
-      Effect.sleep(250 * 2 ** (attempt - 1)).pipe(
+    Effect.catch((error) => {
+      if (!retryableStatsError(error)) return Effect.fail(error);
+      return Effect.sleep(retryDelayMilliseconds(error, attempt)).pipe(
         Effect.andThen(fetchEngagementBatch(videoIds, key, apiUrl, attempt + 1)),
-      ),
-    ),
+      );
+    }),
   );
+}
+
+function loadEngagementCache(path: string): Effect.Effect<Map<string, Engagement>, Error> {
+  return Effect.tryPromise({
+    try: async () => {
+      const text = await readFile(path, "utf8").catch((error: unknown) => {
+        if (isNodeError(error) && error.code === "ENOENT") return "";
+        throw error;
+      });
+      const cache = new Map<string, Engagement>();
+      for (const line of text.split("\n")) {
+        if (!line.trim()) continue;
+        const value: unknown = JSON.parse(line);
+        if (!isRecord(value) || typeof value.video_id !== "string") {
+          throw new Error("Engagement cache contains an invalid record");
+        }
+        cache.set(value.video_id, {
+          view_count: countNumber(value.view_count),
+          like_count: countNumber(value.like_count),
+          comment_count: countNumber(value.comment_count),
+        });
+      }
+      return cache;
+    },
+    catch: asError,
+  });
+}
+
+function appendEngagementCache(
+  path: string,
+  results: ReadonlyArray<readonly [string, Engagement]>,
+): Effect.Effect<void, Error> {
+  if (results.length === 0) return Effect.void;
+  const records = results
+    .map(([videoId, metrics]) => JSON.stringify({ video_id: videoId, ...metrics }))
+    .join("\n");
+  return Effect.tryPromise({
+    try: () => appendFile(path, `${records}\n`, { encoding: "utf8", mode: 0o600 }),
+    catch: asError,
+  });
 }
 
 function writeEnrichedCorpus(
@@ -232,6 +304,37 @@ function count(value: string | undefined): number {
   if (!value) return 0;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function countNumber(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error("Engagement cache contains an invalid counter");
+  }
+  return value;
+}
+
+function retryableStatsError(error: Error): boolean {
+  return !(error instanceof VideoStatsHttpError) || error.status === 429 || error.status >= 500;
+}
+
+function retryDelayMilliseconds(error: Error, attempt: number): number {
+  const exponential = Math.min(2_000 * 2 ** (attempt - 1), 60_000);
+  const retryAfter = error instanceof VideoStatsHttpError ? (error.retryAfterMs ?? 0) : 0;
+  const jitter = (attempt * 137) % 251;
+  return Math.min(Math.max(exponential, retryAfter) + jitter, 300_000);
+}
+
+function retryAfterMilliseconds(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1_000);
+  const date = Date.parse(value);
+  if (!Number.isFinite(date)) return undefined;
+  return Math.max(0, date - Date.now());
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -44,6 +44,13 @@ sha256sum youtube_transcript_chunks.engagement.jsonl.gz \
   > youtube_transcript_chunks.engagement.jsonl.gz.sha256
 ```
 
+Successful statistics batches are appended to a mode-0600
+`<output>.stats.jsonl` cache before the next request. Restarts reuse that cache.
+Requests run one at a time, retry transport errors, HTTP 429, and HTTP 5xx up to
+eight times, honor `Retry-After`, and use capped exponential backoff. Other HTTP
+errors fail immediately. This prevents a late rate limit from discarding
+hundreds of already successful batches.
+
 The builder consolidates each counter once per video, using the maximum seen
 across its chunks. The three `u64` counters live in video metadata rather than
 postings or per-document metadata. Search hits receive the counters only when
