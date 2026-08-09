@@ -5,13 +5,21 @@ RUN cargo build --locked --release -p youtube_raw_search
 
 FROM debian:bookworm-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates gosu \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 rawsearch
 COPY --from=builder /app/target/release/youtube-raw-search /usr/local/bin/youtube-raw-search
 COPY --chown=rawsearch:rawsearch .search-experiment/raw-index /data/index
-USER rawsearch
+COPY --chown=rawsearch:rawsearch .search-experiment/backups/20260809T002826Z/youtube_transcript_chunks.engagement.jsonl.gz /data/source/youtube_transcript_chunks.jsonl.gz
+COPY --chown=rawsearch:rawsearch .search-experiment/backups/20260809T002826Z/youtube_youtubers.jsonl.gz /data/source/youtube_youtubers.jsonl.gz
+COPY scripts/raw-search-entrypoint.sh /usr/local/bin/raw-search-entrypoint
+RUN chmod 0755 /usr/local/bin/raw-search-entrypoint \
+    && mkdir -p /data/mutable \
+    && chown rawsearch:rawsearch /data/mutable
 ENV RAW_SEARCH_BIND=0.0.0.0:8108
 ENV RAW_SEARCH_INDEX_PATH=/data/index
+ENV RAW_SEARCH_BASE_CHUNKS_GZIP=/data/source/youtube_transcript_chunks.jsonl.gz
+ENV RAW_SEARCH_BASE_CHANNELS_GZIP=/data/source/youtube_youtubers.jsonl.gz
+ENV RAW_SEARCH_STATE_DIRECTORY=/data/mutable
 EXPOSE 8108
-CMD ["youtube-raw-search", "serve"]
+ENTRYPOINT ["raw-search-entrypoint"]
