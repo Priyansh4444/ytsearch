@@ -94,6 +94,7 @@ Raw can replace Typesense as the canonical search index.
 
 ## Regression Log
 
+- [x] Experimental frontend creator metadata could survive a backend/corpus swap for seven days, briefly requesting images for creators absent from the active Raw generation. Versioned the cache, reduced its paint-only lifetime to 30 minutes, and retained network refresh as the authority.
 - [x] A queued channel could not be cleanly removed through a guarded operator workflow. Added explicit queue cancellation guidance and made `remove-youtuber` require `--allow-destructive-remove` before deleting both transcript chunks and the channel profile.
 - [x] The persistent worker could sit idle for up to 24 hours after a completed repair pass even while channel cards reported indexable gaps. Reduced the post-pass cooldown to five minutes, retained immediate startup repair and single-writer backpressure, and verified the live worker entered background repair after the request queue emptied.
 - [x] Production Pages still embedded the retired `ytsearch-index-queue-staging` origin after queue ownership moved into the active Typesense API, causing browser `NetworkError` failures before requests reached the worker. Redeployed production with the active API for both search and queue routes, browser-queued `@lauriewired`, verified indexing progress, and added a bundle/queue-route deployment guard.

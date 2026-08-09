@@ -15,10 +15,10 @@ describe("channel cache", () => {
   test("loads a fresh cache and rejects expired or corrupt data", () => {
     const storage = new MemoryStorage();
     cacheChannels([channel], "2026-07-26T20:00:00Z", storage);
-    expect(loadCachedChannels(new Date("2026-07-27T20:00:00Z").getTime(), storage)).toEqual([
+    expect(loadCachedChannels(new Date("2026-07-26T20:29:59Z").getTime(), storage)).toEqual([
       channel,
     ]);
-    expect(loadCachedChannels(new Date("2026-08-03T20:00:01Z").getTime(), storage)).toBeUndefined();
+    expect(loadCachedChannels(new Date("2026-07-26T20:30:01Z").getTime(), storage)).toBeUndefined();
     storage.setItem(CHANNEL_CACHE_KEY, "{");
     expect(loadCachedChannels(Date.now(), storage)).toBeUndefined();
   });

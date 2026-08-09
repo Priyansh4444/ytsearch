@@ -1,7 +1,10 @@
 import type { IndexedChannel } from "./types";
 
-export const CHANNEL_CACHE_KEY = "ytsearch.indexed-channels.v1";
-const CHANNEL_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
+export const CHANNEL_CACHE_KEY = "ytsearch.indexed-channels.v2";
+// This cache is only a paint optimization. Keep it short-lived so a backend
+// cutover or snapshot rollback cannot render creator records that the active
+// search corpus no longer contains.
+const CHANNEL_CACHE_MAX_AGE_MS = 30 * 60 * 1_000;
 
 type CachedChannels = {
   fetchedAt: string;
