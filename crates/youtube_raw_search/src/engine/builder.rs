@@ -193,6 +193,7 @@ pub fn build_index(
             )?;
             videos.push(VideoMeta {
                 id: source.video_id.clone(),
+                youtuber_id: source.youtuber_id.to_ascii_lowercase(),
                 handle: source.youtuber_handle.to_ascii_lowercase(),
                 title: source.title,
                 published_at_timestamp: published_at_timestamp.unwrap_or_default(),

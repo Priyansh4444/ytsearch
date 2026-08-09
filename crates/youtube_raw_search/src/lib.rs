@@ -1,13 +1,16 @@
+mod admin;
 mod engine;
 mod format;
 mod fuzzy;
 mod mutable;
 mod positions;
 mod publisher;
+mod reloadable;
 
 pub use engine::{BuildReport, RawSearchEngine, SliceReport, build_index, slice_corpus};
 pub use mutable::{MutationSnapshot, MutationStore, StoredChannelMutation, StoredVideoMutation};
 pub use publisher::{PublishedGeneration, Publisher, PublisherPaths};
+pub use reloadable::ReloadableEngine;
 pub use youtube_search_service::SearchParams;
 
 use thiserror::Error;
@@ -29,3 +32,4 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+pub use admin::{AdminState, router as admin_router};

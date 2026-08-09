@@ -20,6 +20,7 @@ use std::{
     sync::Arc,
     time::Instant,
 };
+use youtube_index_store::{ChannelDocument, ChunkStats};
 use youtube_search_service::{BackendError, SearchBackend, SearchParams};
 use youtube_time::parse_rfc3339_timestamp;
 
@@ -93,6 +94,8 @@ pub struct SliceReport {
 #[derive(Deserialize)]
 struct IndexDocument {
     video_id: String,
+    #[serde(default)]
+    youtuber_id: String,
     title: String,
     text: String,
     youtuber_handle: String,
@@ -113,6 +116,8 @@ struct IndexDocument {
 #[derive(Clone, Deserialize, Serialize)]
 struct VideoMeta {
     id: String,
+    #[serde(default)]
+    youtuber_id: String,
     handle: String,
     title: String,
     published_at_timestamp: i64,
@@ -398,6 +403,51 @@ impl RawSearchEngine {
 
     pub fn index_size(&self) -> u64 {
         self.inner.index_bytes
+    }
+
+    pub fn video_chunk_count(&self, video_id: &str) -> u64 {
+        self.inner
+            .videos
+            .iter()
+            .find(|video| video.id == video_id)
+            .map_or(0, |video| video.documents.len() as u64)
+    }
+
+    pub fn indexed_video_ids(&self, channel_id: &str) -> Vec<String> {
+        let mut video_ids = self
+            .inner
+            .videos
+            .iter()
+            .filter(|video| video.belongs_to(channel_id))
+            .map(|video| video.id.clone())
+            .collect::<Vec<_>>();
+        video_ids.sort_unstable();
+        video_ids
+    }
+
+    pub fn channel_stats(&self, channel_id: &str) -> ChunkStats {
+        self.inner
+            .videos
+            .iter()
+            .filter(|video| video.belongs_to(channel_id))
+            .fold(ChunkStats::default(), |mut stats, video| {
+                stats.indexed_videos = stats.indexed_videos.saturating_add(1);
+                stats.indexed_chunks = stats
+                    .indexed_chunks
+                    .saturating_add(video.documents.len() as u64);
+                stats
+            })
+    }
+
+    pub fn channel_document(&self, channel_id: &str) -> Result<Option<ChannelDocument>> {
+        self.inner
+            .channels
+            .iter()
+            .find(|channel| channel.get("id").and_then(Value::as_str) == Some(channel_id))
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(Error::Json)
     }
 
     pub fn search(&self, params: &SearchParams) -> Result<Value> {
@@ -1769,5 +1819,16 @@ impl RawSearchEngine {
             .map(|document| json!({ "document": document }))
             .collect::<Vec<_>>();
         Ok(json!({ "found": found, "out_of": found, "hits": hits }))
+    }
+}
+
+impl VideoMeta {
+    fn belongs_to(&self, channel_id: &str) -> bool {
+        self.youtuber_id == channel_id
+            || (self.youtuber_id.is_empty()
+                && self
+                    .handle
+                    .trim_start_matches('@')
+                    .eq_ignore_ascii_case(channel_id))
     }
 }

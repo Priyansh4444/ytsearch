@@ -1,6 +1,9 @@
 use std::{env, net::SocketAddr, path::PathBuf, process::ExitCode, sync::Arc};
-use youtube_raw_search::{RawSearchEngine, build_index, slice_corpus};
-use youtube_search_service::ServerConfig;
+use youtube_raw_search::{
+    AdminState, MutationStore, Publisher, PublisherPaths, RawSearchEngine, ReloadableEngine,
+    admin_router, build_index, slice_corpus,
+};
+use youtube_search_service::{SearchBackend, ServerConfig};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -51,6 +54,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
         }
+        Some("serve-mutable") => {
+            serve_mutable().await?;
+        }
         Some("slice") => {
             let input = required_path(args.next(), "input JSONL path")?;
             let output = required_path(args.next(), "output JSONL path")?;
@@ -62,10 +68,66 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         _ => {
-            return Err("usage: youtube-raw-search build <chunks.jsonl> <channels.jsonl> <index-dir> | serve [index-dir] | slice <input.jsonl> <output.jsonl> <max-videos>".into());
+            return Err("usage: youtube-raw-search build <chunks.jsonl> <channels.jsonl> <index-dir> | serve [index-dir] | serve-mutable | slice <input.jsonl> <output.jsonl> <max-videos>".into());
         }
     }
     Ok(())
+}
+
+async fn serve_mutable() -> Result<(), Box<dyn std::error::Error>> {
+    let bind = env::var("RAW_SEARCH_BIND")
+        .unwrap_or_else(|_| "0.0.0.0:8108".to_string())
+        .parse::<SocketAddr>()?;
+    let base_index = env_path("RAW_SEARCH_INDEX_PATH", "/data/index");
+    let state_directory = env_path("RAW_SEARCH_STATE_DIRECTORY", "/data/mutable");
+    let publisher = Arc::new(Publisher::new(PublisherPaths {
+        base_chunks_gzip: required_env_path("RAW_SEARCH_BASE_CHUNKS_GZIP")?,
+        base_channels_gzip: required_env_path("RAW_SEARCH_BASE_CHANNELS_GZIP")?,
+        base_index,
+        state_directory: state_directory.clone(),
+    }));
+    let store = Arc::new(MutationStore::open(
+        &env::var_os("RAW_SEARCH_MUTATION_DB")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| state_directory.join("mutations.sqlite3")),
+    )?);
+    let active_sequence = publisher.active_sequence()?;
+    let engine = Arc::new(ReloadableEngine::new(
+        RawSearchEngine::open(&publisher.active_index_path()?)?,
+        active_sequence,
+    ));
+    let admin = AdminState::new(
+        Arc::clone(&engine),
+        store,
+        publisher,
+        env::var("RAW_SEARCH_ADMIN_API_KEY")
+            .map_err(|_| "RAW_SEARCH_ADMIN_API_KEY is required for serve-mutable")?,
+    )?;
+    let search_backend: Arc<dyn SearchBackend> = engine;
+    let search_config = ServerConfig {
+        bind,
+        api_key: env::var("RAW_SEARCH_API_KEY").ok(),
+        raw_route: true,
+    };
+    let app = youtube_search_service::router(&search_config, search_backend)
+        .merge(admin_router(admin.clone()));
+    let listener = tokio::net::TcpListener::bind(bind).await?;
+    admin.trigger_publication();
+    tracing::info!(%bind, active_sequence, "mutable raw search ready");
+    youtube_search_service::serve_router(listener, app).await?;
+    Ok(())
+}
+
+fn env_path(name: &str, default: &str) -> PathBuf {
+    env::var_os(name)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(default))
+}
+
+fn required_env_path(name: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    env::var_os(name)
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("{name} is required for serve-mutable").into())
 }
 
 fn required_path(value: Option<String>, name: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {

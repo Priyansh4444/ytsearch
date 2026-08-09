@@ -9,6 +9,7 @@ name = "youtube-raw-search"
 path = "src/main.rs"
 
 [dependencies]
+axum = "0.8"
 blake3 = "1.8"
 flate2 = "1.1.9"
 memmap2 = "0.9"
@@ -16,7 +17,7 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 youtube_search_service = { path = "../youtube_search_service" }

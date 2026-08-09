@@ -900,6 +900,7 @@ fn engagement_normalization_is_bounded_and_handles_missing_metrics() {
     };
     let video = VideoMeta {
         id: "video".to_string(),
+        youtuber_id: "creator".to_string(),
         handle: "@creator".to_string(),
         title: "Video".to_string(),
         published_at_timestamp: 0,
