@@ -9,6 +9,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
+    collections::BTreeMap,
     num::NonZeroU16,
     sync::{
         Arc,
@@ -298,6 +299,10 @@ async fn video_chunk_count(
 ) -> Result<Json<serde_json::Value>, AdminError> {
     authorize(&state, &headers)?;
     let count = state.engine.active()?.video_chunk_count(&video_id);
+    let count = state
+        .store
+        .video_mutation_summary(&video_id)?
+        .map_or(count, |mutation| mutation.chunk_count.unwrap_or(0));
     Ok(Json(json!({ "count": count })))
 }
 
@@ -316,7 +321,9 @@ async fn indexed_video_ids(
                 "limit must be between 1 and {MAX_PAGE_SIZE}"
             )))
         })?;
-    let video_ids = state.engine.active()?.indexed_video_ids(&channel_id);
+    let video_ids = merged_video_counts(&state, &channel_id)?
+        .into_keys()
+        .collect();
     Ok(Json(paginate(video_ids, query.cursor.as_deref(), limit)))
 }
 
@@ -326,7 +333,17 @@ async fn channel_stats(
     headers: HeaderMap,
 ) -> Result<Json<youtube_index_store::ChunkStats>, AdminError> {
     authorize(&state, &headers)?;
-    Ok(Json(state.engine.active()?.channel_stats(&channel_id)))
+    let stats = merged_video_counts(&state, &channel_id)?
+        .into_values()
+        .fold(
+            youtube_index_store::ChunkStats::default(),
+            |mut stats, chunks| {
+                stats.indexed_videos = stats.indexed_videos.saturating_add(1);
+                stats.indexed_chunks = stats.indexed_chunks.saturating_add(chunks);
+                stats
+            },
+        );
+    Ok(Json(stats))
 }
 
 async fn channel(
@@ -335,7 +352,39 @@ async fn channel(
     headers: HeaderMap,
 ) -> Result<Json<Option<ChannelDocument>>, AdminError> {
     authorize(&state, &headers)?;
+    if let Some(mutation) = state.store.channel_mutation(&channel_id)? {
+        return Ok(Json(mutation.document));
+    }
     Ok(Json(state.engine.active()?.channel_document(&channel_id)?))
+}
+
+fn merged_video_counts(
+    state: &AdminState,
+    channel_id: &str,
+) -> Result<BTreeMap<String, u64>, AdminError> {
+    let channel_deleted = state
+        .store
+        .channel_mutation(channel_id)?
+        .is_some_and(|mutation| mutation.document.is_none() && mutation.cascade);
+    let mut counts = if channel_deleted {
+        BTreeMap::new()
+    } else {
+        state
+            .engine
+            .active()?
+            .video_chunk_counts(channel_id)
+            .into_iter()
+            .collect()
+    };
+    for mutation in state.store.video_mutation_summaries()? {
+        counts.remove(&mutation.video_id);
+        if mutation.youtuber_id.as_deref() == Some(channel_id)
+            && let Some(chunk_count) = mutation.chunk_count
+        {
+            counts.insert(mutation.video_id, chunk_count);
+        }
+    }
+    Ok(counts)
 }
 
 fn readiness_value(state: &AdminState) -> Result<BackendReadiness, AdminError> {

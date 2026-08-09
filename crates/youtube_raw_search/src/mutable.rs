@@ -31,6 +31,13 @@ pub struct StoredChannelMutation {
     pub cascade: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VideoMutationSummary {
+    pub video_id: String,
+    pub youtuber_id: Option<String>,
+    pub chunk_count: Option<u64>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct MutationSnapshot {
     pub through_sequence: u64,
@@ -63,7 +70,9 @@ impl MutationStore {
                  CREATE TABLE IF NOT EXISTS video_mutations (
                    video_id TEXT PRIMARY KEY,
                    sequence INTEGER NOT NULL REFERENCES operations(sequence),
-                   chunks_json BLOB
+                   chunks_json BLOB,
+                   youtuber_id TEXT,
+                   chunk_count INTEGER
                  );
                  CREATE TABLE IF NOT EXISTS channel_mutations (
                    channel_id TEXT PRIMARY KEY,
@@ -73,6 +82,7 @@ impl MutationStore {
                  );",
             )
             .map_err(map_sqlite)?;
+        ensure_video_summary_columns(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -86,6 +96,12 @@ impl MutationStore {
         validate_identifier("video_id", replacement.video_id())?;
         validate_idempotency_key(idempotency_key)?;
         let chunks_json = serde_json::to_vec(replacement.chunks()).map_err(map_json)?;
+        let youtuber_id = replacement
+            .chunks()
+            .first()
+            .map(|chunk| chunk.youtuber_id().to_string());
+        let chunk_count = i64::try_from(replacement.chunks().len())
+            .map_err(|error| IndexStoreError::internal(BACKEND, error))?;
         let hash = payload_hash("replace_video", replacement.video_id(), &chunks_json);
         self.write_operation(
             idempotency_key,
@@ -94,11 +110,19 @@ impl MutationStore {
             hash,
             |transaction, sequence| {
                 transaction.execute(
-                    "INSERT INTO video_mutations(video_id, sequence, chunks_json)
-                     VALUES (?1, ?2, ?3)
+                    "INSERT INTO video_mutations(
+                       video_id, sequence, chunks_json, youtuber_id, chunk_count
+                     ) VALUES (?1, ?2, ?3, ?4, ?5)
                      ON CONFLICT(video_id) DO UPDATE SET
-                       sequence=excluded.sequence, chunks_json=excluded.chunks_json",
-                    params![replacement.video_id(), sequence, chunks_json],
+                       sequence=excluded.sequence, chunks_json=excluded.chunks_json,
+                       youtuber_id=excluded.youtuber_id, chunk_count=excluded.chunk_count",
+                    params![
+                        replacement.video_id(),
+                        sequence,
+                        chunks_json,
+                        youtuber_id,
+                        chunk_count
+                    ],
                 )?;
                 Ok(())
             },
@@ -120,10 +144,12 @@ impl MutationStore {
             hash,
             |transaction, sequence| {
                 transaction.execute(
-                    "INSERT INTO video_mutations(video_id, sequence, chunks_json)
-                     VALUES (?1, ?2, NULL)
+                    "INSERT INTO video_mutations(
+                       video_id, sequence, chunks_json, youtuber_id, chunk_count
+                     ) VALUES (?1, ?2, NULL, NULL, NULL)
                      ON CONFLICT(video_id) DO UPDATE SET
-                       sequence=excluded.sequence, chunks_json=NULL",
+                       sequence=excluded.sequence, chunks_json=NULL,
+                       youtuber_id=NULL, chunk_count=NULL",
                     params![video_id, sequence],
                 )?;
                 Ok(())
@@ -276,6 +302,71 @@ impl MutationStore {
         })
     }
 
+    pub fn video_mutation_summary(
+        &self,
+        video_id: &str,
+    ) -> Result<Option<VideoMutationSummary>, IndexStoreError> {
+        validate_identifier("video_id", video_id)?;
+        self.connection()?
+            .query_row(
+                "SELECT video_id, youtuber_id, chunk_count
+                 FROM video_mutations WHERE video_id=?1",
+                [video_id],
+                video_summary_from_row,
+            )
+            .optional()
+            .map_err(map_sqlite)
+    }
+
+    pub fn video_mutation_summaries(&self) -> Result<Vec<VideoMutationSummary>, IndexStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT video_id, youtuber_id, chunk_count
+                 FROM video_mutations ORDER BY video_id",
+            )
+            .map_err(map_sqlite)?;
+        statement
+            .query_map([], video_summary_from_row)
+            .map_err(map_sqlite)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(map_sqlite)
+    }
+
+    pub fn channel_mutation(
+        &self,
+        channel_id: &str,
+    ) -> Result<Option<StoredChannelMutation>, IndexStoreError> {
+        validate_identifier("channel id", channel_id)?;
+        self.connection()?
+            .query_row(
+                "SELECT sequence, channel_id, document_json, cascade
+                 FROM channel_mutations WHERE channel_id=?1",
+                [channel_id],
+                |row| {
+                    let document_json = row.get::<_, Option<Vec<u8>>>(2)?;
+                    let document = document_json
+                        .map(|bytes| serde_json::from_slice::<ChannelDocument>(&bytes))
+                        .transpose()
+                        .map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                2,
+                                rusqlite::types::Type::Blob,
+                                Box::new(error),
+                            )
+                        })?;
+                    Ok(StoredChannelMutation {
+                        sequence: row_u64(row, 0)?,
+                        channel_id: row.get(1)?,
+                        document,
+                        cascade: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(map_sqlite)
+    }
+
     pub fn mark_published(&self, through_sequence: u64) -> Result<(), IndexStoreError> {
         let through_sequence = i64::try_from(through_sequence)
             .map_err(|error| IndexStoreError::internal(BACKEND, error))?;
@@ -356,6 +447,77 @@ impl MutationStore {
             .lock()
             .map_err(|_| IndexStoreError::internal(BACKEND, "mutation store lock poisoned"))
     }
+}
+
+fn ensure_video_summary_columns(connection: &Connection) -> Result<(), IndexStoreError> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(video_mutations)")
+        .map_err(map_sqlite)?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(map_sqlite)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(map_sqlite)?;
+    drop(statement);
+    if !columns.iter().any(|column| column == "youtuber_id") {
+        connection
+            .execute(
+                "ALTER TABLE video_mutations ADD COLUMN youtuber_id TEXT",
+                [],
+            )
+            .map_err(map_sqlite)?;
+    }
+    if !columns.iter().any(|column| column == "chunk_count") {
+        connection
+            .execute(
+                "ALTER TABLE video_mutations ADD COLUMN chunk_count INTEGER",
+                [],
+            )
+            .map_err(map_sqlite)?;
+    }
+    let mut statement = connection
+        .prepare(
+            "SELECT video_id, chunks_json FROM video_mutations
+             WHERE chunks_json IS NOT NULL
+               AND (youtuber_id IS NULL OR chunk_count IS NULL)",
+        )
+        .map_err(map_sqlite)?;
+    let missing = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })
+        .map_err(map_sqlite)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(map_sqlite)?;
+    drop(statement);
+    for (video_id, chunks_json) in missing {
+        let chunks =
+            serde_json::from_slice::<Vec<TranscriptChunk>>(&chunks_json).map_err(map_json)?;
+        let youtuber_id = chunks.first().map(TranscriptChunk::youtuber_id);
+        let chunk_count = i64::try_from(chunks.len())
+            .map_err(|error| IndexStoreError::internal(BACKEND, error))?;
+        connection
+            .execute(
+                "UPDATE video_mutations SET youtuber_id=?1, chunk_count=?2 WHERE video_id=?3",
+                params![youtuber_id, chunk_count, video_id],
+            )
+            .map_err(map_sqlite)?;
+    }
+    Ok(())
+}
+
+fn video_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoMutationSummary> {
+    let chunk_count = row
+        .get::<_, Option<i64>>(2)?
+        .map(|count| {
+            u64::try_from(count).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, count))
+        })
+        .transpose()?;
+    Ok(VideoMutationSummary {
+        video_id: row.get(0)?,
+        youtuber_id: row.get(1)?,
+        chunk_count,
+    })
 }
 
 struct ExistingOperation {

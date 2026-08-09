@@ -113,6 +113,19 @@ async fn video_mutation_is_durable_then_atomically_published() {
         youtube_index_store::IndexOperationState::Durable
     );
     assert_eq!(state.engine.sequence(), 0);
+    let Json(count) = video_chunk_count(
+        State(state.clone()),
+        Path("new-video".to_string()),
+        headers(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(count["count"], 1);
+    let Json(stats) = channel_stats(State(state.clone()), Path("creator".to_string()), headers())
+        .await
+        .unwrap();
+    assert_eq!(stats.indexed_videos, 2);
+    assert_eq!(stats.indexed_chunks, 2);
 
     state.clone().publish_pending().await;
 

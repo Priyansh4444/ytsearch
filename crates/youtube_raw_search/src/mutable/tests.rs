@@ -40,6 +40,14 @@ fn durable_replacement_survives_reopen_and_is_idempotent() {
     assert_eq!(snapshot.through_sequence, first.sequence.unwrap());
     assert_eq!(snapshot.videos.len(), 1);
     assert_eq!(snapshot.videos[0].chunks.as_ref().unwrap(), &chunks);
+    assert_eq!(
+        reopened.video_mutation_summary("video-1").unwrap(),
+        Some(VideoMutationSummary {
+            video_id: "video-1".to_string(),
+            youtuber_id: Some("channel".to_string()),
+            chunk_count: Some(1),
+        })
+    );
 }
 
 #[test]
@@ -82,6 +90,14 @@ fn latest_video_mutation_is_the_only_published_input() {
     assert_eq!(snapshot.videos.len(), 1);
     assert!(snapshot.videos[0].chunks.is_none());
     assert_eq!(snapshot.videos[0].sequence, deletion.sequence.unwrap());
+    assert_eq!(
+        store
+            .video_mutation_summary("video-1")
+            .unwrap()
+            .unwrap()
+            .chunk_count,
+        None
+    );
 }
 
 #[test]

@@ -8,7 +8,10 @@ mod publisher;
 mod reloadable;
 
 pub use engine::{BuildReport, RawSearchEngine, SliceReport, build_index, slice_corpus};
-pub use mutable::{MutationSnapshot, MutationStore, StoredChannelMutation, StoredVideoMutation};
+pub use mutable::{
+    MutationSnapshot, MutationStore, StoredChannelMutation, StoredVideoMutation,
+    VideoMutationSummary,
+};
 pub use publisher::{PublishedGeneration, Publisher, PublisherPaths};
 pub use reloadable::ReloadableEngine;
 pub use youtube_search_service::SearchParams;

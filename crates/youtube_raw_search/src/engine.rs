@@ -415,14 +415,21 @@ impl RawSearchEngine {
 
     pub fn indexed_video_ids(&self, channel_id: &str) -> Vec<String> {
         let mut video_ids = self
-            .inner
-            .videos
-            .iter()
-            .filter(|video| video.belongs_to(channel_id))
-            .map(|video| video.id.clone())
+            .video_chunk_counts(channel_id)
+            .into_iter()
+            .map(|(video_id, _)| video_id)
             .collect::<Vec<_>>();
         video_ids.sort_unstable();
         video_ids
+    }
+
+    pub fn video_chunk_counts(&self, channel_id: &str) -> Vec<(String, u64)> {
+        self.inner
+            .videos
+            .iter()
+            .filter(|video| video.belongs_to(channel_id))
+            .map(|video| (video.id.clone(), video.documents.len() as u64))
+            .collect()
     }
 
     pub fn channel_stats(&self, channel_id: &str) -> ChunkStats {
