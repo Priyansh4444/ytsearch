@@ -1,8 +1,9 @@
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Parser, ValueEnum};
 use serde_json::Value;
 use std::{
     collections::HashSet,
     fs,
+    num::NonZeroU16,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant, SystemTime},
@@ -10,794 +11,34 @@ use std::{
 use thiserror::Error;
 use tokio::task::JoinSet;
 use youtube_client::{ListResource, Page, Query, YouTubeClient};
-use youtube_ingest::{Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource};
-use youtube_search::{DEFAULT_COLLECTION, TextSearchQuery, YoutuberDocument};
-use youtube_sources::{FallbackMetadataSource, YouTubeMetadataSource};
-use youtube_transcribe::{TranscriptionConfig, VoxtypeTranscriptSource};
-use youtube_typesense::{
-    CreateCollectionOutcome as TypesenseCreateCollectionOutcome, TypesenseAdminClient,
-    TypesenseAdminConfig, TypesenseSearchClient, TypesenseSearchConfig,
+use youtube_index_store::{
+    ChannelDocument, ChunkStats, IndexOperation, IndexStoreError, RawIndexAdminClient,
+    SearchIndexAdmin, VideoReplacement,
 };
+use youtube_ingest::{Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource};
+use youtube_sources::{
+    FallbackMetadataSource, YouTubeMetadataSource, stable_youtuber_id as youtuber_id_from_handle,
+};
+use youtube_transcribe::{TranscriptionConfig, VoxtypeTranscriptSource};
+use youtube_typesense::{DEFAULT_COLLECTION, TextSearchQuery};
 use youtube_ytdlp::{YtDlpTranscriptSource, YtDlpVideo};
 
-#[derive(Debug, Parser)]
-#[command(name = "ytsearch")]
-#[command(about = "YouTube transcript search indexing utilities")]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
+mod args;
 
-#[derive(Debug, Subcommand)]
-enum Command {
-    #[command(about = "Create missing Typesense collections without indexing data")]
-    InitBackend(InitBackendCommand),
-    #[command(about = "Validate that a YouTube handle resolves and show recent uploads")]
-    Validate(ValidateCommand),
-    #[command(about = "Validate a YouTuber and create the search backend transcript index")]
-    InitTypesense(InitTypesenseCommand),
-    #[command(about = "Create/update the YouTuber document and report discoverable public videos")]
-    IndexYoutuber(IndexYoutuberCommand),
-    #[command(about = "Index YouTubers from a text file")]
-    IndexYoutubers(IndexYoutubersCommand),
-    #[command(about = "Benchmark indexing phases for one YouTuber")]
-    BenchmarkIndexYoutuber(BenchmarkIndexYoutuberCommand),
-    #[command(about = "Refresh the indexed YouTuber profile document without reindexing videos")]
-    RefreshYoutuber(RefreshYoutuberCommand),
-    #[command(about = "Refresh indexed YouTuber profile documents from a text file")]
-    RefreshYoutubers(RefreshYoutubersCommand),
-    #[command(about = "Reconcile one creator's indexed counts from backend chunks only")]
-    RefreshYoutuberCounts(RefreshYoutuberCountsCommand),
-    #[command(about = "Reconcile creator indexed counts from a text file without YouTube")]
-    RefreshYoutuberCountsList(RefreshYoutuberCountsListCommand),
-    #[command(about = "Remove a YouTuber document and transcript chunks from the search backend")]
-    RemoveYoutuber(RemoveYoutuberCommand),
-    #[command(about = "Index one video by ID or URL")]
-    IndexVideo(IndexVideoCommand),
-    #[command(about = "Search transcript chunks using the selected search backend")]
-    Search(SearchCommand),
-}
-
-#[derive(Clone, Debug, Args)]
-struct InitBackendCommand {
-    #[command(flatten)]
-    search: SearchAdminArgs,
-    #[command(flatten)]
-    collection: TranscriptCollectionArg,
-}
-
-#[derive(Clone, Debug, Args)]
-struct ValidateCommand {
-    #[command(flatten)]
-    youtuber: YoutuberArg,
-    #[arg(long, default_value_t = 5, help = "Number of recent uploads to list")]
-    max_videos: u8,
-    #[command(flatten)]
-    youtube: YouTubeAuthArgs,
-}
-
-#[derive(Clone, Debug, Args)]
-struct InitTypesenseCommand {
-    #[command(flatten)]
-    youtuber: YoutuberArg,
-    #[arg(long, default_value_t = 5, help = "Number of recent uploads to verify")]
-    max_videos: u8,
-    #[command(flatten)]
-    youtube: YouTubeAuthArgs,
-    #[command(flatten)]
-    search: SearchAdminArgs,
-    #[command(flatten)]
-    collection: TranscriptCollectionArg,
-}
-
-#[derive(Clone, Debug, Args)]
-struct RefreshYoutuberCommand {
-    #[command(flatten)]
-    youtuber: YoutuberArg,
-    #[command(flatten)]
-    youtube: YouTubeAuthArgs,
-    #[command(flatten)]
-    search: SearchAdminArgs,
-}
-
-#[derive(Clone, Debug, Args)]
-struct RefreshYoutubersCommand {
-    #[arg(value_name = "LIST_FILE")]
-    list_file: PathBuf,
-    #[command(flatten)]
-    youtube: YouTubeAuthArgs,
-    #[command(flatten)]
-    search: SearchAdminArgs,
-}
-
-#[derive(Clone, Debug, Args)]
-struct RefreshYoutuberCountsCommand {
-    #[command(flatten)]
-    youtuber: YoutuberArg,
-    #[command(flatten)]
-    search: SearchAdminArgs,
-    #[command(flatten)]
-    collection: TranscriptCollectionArg,
-}
-
-#[derive(Clone, Debug, Args)]
-struct RefreshYoutuberCountsListCommand {
-    #[arg(value_name = "LIST_FILE")]
-    list_file: PathBuf,
-    #[command(flatten)]
-    search: SearchAdminArgs,
-    #[command(flatten)]
-    collection: TranscriptCollectionArg,
-}
-
-#[derive(Clone, Debug, Args)]
-struct RemoveYoutuberCommand {
-    #[command(flatten)]
-    youtuber: YoutuberArg,
-    #[command(flatten)]
-    search: SearchAdminArgs,
-    #[command(flatten)]
-    collection: TranscriptCollectionArg,
-    #[arg(
-        long,
-        help = "Acknowledge permanent deletion of the channel profile and all transcript chunks"
-    )]
-    allow_destructive_remove: bool,
-}
-
-#[derive(Clone, Debug, Args)]
-struct IndexYoutuberCommand {
-    #[command(flatten)]
-    youtuber: YoutuberArg,
-    #[command(flatten)]
-    youtube: YouTubeAuthArgs,
-    #[command(flatten)]
-    search: SearchAdminArgs,
-    #[command(flatten)]
-    collection: TranscriptCollectionArg,
-    #[arg(long, help = "Optional cap for a test indexing run")]
-    max_videos: Option<usize>,
-    #[arg(
-        long,
-        help = "After existing-video filtering, index at most this many missing videos"
-    )]
-    max_new_videos: Option<usize>,
-    #[arg(
-        long,
-        help = "In update mode, stop scanning newest-first after this many consecutive already-indexed videos. Use 0 to disable"
-    )]
-    stop_after_existing: Option<usize>,
-    #[arg(long, value_enum, default_value_t = IndexMode::Update)]
-    mode: IndexMode,
-    #[arg(
-        long,
-        help = "Acknowledge that rewipe deletes existing chunks before replacement data is imported"
-    )]
-    allow_destructive_rewipe: bool,
-    #[arg(long, default_value_t = 4, help = "Concurrent videos to index")]
-    jobs: usize,
-    #[arg(
-        long,
-        default_value_t = 300,
-        help = "Maximum seconds to spend on one video"
-    )]
-    video_timeout_seconds: u64,
-    #[arg(
-        long,
-        help = "Skip videos that already have chunks in the search backend"
-    )]
-    skip_existing: bool,
-    #[arg(
-        long,
-        help = "Keep existing chunks for this YouTuber instead of wiping before import"
-    )]
-    no_wipe: bool,
-    #[arg(long, value_enum, default_value_t = ContentKindFilter::All)]
-    content_kind: ContentKindFilter,
-    #[arg(
-        long,
-        default_value_t = 10,
-        help = "Transcript chunk window in seconds"
-    )]
-    chunk_seconds: u32,
-    #[arg(
-        long,
-        help = "When captions are missing, extract audio with yt-dlp and transcribe locally with voxtype"
-    )]
-    transcribe_missing: bool,
-    #[arg(long, default_value = "data/transcription-cache")]
-    transcription_cache_dir: PathBuf,
-    #[arg(long, default_value = "data/transcript-cache")]
-    transcript_cache_dir: PathBuf,
-    #[arg(long, help = "Disable the yt-dlp transcript cache")]
-    no_transcript_cache: bool,
-    #[arg(
-        long,
-        default_value_t = 21_600,
-        help = "Seconds before retrying a video whose fetch or import previously failed"
-    )]
-    transcript_failure_retry_seconds: u64,
-    #[arg(long, default_value_t = 30)]
-    transcription_chunk_seconds: u32,
-    #[arg(
-        long,
-        help = "Optional voxtype engine override, e.g. whisper or parakeet"
-    )]
-    voxtype_engine: Option<String>,
-}
-
-#[derive(Clone, Debug, Args)]
-struct IndexYoutubersCommand {
-    #[arg(value_name = "LIST_FILE")]
-    list_file: PathBuf,
-    #[command(flatten)]
-    youtube: YouTubeAuthArgs,
-    #[command(flatten)]
-    search: SearchAdminArgs,
-    #[command(flatten)]
-    collection: TranscriptCollectionArg,
-    #[arg(long, value_enum, default_value_t = IndexMode::Update)]
-    mode: IndexMode,
-    #[arg(
-        long,
-        help = "Acknowledge that rewipe deletes existing chunks before replacement data is imported"
-    )]
-    allow_destructive_rewipe: bool,
-    #[arg(long, help = "Optional cap per creator for a test indexing run")]
-    max_videos: Option<usize>,
-    #[arg(
-        long,
-        help = "In update mode, stop scanning newest-first after this many consecutive already-indexed videos. Use 0 to disable"
-    )]
-    stop_after_existing: Option<usize>,
-    #[arg(
-        long,
-        default_value_t = 4,
-        help = "Concurrent videos to index per creator"
-    )]
-    jobs: usize,
-    #[arg(
-        long,
-        default_value_t = 1,
-        help = "Concurrent creators; automatically bounded so total video workers never exceed 16"
-    )]
-    channel_jobs: usize,
-    #[arg(
-        long,
-        default_value_t = 300,
-        help = "Maximum seconds to spend on one video"
-    )]
-    video_timeout_seconds: u64,
-    #[arg(long, value_enum, default_value_t = ContentKindFilter::All)]
-    content_kind: ContentKindFilter,
-    #[arg(
-        long,
-        default_value_t = 10,
-        help = "Transcript chunk window in seconds"
-    )]
-    chunk_seconds: u32,
-    #[arg(
-        long,
-        help = "When captions are missing, extract audio with yt-dlp and transcribe locally with voxtype"
-    )]
-    transcribe_missing: bool,
-    #[arg(long, default_value = "data/transcription-cache")]
-    transcription_cache_dir: PathBuf,
-    #[arg(long, default_value = "data/transcript-cache")]
-    transcript_cache_dir: PathBuf,
-    #[arg(long, help = "Disable the yt-dlp transcript cache")]
-    no_transcript_cache: bool,
-    #[arg(
-        long,
-        default_value_t = 21_600,
-        help = "Seconds before retrying a video whose fetch or import previously failed"
-    )]
-    transcript_failure_retry_seconds: u64,
-    #[arg(long, default_value_t = 30)]
-    transcription_chunk_seconds: u32,
-    #[arg(
-        long,
-        help = "Optional voxtype engine override, e.g. whisper or parakeet"
-    )]
-    voxtype_engine: Option<String>,
-}
-
-#[derive(Clone, Debug, Args)]
-struct BenchmarkIndexYoutuberCommand {
-    #[command(flatten)]
-    youtuber: YoutuberArg,
-    #[command(flatten)]
-    youtube: YouTubeAuthArgs,
-    #[command(flatten)]
-    search: SearchAdminArgs,
-    #[command(flatten)]
-    collection: TranscriptCollectionArg,
-    #[arg(long, default_value_t = 10, help = "Videos to benchmark newest-first")]
-    max_videos: usize,
-    #[arg(long, help = "Import chunks while benchmarking")]
-    import: bool,
-    #[arg(
-        long,
-        help = "Skip videos that already have chunks in the search backend"
-    )]
-    skip_existing: bool,
-    #[arg(long, value_enum, default_value_t = ContentKindFilter::All)]
-    content_kind: ContentKindFilter,
-    #[arg(
-        long,
-        default_value_t = 10,
-        help = "Transcript chunk window in seconds"
-    )]
-    chunk_seconds: u32,
-    #[arg(
-        long,
-        help = "When captions are missing, extract audio with yt-dlp and transcribe locally with voxtype"
-    )]
-    transcribe_missing: bool,
-    #[arg(long, default_value = "data/transcription-cache")]
-    transcription_cache_dir: PathBuf,
-    #[arg(long, default_value = "data/transcript-cache")]
-    transcript_cache_dir: PathBuf,
-    #[arg(long, help = "Disable the yt-dlp transcript cache")]
-    no_transcript_cache: bool,
-    #[arg(long, default_value_t = 30)]
-    transcription_chunk_seconds: u32,
-    #[arg(
-        long,
-        help = "Optional voxtype engine override, e.g. whisper or parakeet"
-    )]
-    voxtype_engine: Option<String>,
-}
-
-#[derive(Clone, Debug, Args)]
-struct IndexVideoCommand {
-    #[arg(value_name = "VIDEO_ID_OR_URL")]
-    video: String,
-    #[command(flatten)]
-    youtube: YouTubeAuthArgs,
-    #[command(flatten)]
-    search: SearchAdminArgs,
-    #[command(flatten)]
-    collection: TranscriptCollectionArg,
-    #[arg(
-        long,
-        help = "Keep existing chunks for this video instead of wiping before import"
-    )]
-    no_wipe: bool,
-    #[arg(
-        long,
-        default_value_t = 10,
-        help = "Transcript chunk window in seconds"
-    )]
-    chunk_seconds: u32,
-    #[arg(
-        long,
-        help = "When captions are missing, extract audio with yt-dlp and transcribe locally with voxtype"
-    )]
-    transcribe_missing: bool,
-    #[arg(long, default_value = "data/transcription-cache")]
-    transcription_cache_dir: PathBuf,
-    #[arg(long, default_value = "data/transcript-cache")]
-    transcript_cache_dir: PathBuf,
-    #[arg(long, help = "Disable the yt-dlp transcript cache")]
-    no_transcript_cache: bool,
-    #[arg(long, default_value_t = 30)]
-    transcription_chunk_seconds: u32,
-    #[arg(
-        long,
-        help = "Optional voxtype engine override, e.g. whisper or parakeet"
-    )]
-    voxtype_engine: Option<String>,
-}
-
-#[derive(Clone, Debug, Args)]
-struct SearchCommand {
-    #[arg(value_name = "QUERY")]
-    query: String,
-    #[arg(long, help = "Optional YouTube handle filter, e.g. @t3dotgg")]
-    youtuber: Option<String>,
-    #[command(flatten)]
-    search: SearchQueryArgs,
-    #[command(flatten)]
-    collection: TranscriptCollectionArg,
-    #[arg(long, default_value_t = 10)]
-    per_page: u8,
-}
-
-#[derive(Clone, Debug, Args)]
-struct YoutuberArg {
-    #[arg(value_name = "HANDLE", help = "YouTube handle, e.g. @t3dotgg")]
-    handle: String,
-}
-
-#[derive(Clone, Debug, Args)]
-struct YouTubeAuthArgs {
-    #[arg(
-        long,
-        env = "YOUTUBE_API_KEY",
-        hide_env_values = true,
-        help = "YouTube Data API key"
-    )]
-    youtube_api_key: Option<String>,
-}
-
-#[derive(Clone, Debug, Args)]
-struct SearchAdminArgs {
-    #[arg(
-        long,
-        env = "YTSEARCH_SEARCH_BACKEND",
-        default_value = "typesense",
-        help = "Search backend to use (typesense)"
-    )]
-    backend: SearchBackend,
-    #[arg(
-        long,
-        env = "YTSEARCH_SEARCH_API_URL",
-        hide_env_values = true,
-        help = "Search backend admin URL. Defaults to TYPESENSE_API_URL"
-    )]
-    api_url: Option<String>,
-    #[arg(
-        long,
-        env = "YTSEARCH_SEARCH_ADMIN_API_KEY",
-        hide_env_values = true,
-        help = "Search backend admin key. Defaults to TYPESENSE_ADMIN_API_KEY"
-    )]
-    admin_api_key: Option<String>,
-}
-
-#[derive(Clone, Debug, Args)]
-struct SearchQueryArgs {
-    #[arg(
-        long,
-        env = "YTSEARCH_SEARCH_BACKEND",
-        default_value = "typesense",
-        help = "Search backend to use (typesense)"
-    )]
-    backend: SearchBackend,
-    #[arg(
-        long,
-        env = "YTSEARCH_SEARCH_API_URL",
-        hide_env_values = true,
-        help = "Search backend URL. Defaults to TYPESENSE_API_URL"
-    )]
-    api_url: Option<String>,
-    #[arg(
-        long,
-        env = "YTSEARCH_SEARCH_API_KEY",
-        hide_env_values = true,
-        help = "Search key. Defaults to TYPESENSE_SEARCH_API_KEY"
-    )]
-    search_api_key: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-enum SearchBackend {
-    Typesense,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-enum IndexMode {
-    Update,
-    Rewipe,
-}
-
-#[derive(Clone, Debug, Args)]
-struct TranscriptCollectionArg {
-    #[arg(
-        long,
-        env = "YTSEARCH_TRANSCRIPTS_INDEX",
-        hide_env_values = true,
-        default_value = DEFAULT_COLLECTION
-    )]
-    collection: String,
-}
-
-impl YouTubeAuthArgs {
-    fn client(self) -> Result<YouTubeClient, CliError> {
-        let api_key = self.youtube_api_key.ok_or_else(|| {
-            CliError::Message("missing YouTube Data API key (YOUTUBE_API_KEY)".to_string())
-        })?;
-        Ok(YouTubeClient::with_api_key(api_key)?)
-    }
-
-    fn optional_client(&self) -> Result<Option<YouTubeClient>, CliError> {
-        self.youtube_api_key
-            .as_ref()
-            .map(|api_key| YouTubeClient::with_api_key(api_key.clone()).map_err(CliError::from))
-            .transpose()
-    }
-}
-
-impl SearchAdminArgs {
-    fn resolved(&self) -> Result<ResolvedSearchAdminArgs, CliError> {
-        let api_url = self
-            .api_url
-            .clone()
-            .or_else(|| std::env::var("TYPESENSE_API_URL").ok());
-        let admin_api_key = self
-            .admin_api_key
-            .clone()
-            .or_else(|| std::env::var("TYPESENSE_ADMIN_API_KEY").ok());
-
-        Ok(ResolvedSearchAdminArgs {
-            api_url: api_url.ok_or_else(|| {
-                CliError::Message(format!(
-                    "missing admin URL for {} backend",
-                    self.backend.name()
-                ))
-            })?,
-            admin_api_key: admin_api_key.ok_or_else(|| {
-                CliError::Message(format!(
-                    "missing admin key for {} backend",
-                    self.backend.name()
-                ))
-            })?,
-        })
-    }
-
-    fn client(&self, collection: impl Into<String>) -> Result<SearchAdminClient, CliError> {
-        let collection = collection.into();
-        let resolved = self.resolved()?;
-        Ok(SearchAdminClient::Typesense(TypesenseAdminClient::new(
-            TypesenseAdminConfig::new(resolved.api_url.clone(), resolved.admin_api_key.clone())
-                .with_collection(collection),
-        )))
-    }
-
-    fn youtuber_client(&self) -> Result<SearchAdminClient, CliError> {
-        let resolved = self.resolved()?;
-        Ok(SearchAdminClient::Typesense(TypesenseAdminClient::new(
-            TypesenseAdminConfig::new(resolved.api_url.clone(), resolved.admin_api_key.clone()),
-        )))
-    }
-}
-
-impl SearchQueryArgs {
-    fn resolved(&self) -> Result<ResolvedSearchArgs, CliError> {
-        let api_url = self
-            .api_url
-            .clone()
-            .or_else(|| std::env::var("TYPESENSE_API_URL").ok());
-        let search_api_key = self
-            .search_api_key
-            .clone()
-            .or_else(|| std::env::var("TYPESENSE_SEARCH_API_KEY").ok());
-
-        Ok(ResolvedSearchArgs {
-            api_url: api_url.ok_or_else(|| {
-                CliError::Message(format!(
-                    "missing search URL for {} backend",
-                    self.backend.name()
-                ))
-            })?,
-            search_api_key: search_api_key.ok_or_else(|| {
-                CliError::Message(format!(
-                    "missing search key for {} backend",
-                    self.backend.name()
-                ))
-            })?,
-        })
-    }
-
-    fn client(&self, collection: impl Into<String>) -> Result<SearchClient, CliError> {
-        let collection = collection.into();
-        let resolved = self.resolved()?;
-        Ok(SearchClient::Typesense(TypesenseSearchClient::new(
-            TypesenseSearchConfig::new(resolved.api_url.clone(), resolved.search_api_key.clone())
-                .with_collection(collection),
-        )))
-    }
-}
-
-impl SearchBackend {
-    fn name(self) -> &'static str {
-        "typesense"
-    }
-}
-
-#[derive(Debug)]
-struct ResolvedSearchAdminArgs {
-    api_url: String,
-    admin_api_key: String,
-}
-
-#[derive(Debug)]
-struct ResolvedSearchArgs {
-    api_url: String,
-    search_api_key: String,
-}
-
-#[derive(Clone, Debug)]
-enum SearchAdminClient {
-    Typesense(TypesenseAdminClient),
-}
-
-#[derive(Clone, Debug)]
-enum SearchClient {
-    Typesense(TypesenseSearchClient),
-}
-
-enum CollectionOutcome {
-    Created,
-    AlreadyExists,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct BackendChunkStats {
-    indexed_videos: u64,
-    indexed_chunks: u64,
-}
-
-impl SearchAdminClient {
-    async fn wait_until_ready(&self) -> Result<(), CliError> {
-        let Self::Typesense(client) = self;
-        client.wait_until_ready().await.map_err(CliError::from)
-    }
-
-    async fn create_collection_if_missing(&self) -> Result<CollectionOutcome, CliError> {
-        let Self::Typesense(client) = self;
-        Ok(match client.create_collection_if_missing().await? {
-            TypesenseCreateCollectionOutcome::Created(_) => CollectionOutcome::Created,
-            TypesenseCreateCollectionOutcome::AlreadyExists { .. } => {
-                CollectionOutcome::AlreadyExists
-            }
-        })
-    }
-
-    async fn create_youtubers_collection_if_missing(&self) -> Result<CollectionOutcome, CliError> {
-        let Self::Typesense(client) = self;
-        Ok(
-            match client.create_youtubers_collection_if_missing().await? {
-                TypesenseCreateCollectionOutcome::Created(_) => CollectionOutcome::Created,
-                TypesenseCreateCollectionOutcome::AlreadyExists { .. } => {
-                    CollectionOutcome::AlreadyExists
-                }
-            },
-        )
-    }
-
-    async fn get_youtuber(&self, id: &str) -> Result<Option<YoutuberDocument>, CliError> {
-        let Self::Typesense(client) = self;
-        Ok(client.get_youtuber(id).await?.map(typesense_youtuber))
-    }
-
-    async fn upsert_youtuber(&self, youtuber: &YoutuberDocument) -> Result<Value, CliError> {
-        let Self::Typesense(client) = self;
-        client
-            .upsert_youtuber(&typesense_youtuber_from_shared(youtuber))
-            .await
-            .map_err(CliError::from)
-    }
-
-    async fn delete_youtuber(&self, id: &str) -> Result<Option<Value>, CliError> {
-        let Self::Typesense(client) = self;
-        client.delete_youtuber(id).await.map_err(CliError::from)
-    }
-
-    async fn delete_chunks_by_youtuber_id(&self, id: &str) -> Result<Value, CliError> {
-        let Self::Typesense(client) = self;
-        client
-            .delete_chunks_by_youtuber_id(id)
-            .await
-            .map_err(CliError::from)
-    }
-
-    async fn delete_chunks_by_video_id(&self, id: &str) -> Result<Value, CliError> {
-        let Self::Typesense(client) = self;
-        client
-            .delete_chunks_by_video_id(id)
-            .await
-            .map_err(CliError::from)
-    }
-
-    async fn count_chunks_by_video_id(&self, id: &str) -> Result<u64, CliError> {
-        let Self::Typesense(client) = self;
-        client
-            .count_chunks_by_video_id(id)
-            .await
-            .map_err(CliError::from)
-    }
-
-    async fn chunk_stats_by_youtuber_id(&self, id: &str) -> Result<BackendChunkStats, CliError> {
-        let Self::Typesense(client) = self;
-        let stats = client.chunk_stats_by_youtuber_id(id).await?;
-        Ok(BackendChunkStats {
-            indexed_videos: stats.indexed_videos,
-            indexed_chunks: stats.indexed_chunks,
-        })
-    }
-
-    async fn indexed_video_ids_by_youtuber_id(
-        &self,
-        id: &str,
-    ) -> Result<HashSet<String>, CliError> {
-        let Self::Typesense(client) = self;
-        client
-            .indexed_video_ids_by_youtuber_id(id)
-            .await
-            .map_err(CliError::from)
-    }
-
-    async fn import_chunks_batched(
-        &self,
-        chunks: &[youtube_ingest::TranscriptChunk],
-    ) -> Result<(), CliError> {
-        let Self::Typesense(client) = self;
-        client
-            .import_chunks_batched(chunks)
-            .await
-            .map(|_| ())
-            .map_err(CliError::from)
-    }
-}
-
-impl SearchClient {
-    async fn search(&self, query: &TextSearchQuery) -> Result<Value, CliError> {
-        let Self::Typesense(client) = self;
-        client
-            .search(&search_query_from_shared(query))
-            .await
-            .map_err(CliError::from)
-    }
-}
+use args::*;
 
 #[derive(Debug, Error)]
 enum CliError {
     #[error("youtube api failed: {0}")]
     YouTube(#[from] youtube_client::YouTubeError),
-    #[error("search backend api failed: {0}")]
-    Typesense(#[from] youtube_typesense::TypesenseError),
+    #[error("search query failed: {0}")]
+    Search(#[from] youtube_typesense::TypesenseError),
+    #[error("search index administration failed: {0}")]
+    IndexStore(#[from] IndexStoreError),
     #[error("ingest failed: {0}")]
     Ingest(#[from] youtube_ingest::IngestError),
     #[error("{0}")]
     Message(String),
-}
-
-fn typesense_youtuber(document: youtube_typesense::YoutuberDocument) -> YoutuberDocument {
-    YoutuberDocument {
-        id: document.id,
-        handle: document.handle,
-        name: document.name,
-        channel_id: document.channel_id,
-        uploads_playlist: document.uploads_playlist,
-        public_video_count: document.public_video_count,
-        indexed_video_count: document.indexed_video_count,
-        indexed_chunk_count: document.indexed_chunk_count,
-        avatar_url: document.avatar_url,
-    }
-}
-
-fn typesense_youtuber_from_shared(
-    document: &YoutuberDocument,
-) -> youtube_typesense::YoutuberDocument {
-    youtube_typesense::YoutuberDocument {
-        id: document.id.clone(),
-        handle: document.handle.clone(),
-        name: document.name.clone(),
-        channel_id: document.channel_id.clone(),
-        uploads_playlist: document.uploads_playlist.clone(),
-        public_video_count: document.public_video_count,
-        indexed_video_count: document.indexed_video_count,
-        indexed_chunk_count: document.indexed_chunk_count,
-        avatar_url: document.avatar_url.clone(),
-    }
-}
-
-fn search_query_from_shared(query: &TextSearchQuery) -> youtube_typesense::TextSearchQuery {
-    youtube_typesense::TextSearchQuery {
-        q: query.q.clone(),
-        query_by: query.query_by.clone(),
-        filter_by: query.filter_by.clone(),
-        group_by: query.group_by.clone(),
-        group_limit: query.group_limit,
-        per_page: query.per_page,
-        page: query.page,
-        highlight_fields: query.highlight_fields.clone(),
-        sort_by: query.sort_by.clone(),
-        vector_query: query.vector_query.clone(),
-        rerank_hybrid_matches: query.rerank_hybrid_matches,
-    }
 }
 
 #[derive(Debug)]
@@ -859,10 +100,8 @@ async fn main() -> Result<(), CliError> {
     match Cli::parse().command {
         Command::InitBackend(command) => init_backend_command(command).await,
         Command::Validate(command) => validate_command(command).await,
-        Command::InitTypesense(command) => init_typesense_command(command).await,
         Command::IndexYoutuber(command) => index_youtuber_command(command).await,
         Command::IndexYoutubers(command) => index_youtubers_command(command).await,
-        Command::BenchmarkIndexYoutuber(command) => benchmark_index_youtuber_command(command).await,
         Command::RefreshYoutuber(command) => refresh_youtuber_command(command).await,
         Command::RefreshYoutubers(command) => refresh_youtubers_command(command).await,
         Command::RefreshYoutuberCounts(command) => refresh_youtuber_counts_command(command).await,
@@ -876,24 +115,13 @@ async fn main() -> Result<(), CliError> {
 }
 
 async fn init_backend_command(command: InitBackendCommand) -> Result<(), CliError> {
-    let collection = command.collection.collection;
-    let search = command.search.client(collection.clone())?;
-    match search.create_collection_if_missing().await? {
-        CollectionOutcome::Created => println!("Created search backend collection: {collection}"),
-        CollectionOutcome::AlreadyExists => {
-            println!("Search backend collection already exists: {collection}")
-        }
-    }
-
-    let youtubers = command.search.youtuber_client()?;
-    match youtubers.create_youtubers_collection_if_missing().await? {
-        CollectionOutcome::Created => {
-            println!("Created search backend collection: youtube_youtubers")
-        }
-        CollectionOutcome::AlreadyExists => {
-            println!("Search backend collection already exists: youtube_youtubers")
-        }
-    }
+    let search = command.search.client(command.collection.collection)?;
+    let readiness = search.readiness().await?;
+    println!(
+        "Raw backend ready: generation={}, durable_sequence={}",
+        readiness.generation.as_deref().unwrap_or("base"),
+        readiness.last_sequence.unwrap_or_default()
+    );
     Ok(())
 }
 
@@ -923,51 +151,15 @@ async fn validate_command(command: ValidateCommand) -> Result<(), CliError> {
     Ok(())
 }
 
-async fn init_typesense_command(command: InitTypesenseCommand) -> Result<(), CliError> {
-    let youtube = command.youtube.client()?;
-    let ytdlp = YtDlpTranscriptSource::new();
-    let youtuber = validate_youtuber(
-        Some(&youtube),
-        &ytdlp,
-        &command.youtuber.handle,
-        command.max_videos,
-    )
-    .await?;
-    print_validated_youtuber(&youtuber);
-
-    let collection = command.collection.collection;
-    let search = command.search.client(collection.clone())?;
-    match search.create_collection_if_missing().await? {
-        CollectionOutcome::Created => {
-            println!("Created search backend collection: {collection}");
-        }
-        CollectionOutcome::AlreadyExists => {
-            println!("search backend collection already exists: {collection}");
-        }
-    }
-
-    println!("Ready to import transcript chunks for {}.", youtuber.handle);
-    Ok(())
-}
-
 async fn refresh_youtuber_command(command: RefreshYoutuberCommand) -> Result<(), CliError> {
     let youtube = command.youtube.optional_client()?;
     let ytdlp = YtDlpTranscriptSource::new();
     let youtuber = validate_youtuber(youtube.as_ref(), &ytdlp, &command.youtuber.handle, 5).await?;
     print_validated_youtuber(&youtuber);
 
-    let search = command.search.youtuber_client()?;
-    match search.create_youtubers_collection_if_missing().await? {
-        CollectionOutcome::Created => {
-            println!("Created search backend collection: youtube_youtubers")
-        }
-        CollectionOutcome::AlreadyExists => {
-            println!("search backend collection already exists: youtube_youtubers")
-        }
-    }
-
+    let search = command.search.client(DEFAULT_COLLECTION)?;
     let youtuber_id = youtuber_id_from_handle(&youtuber.handle, &youtuber.channel_id);
-    let existing = search.get_youtuber(&youtuber_id).await?;
+    let existing = search.channel(&youtuber_id).await?;
     let public_video_count = match discover_videos_for_youtuber(youtube.as_ref(), &ytdlp, &youtuber)
         .await
     {
@@ -977,29 +169,29 @@ async fn refresh_youtuber_command(command: RefreshYoutuberCommand) -> Result<(),
             existing.as_ref().map_or(0, |doc| doc.public_video_count)
         }
     };
+    let chunk_stats = search.channel_stats(&youtuber_id).await?;
     let youtuber_doc = build_youtuber_document_from_chunks(
-        &search,
         &youtuber,
         &youtuber_id,
         public_video_count,
+        chunk_stats,
         existing.as_ref(),
-    )
-    .await?;
-    search.upsert_youtuber(&youtuber_doc).await?;
+    );
+    upsert_channel_document(&search, &youtuber_doc).await?;
+    publish_and_wait(&search).await?;
     println!("Refreshed YouTuber document: {}", youtuber_doc.id);
     Ok(())
 }
 
-async fn build_youtuber_document_from_chunks(
-    search: &SearchAdminClient,
+fn build_youtuber_document_from_chunks(
     youtuber: &ValidatedYoutuber,
     youtuber_id: &str,
     public_video_count: u32,
-    existing: Option<&YoutuberDocument>,
-) -> Result<YoutuberDocument, CliError> {
-    let chunk_stats = search.chunk_stats_by_youtuber_id(youtuber_id).await?;
+    chunk_stats: ChunkStats,
+    existing: Option<&ChannelDocument>,
+) -> ChannelDocument {
     let indexed_video_count = saturating_u32(chunk_stats.indexed_videos);
-    Ok(YoutuberDocument {
+    ChannelDocument {
         id: youtuber_id.to_string(),
         handle: youtuber.handle.clone(),
         name: preserved_youtuber_name(youtuber, existing),
@@ -1015,31 +207,33 @@ async fn build_youtuber_document_from_chunks(
             .avatar_url
             .clone()
             .or_else(|| existing.and_then(|doc| doc.avatar_url.clone())),
-    })
+    }
 }
 
 async fn upsert_youtuber_document_from_chunks(
-    search: &SearchAdminClient,
+    search: &RawIndexAdminClient,
     youtuber: &ValidatedYoutuber,
     youtuber_id: &str,
     public_video_count: u32,
-) -> Result<YoutuberDocument, CliError> {
-    let existing = search.get_youtuber(youtuber_id).await?;
+) -> Result<ChannelDocument, CliError> {
+    let (existing, chunk_stats) = tokio::try_join!(
+        search.channel(youtuber_id),
+        search.channel_stats(youtuber_id),
+    )?;
     let youtuber_doc = build_youtuber_document_from_chunks(
-        search,
         youtuber,
         youtuber_id,
         public_video_count,
+        chunk_stats,
         existing.as_ref(),
-    )
-    .await?;
-    search.upsert_youtuber(&youtuber_doc).await?;
+    );
+    upsert_channel_document(search, &youtuber_doc).await?;
     Ok(youtuber_doc)
 }
 
 fn preserved_youtuber_name(
     youtuber: &ValidatedYoutuber,
-    existing: Option<&YoutuberDocument>,
+    existing: Option<&ChannelDocument>,
 ) -> String {
     let candidate = youtuber.title.trim();
     let handle_name = youtuber.handle.trim_start_matches('@');
@@ -1063,13 +257,6 @@ fn preserved_non_empty(candidate: &str, existing: Option<&String>) -> String {
 
 async fn refresh_youtubers_command(command: RefreshYoutubersCommand) -> Result<(), CliError> {
     let handles = read_youtuber_list(&command.list_file)?;
-    if handles.is_empty() {
-        return Err(CliError::Message(format!(
-            "no YouTube handles found in {}",
-            command.list_file.display()
-        )));
-    }
-
     for handle in handles {
         refresh_youtuber_command(RefreshYoutuberCommand {
             youtuber: YoutuberArg { handle },
@@ -1095,13 +282,6 @@ async fn refresh_youtuber_counts_list_command(
     command: RefreshYoutuberCountsListCommand,
 ) -> Result<(), CliError> {
     let handles = read_youtuber_list(&command.list_file)?;
-    if handles.is_empty() {
-        return Err(CliError::Message(format!(
-            "no YouTube handles found in {}",
-            command.list_file.display()
-        )));
-    }
-
     let search = command.search.client(command.collection.collection)?;
     for raw_handle in handles {
         let handle = normalize_handle(&raw_handle)?;
@@ -1112,17 +292,18 @@ async fn refresh_youtuber_counts_list_command(
 }
 
 async fn refresh_youtuber_counts(
-    search: &SearchAdminClient,
+    search: &RawIndexAdminClient,
     handle: &str,
     youtuber_id: &str,
 ) -> Result<(), CliError> {
-    let Some(mut youtuber) = search.get_youtuber(youtuber_id).await? else {
+    let Some(mut youtuber) = search.channel(youtuber_id).await? else {
         println!("Skipped count refresh for {handle}: profile document is missing");
         return Ok(());
     };
-    let stats = search.chunk_stats_by_youtuber_id(youtuber_id).await?;
+    let stats = search.channel_stats(youtuber_id).await?;
     apply_backend_chunk_stats(&mut youtuber, stats);
-    search.upsert_youtuber(&youtuber).await?;
+    upsert_channel_document(search, &youtuber).await?;
+    publish_and_wait(search).await?;
     println!(
         "Refreshed counts for {handle}: {} videos / {} chunks",
         youtuber.indexed_video_count, youtuber.indexed_chunk_count
@@ -1130,7 +311,7 @@ async fn refresh_youtuber_counts(
     Ok(())
 }
 
-fn apply_backend_chunk_stats(youtuber: &mut YoutuberDocument, stats: BackendChunkStats) {
+fn apply_backend_chunk_stats(youtuber: &mut ChannelDocument, stats: ChunkStats) {
     youtuber.indexed_video_count = u32::try_from(stats.indexed_videos).unwrap_or(u32::MAX);
     youtuber.indexed_chunk_count = u32::try_from(stats.indexed_chunks).unwrap_or(u32::MAX);
     youtuber.public_video_count = youtuber
@@ -1138,28 +319,102 @@ fn apply_backend_chunk_stats(youtuber: &mut YoutuberDocument, stats: BackendChun
         .max(youtuber.indexed_video_count);
 }
 
+async fn upsert_channel_document(
+    search: &RawIndexAdminClient,
+    document: &ChannelDocument,
+) -> Result<IndexOperation, CliError> {
+    let payload = serde_json::to_vec(document).map_err(|error| {
+        CliError::Message(format!("failed to encode channel mutation: {error}"))
+    })?;
+    let idempotency_key = content_operation_key("upsert-channel", &document.id, &payload);
+    Ok(search.upsert_channel(document, &idempotency_key).await?)
+}
+
+async fn replace_video_document(
+    search: &RawIndexAdminClient,
+    video_id: &str,
+    chunks: &[youtube_ingest::TranscriptChunk],
+) -> Result<IndexOperation, CliError> {
+    let payload = serde_json::to_vec(chunks)
+        .map_err(|error| CliError::Message(format!("failed to encode video mutation: {error}")))?;
+    let idempotency_key = content_operation_key("replace-video", video_id, &payload);
+    let replacement = VideoReplacement::new(video_id, chunks)?;
+    Ok(search.replace_video(replacement, &idempotency_key).await?)
+}
+
+fn content_operation_key(kind: &str, target: &str, payload: &[u8]) -> String {
+    let digest = blake3::hash(payload).to_hex();
+    format!("{kind}-{target}-{}", &digest[..20])
+}
+
+fn unique_operation_key(kind: &str, target: &str) -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{kind}-{target}-{timestamp}")
+}
+
+async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> {
+    let readiness = search.publish().await?;
+    let target = readiness.last_sequence.unwrap_or_default();
+    let deadline = Instant::now() + Duration::from_secs(20 * 60);
+    loop {
+        let readiness = search.readiness().await?;
+        let active = readiness
+            .generation
+            .as_deref()
+            .and_then(|generation| generation.parse::<u64>().ok())
+            .unwrap_or_default();
+        if active >= target {
+            println!("Published Raw generation {active}");
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(CliError::Message(format!(
+                "timed out waiting for Raw generation {target}; active generation is {active}"
+            )));
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+async fn all_indexed_video_ids(
+    search: &RawIndexAdminClient,
+    channel_id: &str,
+) -> Result<HashSet<String>, CliError> {
+    let mut video_ids = HashSet::new();
+    let mut cursor = None;
+    let limit = NonZeroU16::new(10_000).expect("non-zero page size");
+    loop {
+        let page = search
+            .indexed_video_ids(channel_id, cursor.as_deref(), limit)
+            .await?;
+        video_ids.extend(page.video_ids);
+        let Some(next_cursor) = page.next_cursor else {
+            return Ok(video_ids);
+        };
+        cursor = Some(next_cursor);
+    }
+}
+
 async fn remove_youtuber_command(command: RemoveYoutuberCommand) -> Result<(), CliError> {
     validate_remove_safety(command.allow_destructive_remove)?;
     let handle = normalize_handle(&command.youtuber.handle)?;
     let youtuber_id = youtuber_id_from_handle(&handle, "");
     let transcript_search = command.search.client(command.collection.collection)?;
-    let youtuber_search = command.search.youtuber_client()?;
-
-    let delete_response = transcript_search
-        .delete_chunks_by_youtuber_id(&youtuber_id)
+    let operation = transcript_search
+        .delete_channel(
+            &youtuber_id,
+            true,
+            &unique_operation_key("delete-channel", &youtuber_id),
+        )
         .await?;
+    publish_and_wait(&transcript_search).await?;
     println!(
-        "Deleted transcript chunks for {handle}: {}",
-        serde_json::to_string(&delete_response).unwrap_or_else(|_| delete_response.to_string())
+        "Deleted channel {handle} and its transcript chunks (operation {})",
+        operation.id
     );
-
-    match youtuber_search.delete_youtuber(&youtuber_id).await? {
-        Some(response) => println!(
-            "Deleted YouTuber document for {handle}: {}",
-            serde_json::to_string(&response).unwrap_or_else(|_| response.to_string())
-        ),
-        None => println!("No YouTuber document found for {handle}"),
-    }
 
     Ok(())
 }
@@ -1175,6 +430,13 @@ fn validate_remove_safety(allow_destructive_remove: bool) -> Result<(), CliError
 }
 
 async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), CliError> {
+    index_youtuber(command, true).await
+}
+
+async fn index_youtuber(
+    command: IndexYoutuberCommand,
+    publish_when_complete: bool,
+) -> Result<(), CliError> {
     validate_rewipe_safety(
         command.mode,
         command.no_wipe,
@@ -1182,13 +444,10 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     )?;
     let collection = command.collection.collection.clone();
     let transcript_search = command.search.client(collection.clone())?;
-    transcript_search.wait_until_ready().await?;
+    transcript_search.readiness().await?;
 
     let youtube = command.youtube.optional_client()?;
-    let caption_source = transcript_source(
-        command.no_transcript_cache,
-        command.transcript_cache_dir.clone(),
-    );
+    let caption_source = command.transcript.caption_source();
     let youtuber = validate_youtuber(
         youtube.as_ref(),
         &caption_source,
@@ -1211,27 +470,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         println!("    - {} {}", video.video_id, video.title);
     }
 
-    match transcript_search.create_collection_if_missing().await? {
-        CollectionOutcome::Created => {
-            println!("Created search backend collection: {collection}")
-        }
-        CollectionOutcome::AlreadyExists => {
-            println!("search backend collection already exists: {collection}")
-        }
-    }
-
-    let youtuber_search = command.search.youtuber_client()?;
-    match youtuber_search
-        .create_youtubers_collection_if_missing()
-        .await?
-    {
-        CollectionOutcome::Created => {
-            println!("Created search backend collection: youtube_youtubers")
-        }
-        CollectionOutcome::AlreadyExists => {
-            println!("search backend collection already exists: youtube_youtubers")
-        }
-    }
+    let youtuber_search = transcript_search.clone();
 
     let youtuber_id = youtuber_id_from_handle(&youtuber.handle, &youtuber.channel_id);
     let initial_youtuber_doc = upsert_youtuber_document_from_chunks(
@@ -1247,6 +486,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     );
     let no_wipe = command.no_wipe || command.mode == IndexMode::Update;
     let skip_existing = command.skip_existing || command.mode == IndexMode::Update;
+    let refresh_after_first_completion = !no_wipe || initial_youtuber_doc.indexed_chunk_count == 0;
 
     if no_wipe {
         println!("Keeping existing transcript chunks for {}", youtuber.handle);
@@ -1255,25 +495,19 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
             "Deleting existing transcript chunks for {} before reindex",
             youtuber.handle
         );
-        let delete_response = transcript_search
-            .delete_chunks_by_youtuber_id(&youtuber_id)
+        let operation = transcript_search
+            .delete_channel(
+                &youtuber_id,
+                true,
+                &unique_operation_key("rewipe-channel", &youtuber_id),
+            )
             .await?;
-        println!(
-            "Deleted existing chunks response: {}",
-            serde_json::to_string(&delete_response).unwrap_or_else(|_| delete_response.to_string())
-        );
+        println!("Queued Raw rewipe operation: {}", operation.id);
     }
 
     let metadata_source = metadata_source(youtube.as_ref(), &caption_source);
-    let transcribe_source = command.transcribe_missing.then(|| {
-        VoxtypeTranscriptSource::with_config(
-            TranscriptionConfig::default()
-                .with_cache_dir(command.transcription_cache_dir.clone())
-                .with_chunk_seconds(command.transcription_chunk_seconds)
-                .with_voxtype_engine(command.voxtype_engine.clone()),
-        )
-    });
-    let chunker = Chunker::new(command.chunk_seconds);
+    let transcribe_source = command.transcript.transcriber();
+    let chunker = command.transcript.chunker();
     let mut stats = IndexStats {
         discovered_videos: public_videos.len(),
         ..IndexStats::default()
@@ -1307,9 +541,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
             HashSet::new()
         } else {
             println!("Loading existing indexed video ids for {}", youtuber.handle);
-            let existing = transcript_search
-                .indexed_video_ids_by_youtuber_id(&youtuber_id)
-                .await?;
+            let existing = all_indexed_video_ids(&transcript_search, &youtuber_id).await?;
             println!(
                 "Skipping videos that already have transcript chunks ({} cached ids)",
                 existing.len()
@@ -1331,7 +563,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
             }
         })
         .collect::<Vec<_>>();
-    let transcript_failure_dir = command.transcript_cache_dir.join(".failures");
+    let transcript_failure_dir = command.transcript.transcript_cache_dir.join(".failures");
     defer_recent_transcript_failures(
         &mut videos_to_index,
         &transcript_failure_dir,
@@ -1350,27 +582,6 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
             "Skipped {} already-indexed video(s) before starting workers",
             stats.existing_videos
         );
-        match upsert_youtuber_document_from_chunks(
-            &youtuber_search,
-            &youtuber,
-            &youtuber_id,
-            saturating_u32(stats.discovered_videos),
-        )
-        .await
-        {
-            Ok(youtuber_doc) => {
-                println!(
-                    "Updated YouTuber document: {} ({} videos, {} chunks)",
-                    youtuber_doc.id,
-                    youtuber_doc.indexed_video_count,
-                    youtuber_doc.indexed_chunk_count
-                );
-            }
-            Err(error) => {
-                tracing::warn!(handle = %youtuber.handle, %error, "failed to update YouTuber document after existing-video scan");
-                println!("Skipped YouTuber document refresh after existing-video scan: {error}");
-            }
-        }
     } else if use_worker_existing_checks {
         println!(
             "Using per-video existing checks for {} recent candidate video(s)",
@@ -1463,7 +674,7 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
         let run_indexed_chunks = stats.indexed_chunks.saturating_add(stats.existing_chunks);
         let should_refresh_youtuber_doc = run_indexed_videos > 0
             && run_indexed_chunks > 0
-            && (last_youtuber_doc_refresh_completed == 0
+            && ((refresh_after_first_completion && last_youtuber_doc_refresh_completed == 0)
                 || completed_videos.saturating_sub(last_youtuber_doc_refresh_completed) >= 25);
         if should_refresh_youtuber_doc {
             match upsert_youtuber_document_from_chunks(
@@ -1508,13 +719,26 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
                 "Update pass found no new searchable chunks for {}; kept existing indexed data ({} videos, {} chunks)",
                 youtuber.handle, youtuber_doc.indexed_video_count, youtuber_doc.indexed_chunk_count
             );
+            if publish_when_complete {
+                publish_and_wait(&transcript_search).await?;
+            }
             return Ok(());
         }
 
-        if let Err(error) = youtuber_search.delete_youtuber(&youtuber_id).await {
+        if let Err(error) = youtuber_search
+            .delete_channel(
+                &youtuber_id,
+                true,
+                &unique_operation_key("remove-empty-channel", &youtuber_id),
+            )
+            .await
+        {
             tracing::warn!(handle = %youtuber.handle, %error, "failed to remove unsearchable YouTuber document");
         } else {
             println!("Removed unsearchable YouTuber document: {youtuber_id}");
+        }
+        if publish_when_complete {
+            publish_and_wait(&transcript_search).await?;
         }
         return Err(CliError::Message(format!(
             "No searchable transcript chunks were imported for {}. attempted={}, skipped={}, kind_filtered={}. Check yt-dlp/caption errors above.",
@@ -1533,19 +757,18 @@ async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), Cli
     )
     .await?;
     println!("Upserted YouTuber document: {}", youtuber_doc.id);
+    if publish_when_complete {
+        publish_and_wait(&transcript_search).await?;
+    }
 
     Ok(())
 }
 
 async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), CliError> {
+    let publication_search = command
+        .search
+        .client(command.collection.collection.clone())?;
     let handles = read_youtuber_list(&command.list_file)?;
-    if handles.is_empty() {
-        return Err(CliError::Message(format!(
-            "no YouTube handles found in {}",
-            command.list_file.display()
-        )));
-    }
-
     let channel_jobs = effective_channel_jobs(command.channel_jobs, command.jobs);
     println!(
         "Indexing creators with {channel_jobs} concurrent creator job(s) and up to {} video worker(s) each",
@@ -1576,16 +799,10 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
                 skip_existing: command.mode == IndexMode::Update,
                 no_wipe: command.mode == IndexMode::Update,
                 content_kind: command.content_kind,
-                chunk_seconds: command.chunk_seconds,
-                transcribe_missing: command.transcribe_missing,
-                transcription_cache_dir: command.transcription_cache_dir.clone(),
-                transcript_cache_dir: command.transcript_cache_dir.clone(),
-                no_transcript_cache: command.no_transcript_cache,
+                transcript: command.transcript.clone(),
                 transcript_failure_retry_seconds: command.transcript_failure_retry_seconds,
-                transcription_chunk_seconds: command.transcription_chunk_seconds,
-                voxtype_engine: command.voxtype_engine.clone(),
             };
-            tasks.spawn(async move { (failed_handle, index_youtuber_command(child).await) });
+            tasks.spawn(async move { (failed_handle, index_youtuber(child, false).await) });
         }
 
         let Some(result) = tasks.join_next().await else {
@@ -1604,6 +821,7 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
         }
     }
 
+    publish_and_wait(&publication_search).await?;
     if failures.is_empty() {
         Ok(())
     } else {
@@ -1634,94 +852,11 @@ fn validate_rewipe_safety(
     Ok(())
 }
 
-async fn benchmark_index_youtuber_command(
-    command: BenchmarkIndexYoutuberCommand,
-) -> Result<(), CliError> {
-    let youtube = command.youtube.optional_client()?;
-    let caption_source = transcript_source(
-        command.no_transcript_cache,
-        command.transcript_cache_dir.clone(),
-    );
-    let validate_started = Instant::now();
-    let youtuber = validate_youtuber(
-        youtube.as_ref(),
-        &caption_source,
-        &command.youtuber.handle,
-        5,
-    )
-    .await?;
-    let validate_elapsed = validate_started.elapsed();
-    print_validated_youtuber(&youtuber);
-
-    let discover_started = Instant::now();
-    let public_videos =
-        discover_videos_for_youtuber(youtube.as_ref(), &caption_source, &youtuber).await?;
-    let discover_elapsed = discover_started.elapsed();
-    let videos = public_videos
-        .iter()
-        .take(command.max_videos)
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let search = command.search.client(command.collection.collection)?;
-    let metadata_source = metadata_source(youtube.as_ref(), &caption_source);
-    let transcribe_source = command.transcribe_missing.then(|| {
-        VoxtypeTranscriptSource::with_config(
-            TranscriptionConfig::default()
-                .with_cache_dir(command.transcription_cache_dir.clone())
-                .with_chunk_seconds(command.transcription_chunk_seconds)
-                .with_voxtype_engine(command.voxtype_engine.clone()),
-        )
-    });
-    let chunker = Chunker::new(command.chunk_seconds);
-    let youtuber_id = youtuber_id_from_handle(&youtuber.handle, &youtuber.channel_id);
-
-    println!(
-        "Index benchmark: handle={} discovered={} sampled={} import={}",
-        youtuber.handle,
-        public_videos.len(),
-        videos.len(),
-        command.import
-    );
-    println!(
-        "validate_ms\tdiscover_ms\t{}",
-        BenchmarkIndexVideoTiming::header()
-    );
-
-    let mut summary = BenchmarkIndexSummary::default();
-    for (offset, video) in videos.into_iter().enumerate() {
-        let timing = benchmark_index_video(
-            offset + 1,
-            video,
-            &youtuber_id,
-            &metadata_source,
-            &caption_source,
-            transcribe_source.as_ref(),
-            &chunker,
-            &search,
-            command.content_kind,
-            command.skip_existing,
-            command.import,
-        )
-        .await;
-        summary.record(&timing);
-        println!(
-            "{}\t{}\t{}",
-            millis(validate_elapsed),
-            millis(discover_elapsed),
-            timing.row()
-        );
-    }
-
-    println!("{}", summary.row());
-    Ok(())
-}
-
 fn read_youtuber_list(path: &PathBuf) -> Result<Vec<String>, CliError> {
     let body = std::fs::read_to_string(path).map_err(|error| {
         CliError::Message(format!("failed to read {}: {error}", path.display()))
     })?;
-    let handles = body
+    let handles: Vec<_> = body
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
@@ -1730,12 +865,19 @@ fn read_youtuber_list(path: &PathBuf) -> Result<Vec<String>, CliError> {
         .filter(|line| !line.is_empty())
         .map(ToOwned::to_owned)
         .collect();
-    Ok(handles)
+    if handles.is_empty() {
+        Err(CliError::Message(format!(
+            "no YouTube handles found in {}",
+            path.display()
+        )))
+    } else {
+        Ok(handles)
+    }
 }
 
 async fn prepare_videos_to_index(
     public_videos: &[DiscoveredVideo],
-    search: &SearchAdminClient,
+    search: &RawIndexAdminClient,
     skip_existing: bool,
     max_videos: Option<usize>,
     stop_after_existing: Option<usize>,
@@ -1755,7 +897,7 @@ async fn prepare_videos_to_index(
     let mut consecutive_existing = 0usize;
 
     for video in candidates.cloned() {
-        let existing_chunks = search.count_chunks_by_video_id(&video.video_id).await?;
+        let existing_chunks = search.video_chunk_count(&video.video_id).await?;
         if select_missing_video_until_existing_tail(
             video,
             existing_chunks,
@@ -1815,7 +957,7 @@ fn defer_recent_transcript_failures(
 
     if stats.deferred_transcript_failures > 0 {
         println!(
-            "Deferred {} recently failed video(s); they remain eligible after {} seconds",
+            "Deferred {} recently failed transcript(s); they remain eligible after {} seconds",
             stats.deferred_transcript_failures,
             retry_after.as_secs()
         );
@@ -1840,10 +982,10 @@ fn remember_transcript_failure(failure_dir: &Path, video_id: &str) {
     if let Err(error) = fs::create_dir_all(failure_dir).and_then(|_| {
         fs::write(
             transcript_failure_path(failure_dir, video_id),
-            b"video fetch or import failed; retry after cooldown\n",
+            b"transcript fetch failed; retry after cooldown\n",
         )
     }) {
-        tracing::warn!(video_id, %error, "failed to persist video retry marker");
+        tracing::warn!(video_id, %error, "failed to persist transcript retry marker");
     }
 }
 
@@ -1852,7 +994,7 @@ fn clear_transcript_failure(failure_dir: &Path, video_id: &str) {
     if let Err(error) = fs::remove_file(path)
         && error.kind() != std::io::ErrorKind::NotFound
     {
-        tracing::warn!(video_id, %error, "failed to clear video retry marker");
+        tracing::warn!(video_id, %error, "failed to clear transcript retry marker");
     }
 }
 
@@ -1895,6 +1037,27 @@ fn transcript_source(no_cache: bool, cache_dir: PathBuf) -> YtDlpTranscriptSourc
     }
 }
 
+impl TranscriptOptions {
+    fn caption_source(&self) -> YtDlpTranscriptSource {
+        transcript_source(self.no_transcript_cache, self.transcript_cache_dir.clone())
+    }
+
+    fn transcriber(&self) -> Option<VoxtypeTranscriptSource> {
+        self.transcribe_missing.then(|| {
+            VoxtypeTranscriptSource::with_config(
+                TranscriptionConfig::default()
+                    .with_cache_dir(self.transcription_cache_dir.clone())
+                    .with_chunk_seconds(self.transcription_chunk_seconds)
+                    .with_voxtype_engine(self.voxtype_engine.clone()),
+            )
+        })
+    }
+
+    fn chunker(&self) -> Chunker {
+        Chunker::new(self.chunk_seconds)
+    }
+}
+
 fn metadata_source(
     youtube: Option<&YouTubeClient>,
     caption_source: &YtDlpTranscriptSource,
@@ -1931,220 +1094,6 @@ enum IndexVideoOutcome {
     },
 }
 
-#[derive(Debug)]
-struct BenchmarkIndexVideoTiming {
-    index: usize,
-    video_id: String,
-    title: String,
-    existing_chunks: u64,
-    chunks: usize,
-    skipped: Option<String>,
-    metadata_ms: u128,
-    existing_ms: u128,
-    transcript_ms: u128,
-    chunk_ms: u128,
-    import_ms: u128,
-    total_ms: u128,
-}
-
-impl BenchmarkIndexVideoTiming {
-    fn header() -> &'static str {
-        "index\tvideo_id\texisting_chunks\tchunks\tmetadata_ms\texisting_ms\ttranscript_ms\tchunk_ms\timport_ms\ttotal_ms\tskipped\ttitle"
-    }
-
-    fn row(&self) -> String {
-        format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            self.index,
-            self.video_id,
-            self.existing_chunks,
-            self.chunks,
-            self.metadata_ms,
-            self.existing_ms,
-            self.transcript_ms,
-            self.chunk_ms,
-            self.import_ms,
-            self.total_ms,
-            self.skipped.as_deref().unwrap_or(""),
-            self.title.replace('\t', " ")
-        )
-    }
-}
-
-#[derive(Default)]
-struct BenchmarkIndexSummary {
-    videos: usize,
-    skipped: usize,
-    chunks: usize,
-    existing_chunks: u64,
-    metadata_ms: u128,
-    existing_ms: u128,
-    transcript_ms: u128,
-    chunk_ms: u128,
-    import_ms: u128,
-    total_ms: u128,
-}
-
-impl BenchmarkIndexSummary {
-    fn record(&mut self, timing: &BenchmarkIndexVideoTiming) {
-        self.videos = self.videos.saturating_add(1);
-        if timing.skipped.is_some() {
-            self.skipped = self.skipped.saturating_add(1);
-        }
-        self.chunks = self.chunks.saturating_add(timing.chunks);
-        self.existing_chunks = self.existing_chunks.saturating_add(timing.existing_chunks);
-        self.metadata_ms = self.metadata_ms.saturating_add(timing.metadata_ms);
-        self.existing_ms = self.existing_ms.saturating_add(timing.existing_ms);
-        self.transcript_ms = self.transcript_ms.saturating_add(timing.transcript_ms);
-        self.chunk_ms = self.chunk_ms.saturating_add(timing.chunk_ms);
-        self.import_ms = self.import_ms.saturating_add(timing.import_ms);
-        self.total_ms = self.total_ms.saturating_add(timing.total_ms);
-    }
-
-    fn row(&self) -> String {
-        format!(
-            "summary\tvideos={}\tskipped={}\tchunks={}\texisting_chunks={}\tmetadata_ms={}\texisting_ms={}\ttranscript_ms={}\tchunk_ms={}\timport_ms={}\ttotal_ms={}",
-            self.videos,
-            self.skipped,
-            self.chunks,
-            self.existing_chunks,
-            self.metadata_ms,
-            self.existing_ms,
-            self.transcript_ms,
-            self.chunk_ms,
-            self.import_ms,
-            self.total_ms
-        )
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn benchmark_index_video(
-    index: usize,
-    video: DiscoveredVideo,
-    youtuber_id: &str,
-    metadata_source: &Arc<FallbackMetadataSource>,
-    caption_source: &YtDlpTranscriptSource,
-    transcribe_source: Option<&VoxtypeTranscriptSource>,
-    chunker: &Chunker,
-    search: &SearchAdminClient,
-    content_kind_filter: ContentKindFilter,
-    skip_existing: bool,
-    import: bool,
-) -> BenchmarkIndexVideoTiming {
-    let total_started = Instant::now();
-    let mut timing = BenchmarkIndexVideoTiming {
-        index,
-        video_id: video.video_id.clone(),
-        title: video.title.clone(),
-        existing_chunks: 0,
-        chunks: 0,
-        skipped: None,
-        metadata_ms: 0,
-        existing_ms: 0,
-        transcript_ms: 0,
-        chunk_ms: 0,
-        import_ms: 0,
-        total_ms: 0,
-    };
-
-    if skip_existing {
-        let started = Instant::now();
-        match search.count_chunks_by_video_id(&video.video_id).await {
-            Ok(existing_chunks) => {
-                timing.existing_chunks = existing_chunks;
-                timing.existing_ms = millis(started.elapsed());
-                if existing_chunks > 0 {
-                    timing.skipped = Some("existing".to_string());
-                    timing.total_ms = millis(total_started.elapsed());
-                    return timing;
-                }
-            }
-            Err(error) => {
-                timing.existing_ms = millis(started.elapsed());
-                timing.skipped = Some(format!("existing: {error}"));
-                timing.total_ms = millis(total_started.elapsed());
-                return timing;
-            }
-        }
-    }
-
-    let started = Instant::now();
-    let mut metadata = match metadata_source.metadata_for_video(&video.video_id).await {
-        Ok(metadata) => {
-            timing.metadata_ms = millis(started.elapsed());
-            metadata
-        }
-        Err(error) => {
-            timing.metadata_ms = millis(started.elapsed());
-            timing.skipped = Some(format!("metadata: {error}"));
-            timing.total_ms = millis(total_started.elapsed());
-            return timing;
-        }
-    };
-    metadata.youtuber.id = youtuber_id.to_string();
-
-    let content_kind = content_kind_for_duration(metadata.duration_ms);
-    if !content_kind_filter.includes(content_kind) {
-        timing.skipped = Some(format!("kind: {content_kind:?}"));
-        timing.total_ms = millis(total_started.elapsed());
-        return timing;
-    }
-
-    let started = Instant::now();
-    let (transcript, _) = match fetch_transcript_with_optional_fallback(
-        &video.video_id,
-        caption_source,
-        transcribe_source,
-    )
-    .await
-    {
-        Ok(result) => {
-            timing.transcript_ms = millis(started.elapsed());
-            result
-        }
-        Err(error) => {
-            timing.transcript_ms = millis(started.elapsed());
-            timing.skipped = Some(format!("transcript: {error}"));
-            timing.total_ms = millis(total_started.elapsed());
-            return timing;
-        }
-    };
-
-    let started = Instant::now();
-    let chunks = match chunker.chunks(&metadata, &transcript) {
-        Ok(chunks) => {
-            timing.chunk_ms = millis(started.elapsed());
-            chunks
-        }
-        Err(error) => {
-            timing.chunk_ms = millis(started.elapsed());
-            timing.skipped = Some(format!("chunking: {error}"));
-            timing.total_ms = millis(total_started.elapsed());
-            return timing;
-        }
-    };
-    timing.chunks = chunks.len();
-
-    if import {
-        let started = Instant::now();
-        if let Err(error) = search.import_chunks_batched(&chunks).await {
-            timing.import_ms = millis(started.elapsed());
-            timing.skipped = Some(format!("import: {error}"));
-            timing.total_ms = millis(total_started.elapsed());
-            return timing;
-        }
-        timing.import_ms = millis(started.elapsed());
-    }
-
-    timing.total_ms = millis(total_started.elapsed());
-    timing
-}
-
-fn millis(duration: Duration) -> u128 {
-    duration.as_millis()
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn index_discovered_video(
     index: usize,
@@ -2155,11 +1104,12 @@ async fn index_discovered_video(
     caption_source: YtDlpTranscriptSource,
     transcribe_source: Option<VoxtypeTranscriptSource>,
     chunker: Chunker,
-    search: SearchAdminClient,
+    search: RawIndexAdminClient,
     content_kind_filter: ContentKindFilter,
     skip_existing: bool,
     transcript_failure_dir: PathBuf,
 ) -> Result<IndexVideoOutcome, CliError> {
+    let indexing_started = Instant::now();
     tracing::info!(
         video_id = %video.video_id,
         title = %video.title,
@@ -2172,9 +1122,16 @@ async fn index_discovered_video(
         video.video_id, video.title
     );
 
+    let existing_check_started = Instant::now();
     if skip_existing {
-        let existing_chunks = search.count_chunks_by_video_id(&video.video_id).await?;
+        let existing_chunks = search.video_chunk_count(&video.video_id).await?;
         if existing_chunks > 0 {
+            tracing::info!(
+                video_id = %video.video_id,
+                existing_check_ms = existing_check_started.elapsed().as_millis() as u64,
+                total_ms = indexing_started.elapsed().as_millis() as u64,
+                "indexing video already exists"
+            );
             return Ok(IndexVideoOutcome::Existing {
                 video_id: video.video_id,
                 title: video.title,
@@ -2182,12 +1139,20 @@ async fn index_discovered_video(
             });
         }
     }
+    let existing_check_ms = existing_check_started.elapsed().as_millis() as u64;
 
+    let metadata_started = Instant::now();
     let mut metadata = match metadata_source.metadata_for_video(&video.video_id).await {
         Ok(metadata) => metadata,
         Err(error) => {
             remember_transcript_failure(&transcript_failure_dir, &video.video_id);
-            tracing::warn!(video_id = %video.video_id, %error, "skipped video metadata");
+            tracing::warn!(
+                video_id = %video.video_id,
+                %error,
+                metadata_ms = metadata_started.elapsed().as_millis() as u64,
+                total_ms = indexing_started.elapsed().as_millis() as u64,
+                "skipped video metadata"
+            );
             return Ok(IndexVideoOutcome::Skipped {
                 video_id: video.video_id,
                 title: video.title,
@@ -2195,13 +1160,21 @@ async fn index_discovered_video(
             });
         }
     };
+    let metadata_ms = metadata_started.elapsed().as_millis() as u64;
     metadata.youtuber.id = youtuber_id;
 
     let content_kind = content_kind_for_duration(metadata.duration_ms);
     if !content_kind_filter.includes(content_kind) {
         caption_source.discard_video_json(&video.video_id).await;
         clear_transcript_failure(&transcript_failure_dir, &video.video_id);
-        tracing::info!(video_id = %video.video_id, ?content_kind, "skipped by content kind");
+        tracing::info!(
+            video_id = %video.video_id,
+            ?content_kind,
+            existing_check_ms,
+            metadata_ms,
+            total_ms = indexing_started.elapsed().as_millis() as u64,
+            "skipped by content kind"
+        );
         return Ok(IndexVideoOutcome::KindFiltered {
             video_id: video.video_id,
             title: video.title,
@@ -2209,6 +1182,7 @@ async fn index_discovered_video(
         });
     }
 
+    let transcript_started = Instant::now();
     let (transcript, audio_transcribed) = match fetch_transcript_with_optional_fallback(
         &video.video_id,
         &caption_source,
@@ -2218,8 +1192,14 @@ async fn index_discovered_video(
     {
         Ok(result) => result,
         Err(error) => {
+            tracing::warn!(
+                video_id = %video.video_id,
+                %error,
+                transcript_ms = transcript_started.elapsed().as_millis() as u64,
+                total_ms = indexing_started.elapsed().as_millis() as u64,
+                "skipped transcript"
+            );
             remember_transcript_failure(&transcript_failure_dir, &video.video_id);
-            tracing::warn!(video_id = %video.video_id, %error, "skipped transcript");
             return Ok(IndexVideoOutcome::Skipped {
                 video_id: video.video_id,
                 title: video.title,
@@ -2227,11 +1207,19 @@ async fn index_discovered_video(
             });
         }
     };
+    let transcript_ms = transcript_started.elapsed().as_millis() as u64;
 
+    let chunking_started = Instant::now();
     let chunks = match chunker.chunks(&metadata, &transcript) {
         Ok(chunks) => chunks,
         Err(error) => {
-            tracing::warn!(video_id = %video.video_id, %error, "skipped chunking");
+            tracing::warn!(
+                video_id = %video.video_id,
+                %error,
+                chunking_ms = chunking_started.elapsed().as_millis() as u64,
+                total_ms = indexing_started.elapsed().as_millis() as u64,
+                "skipped chunking"
+            );
             return Ok(IndexVideoOutcome::Skipped {
                 video_id: video.video_id,
                 title: video.title,
@@ -2239,19 +1227,39 @@ async fn index_discovered_video(
             });
         }
     };
+    let chunking_ms = chunking_started.elapsed().as_millis() as u64;
 
     let chunk_count = chunks.len();
-    if let Err(error) = search.import_chunks_batched(&chunks).await {
+    let import_started = Instant::now();
+    if let Err(error) = replace_video_document(&search, &video.video_id, &chunks).await {
         remember_transcript_failure(&transcript_failure_dir, &video.video_id);
-        tracing::warn!(video_id = %video.video_id, %error, "skipped import");
+        tracing::warn!(
+            video_id = %video.video_id,
+            %error,
+            import_ms = import_started.elapsed().as_millis() as u64,
+            total_ms = indexing_started.elapsed().as_millis() as u64,
+            "skipped import"
+        );
         return Ok(IndexVideoOutcome::Skipped {
             video_id: video.video_id,
             title: video.title,
             reason: format!("import: {error}"),
         });
     }
+    let import_ms = import_started.elapsed().as_millis() as u64;
     clear_transcript_failure(&transcript_failure_dir, &video.video_id);
-    tracing::info!(video_id = %video.video_id, chunk_count, "imported transcript chunks");
+    tracing::info!(
+        video_id = %video.video_id,
+        chunk_count,
+        audio_transcribed,
+        existing_check_ms,
+        metadata_ms,
+        transcript_ms,
+        chunking_ms,
+        import_ms,
+        total_ms = indexing_started.elapsed().as_millis() as u64,
+        "indexed video performance"
+    );
 
     Ok(IndexVideoOutcome::Indexed {
         video_id: video.video_id,
@@ -2319,40 +1327,15 @@ async fn index_video_command(command: IndexVideoCommand) -> Result<(), CliError>
     let collection = command.collection.collection;
     let search = command.search.client(collection.clone())?;
 
-    match search.create_collection_if_missing().await? {
-        CollectionOutcome::Created => {
-            println!("Created search backend collection: {collection}")
-        }
-        CollectionOutcome::AlreadyExists => {
-            println!("search backend collection already exists: {collection}")
-        }
-    }
-
+    search.readiness().await?;
     if command.no_wipe {
-        println!("Keeping existing transcript chunks for video {video_id}");
-    } else {
-        println!("Deleting existing transcript chunks for video {video_id} before reindex");
-        let delete_response = search.delete_chunks_by_video_id(&video_id).await?;
-        println!(
-            "Deleted existing chunks response: {}",
-            serde_json::to_string(&delete_response).unwrap_or_else(|_| delete_response.to_string())
-        );
+        println!("Raw replacement keeps unrelated videos and atomically replaces this video");
     }
 
-    let caption_source = transcript_source(
-        command.no_transcript_cache,
-        command.transcript_cache_dir.clone(),
-    );
+    let caption_source = command.transcript.caption_source();
     let metadata_source = metadata_source(youtube.as_ref(), &caption_source);
-    let transcribe_source = command.transcribe_missing.then(|| {
-        VoxtypeTranscriptSource::with_config(
-            TranscriptionConfig::default()
-                .with_cache_dir(command.transcription_cache_dir.clone())
-                .with_chunk_seconds(command.transcription_chunk_seconds)
-                .with_voxtype_engine(command.voxtype_engine.clone()),
-        )
-    });
-    let chunker = Chunker::new(command.chunk_seconds);
+    let transcribe_source = command.transcript.transcriber();
+    let chunker = command.transcript.chunker();
 
     println!("Indexing video: {video_id}");
     let metadata = metadata_source.metadata_for_video(&video_id).await?;
@@ -2370,7 +1353,8 @@ async fn index_video_command(command: IndexVideoCommand) -> Result<(), CliError>
     .await?;
     let chunks = chunker.chunks(&metadata, &transcript)?;
     let chunk_count = chunks.len();
-    search.import_chunks_batched(&chunks).await?;
+    replace_video_document(&search, &video_id, &chunks).await?;
+    publish_and_wait(&search).await?;
 
     println!("  imported {chunk_count} transcript chunks");
     println!(
@@ -2404,11 +1388,22 @@ async fn validate_youtuber(
     max_videos: u8,
 ) -> Result<ValidatedYoutuber, CliError> {
     let handle = normalize_handle(raw_handle)?;
-    match validate_youtuber_with_ytdlp(ytdlp, &handle, max_videos).await {
+    let ytdlp_validation = validate_youtuber_with_ytdlp(ytdlp, &handle, max_videos);
+    let (ytdlp_result, profile_result) = if let Some(youtube) = youtube {
+        let (ytdlp_result, profile_result) = tokio::join!(
+            ytdlp_validation,
+            enrich_youtuber_channel_metadata(youtube, &handle),
+        );
+        (ytdlp_result, Some(profile_result))
+    } else {
+        (ytdlp_validation.await, None)
+    };
+
+    match ytdlp_result {
         Ok(mut youtuber) => {
             println!("  validation source: yt-dlp channel feed");
-            if let Some(youtube) = youtube {
-                match enrich_youtuber_channel_metadata(youtube, &handle, 0).await {
+            if let Some(profile_result) = profile_result {
+                match profile_result {
                     Ok(channel) => {
                         // Keep yt-dlp as the discovery source, but persist the
                         // canonical channel identity and image from YouTube's API.
@@ -2440,40 +1435,43 @@ async fn validate_youtuber(
             "Could not resolve YouTube handle {handle} with yt-dlp and no YOUTUBE_API_KEY is configured"
         ))
     })?;
-    validate_youtuber_with_youtube_api(youtube, &handle, max_videos).await
+    match profile_result.expect("profile lookup runs when the YouTube client is configured") {
+        Ok(mut youtuber) => {
+            populate_recent_uploads(youtube, &mut youtuber, max_videos).await;
+            Ok(youtuber)
+        }
+        Err(error) => Err(error),
+    }
 }
 
-async fn validate_youtuber_with_youtube_api(
+async fn populate_recent_uploads(
     youtube: &YouTubeClient,
-    handle: &str,
+    youtuber: &mut ValidatedYoutuber,
     max_videos: u8,
-) -> Result<ValidatedYoutuber, CliError> {
-    let mut youtuber = enrich_youtuber_channel_metadata(youtube, handle, max_videos).await?;
-    if youtuber.recent_uploads.is_empty() {
-        if let Some(uploads_playlist) = youtuber.uploads_playlist.as_deref() {
-            match fetch_recent_uploads(youtube, uploads_playlist, max_videos).await {
-                Ok(recent_uploads) => {
-                    youtuber.recent_uploads = recent_uploads;
-                    youtuber.uploads_warning = None;
-                }
-                Err(error) => {
-                    youtuber.uploads_warning = Some(format!(
-                        "could not list recent uploads from playlist {uploads_playlist}: {error}"
-                    ));
-                }
-            }
-        } else {
-            youtuber.uploads_warning =
-                Some("channel did not expose an uploads playlist".to_string());
+) {
+    if max_videos == 0 {
+        return;
+    }
+    let Some(uploads_playlist) = youtuber.uploads_playlist.as_deref() else {
+        youtuber.uploads_warning = Some("channel did not expose an uploads playlist".to_string());
+        return;
+    };
+    match fetch_recent_uploads(youtube, uploads_playlist, max_videos).await {
+        Ok(recent_uploads) => {
+            youtuber.recent_uploads = recent_uploads;
+            youtuber.uploads_warning = None;
+        }
+        Err(error) => {
+            youtuber.uploads_warning = Some(format!(
+                "could not list recent uploads from playlist {uploads_playlist}: {error}"
+            ));
         }
     }
-    Ok(youtuber)
 }
 
 async fn enrich_youtuber_channel_metadata(
     youtube: &YouTubeClient,
     handle: &str,
-    max_videos: u8,
 ) -> Result<ValidatedYoutuber, CliError> {
     let channel_page = youtube
         .list(ListResource::Channels)
@@ -2497,22 +1495,13 @@ async fn enrich_youtuber_channel_metadata(
         optional_string(channel, "/snippet/customUrl").unwrap_or_else(|| handle.to_string());
     let uploads_playlist = optional_string(channel, "/contentDetails/relatedPlaylists/uploads");
     let avatar_url = best_thumbnail(channel.pointer("/snippet/thumbnails"));
-    let recent_uploads = match uploads_playlist.as_deref() {
-        Some(uploads_playlist) if max_videos > 0 => {
-            fetch_recent_uploads(youtube, uploads_playlist, max_videos)
-                .await
-                .unwrap_or_default()
-        }
-        _ => Vec::new(),
-    };
-
     Ok(ValidatedYoutuber {
         handle: resolved_handle,
         channel_id,
         title,
         uploads_playlist,
         avatar_url,
-        recent_uploads,
+        recent_uploads: Vec::new(),
         uploads_warning: None,
     })
 }
@@ -2621,7 +1610,10 @@ async fn discover_videos_for_youtuber_with_ytdlp(
     ytdlp: &YtDlpTranscriptSource,
     handle: &str,
 ) -> Result<Vec<DiscoveredVideo>, CliError> {
-    let uploads = ytdlp.channel_videos(handle, None).await;
+    let (uploads, streams) = tokio::join!(
+        ytdlp.channel_videos(handle, None),
+        ytdlp.channel_streams(handle, None),
+    );
     let mut videos = match &uploads {
         Ok(uploads) => uploads
             .iter()
@@ -2635,7 +1627,7 @@ async fn discover_videos_for_youtuber_with_ytdlp(
         }
     };
 
-    match ytdlp.channel_streams(handle, None).await {
+    match streams {
         Ok(streams) => {
             println!(
                 "  discovery source: yt-dlp streams tab ({} entries)",
@@ -2893,7 +1885,7 @@ fn saturating_u32(value: impl TryInto<u32>) -> u32 {
 
 fn print_index_summary(stats: &IndexStats) {
     println!(
-        "Index summary: discovered={}, attempted={}, indexed={}, existing={}, skipped={}, deferred_failures={}, kind_filtered={}, audio_transcribed={}, chunks={}, existing_chunks={}",
+        "Index summary: discovered={}, attempted={}, indexed={}, existing={}, skipped={}, deferred_transcript_failures={}, kind_filtered={}, audio_transcribed={}, chunks={}, existing_chunks={}",
         stats.discovered_videos,
         stats.attempted_videos,
         stats.indexed_videos,
@@ -2905,32 +1897,6 @@ fn print_index_summary(stats: &IndexStats) {
         stats.indexed_chunks,
         stats.existing_chunks
     );
-}
-
-fn youtuber_id_from_handle(handle: &str, channel_id: &str) -> String {
-    let source = handle.strip_prefix('@').unwrap_or(handle);
-    let source = if source.is_empty() {
-        channel_id
-    } else {
-        source
-    };
-    let mut id = String::with_capacity(source.len());
-    let mut previous_was_separator = false;
-
-    for byte in source.bytes() {
-        if byte.is_ascii_alphanumeric() {
-            id.push(char::from(byte.to_ascii_lowercase()));
-            previous_was_separator = false;
-        } else if !previous_was_separator && !id.is_empty() {
-            id.push('-');
-            previous_was_separator = true;
-        }
-    }
-
-    if id.ends_with('-') {
-        id.pop();
-    }
-    id
 }
 
 fn normalize_handle(raw_handle: &str) -> Result<String, CliError> {
@@ -3099,9 +2065,9 @@ mod tests {
     }
 
     #[test]
-    fn recent_failures_do_not_block_later_missing_videos() {
+    fn recent_transcript_failures_do_not_block_later_missing_videos() {
         let failure_dir = std::env::temp_dir().join(format!(
-            "ytsearch-video-failure-test-{}",
+            "ytsearch-transcript-failure-test-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&failure_dir);
@@ -3138,7 +2104,7 @@ mod tests {
 
     #[test]
     fn backend_counts_replace_stale_profile_counts() {
-        let mut youtuber = YoutuberDocument {
+        let mut youtuber = ChannelDocument {
             id: "t3dotgg".to_string(),
             handle: "@t3dotgg".to_string(),
             name: "Theo".to_string(),
@@ -3152,7 +2118,7 @@ mod tests {
 
         apply_backend_chunk_stats(
             &mut youtuber,
-            BackendChunkStats {
+            ChunkStats {
                 indexed_videos: 576,
                 indexed_chunks: 165_451,
             },
@@ -3175,6 +2141,20 @@ mod tests {
     fn destructive_remove_requires_explicit_acknowledgement() {
         assert!(validate_remove_safety(true).is_ok());
         assert!(validate_remove_safety(false).is_err());
+    }
+
+    #[test]
+    fn mutation_keys_are_stable_for_retries_and_change_with_content() {
+        let first = content_operation_key("replace-video", "video", b"first");
+        assert_eq!(
+            first,
+            content_operation_key("replace-video", "video", b"first")
+        );
+        assert_ne!(
+            first,
+            content_operation_key("replace-video", "video", b"second")
+        );
+        assert!(first.bytes().all(|byte| byte.is_ascii_graphic()));
     }
 
     #[test]

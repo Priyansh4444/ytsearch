@@ -2354,6 +2354,7 @@ dependencies = [
 name = "youtube_cli"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "clap",
  "dotenvy",
  "serde_json",
@@ -2362,8 +2363,8 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "youtube_client",
+ "youtube_index_store",
  "youtube_ingest",
- "youtube_search",
  "youtube_sources",
  "youtube_transcribe",
  "youtube_typesense",
