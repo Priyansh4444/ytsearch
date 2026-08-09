@@ -72,7 +72,8 @@ const program = Effect.gen(function* () {
     requested_videos: videoIds.length,
     enriched_videos: engagement.size,
     missing_videos: videoIds.length - engagement.size,
-    written_documents: written,
+    written_documents: written.documents,
+    metric_records_written: written.metricRecords,
     api_requests: batches.length,
   };
 });
@@ -169,7 +170,7 @@ function writeEnrichedCorpus(
   input: string,
   output: string,
   engagement: ReadonlyMap<string, Engagement>,
-): Effect.Effect<number, Error> {
+): Effect.Effect<{ documents: number; metricRecords: number }, Error> {
   return Effect.tryPromise({
     try: async () => {
       const lines = createInterface({ input: corpusInput(input), crlfDelay: Infinity });
@@ -178,7 +179,9 @@ function writeEnrichedCorpus(
       if (destination !== outputFile) destination.pipe(outputFile);
       const destinationDone = finished(destination);
       const outputDone = destination === outputFile ? destinationDone : finished(outputFile);
+      const enrichedVideos = new Set<string>();
       let documents = 0;
+      let metricRecords = 0;
       try {
         for await (const line of lines) {
           if (!line.trim()) continue;
@@ -186,18 +189,20 @@ function writeEnrichedCorpus(
           if (!isRecord(value) || typeof value.video_id !== "string") {
             throw new Error("Corpus document is missing video_id");
           }
-          const metrics = engagement.get(value.video_id) ?? {
-            view_count: 0,
-            like_count: 0,
-            comment_count: 0,
-          };
-          const writable = destination.write(`${JSON.stringify({ ...value, ...metrics })}\n`);
+          const metrics = engagement.get(value.video_id);
+          const shouldWriteMetrics = metrics !== undefined && !enrichedVideos.has(value.video_id);
+          if (shouldWriteMetrics) {
+            enrichedVideos.add(value.video_id);
+            metricRecords += 1;
+          }
+          const outputLine = shouldWriteMetrics ? JSON.stringify({ ...value, ...metrics }) : line;
+          const writable = destination.write(`${outputLine}\n`);
           if (!writable) await once(destination, "drain");
           documents += 1;
         }
         destination.end();
         await Promise.all([destinationDone, outputDone]);
-        return documents;
+        return { documents, metricRecords };
       } catch (error) {
         destination.destroy();
         outputFile.destroy();

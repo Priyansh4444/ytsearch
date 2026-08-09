@@ -57,8 +57,12 @@ the selected documents are materialized.
 | Index bytes |      72,441,536 |    73,018,300 | +576,764 (+0.80%) |
 | Fresh build | 4,335 ms median |      4,615 ms |             +6.5% |
 
-The source JSONL is larger because every chunk carries the fetched counters,
-but the final index deduplicates them at the video boundary.
+The original four-channel source repeated fetched counters on every chunk. The
+full-snapshot path writes counters only on the first record for each video,
+copies all other JSON lines byte-for-byte, and records the number of metric
+records in its report. The builder takes the per-video maximum and the reader
+injects those counters into every returned hit, so ranking and response values
+remain identical without millions of redundant fields or serializations.
 
 ## Bounded combined score
 
