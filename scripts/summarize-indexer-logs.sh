@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-staging}"
+APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-raw-production}"
 LINES="${LINES:-25}"
 ERROR_LINES="${ERROR_LINES:-3}"
 VERBOSE="${VERBOSE:-0}"

@@ -5,19 +5,14 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 MANIFEST="${1:-$SCRIPT_DIR/conference-playlists.tsv}"
 STATE_DIR="${CONFERENCE_STATE_DIR:-$ROOT_DIR/data/conference-index-state}"
-BACKEND="${BACKEND:-typesense}"
+BACKEND="${BACKEND:-raw}"
 COLLECTION="${COLLECTION:-youtube_transcript_chunks}"
 TRANSCRIPT_CACHE_DIR="${TRANSCRIPT_CACHE_DIR:-$ROOT_DIR/data/transcript-cache}"
 
 . "$SCRIPT_DIR/load-env.sh"
 
-TYPESENSE_API_URL="${TYPESENSE_API_URL:-${TYPESENSE_SELFHOST_API_URL:-}}"
-TYPESENSE_ADMIN_API_KEY="${TYPESENSE_ADMIN_API_KEY:-${TYPESENSE_SELFHOST_API_KEY:-}}"
-TYPESENSE_SEARCH_API_KEY="${TYPESENSE_SEARCH_API_KEY:-$TYPESENSE_ADMIN_API_KEY}"
-export TYPESENSE_API_URL TYPESENSE_ADMIN_API_KEY TYPESENSE_SEARCH_API_KEY
-
-if [ "$BACKEND" = "typesense" ] && { [ -z "$TYPESENSE_API_URL" ] || [ -z "$TYPESENSE_ADMIN_API_KEY" ]; }; then
-  echo "conference-index: Typesense admin URL and key are required" >&2
+if [ "$BACKEND" = "raw" ] && { [ -z "${RAW_SEARCH_API_URL:-}" ] || [ -z "${RAW_SEARCH_ADMIN_API_KEY:-}" ]; }; then
+  echo "conference-index: Raw admin URL and key are required" >&2
   exit 1
 fi
 

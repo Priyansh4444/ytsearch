@@ -5,7 +5,7 @@ set -eu
 . "$(dirname "$0")/load-env.sh"
 . "$(dirname "$0")/queue-api-url.sh"
 
-APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer}"
+APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-raw-production}"
 INDEX_QUEUE_API_BASE_URL="$(normalize_queue_api_url "${INDEX_QUEUE_API_BASE_URL:-}")"
 
 if [ -z "${FLY_ORG:-}" ]; then
@@ -24,8 +24,8 @@ require_env() {
   fi
 }
 
-require_env TYPESENSE_SELFHOST_API_URL
-require_env TYPESENSE_SELFHOST_API_KEY
+require_env RAW_SEARCH_API_URL
+require_env RAW_SEARCH_ADMIN_API_KEY
 require_env YTSEARCH_INDEX_QUEUE_TOKEN
 
 set_optional_ytdlp_secrets() {
@@ -76,11 +76,8 @@ flyctl secrets set --stage \
   --app "$APP_NAME" \
   INDEX_QUEUE_API_BASE_URL="$INDEX_QUEUE_API_BASE_URL" \
   YTSEARCH_INDEX_QUEUE_TOKEN="$YTSEARCH_INDEX_QUEUE_TOKEN" \
-  TYPESENSE_SELFHOST_API_URL="$TYPESENSE_SELFHOST_API_URL" \
-  TYPESENSE_SELFHOST_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
-  TYPESENSE_API_URL="$TYPESENSE_SELFHOST_API_URL" \
-  TYPESENSE_ADMIN_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
-  TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SELFHOST_API_KEY"
+  RAW_SEARCH_API_URL="$RAW_SEARCH_API_URL" \
+  RAW_SEARCH_ADMIN_API_KEY="$RAW_SEARCH_ADMIN_API_KEY"
 
 set_optional_ytdlp_secrets
 configure_youtube_api_fallback

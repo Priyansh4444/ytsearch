@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-# This marks the three known legacy Machines after Raw owns both reads and
+# This marks the four known legacy Machines after Raw owns both reads and
 # writes. Fly Machine metadata updates can restart a Machine, so this script is
 # deliberately fail-closed and must not be run before the cutover proof passes.
 

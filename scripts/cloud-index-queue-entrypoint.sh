@@ -1,12 +1,13 @@
 #!/usr/bin/env sh
 set -eu
 
-BACKENDS="${BACKENDS:-typesense-fly}"
+BACKENDS="${BACKENDS:-raw}"
 QUEUE_TARGET_BACKEND="${QUEUE_TARGET_BACKEND:-}"
 JOBS="${JOBS:-1}"
 COLLECTION="${COLLECTION:-youtube_transcript_chunks}"
-VIDEO_TIMEOUT_SECONDS="${VIDEO_TIMEOUT_SECONDS:-300}"
+VIDEO_TIMEOUT_SECONDS="${VIDEO_TIMEOUT_SECONDS:-600}"
 TRANSCRIPT_CACHE_DIR="${TRANSCRIPT_CACHE_DIR:-/data/transcript-cache}"
+TRANSCRIPT_FAILURE_RETRY_SECONDS="${TRANSCRIPT_FAILURE_RETRY_SECONDS:-21600}"
 LIMIT="${LIMIT:-10}"
 QUEUE_ONE_REQUEST_PER_PASS="${QUEUE_ONE_REQUEST_PER_PASS:-0}"
 DAILY_UPDATE_LIST_FILE="${DAILY_UPDATE_LIST_FILE:-/tmp/daily-indexed-channels.txt}"
@@ -108,7 +109,7 @@ default_queue_target_backend() {
 validate_backend_scope() {
   target_backend="$(default_queue_target_backend)"
   case "$target_backend" in
-    typesense-fly) ;;
+    raw) ;;
     *)
       echo "cloud-queue-indexer: QUEUE_TARGET_BACKEND must select exactly one active backend" >&2
       exit 1
@@ -157,7 +158,8 @@ if status:
     payload["status"] = status
 print(json.dumps(payload, separators=(",", ":")), file=sys.stderr)
 
-token = os.environ.get("AXIOM_TOKEN") or os.environ.get("AXIOM_API_KEY")
+# Ingest only. Never use AXIOM_API_QUERY (operator query token).
+token = os.environ.get("AXIOM_API_KEY") or os.environ.get("AXIOM_TOKEN")
 dataset = os.environ.get("AXIOM_DATASET")
 if token and dataset:
     base_url = (
@@ -243,7 +245,7 @@ import urllib.request
 handle = os.environ.get("HANDLE", "")
 request = urllib.request.Request(
     os.environ["INDEX_QUEUE_API_BASE_URL"].rstrip("/") + "/api/index-activity",
-    data=json.dumps({"handle": handle or None, "target_backend": "typesense-fly"}).encode(),
+    data=json.dumps({"handle": handle or None, "target_backend": "raw"}).encode(),
     method="POST",
     headers={
         "Authorization": f"Bearer {os.environ['YTSEARCH_INDEX_QUEUE_TOKEN']}",
@@ -435,16 +437,10 @@ index_one_backend() {
     --jobs "$jobs" \
     --video-timeout-seconds "$VIDEO_TIMEOUT_SECONDS" \
     --transcript-cache-dir "$TRANSCRIPT_CACHE_DIR" \
+    --transcript-failure-retry-seconds "$TRANSCRIPT_FAILURE_RETRY_SECONDS" \
     $extra_args \
     "$@"; then
     return 1
-  fi
-
-  echo "cloud-queue-indexer: refreshing $handle backend=$label"
-  if ! ytsearch refresh-youtuber-counts "$handle" \
-    --backend "$backend" \
-    --collection "$COLLECTION"; then
-    echo "cloud-queue-indexer: refresh failed handle=$handle backend=$label (indexed data kept)" >&2
   fi
 }
 
@@ -452,18 +448,16 @@ index_youtuber_for_backends() {
   handle="$1"
   shift
   failed=0
-  typesense_jobs="${TYPESENSE_JOBS:-$JOBS}"
+  raw_jobs="${RAW_JOBS:-$JOBS}"
 
-  if has_backend typesense-fly; then
-    if [ -z "${TYPESENSE_SELFHOST_API_URL:-}" ] || [ -z "${TYPESENSE_SELFHOST_API_KEY:-}" ]; then
-      echo "cloud-queue-indexer: skipping typesense-fly; missing TYPESENSE_SELFHOST_API_URL or TYPESENSE_SELFHOST_API_KEY" >&2
+  if has_backend raw; then
+    if [ -z "${RAW_SEARCH_API_URL:-}" ] || [ -z "${RAW_SEARCH_ADMIN_API_KEY:-}" ]; then
+      echo "cloud-queue-indexer: raw unavailable; missing RAW_SEARCH_API_URL or RAW_SEARCH_ADMIN_API_KEY" >&2
+      failed=1
     else
-      export TYPESENSE_API_URL="$TYPESENSE_SELFHOST_API_URL"
-      export TYPESENSE_ADMIN_API_KEY="$TYPESENSE_SELFHOST_API_KEY"
-      export TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SELFHOST_API_KEY"
-      if ! index_one_backend typesense-fly typesense "$typesense_jobs" "$handle" "$@"; then
+      if ! index_one_backend raw raw "$raw_jobs" "$handle" "$@"; then
         failed=1
-        echo "cloud-queue-indexer: backend failed handle=$handle backend=typesense-fly" >&2
+        echo "cloud-queue-indexer: backend failed handle=$handle backend=raw" >&2
       fi
     fi
   fi
@@ -481,8 +475,8 @@ index_youtuber_for_queue_target() {
   fi
 
   case "$target_backend" in
-    typesense-fly)
-      BACKENDS="typesense-fly" index_youtuber_for_backends "$handle"
+    raw)
+      BACKENDS="raw" index_youtuber_for_backends "$handle"
       ;;
     *)
       echo "cloud-queue-indexer: unsupported target_backend=$target_backend request skipped" >&2
@@ -518,18 +512,16 @@ index_daily_update_for_backends() {
   fi
 
   failed=0
-  typesense_jobs="${TYPESENSE_JOBS:-$JOBS}"
+  raw_jobs="${RAW_JOBS:-$JOBS}"
 
-  if has_backend typesense-fly; then
-    if [ -z "${TYPESENSE_SELFHOST_API_URL:-}" ] || [ -z "${TYPESENSE_SELFHOST_API_KEY:-}" ]; then
-      echo "cloud-queue-indexer: skipping daily typesense-fly; missing TYPESENSE_SELFHOST_API_URL or TYPESENSE_SELFHOST_API_KEY" >&2
+  if has_backend raw; then
+    if [ -z "${RAW_SEARCH_API_URL:-}" ] || [ -z "${RAW_SEARCH_ADMIN_API_KEY:-}" ]; then
+      echo "cloud-queue-indexer: daily Raw update unavailable; missing RAW_SEARCH_API_URL or RAW_SEARCH_ADMIN_API_KEY" >&2
+      failed=1
     else
-      export TYPESENSE_API_URL="$TYPESENSE_SELFHOST_API_URL"
-      export TYPESENSE_ADMIN_API_KEY="$TYPESENSE_SELFHOST_API_KEY"
-      export TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SELFHOST_API_KEY"
-      if ! index_list_backend typesense-fly typesense "$typesense_jobs"; then
+      if ! index_list_backend raw raw "$raw_jobs"; then
         failed=1
-        log_queue_event error daily_update_backend_failed "" "" "" "typesense-fly" "failed"
+        log_queue_event error daily_update_backend_failed "" "" "" "raw" "failed"
       fi
     fi
   fi

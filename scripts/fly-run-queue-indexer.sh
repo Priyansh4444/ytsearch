@@ -4,7 +4,7 @@ set -eu
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
 
-APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer}"
+APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-raw-production}"
 FLY_REGION="${FLY_REGION:-sjc}"
 QUEUE_TARGET_BACKEND="${QUEUE_TARGET_BACKEND:-}"
 ON_DEMAND="${ON_DEMAND:-0}"
@@ -17,16 +17,16 @@ if [ -z "${FLY_ORG:-}" ]; then
 fi
 
 case "$QUEUE_TARGET_BACKEND" in
-  typesense-fly)
-    EXPECTED_BACKENDS="typesense-fly"
-    DEFAULT_MACHINE_NAME="ytsearch-queue-typesense"
+  raw)
+    EXPECTED_BACKENDS="raw"
+    DEFAULT_MACHINE_NAME="ytsearch-queue-raw"
     # Fly volume names are limited to 30 characters. Keep this aligned with the
-    # Typesense worker volume created by the multi-indexer launcher.
-    DEFAULT_VOLUME_NAME="ytsearch_indexer_data_ts"
+    # Raw worker volume created by the multi-indexer launcher.
+    DEFAULT_VOLUME_NAME="ytsearch_indexer_data_raw"
     ;;
   *)
-    echo "QUEUE_TARGET_BACKEND must be typesense-fly." >&2
-    echo "Use scripts/fly-run-queue-indexers.sh to start the active Typesense worker." >&2
+    echo "QUEUE_TARGET_BACKEND must be raw." >&2
+    echo "Use scripts/fly-run-queue-indexers.sh to start the active Raw worker." >&2
     exit 1
     ;;
 esac
@@ -168,8 +168,9 @@ exec flyctl machine run \
   $daily_update_file_args \
   --env "BACKENDS=$BACKENDS" \
   --env "QUEUE_TARGET_BACKEND=$QUEUE_TARGET_BACKEND" \
+  --env "RAW_SEARCH_API_URL=${RAW_SEARCH_API_URL:-http://ytsearch-raw-production.internal:8108}" \
   --env "JOBS=${JOBS:-1}" \
-  --env "TYPESENSE_JOBS=${TYPESENSE_JOBS:-1}" \
+  --env "RAW_JOBS=${RAW_JOBS:-1}" \
   --env "LIMIT=$queue_limit" \
   --env "QUEUE_ONE_REQUEST_PER_PASS=$queue_one_request_per_pass" \
   --env "MAX_VIDEOS_PER_PASS=${MAX_VIDEOS_PER_PASS:-0}" \
@@ -186,7 +187,11 @@ exec flyctl machine run \
   --env "DAILY_UPDATE_INTERVAL_SECONDS=$daily_update_interval_seconds" \
   --env "DAILY_UPDATE_INITIAL_DELAY_SECONDS=$daily_update_initial_delay_seconds" \
   --env "EXISTING_TAIL=${EXISTING_TAIL:-0}" \
-  --env "VIDEO_TIMEOUT_SECONDS=${VIDEO_TIMEOUT_SECONDS:-300}" \
+  --env "VIDEO_TIMEOUT_SECONDS=${VIDEO_TIMEOUT_SECONDS:-600}" \
+  --env "TRANSCRIPT_FAILURE_RETRY_SECONDS=${TRANSCRIPT_FAILURE_RETRY_SECONDS:-21600}" \
+  --env "YT_DLP_CAPTION_FETCH_ATTEMPTS=${YT_DLP_CAPTION_FETCH_ATTEMPTS:-6}" \
+  --env "YT_DLP_CAPTION_MIN_INTERVAL_MS=${YT_DLP_CAPTION_MIN_INTERVAL_MS:-1500}" \
+  --env "YT_DLP_RATE_LIMIT_RETRY_BASE_SECONDS=${YT_DLP_RATE_LIMIT_RETRY_BASE_SECONDS:-5}" \
   --env "RUST_LOG=${RUST_LOG:-youtube_cli=info,youtube_sources=info,youtube_ytdlp=warn}" \
   ${image_ref:-.} \
   /bin/sh /usr/local/bin/cloud-index-queue "$@"

@@ -11,10 +11,10 @@ fixture() {
   restart="$3"
   jq -n --arg state "$state" --arg idle "$idle" --arg restart "$restart" '[{
     id:"machine-1",
-    name:"ytsearch-queue-typesense",
+    name:"ytsearch-queue-raw",
     state:$state,
     config:{
-      env:{QUEUE_TARGET_BACKEND:"typesense-fly",QUEUE_LOOP:"1",IDLE_EXIT_AFTER_SECONDS:$idle},
+      env:{QUEUE_TARGET_BACKEND:"raw",QUEUE_LOOP:"1",IDLE_EXIT_AFTER_SECONDS:$idle},
       restart:{policy:$restart}
     }
   }]'

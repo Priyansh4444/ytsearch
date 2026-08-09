@@ -88,10 +88,11 @@ exec flyctl machine run \
   $youtube_secret_args \
   --env "LIST_FILE=/tmp/indexed-channels.txt" \
   --env "TRANSCRIPT_CACHE_DIR=$transcript_cache_dir" \
-  --env "BACKENDS=${BACKENDS:-typesense-fly}" \
+  --env "BACKENDS=${BACKENDS:-raw}" \
+  --env "RAW_SEARCH_API_URL=${RAW_SEARCH_API_URL:-http://ytsearch-raw-production.internal:8108}" \
   --env "MODE=${MODE:-update}" \
   --env "JOBS=${JOBS:-3}" \
-  --env "TYPESENSE_JOBS=${TYPESENSE_JOBS:-3}" \
+  --env "RAW_JOBS=${RAW_JOBS:-3}" \
   --env "EXISTING_TAIL=${EXISTING_TAIL:-0}" \
   --env "VIDEO_TIMEOUT_SECONDS=${VIDEO_TIMEOUT_SECONDS:-300}" \
   --env "RUST_LOG=${RUST_LOG:-youtube_cli=info,youtube_sources=info,youtube_ytdlp=warn}" \

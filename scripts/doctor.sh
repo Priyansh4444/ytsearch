@@ -33,19 +33,19 @@ public="$(value '.indexing.public')"
 
 if [ "$frontend" != "200" ]; then
   echo "FAIL frontend HTTP ${frontend:-unknown}"
-  echo "NEXT run: TYPESENSE_FRONTEND_URL=https://search.pronsh.dev $SCRIPT_DIR/check-frontend-backends.sh"
+  echo "NEXT run: RAW_SEARCH_FRONTEND_URL=https://search.pronsh.dev $SCRIPT_DIR/check-frontend-backends.sh"
   exit 1
 fi
 
 if [ "$engine" != "200" ]; then
-  echo "FAIL Typesense health HTTP ${engine:-unknown}"
-  echo "NEXT run: VERBOSE=1 $SCRIPT_DIR/check-typesense-fly.sh"
+  echo "FAIL Raw search health HTTP ${engine:-unknown}"
+  echo "NEXT run: $SCRIPT_DIR/check-raw-search-engine.sh"
   exit 1
 fi
 
 if [ "$search" != "200" ]; then
   echo "FAIL search API HTTP ${search:-unknown}"
-  echo "NEXT run: flyctl logs --app ytsearch-api-typesense-fly-staging --no-tail | tail -n 50"
+  echo "NEXT run: flyctl logs --app ytsearch-api-raw-production --no-tail | tail -n 50"
   exit 1
 fi
 

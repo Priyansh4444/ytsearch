@@ -7,19 +7,19 @@ if [ "$#" -gt 0 ]; then
 fi
 
 MODE="${MODE:-update}"
-# The active staging engine is a single Typesense node. Keep local bulk runs
+# The active engine publishes one immutable Raw generation. Keep local bulk runs
 # serialized unless an operator has provisioned and measured separate ingest
 # capacity.
 JOBS="${JOBS:-1}"
 if [ "${BACKENDS+x}" != "x" ]; then
-  BACKENDS="typesense-fly"
+  BACKENDS="raw"
 fi
 COLLECTION="${COLLECTION:-youtube_transcript_chunks}"
 
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
 
-COLLECTION="${YTSEARCH_TRANSCRIPTS_INDEX:-${TYPESENSE_COLLECTION:-$COLLECTION}}"
+COLLECTION="${YTSEARCH_TRANSCRIPTS_INDEX:-${RAW_SEARCH_COLLECTION:-$COLLECTION}}"
 REWIPE_ACK_ARG=""
 
 if [ "$MODE" = "rewipe" ]; then
@@ -35,30 +35,16 @@ if [ ! -f "$LIST_FILE" ]; then
   exit 1
 fi
 
-run_index_typesense_fly() {
-  echo "Indexing typesense-fly: mode=$MODE jobs=$JOBS list=$LIST_FILE"
-  TYPESENSE_API_URL="$TYPESENSE_SELFHOST_API_URL" \
-  TYPESENSE_ADMIN_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
-  TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
+run_index_raw() {
+  echo "Indexing Raw: mode=$MODE jobs=$JOBS list=$LIST_FILE"
   cargo run --release -p youtube_cli -- \
     index-youtubers "$LIST_FILE" \
-    --backend typesense \
+    --backend raw \
     --mode "$MODE" \
     --collection "$COLLECTION" \
     --jobs "$JOBS" \
     $REWIPE_ACK_ARG \
     "$@"
-}
-
-run_refresh_typesense_fly() {
-  echo "Refreshing profile counts for typesense-fly"
-  TYPESENSE_API_URL="$TYPESENSE_SELFHOST_API_URL" \
-  TYPESENSE_ADMIN_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
-  TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
-  cargo run --release -p youtube_cli -- \
-    refresh-youtuber-counts-list "$LIST_FILE" \
-    --backend typesense \
-    --collection "$COLLECTION"
 }
 
 has_backend() {
@@ -69,11 +55,11 @@ has_backend() {
   esac
 }
 
-if has_backend typesense-fly; then
-  if [ -z "${TYPESENSE_SELFHOST_API_KEY:-}" ] || [ -z "${TYPESENSE_SELFHOST_API_URL:-}" ]; then
-    echo "Skipping typesense-fly: missing TYPESENSE_SELFHOST_API_KEY or TYPESENSE_SELFHOST_API_URL" >&2
+if has_backend raw; then
+  if [ -z "${RAW_SEARCH_ADMIN_API_KEY:-}" ] || [ -z "${RAW_SEARCH_API_URL:-}" ]; then
+    echo "Raw indexing unavailable: missing RAW_SEARCH_ADMIN_API_KEY or RAW_SEARCH_API_URL" >&2
+    exit 1
   else
-    run_index_typesense_fly "$@"
-    run_refresh_typesense_fly
+    run_index_raw "$@"
   fi
 fi

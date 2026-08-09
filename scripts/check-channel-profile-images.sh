@@ -7,9 +7,9 @@ set -eu
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
 
-API_BASE_URL="${API_BASE_URL:-${TYPESENSE_FLY_API_BASE_URL:-}}"
+API_BASE_URL="${API_BASE_URL:-${RAW_SEARCH_API_BASE_URL:-}}"
 if [ -z "$API_BASE_URL" ]; then
-  echo "Missing API_BASE_URL or TYPESENSE_FLY_API_BASE_URL" >&2
+  echo "Missing API_BASE_URL or RAW_SEARCH_API_BASE_URL" >&2
   exit 1
 fi
 

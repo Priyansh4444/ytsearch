@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-# Smoke-check active frontend variants and the API each one is meant to use.
+# Smoke-check the production Raw read and queue paths.
 
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
@@ -10,9 +10,8 @@ QUERY="${QUERY:-fable}"
 PER_PAGE="${PER_PAGE:-3}"
 CURL_MAX_TIME="${CURL_MAX_TIME:-15}"
 
-TYPESENSE_FRONTEND_URL="${TYPESENSE_FRONTEND_URL:-${TYPESENSE_FLY_FRONTEND_URL:-https://search.pronsh.dev}}"
-RAW_EXPERIMENTAL_FRONTEND_URL="${RAW_EXPERIMENTAL_FRONTEND_URL:-https://search.experimental.pronsh.dev}"
-RAW_FLY_API_BASE_URL="${RAW_FLY_API_BASE_URL:-https://ytsearch-api-raw-experiment.fly.dev}"
+PRODUCTION_FRONTEND_URL="${PRODUCTION_FRONTEND_URL:-https://search.pronsh.dev}"
+RAW_PRODUCTION_API_BASE_URL="${RAW_PRODUCTION_API_BASE_URL:-https://ytsearch-api-raw-production.fly.dev}"
 
 required_env() {
   name="$1"
@@ -111,17 +110,11 @@ check_frontend_config() {
       exit 1
     fi
   fi
-  echo "$label config ok: active API owns search and queue routes"
+  echo "$label config ok: same-origin search and queue routes are present"
 }
 
-required_env TYPESENSE_FLY_API_BASE_URL
-
-check_url "frontend typesense" "$TYPESENSE_FRONTEND_URL"
-check_frontend_config "frontend typesense" "$TYPESENSE_FRONTEND_URL" "$TYPESENSE_FLY_API_BASE_URL"
-check_api "frontend typesense" "$TYPESENSE_FRONTEND_URL"
-check_url "frontend typesense queue" "$TYPESENSE_FLY_API_BASE_URL/api/index-status"
-
-check_url "frontend raw" "$RAW_EXPERIMENTAL_FRONTEND_URL"
-check_frontend_config "frontend raw" "$RAW_EXPERIMENTAL_FRONTEND_URL" "$RAW_FLY_API_BASE_URL"
-check_api "frontend raw" "$RAW_EXPERIMENTAL_FRONTEND_URL"
-check_url "frontend raw directory" "$RAW_EXPERIMENTAL_FRONTEND_URL/api/youtubers"
+check_url "production frontend" "$PRODUCTION_FRONTEND_URL"
+check_frontend_config "production frontend" "$PRODUCTION_FRONTEND_URL" "$RAW_PRODUCTION_API_BASE_URL"
+check_api "production Raw search" "$PRODUCTION_FRONTEND_URL"
+check_url "production Raw API directory" "$RAW_PRODUCTION_API_BASE_URL/api/youtubers"
+check_url "production Raw queue" "$RAW_PRODUCTION_API_BASE_URL/api/index-status"

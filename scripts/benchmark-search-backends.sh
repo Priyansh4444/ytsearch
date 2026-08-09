@@ -5,13 +5,13 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 . "$SCRIPT_DIR/load-env.sh"
 
-API_BASE_URL="${API_BASE_URL:-${TYPESENSE_FLY_API_BASE_URL:-}}"
+API_BASE_URL="${API_BASE_URL:-${RAW_SEARCH_API_BASE_URL:-}}"
 QUERY="${QUERY:-react}"
 YOUTUBER="${YOUTUBER:-}"
 RUNS="${RUNS:-10}"
 RESULTS_FILE="${RESULTS_FILE:-}"
 CASE_LABEL="${CASE_LABEL:-default}"
-BACKEND_LABEL="${BACKEND_LABEL:-typesense}"
+BACKEND_LABEL="${BACKEND_LABEL:-raw}"
 ACCEPT_ENCODING="${ACCEPT_ENCODING:-gzip}"
 PAGE="${PAGE:-1}"
 PER_PAGE="${PER_PAGE:-10}"
@@ -20,7 +20,7 @@ VIDEO_ID="${VIDEO_ID:-}"
 QUIET="${QUIET:-0}"
 
 if [ -z "$API_BASE_URL" ]; then
-  echo "API_BASE_URL or TYPESENSE_FLY_API_BASE_URL is required" >&2
+  echo "API_BASE_URL or RAW_SEARCH_API_BASE_URL is required" >&2
   exit 1
 fi
 

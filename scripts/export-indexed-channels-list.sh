@@ -9,10 +9,10 @@ set -eu
 . "$(dirname "$0")/load-env.sh"
 
 OUTPUT_FILE="${1:-indexed-channels.txt}"
-API_BASE_URL="${API_BASE_URL:-${TYPESENSE_FLY_API_BASE_URL:-}}"
+API_BASE_URL="${API_BASE_URL:-${RAW_SEARCH_API_BASE_URL:-}}"
 
 if [ -z "$API_BASE_URL" ]; then
-  echo "Missing required environment variable: API_BASE_URL or TYPESENSE_FLY_API_BASE_URL" >&2
+  echo "Missing required environment variable: API_BASE_URL or RAW_SEARCH_API_BASE_URL" >&2
   exit 1
 fi
 

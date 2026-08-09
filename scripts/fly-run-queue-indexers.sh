@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
 set -eu
 
-# Start or create the single on-demand Typesense queue worker.
+# Start or create the single on-demand Raw queue worker.
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-staging}"
+APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-raw-production}"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -46,7 +46,7 @@ run_worker() {
   INDEXER_MACHINE_NAME="$machine_name" \
   INDEXER_VOLUME_NAME="$volume_name" \
   JOBS="${JOBS:-1}" \
-  TYPESENSE_JOBS="${TYPESENSE_JOBS:-1}" \
+  RAW_JOBS="${RAW_JOBS:-1}" \
   QUEUE_POLL_INTERVAL_SECONDS="${QUEUE_POLL_INTERVAL_SECONDS:-30}" \
   IDLE_GAP_FILL_ENABLED="${IDLE_GAP_FILL_ENABLED:-1}" \
   IDLE_GAP_FILL_MAX_PASSES="${IDLE_GAP_FILL_MAX_PASSES:-1}" \
@@ -57,6 +57,6 @@ run_worker() {
   "$SCRIPT_DIR/fly-run-queue-indexer.sh"
 }
 
-run_worker typesense-fly "${TYPESENSE_INDEXER_MACHINE_NAME:-ytsearch-queue-typesense}" \
-  "${TYPESENSE_INDEXER_VOLUME_NAME:-ytsearch_indexer_data_ts}"
-echo "Active queue worker: backend=typesense-fly"
+run_worker raw "${RAW_INDEXER_MACHINE_NAME:-ytsearch-queue-raw}" \
+  "${RAW_INDEXER_VOLUME_NAME:-ytsearch_indexer_data_raw}"
+echo "Active queue worker: backend=raw"

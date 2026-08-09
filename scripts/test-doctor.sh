@@ -32,7 +32,7 @@ if SNAPSHOT_FILE="$tmp/engine.json" "$SCRIPT_DIR/doctor.sh" > "$tmp/output"; the
   echo "doctor should fail for an unhealthy engine" >&2
   exit 1
 fi
-grep -F 'FAIL Typesense health HTTP 503' "$tmp/output" >/dev/null
+grep -F 'FAIL Raw search health HTTP 503' "$tmp/output" >/dev/null
 grep -F 'NEXT run:' "$tmp/output" >/dev/null
 
 cat > "$tmp/worker.json" <<'JSON'

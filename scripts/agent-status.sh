@@ -5,10 +5,10 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 . "$SCRIPT_DIR/load-env.sh"
 
-API_URL="${TYPESENSE_FLY_API_BASE_URL:-https://ytsearch-api-typesense-fly-staging.fly.dev}"
-ENGINE_URL="${TYPESENSE_SELFHOST_API_URL:-https://ytsearch-typesense-staging.fly.dev}"
-FRONTEND_URL="${TYPESENSE_FRONTEND_URL:-https://search.pronsh.dev}"
-INDEXER_APP="${INDEXER_APP_NAME:-ytsearch-indexer-staging}"
+API_URL="${RAW_SEARCH_API_BASE_URL:-https://ytsearch-api-raw-production.fly.dev}"
+ENGINE_URL="${RAW_SEARCH_API_URL:-https://ytsearch-raw-production.fly.dev}"
+FRONTEND_URL="${RAW_SEARCH_FRONTEND_URL:-https://search.pronsh.dev}"
+INDEXER_APP="${INDEXER_APP_NAME:-ytsearch-indexer-raw-production}"
 QUERY="${QUERY:-healthcheck}"
 FORMAT="${FORMAT:-json}"
 CURL_MAX_TIME="${CURL_MAX_TIME:-15}"
@@ -44,15 +44,15 @@ for file in search status channels; do
 done
 
 metrics='{}'
-if [ -n "${TYPESENSE_SELFHOST_API_KEY:-}" ]; then
-  metrics_result="$(http_get "$tmp/metrics" "$ENGINE_URL/metrics.json" -H "X-TYPESENSE-API-KEY: $TYPESENSE_SELFHOST_API_KEY")"
+if [ -n "$ENGINE_URL" ]; then
+  metrics_result="$(http_get "$tmp/metrics" "$ENGINE_URL/metrics")"
   if [ "$(printf '%s' "$metrics_result" | cut -f1)" = "200" ]; then
-    metrics="$(jq -c '{cpu_pct:(.system_cpu_active_percentage|tonumber? // 0),resident_mb:(((.typesense_memory_resident_bytes|tonumber? // 0)/1048576)|floor),disk_used_gb:(((.system_disk_used_bytes|tonumber? // 0)/1073741824*10|floor)/10),disk_total_gb:(((.system_disk_total_bytes|tonumber? // 0)/1073741824*10|floor)/10)}' "$tmp/metrics")"
+    metrics="$(jq -c '{cpu_ticks:(.cpu_ticks // 0),resident_mb:(((.rss_bytes // 0)/1048576)|floor),index_gb:(((.index_bytes // 0)/1073741824*100|floor)/100),documents:(.documents // 0)}' "$tmp/metrics")"
   fi
 fi
 
 machines="$(flyctl machine list --app "$INDEXER_APP" --json 2>/dev/null || printf '[]')"
-worker="$(printf '%s' "$machines" | jq -c '[.[] | select(.config.env.QUEUE_TARGET_BACKEND == "typesense-fly") | {id,name,state,restart:(.config.restart.policy // "")} ] | first // null')"
+worker="$(printf '%s' "$machines" | jq -c '[.[] | select(.config.env.QUEUE_TARGET_BACKEND == "raw") | {id,name,state,restart:(.config.restart.policy // "")} ] | first // null')"
 
 json="$(jq -nc \
   --argjson frontend_http "$(printf '%s' "$frontend_result" | cut -f1)" \
@@ -72,7 +72,7 @@ case "$FORMAT" in
   json) printf '%s\n' "$json" ;;
   pretty) printf '%s\n' "$json" | jq . ;;
   tsv)
-    printf '%s\n' "$json" | jq -r '[.ok,.frontend_http,.engine_http,.search.http,.search.seconds,.indexing.status,.indexing.handle,.indexing.indexed,.indexing.public,.corpus.incomplete_channels,.corpus.reported_video_gap,.worker.state,.engine.disk_used_gb,.engine.disk_total_gb] | @tsv'
+    printf '%s\n' "$json" | jq -r '[.ok,.frontend_http,.engine_http,.search.http,.search.seconds,.indexing.status,.indexing.handle,.indexing.indexed,.indexing.public,.corpus.incomplete_channels,.corpus.reported_video_gap,.worker.state,.engine.resident_mb,.engine.index_gb] | @tsv'
     ;;
   *) echo "FORMAT must be json, pretty, or tsv" >&2; exit 1 ;;
 esac

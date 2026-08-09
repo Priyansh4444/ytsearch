@@ -11,7 +11,7 @@ set -eu
 
 INDEX_QUEUE_API_BASE_URL="$(normalize_queue_api_url "${INDEX_QUEUE_API_BASE_URL:-}")"
 
-BACKENDS="${BACKENDS:-typesense-fly}"
+BACKENDS="${BACKENDS:-raw}"
 QUERY="${QUERY:-the}"
 PER_PAGE="${PER_PAGE:-3}"
 
@@ -38,9 +38,9 @@ required_env() {
 
 backend_url() {
   case "$1" in
-    typesense-fly)
-      required_env TYPESENSE_FLY_API_BASE_URL
-      printf '%s' "$TYPESENSE_FLY_API_BASE_URL"
+    raw)
+      required_env RAW_SEARCH_API_BASE_URL
+      printf '%s' "$RAW_SEARCH_API_BASE_URL"
       ;;
     *)
       echo "Unknown backend: $1" >&2

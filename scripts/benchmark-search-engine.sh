@@ -36,18 +36,16 @@ request() {
     --output "$output"
   )
   if [[ -n "$SEARCH_API_KEY" ]]; then
-    args+=(-H "X-TYPESENSE-API-KEY: $SEARCH_API_KEY")
+    args+=(-H "x-raw-search-key: $SEARCH_API_KEY")
   fi
-  if [[ "$BACKEND_KIND" == typesense ]]; then
-    args+=(
-      --data-urlencode 'query_by_weights=4,6'
-      --data-urlencode 'text_match_type=sum_score'
-      --data-urlencode 'prioritize_exact_match=true'
-      --data-urlencode 'prioritize_token_position=true'
-      --data-urlencode 'typo_tokens_threshold=5'
-      --data-urlencode 'split_join_tokens=always'
-    )
-  fi
+  args+=(
+    --data-urlencode 'query_by_weights=4,6'
+    --data-urlencode 'text_match_type=sum_score'
+    --data-urlencode 'prioritize_exact_match=true'
+    --data-urlencode 'prioritize_token_position=true'
+    --data-urlencode 'typo_tokens_threshold=5'
+    --data-urlencode 'split_join_tokens=always'
+  )
   if [[ "$USE_CACHE" == 1 ]]; then
     args+=(--data-urlencode 'use_cache=true' --data-urlencode 'cache_ttl=60')
   fi

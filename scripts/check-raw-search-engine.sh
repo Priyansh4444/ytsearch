@@ -35,7 +35,7 @@ search() {
     args+=(--data-urlencode "sort_by=$sort_by")
   fi
   if [[ -n "$RAW_API_KEY" ]]; then
-    args+=(-H "X-TYPESENSE-API-KEY: $RAW_API_KEY")
+    args+=(-H "x-raw-search-key: $RAW_API_KEY")
   fi
   curl "${args[@]}"
 }
@@ -53,7 +53,7 @@ search_channel() {
     --output "$output"
   )
   if [[ -n "$RAW_API_KEY" ]]; then
-    args+=(-H "X-TYPESENSE-API-KEY: $RAW_API_KEY")
+    args+=(-H "x-raw-search-key: $RAW_API_KEY")
   fi
   curl "${args[@]}"
 }

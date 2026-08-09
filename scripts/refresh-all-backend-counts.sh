@@ -2,7 +2,7 @@
 set -eu
 
 LIST_FILE="${1:-scripts/indexed-channels.txt}"
-BACKENDS="${BACKENDS:-typesense-fly}"
+BACKENDS="${BACKENDS:-raw}"
 
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
@@ -20,14 +20,12 @@ has_backend() {
   esac
 }
 
-if has_backend typesense-fly; then
-  if [ -z "${TYPESENSE_SELFHOST_API_KEY:-}" ] || [ -z "${TYPESENSE_SELFHOST_API_URL:-}" ]; then
-    echo "Skipping typesense-fly: missing TYPESENSE_SELFHOST_API_KEY or TYPESENSE_SELFHOST_API_URL" >&2
+if has_backend raw; then
+  if [ -z "${RAW_SEARCH_ADMIN_API_KEY:-}" ] || [ -z "${RAW_SEARCH_API_URL:-}" ]; then
+    echo "Raw count refresh unavailable: missing RAW_SEARCH_ADMIN_API_KEY or RAW_SEARCH_API_URL" >&2
+    exit 1
   else
-    TYPESENSE_API_URL="$TYPESENSE_SELFHOST_API_URL" \
-    TYPESENSE_ADMIN_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
-    TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SELFHOST_API_KEY" \
     cargo run --release -p youtube_cli -- \
-      refresh-youtuber-counts-list "$LIST_FILE" --backend typesense
+      refresh-youtuber-counts-list "$LIST_FILE" --backend raw
   fi
 fi

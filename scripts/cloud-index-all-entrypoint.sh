@@ -2,10 +2,10 @@
 set -eu
 
 LIST_FILE="${LIST_FILE:-/tmp/indexed-channels.txt}"
-BACKENDS="${BACKENDS:-typesense-fly}"
+BACKENDS="${BACKENDS:-raw}"
 MODE="${MODE:-update}"
 JOBS="${JOBS:-2}"
-TYPESENSE_JOBS="${TYPESENSE_JOBS:-3}"
+RAW_JOBS="${RAW_JOBS:-3}"
 COLLECTION="${COLLECTION:-youtube_transcript_chunks}"
 VIDEO_TIMEOUT_SECONDS="${VIDEO_TIMEOUT_SECONDS:-300}"
 EXISTING_TAIL="${EXISTING_TAIL:-0}"
@@ -51,21 +51,14 @@ index_backend() {
     --transcript-cache-dir "$TRANSCRIPT_CACHE_DIR" \
     $REWIPE_ACK_ARG \
     "$@"
-
-  echo "cloud-indexer: refreshing counts for $label"
-  ytsearch refresh-youtuber-counts-list "$LIST_FILE" \
-    --backend "$backend" \
-    --collection "$COLLECTION"
 }
 
-if has_backend typesense-fly; then
-  if [ -z "${TYPESENSE_SELFHOST_API_URL:-}" ] || [ -z "${TYPESENSE_SELFHOST_API_KEY:-}" ]; then
-    echo "cloud-indexer: skipping typesense-fly; missing TYPESENSE_SELFHOST_API_URL or TYPESENSE_SELFHOST_API_KEY" >&2
+if has_backend raw; then
+  if [ -z "${RAW_SEARCH_API_URL:-}" ] || [ -z "${RAW_SEARCH_ADMIN_API_KEY:-}" ]; then
+    echo "cloud-indexer: Raw unavailable; missing RAW_SEARCH_API_URL or RAW_SEARCH_ADMIN_API_KEY" >&2
+    exit 1
   else
-    export TYPESENSE_API_URL="$TYPESENSE_SELFHOST_API_URL"
-    export TYPESENSE_ADMIN_API_KEY="$TYPESENSE_SELFHOST_API_KEY"
-    export TYPESENSE_SEARCH_API_KEY="$TYPESENSE_SELFHOST_API_KEY"
-    index_backend typesense-fly typesense "${TYPESENSE_JOBS:-$JOBS}"
+    index_backend raw raw "${RAW_JOBS:-$JOBS}"
   fi
 fi
 

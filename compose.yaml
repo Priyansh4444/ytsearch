@@ -1,12 +1,16 @@
 services:
-  typesense:
-    image: typesense/typesense:30.2
-    command: --data-dir=/data --api-key=${TYPESENSE_SELFHOST_API_KEY:?set TYPESENSE_SELFHOST_API_KEY}
+  raw-search:
+    build:
+      context: .
+      dockerfile: Dockerfile.raw-search
     restart: unless-stopped
     ports:
       - "8108:8108"
+    environment:
+      RAW_SEARCH_ADMIN_API_KEY: ${RAW_SEARCH_ADMIN_API_KEY:?set RAW_SEARCH_ADMIN_API_KEY}
+      RAW_SEARCH_API_KEY: ${RAW_SEARCH_API_KEY:?set RAW_SEARCH_API_KEY}
     volumes:
-      - typesense-data:/data
+      - raw-mutable-data:/data/mutable
     healthcheck:
       test:
         [
@@ -23,7 +27,7 @@ services:
     build: .
     restart: unless-stopped
     depends_on:
-      typesense:
+      raw-search:
         condition: service_healthy
       init-backend:
         condition: service_completed_successfully
@@ -31,13 +35,10 @@ services:
       - "8787:8787"
     environment: &backend-environment
       YTSEARCH_API_ADDR: 0.0.0.0:8787
-      YTSEARCH_SEARCH_BACKEND: typesense
-      TYPESENSE_API_URL: http://typesense:8108
-      TYPESENSE_SELFHOST_API_URL: http://typesense:8108
-      TYPESENSE_SEARCH_API_KEY: ${TYPESENSE_SELFHOST_API_KEY}
-      TYPESENSE_ADMIN_API_KEY: ${TYPESENSE_SELFHOST_API_KEY}
-      TYPESENSE_SELFHOST_API_KEY: ${TYPESENSE_SELFHOST_API_KEY}
-      TYPESENSE_COLLECTION: youtube_transcript_chunks
+      RAW_SEARCH_API_URL: http://raw-search:8108
+      RAW_SEARCH_API_KEY: ${RAW_SEARCH_API_KEY:?set RAW_SEARCH_API_KEY}
+      RAW_SEARCH_ADMIN_API_KEY: ${RAW_SEARCH_ADMIN_API_KEY:?set RAW_SEARCH_ADMIN_API_KEY}
+      RAW_SEARCH_COLLECTION: youtube_transcript_chunks
       YTSEARCH_INDEX_QUEUE_PATH: /queue/index-requests.jsonl
       YTSEARCH_INDEX_QUEUE_TOKEN: ${YTSEARCH_INDEX_QUEUE_TOKEN:?set YTSEARCH_INDEX_QUEUE_TOKEN}
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
@@ -58,17 +59,15 @@ services:
 
   init-backend:
     build: .
-    command: ["ytsearch", "init-backend", "--backend", "typesense"]
+    command: ["ytsearch", "init-backend", "--backend", "raw"]
     restart: "no"
     depends_on:
-      typesense:
+      raw-search:
         condition: service_healthy
     environment:
-      TYPESENSE_API_URL: http://typesense:8108
-      TYPESENSE_SELFHOST_API_URL: http://typesense:8108
-      TYPESENSE_ADMIN_API_KEY: ${TYPESENSE_SELFHOST_API_KEY}
-      TYPESENSE_SELFHOST_API_KEY: ${TYPESENSE_SELFHOST_API_KEY}
-      TYPESENSE_COLLECTION: youtube_transcript_chunks
+      RAW_SEARCH_API_URL: http://raw-search:8108
+      RAW_SEARCH_ADMIN_API_KEY: ${RAW_SEARCH_ADMIN_API_KEY:?set RAW_SEARCH_ADMIN_API_KEY}
+      RAW_SEARCH_COLLECTION: youtube_transcript_chunks
 
   worker:
     build: .
@@ -80,8 +79,8 @@ services:
     environment:
       <<: *backend-environment
       INDEX_QUEUE_API_BASE_URL: http://api:8787
-      BACKENDS: typesense-fly
-      QUEUE_TARGET_BACKEND: typesense-fly
+      BACKENDS: raw
+      QUEUE_TARGET_BACKEND: raw
       QUEUE_LOOP: "1"
       QUEUE_POLL_INTERVAL_SECONDS: "30"
       QUEUE_ONE_REQUEST_PER_PASS: "1"
@@ -91,7 +90,7 @@ services:
       DAILY_UPDATE_LIST_FILE: /app/indexed-channels.txt
       TRANSCRIPT_CACHE_DIR: /data/transcript-cache
       JOBS: "1"
-      TYPESENSE_JOBS: "1"
+      RAW_JOBS: "1"
       ACK_FAILED_REQUESTS: "0"
     volumes:
       - transcript-cache:/data
@@ -111,6 +110,6 @@ services:
       - "3000:80"
 
 volumes:
-  typesense-data:
+  raw-mutable-data:
   queue-data:
   transcript-cache:
