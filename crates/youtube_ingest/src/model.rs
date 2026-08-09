@@ -63,4 +63,8 @@ impl TranscriptChunk {
     pub fn video_id(&self) -> &str {
         &self.video_id
     }
+
+    pub fn youtuber_id(&self) -> &str {
+        &self.youtuber_id
+    }
 }

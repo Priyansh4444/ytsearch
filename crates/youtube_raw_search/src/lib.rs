@@ -3,9 +3,11 @@ mod format;
 mod fuzzy;
 mod mutable;
 mod positions;
+mod publisher;
 
 pub use engine::{BuildReport, RawSearchEngine, SliceReport, build_index, slice_corpus};
 pub use mutable::{MutationSnapshot, MutationStore, StoredChannelMutation, StoredVideoMutation};
+pub use publisher::{PublishedGeneration, Publisher, PublisherPaths};
 pub use youtube_search_service::SearchParams;
 
 use thiserror::Error;

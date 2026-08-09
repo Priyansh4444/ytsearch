@@ -380,6 +380,26 @@ impl SearchBackend for RawSearchEngine {
 }
 
 impl RawSearchEngine {
+    pub fn document_count(&self) -> u64 {
+        u64::from(self.inner.manifest.documents)
+    }
+
+    pub fn video_count(&self) -> usize {
+        self.inner.videos.len()
+    }
+
+    pub fn channel_count(&self) -> usize {
+        self.inner.channels.len()
+    }
+
+    pub fn term_count(&self) -> usize {
+        self.inner.lexicon.count
+    }
+
+    pub fn index_size(&self) -> u64 {
+        self.inner.index_bytes
+    }
+
     pub fn search(&self, params: &SearchParams) -> Result<Value> {
         validate_search_params(params)?;
         let parsed = parse_query(&params.q)?;
