@@ -89,6 +89,7 @@ changes without starting/stopping Machines; `enforce` is production mode.
 
 ```bash
 scripts/check-frontend-backends.sh
+scripts/check-production-search-contract.sh
 scripts/check-staging-machines.sh
 scripts/check-queue-indexers.sh
 scripts/check-raw-search-engine.sh
