@@ -690,6 +690,59 @@ fn multi_token_typo_and_last_token_prefix_preserve_strict_intersection() {
 }
 
 #[test]
+fn prefix_candidates_are_not_hidden_by_five_exact_results() {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    for index in 0..5 {
+        writeln!(
+            chunks,
+            "{}",
+            json!({
+                "id": format!("exact-{index}"),
+                "video_id": format!("exact-{index}"),
+                "title": "Linux exploit",
+                "text": "linux exploit",
+                "youtuber_handle": "@security",
+                "youtuber_name": "Security"
+            })
+        )
+        .expect("write exact chunk");
+    }
+    writeln!(
+        chunks,
+        "{}",
+        json!({
+            "id": "prefix-only",
+            "video_id": "prefix-only",
+            "title": "Linux exploitation",
+            "text": "linux exploitation",
+            "youtuber_handle": "@security",
+            "youtuber_name": "Security"
+        })
+    )
+    .expect("write prefix chunk");
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+    let engine = RawSearchEngine::open(&index_path).expect("open raw index");
+
+    for query in ["exploit", "linux exploit"] {
+        let response = engine.search(&grouped_query(query)).expect("search");
+        assert_eq!(response["found"], 6, "query={query}");
+        assert!(
+            response["grouped_hits"]
+                .as_array()
+                .expect("groups")
+                .iter()
+                .any(|group| group["group_key"][0] == "prefix-only"),
+            "query={query}"
+        );
+    }
+}
+
+#[test]
 fn token_drop_prefers_the_longest_right_to_left_conjunction() {
     let (_root, engine) = token_drop_engine();
     let response = engine

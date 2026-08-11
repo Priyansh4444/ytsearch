@@ -484,16 +484,12 @@ impl RawSearchEngine {
         }
 
         let exact_term_matches = self.exact_term_matches(&terms, fields)?;
-        let mut strict_matches = intersect_all_borrowed(&exact_term_matches);
-        retain_not_excluded(&mut strict_matches, &excluded_documents);
-        if self.reaches_result_threshold(params, &strict_matches, TYPO_RESULT_THRESHOLD)? {
-            self.apply_exact_proximity(&terms, fields, &mut strict_matches)?;
-            return self.format_conjunctive(params, terms, strict_matches);
-        }
 
-        // Typesense expands the last token as a prefix and tolerates typos before it
-        // starts dropping query tokens. Every expansion remains conjunctive: a
-        // document must match one alternative for every retained query token.
+        // Typesense includes the last-token prefix in the ordinary query even
+        // when the exact conjunction already clears the typo threshold. Typos
+        // remain threshold-gated inside this bounded candidate progression.
+        // Every expansion remains conjunctive: a document must match one
+        // alternative for every retained query token.
         if let Some((matches, highlights)) = self.best_conjunctive_candidate(
             params,
             &terms,
@@ -758,10 +754,10 @@ impl RawSearchEngine {
         let mut highlight_terms = Vec::with_capacity(1 + split_terms.len());
         highlight_terms.push(term.to_string());
         highlight_terms.extend(split_terms);
-        if self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)? {
-            return self.format_matches(params, &highlight_terms, matches, &mut cache);
-        }
 
+        // Prefix matching is part of Typesense's ordinary candidate set, not a
+        // typo fallback. Always merge it before applying the typo threshold so
+        // five exact hits do not hide `exploit` -> `exploiting` matches.
         let (prefix, prefix_terms) = self.fuzzy_alternatives(term, fields, 0, None, true)?;
         matches = union_sorted(matches, prefix);
         retain_not_excluded(&mut matches, excluded_documents);
