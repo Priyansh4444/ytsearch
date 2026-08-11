@@ -39,6 +39,12 @@ ownership separately before deleting them.
    `fly apps list`, `fly machines list`, and `fly volumes list` to prove no
    active Typesense resource remains.
 
+The final destructive step is encoded in
+`scripts/destroy-deprecated-typesense-fly.sh`. It resolves every exact Machine,
+volume attachment, stopped state, deprecation marker, successor, and complete
+app Machine set before deleting the first resource. It intentionally excludes
+the three unattached historical volumes listed above.
+
 Never delete the legacy queue before its request IDs have been copied and
 acknowledged by the Raw queue. A successful search-read cutover alone is not a
 write-path migration.
