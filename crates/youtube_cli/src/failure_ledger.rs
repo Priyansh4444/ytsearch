@@ -102,20 +102,23 @@ impl FailureLedger {
         match read_record(&path) {
             Ok(Some(record)) => {
                 let category = effective_category(&record);
-                let retry_at = if category == record.category {
-                    record.next_retry_at_unix
-                } else {
-                    category.retryable().then(|| {
-                        record.last_failed_at_unix.saturating_add(
-                            jittered_retry_delay(
-                                video_id,
-                                category,
-                                record.attempts,
-                                self.default_retry_after,
-                            )
-                            .as_secs(),
+                let policy_retry_at = category.retryable().then(|| {
+                    record.last_failed_at_unix.saturating_add(
+                        jittered_retry_delay(
+                            video_id,
+                            category,
+                            record.attempts,
+                            self.default_retry_after,
                         )
-                    })
+                        .as_secs(),
+                    )
+                });
+                // A record may have been written by an older retry policy. Keep
+                // its attempt history, but never let a stale persisted deadline
+                // defer work beyond the current category-specific policy.
+                let retry_at = match (record.next_retry_at_unix, policy_retry_at) {
+                    (Some(stored), Some(current)) => Some(stored.min(current)),
+                    (stored, current) => stored.or(current),
                 };
                 FailureDecision {
                     deferred: !category.retryable()
@@ -499,6 +502,38 @@ mod tests {
         assert_eq!(
             ledger.decision("rate-limited-video").category,
             Some(FailureCategory::RateLimited)
+        );
+        let _ = fs::remove_dir_all(&ledger.directory);
+    }
+
+    #[test]
+    fn persisted_retry_deadline_is_capped_by_the_current_policy() {
+        let ledger = test_ledger("policy-cap");
+        let path = failure_path(&ledger.directory, "old-rate-limit-video");
+        let now = unix_seconds(SystemTime::now());
+        let last_failed_at = now.saturating_sub(7_200);
+        write_record_atomic(
+            &path,
+            &FailureRecord {
+                version: RECORD_VERSION,
+                video_id: "old-rate-limit-video".to_string(),
+                category: FailureCategory::RateLimited,
+                retryable: true,
+                attempts: 1,
+                first_failed_at_unix: last_failed_at,
+                last_failed_at_unix: last_failed_at,
+                next_retry_at_unix: Some(now.saturating_add(14_400)),
+                reason: "upstream returned 429".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            ledger.decision("old-rate-limit-video"),
+            FailureDecision {
+                deferred: false,
+                category: Some(FailureCategory::RateLimited),
+            }
         );
         let _ = fs::remove_dir_all(&ledger.directory);
     }
