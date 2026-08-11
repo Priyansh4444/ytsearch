@@ -14,7 +14,10 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     process::Stdio,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use tokio::{
     process::Command,
@@ -45,6 +48,7 @@ const ERROR_BODY_PREVIEW_BYTES: usize = 240;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const YT_DLP_TIMEOUT: Duration = Duration::from_secs(60);
 const VIDEO_JSON_HANDOFF_LIMIT: usize = 64;
+static CAPTION_FALLBACK_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
 pub struct YtDlpTranscriptSource {
@@ -134,22 +138,7 @@ impl YtDlpTranscriptSource {
             .arg("--skip-download")
             .arg("--dump-json")
             .arg("--no-warnings");
-
-        if let Ok(cookies_file) = env::var(YT_DLP_COOKIES_FILE_ENV)
-            && !cookies_file.trim().is_empty()
-        {
-            command.arg("--cookies").arg(cookies_file);
-        }
-        if let Ok(extractor_args) = env::var(YT_DLP_EXTRACTOR_ARGS_ENV)
-            && !extractor_args.trim().is_empty()
-        {
-            command.arg("--extractor-args").arg(extractor_args);
-        }
-        if let Ok(user_agent) = env::var(YT_DLP_USER_AGENT_ENV)
-            && !user_agent.trim().is_empty()
-        {
-            command.arg("--user-agent").arg(user_agent);
-        }
+        configure_ytdlp_environment(&mut command);
 
         let output = timeout(
             YT_DLP_TIMEOUT,
@@ -306,6 +295,22 @@ impl YtDlpTranscriptSource {
             match self.fetch_caption_once(video_id, track).await {
                 Ok(body) => return Ok(body),
                 Err(error) => {
+                    if attempt == 1 && is_retryable_caption_error(&error) {
+                        tracing::warn!(
+                            video_id,
+                            language = %track.language,
+                            extension = %track.extension,
+                            "direct caption request failed; trying bounded yt-dlp fallback"
+                        );
+                        match self.fetch_caption_with_ytdlp(video_id, track).await {
+                            Ok(body) => return Ok(body),
+                            Err(fallback_error) => tracing::warn!(
+                                video_id,
+                                error = %fallback_error,
+                                "yt-dlp caption fallback failed; retaining bounded direct retries"
+                            ),
+                        }
+                    }
                     let delay = caption_retry_delay(attempt, &error);
                     let retryable = is_retryable_caption_error(&error);
                     last_error = Some(error);
@@ -326,6 +331,79 @@ impl YtDlpTranscriptSource {
         }
 
         Err(last_error.unwrap_or_else(|| transcript_error(video_id, "caption request failed")))
+    }
+
+    async fn fetch_caption_with_ytdlp(
+        &self,
+        video_id: &str,
+        track: &CaptionTrack,
+    ) -> youtube_ingest::Result<String> {
+        let sequence = CAPTION_FALLBACK_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let directory = env::temp_dir().join(format!(
+            "ytsearch-caption-fallback-{}-{}-{sequence}",
+            std::process::id(),
+            sanitize_cache_key(video_id)
+        ));
+        fs::create_dir_all(&directory).map_err(|error| {
+            transcript_error(
+                video_id,
+                format!("caption fallback directory create failed: {error}"),
+            )
+        })?;
+
+        let mut command = Command::new(&self.binary);
+        command
+            .kill_on_drop(true)
+            .arg("--no-playlist")
+            .arg("--skip-download")
+            .arg("--write-subs")
+            .arg("--write-auto-subs")
+            .arg("--sub-langs")
+            .arg(&track.language)
+            .arg("--sub-format")
+            .arg(&track.extension)
+            .arg("--paths")
+            .arg(&directory)
+            .arg("--output")
+            .arg("%(id)s.%(ext)s")
+            .arg("--no-warnings");
+        configure_ytdlp_environment(&mut command);
+
+        let output = timeout(
+            YT_DLP_TIMEOUT,
+            command
+                .arg(video_url(video_id))
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .output(),
+        )
+        .await
+        .map_err(|_| transcript_error(video_id, "yt-dlp caption fallback timed out"))?
+        .map_err(|error| {
+            transcript_error(
+                video_id,
+                format!("failed to run yt-dlp caption fallback: {error}"),
+            )
+        });
+
+        let result = match output {
+            Ok(output) if output.status.success() => {
+                read_caption_fallback(video_id, &directory, &track.extension)
+            }
+            Ok(output) => Err(transcript_error(
+                video_id,
+                format!(
+                    "yt-dlp caption fallback exited with {}: {}",
+                    output.status,
+                    preview_error_body(&String::from_utf8_lossy(&output.stderr))
+                ),
+            )),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = fs::remove_dir_all(&directory) {
+            tracing::warn!(video_id, %error, "failed to remove caption fallback directory");
+        }
+        result
     }
 
     async fn fetch_caption_once(
@@ -636,6 +714,7 @@ fn sanitize_cache_key(key: &str) -> String {
 struct CaptionTrack {
     url: String,
     extension: String,
+    language: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -671,7 +750,7 @@ fn select_caption_track_from_section(section: &Value) -> Option<CaptionTrack> {
         for extension in CAPTION_EXTENSIONS {
             if let Some(track) = tracks
                 .iter()
-                .find_map(|track| caption_track(track, extension))
+                .find_map(|track| caption_track(track, extension, language))
             {
                 return Some(track);
             }
@@ -681,7 +760,7 @@ fn select_caption_track_from_section(section: &Value) -> Option<CaptionTrack> {
     None
 }
 
-fn caption_track(track: &Value, expected_extension: &str) -> Option<CaptionTrack> {
+fn caption_track(track: &Value, expected_extension: &str, language: &str) -> Option<CaptionTrack> {
     let extension = track.get("ext")?.as_str()?;
     if extension != expected_extension {
         return None;
@@ -690,6 +769,56 @@ fn caption_track(track: &Value, expected_extension: &str) -> Option<CaptionTrack
     Some(CaptionTrack {
         url: track.get("url")?.as_str()?.to_string(),
         extension: extension.to_string(),
+        language: language.to_string(),
+    })
+}
+
+fn configure_ytdlp_environment(command: &mut Command) {
+    if let Ok(cookies_file) = env::var(YT_DLP_COOKIES_FILE_ENV)
+        && !cookies_file.trim().is_empty()
+    {
+        command.arg("--cookies").arg(cookies_file);
+    }
+    if let Ok(extractor_args) = env::var(YT_DLP_EXTRACTOR_ARGS_ENV)
+        && !extractor_args.trim().is_empty()
+    {
+        command.arg("--extractor-args").arg(extractor_args);
+    }
+    if let Ok(user_agent) = env::var(YT_DLP_USER_AGENT_ENV)
+        && !user_agent.trim().is_empty()
+    {
+        command.arg("--user-agent").arg(user_agent);
+    }
+}
+
+fn read_caption_fallback(
+    video_id: &str,
+    directory: &Path,
+    extension: &str,
+) -> youtube_ingest::Result<String> {
+    let suffix = format!(".{extension}");
+    let path = fs::read_dir(directory)
+        .map_err(|error| {
+            transcript_error(
+                video_id,
+                format!("caption fallback listing failed: {error}"),
+            )
+        })?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(video_id) && name.ends_with(&suffix))
+        })
+        .ok_or_else(|| {
+            transcript_error(
+                video_id,
+                format!("yt-dlp caption fallback produced no {extension} file"),
+            )
+        })?;
+    fs::read_to_string(path).map_err(|error| {
+        transcript_error(video_id, format!("caption fallback read failed: {error}"))
     })
 }
 
@@ -943,7 +1072,60 @@ mod tests {
         let track = select_caption_track(&video).unwrap();
 
         assert_eq!(track.extension, "json3");
+        assert_eq!(track.language, "en");
         assert_eq!(track.url, "https://example.com/manual.json3");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bounded_ytdlp_fallback_reads_the_requested_caption_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = env::temp_dir().join(format!(
+            "ytsearch-ytdlp-fallback-fixture-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&fixture);
+        fs::create_dir_all(&fixture).unwrap();
+        let binary = fixture.join("fake-yt-dlp");
+        fs::write(
+            &binary,
+            r#"#!/bin/sh
+set -eu
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --paths) output_dir="$2"; shift 2 ;;
+    --sub-langs) language="$2"; shift 2 ;;
+    --sub-format) extension="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '%s' '{"events":[{"tStartMs":1000,"dDurationMs":2000,"segs":[{"utf8":"fallback works"}]}]}' \
+  >"$output_dir/video-id.$language.$extension"
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&binary, permissions).unwrap();
+
+        let source = YtDlpTranscriptSource::with_binary(binary.to_string_lossy().into_owned());
+        let body = source
+            .fetch_caption_with_ytdlp(
+                "video-id",
+                &CaptionTrack {
+                    url: "https://example.com/throttled".to_string(),
+                    extension: "json3".to_string(),
+                    language: "en".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        let transcript = parse_json3_transcript("video-id", &body).unwrap();
+
+        assert_eq!(transcript.len(), 1);
+        assert_eq!(transcript[0].text, "fallback works");
+        fs::remove_dir_all(fixture).unwrap();
     }
 
     #[test]
