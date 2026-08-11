@@ -110,12 +110,23 @@ channels, and 293,152 terms. The completed mutable directory was 1,445,988,194
 bytes, `work/` stayed empty, process HWM was 2,575,380 KiB, and RSS returned to
 about 145 MiB after `malloc_trim`.
 
-This removes roughly 6.6 GiB of scratch data and one complete write/read pass.
-It does not yet solve builder heap: term/posting accumulation still owns the
-roughly 2.46 GiB HWM. The image was prebuilt as
-`registry.fly.io/ytsearch-raw-production:raw-streaming-204f754`; deploy it only
-after the active indexing batch completes, then measure the final generation on
-the 4 GiB Machine before retirement.
+Commit `2ddbb5b` then replaces the retained global posting map with
+lexicographically ordered external posting runs. Runs over 32 MiB are refined by
+the next term byte, and the builder groups only one final run at a time. Fixed
+document metadata is also streamed instead of retaining all 8.14 million
+records. The final full-corpus release build peaked at 457,928 KiB (447.2 MiB),
+completed in roughly 80 seconds, and used about 4.26 GB at peak before returning
+to a 1,445,988,194-byte completed directory.
+
+Every search-artifact BLAKE3 checksum matched the prior generation. Parsed and
+ID-sorted channel/video metadata also matched exactly; their raw JSON checksums
+differ only because the publisher canonicalizes array order. Smoke queries kept
+`linux exploit` at 189 videos with `gIJOtP1AC3A` first and returned 317 videos
+for `blackhole`. All 160 workspace tests pass (5 real-network/manual benchmarks
+remain intentionally ignored), and Clippy is clean. The deployable image is
+`registry.fly.io/ytsearch-raw-production:raw-bounded-2ddbb5b`; deploy it after
+the active indexing batch completes, then repeat the memory/artifact gate on the
+4 GiB Machine before retirement.
 
 ## Fly retirement inventory
 

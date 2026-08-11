@@ -63,15 +63,15 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Publish immutable delta segments and tombstones without rewriting the base.
 - [ ] Make acknowledged writes visible on both readers within 60 seconds at p95.
 - [x] Add checksummed atomic generations, crash recovery, and one-generation rollback.
-- [ ] Replace full-generation publication with streaming bounded-memory compaction.
+- [x] Replace full-generation publication with streaming bounded-memory compaction.
   - [x] Coalesce explicit publication requests to a captured operation sequence;
     mutations arriving during a build remain durable for the next requested
     generation instead of triggering an unbounded rebuild loop.
   - [x] Remove abandoned `work/*` and `*.candidate` artifacts before recovery.
   - [x] Eliminate the 6.6 GiB uncompressed merged-JSON scratch file by streaming
     the filtered base plus replacements directly into the builder.
-  - [ ] Replace the retained in-memory postings builder with bounded external
-    runs or immutable delta segments.
+  - [x] Replace the retained in-memory postings builder with lexicographically
+    ordered, recursively bounded external runs and stream document metadata.
 - [ ] Upload checksummed versioned artifacts to private R2 once R2 is enabled.
 - [x] Bootstrap Raw from the final matched snapshot and remove dual-writing from
   the repository. The deployed legacy queue remains a cutover task below.
@@ -118,10 +118,9 @@ Raw can replace Typesense as the canonical search index.
   matched 1,956-video comparison (71% lower p95 and 73% lower CPU).
 - [x] Raw steady-state RSS is at most 60% of Typesense. The full Raw snapshot
   warmed to 347 MiB versus about 3.9 GiB for the restored Typesense clone.
-- [ ] Full-snapshot compaction peak RSS stays below 512 MiB. Live generation 461
-  reached 2,796,580 KiB process HWM and about 3.90 GiB total cgroup usage
-  including reclaimable page cache; replace retained builder state and the
-  uncompressed merged corpus with streaming runs.
+- [x] Full-snapshot compaction peak RSS stays below 512 MiB. The release-build
+  bounded compactor peaked at 457,928 KiB (447.2 MiB), down from 2,575,380 KiB
+  (2.46 GiB), while reproducing every search-artifact checksum.
 - [x] Complete-position artifact growth is measured and documented.
 - [x] Benchmarks name corpus, hardware, build mode, concurrency, and cache state.
 - [x] Every optimization has a correctness invariant and rollback condition.
