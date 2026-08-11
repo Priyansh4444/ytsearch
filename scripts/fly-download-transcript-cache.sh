@@ -20,10 +20,14 @@ mkdir -p "$LOCAL_CACHE_DIR"
 
 machine_name="ytsearch-cache-export-$(date +%Y%m%d%H%M%S)"
 archive_remote="/tmp/transcript-cache.tar.gz"
+archive_remote_tmp="${archive_remote}.tmp"
+archive_ready="${archive_remote}.ready"
 archive_local="/tmp/ytsearch-transcript-cache.$$.tar.gz"
+extract_local="/tmp/ytsearch-transcript-cache-extract.$$"
 
 cleanup() {
   rm -f "$archive_local"
+  rm -rf "$extract_local"
   if [ -n "${machine_id:-}" ]; then
     flyctl machine destroy "$machine_id" --app "$APP_NAME" --force >/dev/null 2>&1 || true
   fi
@@ -41,7 +45,7 @@ flyctl machine run debian:bookworm-slim \
   --vm-cpu-kind shared \
   --vm-cpus 1 \
   --vm-memory 512 \
-  -- /bin/sh -c "mkdir -p /data/transcript-cache && tar -C /data/transcript-cache -czf $archive_remote . && sleep 300"
+  -- /bin/sh -c "set -e; mkdir -p /data/transcript-cache; rm -f $archive_remote_tmp $archive_ready; tar -C /data/transcript-cache -czf $archive_remote_tmp .; mv $archive_remote_tmp $archive_remote; : >$archive_ready; sleep 300"
 
 machine_id="$(flyctl machine list --app "$APP_NAME" --json | jq -r ".[] | select(.name == \"$machine_name\") | .id" | head -n 1)"
 if [ -z "$machine_id" ]; then
@@ -49,6 +53,12 @@ if [ -z "$machine_id" ]; then
   exit 1
 fi
 
+flyctl ssh console --app "$APP_NAME" --machine "$machine_id" --command \
+  "sh -lc 'attempt=0; while [ ! -f $archive_ready ]; do attempt=\$((attempt + 1)); [ \"\$attempt\" -lt 180 ] || exit 1; sleep 1; done'"
+
 flyctl ssh sftp get "$archive_remote" "$archive_local" --app "$APP_NAME" --machine "$machine_id"
-tar -C "$LOCAL_CACHE_DIR" -xzf "$archive_local"
+gzip -t "$archive_local"
+mkdir -p "$extract_local"
+tar -C "$extract_local" -xzf "$archive_local"
+cp -Rn "$extract_local/." "$LOCAL_CACHE_DIR/"
 find "$LOCAL_CACHE_DIR" -type f | wc -l
