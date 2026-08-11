@@ -1,5 +1,8 @@
 # Raw production cutover
 
+Current allocation costs, load gates, and the SQLite control-plane decision are
+recorded in [Raw production cost and persistence decision](raw-production-cost.md).
+
 ## Current topology
 
 Search reads from <https://search.pronsh.dev> route through the Cloudflare
@@ -10,13 +13,13 @@ there is no Typesense dependency in the live read or write path.
 
 | Component | Identifier | Allocation or version |
 | --- | --- | --- |
-| Raw engine | `ytsearch-raw-production` / `d89303da029328` | 4 GiB, 2 performance vCPUs |
+| Raw engine | `ytsearch-raw-production` / `d89303da029328` | 2 GiB, 2 shared vCPUs; 512 MiB swap recovery margin |
 | Raw API | `ytsearch-api-raw-production` / `8e7204a7694d28` | 512 MiB, 1 shared vCPU |
 | Raw indexer | `ytsearch-indexer-raw-production` / `8e426df7e305e8` | 4 GiB, 4 shared vCPUs; stops after five idle minutes |
-| Production Worker | `ytsearch-search` | `435a1c4d-0a9d-4ef7-b16c-d92574fb60ad` |
+| Production Worker | `ytsearch-search` | `5e4f60d7-8036-4ecb-9329-233a09925354` |
 | Pre-cutover Worker rollback | `ytsearch-search` | `1b873022-c9df-48c0-a4df-dda0337344a4` |
-| Deprecated Typesense engine | `ytsearch-typesense-staging` / `8147deb94937e8` | Retained only for the unobserved final browser gate |
-| Deprecated Typesense API | `ytsearch-api-typesense-fly-staging` / `1855eddf654298` | Retained only for the unobserved final browser gate |
+| Deprecated Typesense engine | `ytsearch-typesense-staging` / `8147deb94937e8` | Stopped; pending exact-resource destruction after the active full repair gate |
+| Deprecated Typesense API | `ytsearch-api-typesense-fly-staging` / `1855eddf654298` | Stopped; pending exact-resource destruction after the active full repair gate |
 
 The production Raw engine runs the bounded publisher image
 `registry.fly.io/ytsearch-raw-production:raw-bounded-2ddbb5b` at digest
