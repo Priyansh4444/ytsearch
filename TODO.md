@@ -79,8 +79,11 @@ Raw can replace Typesense as the canonical search index.
 ### P1: indexing reliability and throughput
 
 - [ ] Add bounded fetch concurrency with per-host and per-channel limits.
-- [ ] Classify retryable, terminal, private, deleted, and unavailable-video failures.
-- [ ] Persist jittered backoff and resume incomplete channels after restarts.
+- [x] Classify retryable, terminal, private, deleted, and unavailable-video
+  failures in an atomic, versioned per-video ledger. Legacy cooldown markers
+  remain readable and are upgraded on the next failure.
+- [x] Persist bounded exponential backoff with stable per-video jitter and
+  resume incomplete channels after restarts through the durable gap cursor.
 - [ ] Batch by bytes and document count; avoid retaining transcripts twice.
 - [ ] Emit progress, retry, failure-reason, throughput, and freshness metrics.
 - [ ] Add `scripts/index-all-raw.sh` only after restart and recovery tests pass.
@@ -153,6 +156,16 @@ Raw can replace Typesense as the canonical search index.
 
 ## Regression Log
 
+- [x] The Pacific-hours lifecycle policy stopped an active repair at midnight
+  and intentionally made production search unavailable for half the day.
+  Production now uses an explicit `always_on` mode; the five-minute reconciler
+  restarts a stopped Raw reader, while the repair indexer retains its separate
+  five-minute idle shutdown.
+- [x] Transcript failure markers conflated rate limits, bot challenges,
+  premieres, captionless/private/deleted videos, timeouts, chunking errors, and
+  Raw import failures. Replaced them with crash-safe classified records,
+  category-specific retry policy, stable jitter, terminal deferral, and
+  per-run category summaries.
 - [x] Prefix candidates were skipped whenever five exact candidates existed,
   hiding valid videos for multi-token queries such as `linux exploit`. Prefix
   expansion now participates before the typo threshold; the full corpus returns

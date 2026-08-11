@@ -168,8 +168,18 @@ and does not block later work.
 
 Caption requests are process-wide paced. Timeouts, connection failures, 429,
 and 5xx responses use bounded exponential retry. Exhausted video IDs create
-small markers under `/data/transcript-cache/.failures` and are deferred for six
-hours by default (`TRANSCRIPT_FAILURE_RETRY_SECONDS=21600`).
+small, versioned JSON records under `/data/transcript-cache/.failures`. Writes
+are file-synced and atomically renamed so a Machine stop cannot leave a partial
+record. Old text markers remain readable and are upgraded when that video fails
+again.
+
+The ledger distinguishes bot challenges, throttling, future premieres,
+captionless/private/deleted videos, timeouts, metadata failures, chunking, and
+Raw imports. Retryable categories use bounded exponential backoff with stable
+per-video jitter; deterministic terminal failures stay deferred until an
+operator clears the record or indexing capabilities change. The configured
+default base remains six hours (`TRANSCRIPT_FAILURE_RETRY_SECONDS=21600`), while
+Raw import failures retry sooner.
 
 Useful controls:
 
@@ -179,9 +189,8 @@ Useful controls:
 - `VIDEO_TIMEOUT_SECONDS` (queue default: 600);
 - `IDLE_GAP_FILL_MAX_NEW_VIDEOS` (default: 10).
 
-Classify terminal missing/private/no-caption failures separately from retryable
-network/throttling failures. Do not make unavailable newest videos starve older
-repairable gaps.
+The end-of-run summary reports both newly observed and deferred failure
+categories. Unavailable newest videos do not starve older repairable gaps.
 
 ## Removal
 

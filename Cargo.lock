@@ -2356,6 +2356,7 @@ dependencies = [
  "blake3",
  "clap",
  "dotenvy",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",

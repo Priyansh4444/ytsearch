@@ -1,10 +1,9 @@
 use clap::{Parser, ValueEnum};
 use serde_json::Value;
 use std::{
-    collections::HashSet,
-    fs,
+    collections::{BTreeMap, HashSet},
     num::NonZeroU16,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant, SystemTime},
 };
@@ -24,8 +23,10 @@ use youtube_transcribe::{TranscriptionConfig, VoxtypeTranscriptSource};
 use youtube_ytdlp::{YtDlpTranscriptSource, YtDlpVideo};
 
 mod args;
+mod failure_ledger;
 
 use args::*;
+use failure_ledger::{FailureCategory, FailureLedger, FailureStage};
 
 #[derive(Debug, Error)]
 enum CliError {
@@ -85,6 +86,8 @@ struct IndexStats {
     indexed_videos: u32,
     skipped_videos: u32,
     deferred_transcript_failures: u32,
+    deferred_failure_categories: BTreeMap<String, u32>,
+    failure_categories: BTreeMap<String, u32>,
     kind_filtered_videos: u32,
     existing_videos: u32,
     existing_chunks: u32,
@@ -563,13 +566,11 @@ async fn index_youtuber(
             }
         })
         .collect::<Vec<_>>();
-    let transcript_failure_dir = command.transcript.transcript_cache_dir.join(".failures");
-    defer_recent_transcript_failures(
-        &mut videos_to_index,
-        &transcript_failure_dir,
+    let failure_ledger = FailureLedger::new(
+        command.transcript.transcript_cache_dir.join(".failures"),
         Duration::from_secs(command.transcript_failure_retry_seconds),
-        &mut stats,
     );
+    defer_recent_transcript_failures(&mut videos_to_index, &failure_ledger, &mut stats);
     if let Some(limit) = command.max_new_videos {
         videos_to_index.truncate(limit);
         println!(
@@ -614,8 +615,8 @@ async fn index_youtuber(
             let content_kind = command.content_kind;
             let timeout_video_id = video.video_id.clone();
             let timeout_title = video.title.clone();
-            let transcript_failure_dir = transcript_failure_dir.clone();
-            let timeout_failure_dir = transcript_failure_dir.clone();
+            let failure_ledger = failure_ledger.clone();
+            let timeout_failure_ledger = failure_ledger.clone();
             tasks.spawn(async move {
                 tokio::time::timeout(
                     Duration::from_secs(timeout_seconds),
@@ -631,16 +632,21 @@ async fn index_youtuber(
                         transcript_search,
                         content_kind,
                         use_worker_existing_checks,
-                        transcript_failure_dir,
+                        failure_ledger,
                     ),
                 )
                 .await
                 .unwrap_or_else(|_| {
-                    remember_transcript_failure(&timeout_failure_dir, &timeout_video_id);
+                    let category = timeout_failure_ledger.record(
+                        &timeout_video_id,
+                        FailureStage::Timeout,
+                        "video indexing exceeded its timeout",
+                    );
                     Ok(IndexVideoOutcome::Skipped {
                         video_id: timeout_video_id,
                         title: timeout_title,
                         reason: "timeout".to_string(),
+                        category,
                     })
                 })
             });
@@ -932,69 +938,27 @@ fn should_use_worker_existing_checks(
 
 fn defer_recent_transcript_failures(
     videos: &mut Vec<DiscoveredVideo>,
-    failure_dir: &Path,
-    retry_after: Duration,
+    failure_ledger: &FailureLedger,
     stats: &mut IndexStats,
 ) {
-    if retry_after.is_zero() {
-        return;
-    }
-
-    let now = SystemTime::now();
     videos.retain(|video| {
-        let path = transcript_failure_path(failure_dir, &video.video_id);
-        let recent = fs::metadata(path)
-            .and_then(|metadata| metadata.modified())
-            .ok()
-            .and_then(|modified| now.duration_since(modified).ok())
-            .is_some_and(|age| age < retry_after);
-        if recent {
+        let decision = failure_ledger.decision(&video.video_id);
+        if decision.deferred {
             stats.deferred_transcript_failures =
                 stats.deferred_transcript_failures.saturating_add(1);
+            if let Some(category) = decision.category {
+                increment_category(&mut stats.deferred_failure_categories, category);
+            }
         }
-        !recent
+        !decision.deferred
     });
 
     if stats.deferred_transcript_failures > 0 {
         println!(
-            "Deferred {} recently failed transcript(s); they remain eligible after {} seconds",
+            "Deferred {} classified video failure(s): {}",
             stats.deferred_transcript_failures,
-            retry_after.as_secs()
+            category_summary(&stats.deferred_failure_categories)
         );
-    }
-}
-
-fn transcript_failure_path(failure_dir: &Path, video_id: &str) -> PathBuf {
-    let key = video_id
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    failure_dir.join(format!("{key}.failed"))
-}
-
-fn remember_transcript_failure(failure_dir: &Path, video_id: &str) {
-    if let Err(error) = fs::create_dir_all(failure_dir).and_then(|_| {
-        fs::write(
-            transcript_failure_path(failure_dir, video_id),
-            b"transcript fetch failed; retry after cooldown\n",
-        )
-    }) {
-        tracing::warn!(video_id, %error, "failed to persist transcript retry marker");
-    }
-}
-
-fn clear_transcript_failure(failure_dir: &Path, video_id: &str) {
-    let path = transcript_failure_path(failure_dir, video_id);
-    if let Err(error) = fs::remove_file(path)
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!(video_id, %error, "failed to clear transcript retry marker");
     }
 }
 
@@ -1091,6 +1055,7 @@ enum IndexVideoOutcome {
         video_id: String,
         title: String,
         reason: String,
+        category: FailureCategory,
     },
 }
 
@@ -1107,7 +1072,7 @@ async fn index_discovered_video(
     search: RawIndexAdminClient,
     content_kind_filter: ContentKindFilter,
     skip_existing: bool,
-    transcript_failure_dir: PathBuf,
+    failure_ledger: FailureLedger,
 ) -> Result<IndexVideoOutcome, CliError> {
     let indexing_started = Instant::now();
     tracing::info!(
@@ -1145,7 +1110,8 @@ async fn index_discovered_video(
     let mut metadata = match metadata_source.metadata_for_video(&video.video_id).await {
         Ok(metadata) => metadata,
         Err(error) => {
-            remember_transcript_failure(&transcript_failure_dir, &video.video_id);
+            let category =
+                failure_ledger.record(&video.video_id, FailureStage::Metadata, &error.to_string());
             tracing::warn!(
                 video_id = %video.video_id,
                 %error,
@@ -1157,6 +1123,7 @@ async fn index_discovered_video(
                 video_id: video.video_id,
                 title: video.title,
                 reason: format!("metadata: {error}"),
+                category,
             });
         }
     };
@@ -1166,7 +1133,7 @@ async fn index_discovered_video(
     let content_kind = content_kind_for_duration(metadata.duration_ms);
     if !content_kind_filter.includes(content_kind) {
         caption_source.discard_video_json(&video.video_id).await;
-        clear_transcript_failure(&transcript_failure_dir, &video.video_id);
+        failure_ledger.clear(&video.video_id);
         tracing::info!(
             video_id = %video.video_id,
             ?content_kind,
@@ -1199,11 +1166,16 @@ async fn index_discovered_video(
                 total_ms = indexing_started.elapsed().as_millis() as u64,
                 "skipped transcript"
             );
-            remember_transcript_failure(&transcript_failure_dir, &video.video_id);
+            let category = failure_ledger.record(
+                &video.video_id,
+                FailureStage::Transcript,
+                &error.to_string(),
+            );
             return Ok(IndexVideoOutcome::Skipped {
                 video_id: video.video_id,
                 title: video.title,
                 reason: format!("transcript: {error}"),
+                category,
             });
         }
     };
@@ -1213,6 +1185,8 @@ async fn index_discovered_video(
     let chunks = match chunker.chunks(&metadata, &transcript) {
         Ok(chunks) => chunks,
         Err(error) => {
+            let category =
+                failure_ledger.record(&video.video_id, FailureStage::Chunking, &error.to_string());
             tracing::warn!(
                 video_id = %video.video_id,
                 %error,
@@ -1224,6 +1198,7 @@ async fn index_discovered_video(
                 video_id: video.video_id,
                 title: video.title,
                 reason: format!("chunking: {error}"),
+                category,
             });
         }
     };
@@ -1232,7 +1207,8 @@ async fn index_discovered_video(
     let chunk_count = chunks.len();
     let import_started = Instant::now();
     if let Err(error) = replace_video_document(&search, &video.video_id, &chunks).await {
-        remember_transcript_failure(&transcript_failure_dir, &video.video_id);
+        let category =
+            failure_ledger.record(&video.video_id, FailureStage::Import, &error.to_string());
         tracing::warn!(
             video_id = %video.video_id,
             %error,
@@ -1244,10 +1220,11 @@ async fn index_discovered_video(
             video_id: video.video_id,
             title: video.title,
             reason: format!("import: {error}"),
+            category,
         });
     }
     let import_ms = import_started.elapsed().as_millis() as u64;
-    clear_transcript_failure(&transcript_failure_dir, &video.video_id);
+    failure_ledger.clear(&video.video_id);
     tracing::info!(
         video_id = %video.video_id,
         chunk_count,
@@ -1314,8 +1291,10 @@ fn apply_index_outcome(
             video_id,
             title,
             reason,
+            category,
         } => {
             stats.skipped_videos = stats.skipped_videos.saturating_add(1);
+            increment_category(&mut stats.failure_categories, category);
             println!("Done {completed}/{total}: {video_id} {title} — skipped {reason}");
         }
     }
@@ -1897,6 +1876,21 @@ fn print_index_summary(stats: &IndexStats) {
         stats.indexed_chunks,
         stats.existing_chunks
     );
+    if !stats.failure_categories.is_empty() {
+        println!(
+            "Index failure categories: {}",
+            category_summary(&stats.failure_categories)
+        );
+    }
+}
+
+fn increment_category(categories: &mut BTreeMap<String, u32>, category: FailureCategory) {
+    let count = categories.entry(category.as_str().to_string()).or_default();
+    *count = count.saturating_add(1);
+}
+
+fn category_summary(categories: &BTreeMap<String, u32>) -> String {
+    serde_json::to_string(categories).unwrap_or_else(|_| "{}".to_string())
 }
 
 fn normalize_handle(raw_handle: &str) -> Result<String, CliError> {
@@ -2070,17 +2064,17 @@ mod tests {
             "ytsearch-transcript-failure-test-{}",
             std::process::id()
         ));
-        let _ = fs::remove_dir_all(&failure_dir);
-        remember_transcript_failure(&failure_dir, "failed-video");
+        let _ = std::fs::remove_dir_all(&failure_dir);
+        let ledger = FailureLedger::new(failure_dir.clone(), Duration::from_secs(3_600));
+        ledger.record(
+            "failed-video",
+            FailureStage::Transcript,
+            "temporary request failed",
+        );
         let mut videos = vec![video("failed-video"), video("next-video")];
         let mut stats = IndexStats::default();
 
-        defer_recent_transcript_failures(
-            &mut videos,
-            &failure_dir,
-            Duration::from_secs(3_600),
-            &mut stats,
-        );
+        defer_recent_transcript_failures(&mut videos, &ledger, &mut stats);
 
         assert_eq!(
             videos
@@ -2090,8 +2084,9 @@ mod tests {
             vec!["next-video"]
         );
         assert_eq!(stats.deferred_transcript_failures, 1);
-        clear_transcript_failure(&failure_dir, "failed-video");
-        let _ = fs::remove_dir_all(&failure_dir);
+        assert_eq!(stats.deferred_failure_categories.get("unknown"), Some(&1));
+        ledger.clear("failed-video");
+        let _ = std::fs::remove_dir_all(&failure_dir);
     }
 
     #[test]
