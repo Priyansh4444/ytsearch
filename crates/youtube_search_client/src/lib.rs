@@ -197,10 +197,15 @@ impl SearchClient {
     }
 
     async fn get_json(&self, url: Url) -> Result<Value, SearchError> {
+        // Temporary expand-migrate-contract bridge: the deployed immutable
+        // reader still authenticates with the former compatibility header,
+        // while the mutable reader accepts the Raw header. Remove the former
+        // header immediately after both production readers are mutable.
         let response = self
             .http
             .get(url)
             .header("x-raw-search-key", &self.config.api_key)
+            .header("x-typesense-api-key", &self.config.api_key)
             .send()
             .await?;
         let status = response.status();
