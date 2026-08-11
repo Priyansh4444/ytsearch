@@ -43,7 +43,7 @@ fn config_debug_redacts_keys_and_rejects_non_http_urls() {
 }
 
 #[tokio::test]
-async fn search_uses_both_auth_headers_during_the_live_cutover() {
+async fn search_uses_the_raw_auth_header() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -55,7 +55,6 @@ async fn search_uses_both_auth_headers_during_the_live_cutover() {
             request.starts_with("GET /collections/youtube_transcript_chunks/documents/search?")
         );
         assert!(request.contains("x-raw-search-key: raw-key"));
-        assert!(request.contains("x-typesense-api-key: raw-key"));
         let body = r#"{"found":0,"hits":[]}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
