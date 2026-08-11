@@ -1,0 +1,17 @@
+.git
+.env
+.env*.local
+cookies.txt
+youtube-cookies.txt
+*.cookies.txt
+node_modules
+target
+dist
+data
+temp_research
+.search-experiment
+.wrangler
+.output
+.vercel
+.netlify
+.vinxi
