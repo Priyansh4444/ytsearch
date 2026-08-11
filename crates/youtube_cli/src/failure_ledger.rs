@@ -48,6 +48,10 @@ impl FailureCategory {
             Self::NoCaptions | Self::Private | Self::Unavailable | Self::Chunking
         )
     }
+
+    pub(super) const fn blocks_run(self) -> bool {
+        matches!(self, Self::BotChallenge | Self::RateLimited)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -96,13 +100,29 @@ impl FailureLedger {
         let path = failure_path(&self.directory, video_id);
         let now = unix_seconds(SystemTime::now());
         match read_record(&path) {
-            Ok(Some(record)) => FailureDecision {
-                deferred: !record.retryable
-                    || record
-                        .next_retry_at_unix
-                        .is_some_and(|retry_at| now < retry_at),
-                category: Some(record.category),
-            },
+            Ok(Some(record)) => {
+                let category = effective_category(&record);
+                let retry_at = if category == record.category {
+                    record.next_retry_at_unix
+                } else {
+                    category.retryable().then(|| {
+                        record.last_failed_at_unix.saturating_add(
+                            jittered_retry_delay(
+                                video_id,
+                                category,
+                                record.attempts,
+                                self.default_retry_after,
+                            )
+                            .as_secs(),
+                        )
+                    })
+                };
+                FailureDecision {
+                    deferred: !category.retryable()
+                        || retry_at.is_some_and(|retry_at| now < retry_at),
+                    category: Some(category),
+                }
+            }
             Ok(None) => legacy_decision(&path, self.default_retry_after),
             Err(error) => {
                 tracing::warn!(video_id, %error, "failed to read classified video failure");
@@ -174,7 +194,12 @@ fn classify(stage: FailureStage, reason: &str) -> FailureCategory {
     {
         return FailureCategory::BotChallenge;
     }
-    if reason.contains("429") || reason.contains("too many requests") {
+    if reason.contains("429")
+        || reason.contains("too many requests")
+        || reason.contains("rate-limited")
+        || reason.contains("rate limited")
+        || reason.contains("rate limit exceeded")
+    {
         return FailureCategory::RateLimited;
     }
     if reason.contains("no english subtitles")
@@ -211,10 +236,11 @@ fn retry_delay(category: FailureCategory, attempts: u32, default: Duration) -> D
             default.max(Duration::from_secs(900)),
             Duration::from_secs(86_400),
         ),
-        FailureCategory::BotChallenge | FailureCategory::RateLimited => (
+        FailureCategory::BotChallenge => (
             default.max(Duration::from_secs(3_600)),
             Duration::from_secs(259_200),
         ),
+        FailureCategory::RateLimited => (Duration::from_secs(3_600), Duration::from_secs(86_400)),
         FailureCategory::NoCaptions
         | FailureCategory::Private
         | FailureCategory::Unavailable
@@ -222,6 +248,14 @@ fn retry_delay(category: FailureCategory, attempts: u32, default: Duration) -> D
     };
     let exponent = attempts.saturating_sub(1).min(10);
     base.saturating_mul(1_u32 << exponent).min(maximum)
+}
+
+fn effective_category(record: &FailureRecord) -> FailureCategory {
+    if record.category == FailureCategory::Unknown {
+        classify(FailureStage::Transcript, &record.reason)
+    } else {
+        record.category
+    }
 }
 
 fn jittered_retry_delay(
@@ -358,6 +392,13 @@ mod tests {
         assert_eq!(
             classify(
                 FailureStage::Transcript,
+                "The current session has been rate-limited by YouTube for up to an hour"
+            ),
+            FailureCategory::RateLimited
+        );
+        assert_eq!(
+            classify(
+                FailureStage::Transcript,
                 "yt-dlp found no English subtitles or automatic captions"
             ),
             FailureCategory::NoCaptions
@@ -424,6 +465,42 @@ mod tests {
         assert_eq!(first, second);
         assert!(first >= base.saturating_mul(80) / 100);
         assert!(first <= base.saturating_mul(120) / 100);
+    }
+
+    #[test]
+    fn upstream_protection_failures_block_the_current_run() {
+        assert!(FailureCategory::RateLimited.blocks_run());
+        assert!(FailureCategory::BotChallenge.blocks_run());
+        assert!(!FailureCategory::NoCaptions.blocks_run());
+        assert!(!FailureCategory::Metadata.blocks_run());
+    }
+
+    #[test]
+    fn an_unknown_record_is_reclassified_from_its_preserved_reason() {
+        let ledger = test_ledger("reclassify");
+        let path = failure_path(&ledger.directory, "rate-limited-video");
+        let now = unix_seconds(SystemTime::now());
+        write_record_atomic(
+            &path,
+            &FailureRecord {
+                version: RECORD_VERSION,
+                video_id: "rate-limited-video".to_string(),
+                category: FailureCategory::Unknown,
+                retryable: true,
+                attempts: 1,
+                first_failed_at_unix: now,
+                last_failed_at_unix: now,
+                next_retry_at_unix: Some(now.saturating_add(21_600)),
+                reason: "current session has been rate-limited by YouTube".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            ledger.decision("rate-limited-video").category,
+            Some(FailureCategory::RateLimited)
+        );
+        let _ = fs::remove_dir_all(&ledger.directory);
     }
 
     #[test]

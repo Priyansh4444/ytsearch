@@ -38,6 +38,8 @@ enum CliError {
     IndexStore(#[from] IndexStoreError),
     #[error("ingest failed: {0}")]
     Ingest(#[from] youtube_ingest::IngestError),
+    #[error("upstream indexing paused after {0}; retry after the provider cooldown")]
+    UpstreamBlocked(&'static str),
     #[error("{0}")]
     Message(String),
 }
@@ -591,6 +593,7 @@ async fn index_youtuber(
     }
 
     let mut tasks = JoinSet::new();
+    let worker_total = videos_to_index.len();
     let mut next_video = 0;
     let mut active_jobs = 0usize;
     let mut completed_videos = 0usize;
@@ -605,7 +608,6 @@ async fn index_youtuber(
             active_jobs += 1;
 
             let timeout_seconds = command.video_timeout_seconds;
-            let attempted_videos = stats.attempted_videos;
             let metadata_source = metadata_source.clone();
             let caption_source = caption_source.clone();
             let transcribe_source = transcribe_source.clone();
@@ -622,7 +624,7 @@ async fn index_youtuber(
                     Duration::from_secs(timeout_seconds),
                     index_discovered_video(
                         index,
-                        attempted_videos,
+                        worker_total,
                         video,
                         worker_youtuber_id,
                         metadata_source,
@@ -657,22 +659,26 @@ async fn index_youtuber(
         };
         active_jobs = active_jobs.saturating_sub(1);
         completed_videos += 1;
-        let attempted_videos = stats.attempted_videos;
         match result {
             Ok(Ok(outcome)) => {
-                apply_index_outcome(&mut stats, outcome, completed_videos, attempted_videos);
+                let blocking_category = outcome.upstream_blocking_category();
+                apply_index_outcome(&mut stats, outcome, completed_videos, worker_total);
+                if let Some(category) = blocking_category {
+                    tasks.abort_all();
+                    while tasks.join_next().await.is_some() {}
+                    print_index_summary(&stats);
+                    return Err(CliError::UpstreamBlocked(category.as_str()));
+                }
             }
             Ok(Err(error)) => {
                 stats.skipped_videos = stats.skipped_videos.saturating_add(1);
                 tracing::warn!(%error, "skipped video after indexing task failed");
-                println!(
-                    "Done {completed_videos}/{attempted_videos}: skipped indexing error: {error}"
-                );
+                println!("Done {completed_videos}/{worker_total}: skipped indexing error: {error}");
             }
             Err(error) => {
                 stats.skipped_videos = stats.skipped_videos.saturating_add(1);
                 tracing::warn!(%error, "skipped video after indexing task panicked");
-                println!("Done {completed_videos}/{attempted_videos}: skipped task error: {error}");
+                println!("Done {completed_videos}/{worker_total}: skipped task error: {error}");
             }
         }
 
@@ -816,6 +822,10 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
         };
         match result {
             Ok((_, Ok(()))) => {}
+            Ok((_, Err(error @ CliError::UpstreamBlocked(_)))) => {
+                tasks.abort_all();
+                return Err(error);
+            }
             Ok((failed_handle, Err(error))) => {
                 tracing::error!(handle = %failed_handle, %error, "YouTuber indexing failed; continuing with remaining creators");
                 failures.push(format!("{failed_handle}: {error}"));
@@ -1057,6 +1067,15 @@ enum IndexVideoOutcome {
         reason: String,
         category: FailureCategory,
     },
+}
+
+impl IndexVideoOutcome {
+    fn upstream_blocking_category(&self) -> Option<FailureCategory> {
+        match self {
+            Self::Skipped { category, .. } if category.blocks_run() => Some(*category),
+            _ => None,
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2087,6 +2106,28 @@ mod tests {
         assert_eq!(stats.deferred_failure_categories.get("unknown"), Some(&1));
         ledger.clear("failed-video");
         let _ = std::fs::remove_dir_all(&failure_dir);
+    }
+
+    #[test]
+    fn upstream_protection_outcomes_stop_new_video_work() {
+        let rate_limited = IndexVideoOutcome::Skipped {
+            video_id: "video".to_string(),
+            title: "Video".to_string(),
+            reason: "rate limited".to_string(),
+            category: FailureCategory::RateLimited,
+        };
+        let captionless = IndexVideoOutcome::Skipped {
+            video_id: "video".to_string(),
+            title: "Video".to_string(),
+            reason: "no captions".to_string(),
+            category: FailureCategory::NoCaptions,
+        };
+
+        assert_eq!(
+            rate_limited.upstream_blocking_category(),
+            Some(FailureCategory::RateLimited)
+        );
+        assert_eq!(captionless.upstream_blocking_category(), None);
     }
 
     #[test]

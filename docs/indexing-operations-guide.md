@@ -183,6 +183,13 @@ operator clears the record or indexing capabilities change. The configured
 default base remains six hours (`TRANSCRIPT_FAILURE_RETRY_SECONDS=21600`), while
 Raw import failures retry sooner.
 
+A bot challenge or session-level rate limit is a batch circuit breaker. The
+CLI aborts outstanding video and creator tasks, retains every already durable
+idempotent mutation, and does not publish the incomplete generation. Keep a
+one-off Fly repair Machine's restart policy at `no`; restart it only after the
+provider cooldown. The same complete-list command then skips durable work and
+resumes the remaining gaps.
+
 Useful controls:
 
 - `YT_DLP_CAPTION_FETCH_ATTEMPTS`;

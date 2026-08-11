@@ -168,6 +168,12 @@ Raw can replace Typesense as the canonical search index.
   Raw import failures. Replaced them with crash-safe classified records,
   category-specific retry policy, stable jitter, terminal deferral, and
   per-run category summaries.
+- [x] yt-dlp's literal `rate-limited` diagnostic was falling through to
+  `unknown`, and a full repair continued requesting later videos after the
+  provider blocked the session. The classifier now recognizes that wording,
+  reclassifies preserved unknown records by reason, uses a one-hour jittered
+  cooldown, and aborts every remaining creator task without publishing a
+  partial generation.
 - [x] Prefix candidates were skipped whenever five exact candidates existed,
   hiding valid videos for multi-token queries such as `linux exploit`. Prefix
   expansion now participates before the typo threshold; the full corpus returns
