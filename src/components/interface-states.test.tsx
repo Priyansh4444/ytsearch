@@ -59,6 +59,14 @@ describe("interface states", () => {
     expect(screen.getByRole("status").textContent).not.toMatch(/\b(PST|PDT|Pacific)\b/);
   });
 
+  test("describes an always-on ready service without an expiry", () => {
+    render(() => (
+      <AvailabilityNotice availability={{ ...availability("ready"), enforced: false }} />
+    ));
+    expect(screen.getByRole("status")).toHaveTextContent("Search is available 24/7.");
+    expect(screen.getByRole("status")).not.toHaveTextContent(/Expires|returns/);
+  });
+
   test("renders accessible loading, error, empty, and welcome states", () => {
     const { unmount } = render(() => <LoadingState />);
     expect(screen.getByRole("status", { name: "Loading search results" })).toBeInTheDocument();
