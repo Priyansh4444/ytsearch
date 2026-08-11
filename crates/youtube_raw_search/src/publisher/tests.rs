@@ -142,3 +142,27 @@ fn failed_publication_keeps_the_previous_manifest_and_durable_wal() {
         youtube_index_store::IndexOperationState::Durable
     );
 }
+
+#[test]
+fn publication_removes_only_uncommitted_recovery_artifacts() {
+    let (_directory, publisher, store) = fixture();
+    let work = publisher.paths.state_directory.join("work/stale");
+    let candidate = publisher
+        .paths
+        .state_directory
+        .join("generations/00000000000000000007.candidate");
+    let completed = publisher
+        .paths
+        .state_directory
+        .join("generations/00000000000000000006");
+    for path in [&work, &candidate, &completed] {
+        fs::create_dir_all(path).unwrap();
+        File::create(path.join("marker")).unwrap();
+    }
+
+    assert!(publisher.publish(&store).unwrap().is_none());
+
+    assert!(!work.exists());
+    assert!(!candidate.exists());
+    assert!(completed.join("marker").exists());
+}

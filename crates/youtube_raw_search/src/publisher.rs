@@ -80,6 +80,9 @@ impl Publisher {
         &self,
         store: &MutationStore,
     ) -> Result<Option<PublishedGeneration>, IndexStoreError> {
+        fs::create_dir_all(self.paths.state_directory.join("generations")).map_err(map_io)?;
+        fs::create_dir_all(self.paths.state_directory.join("work")).map_err(map_io)?;
+        self.remove_uncommitted_artifacts()?;
         let snapshot = store.snapshot()?;
         if snapshot.through_sequence <= self.active_sequence()? {
             return Ok(None);
@@ -87,9 +90,6 @@ impl Publisher {
         validate_source(&self.paths.base_chunks_gzip)?;
         validate_source(&self.paths.base_channels_gzip)?;
         validate_source(&self.paths.base_index)?;
-        fs::create_dir_all(self.paths.state_directory.join("generations")).map_err(map_io)?;
-        fs::create_dir_all(self.paths.state_directory.join("work")).map_err(map_io)?;
-
         let generation_name = format!("generations/{:020}", snapshot.through_sequence);
         let final_path = self.paths.state_directory.join(&generation_name);
         ensure_generation_path(&self.paths.state_directory, &final_path)?;
@@ -252,6 +252,42 @@ impl Publisher {
             fs::remove_dir_all(path).map_err(map_io)?;
         }
         Ok(())
+    }
+
+    fn remove_uncommitted_artifacts(&self) -> Result<(), IndexStoreError> {
+        let work = self.paths.state_directory.join("work");
+        for entry in fs::read_dir(&work).map_err(map_io)? {
+            remove_scratch_entry(&self.paths.state_directory, entry.map_err(map_io)?)?;
+        }
+
+        let generations = self.paths.state_directory.join("generations");
+        for entry in fs::read_dir(&generations).map_err(map_io)? {
+            let entry = entry.map_err(map_io)?;
+            if entry
+                .path()
+                .extension()
+                .is_some_and(|value| value == "candidate")
+            {
+                remove_scratch_entry(&self.paths.state_directory, entry)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn remove_scratch_entry(root: &Path, entry: fs::DirEntry) -> Result<(), IndexStoreError> {
+    let path = entry.path();
+    ensure_generation_path(root, &path)?;
+    let file_type = entry.file_type().map_err(map_io)?;
+    if file_type.is_dir() {
+        fs::remove_dir_all(path).map_err(map_io)
+    } else if file_type.is_file() {
+        fs::remove_file(path).map_err(map_io)
+    } else {
+        Err(IndexStoreError::InvalidInput(format!(
+            "publisher scratch path has unsupported type: {}",
+            path.display()
+        )))
     }
 }
 
