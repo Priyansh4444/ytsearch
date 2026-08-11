@@ -3,6 +3,7 @@ primary_region = 'sjc'
 
 [build]
   dockerfile = 'Dockerfile.search-api'
+  ignorefile = '.dockerignore.api'
 
 [env]
   YTSEARCH_API_ADDR = '0.0.0.0:8787'
