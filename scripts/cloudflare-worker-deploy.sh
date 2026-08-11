@@ -25,6 +25,7 @@ curl -fsS "${PUBLIC_URL%/}/api/availability" >"$smoke_response"
 if ! jq -e '
   (.status | type == "string") and
   (.search_enabled | type == "boolean") and
+  (.schedule_policy == "always_on" or .schedule_policy == "scheduled" or .schedule_policy == "observe") and
   .time_zone == "America/Los_Angeles"
 ' "$smoke_response" >/dev/null; then
   echo "Deployment smoke test failed: /api/availability returned an invalid response" >&2
