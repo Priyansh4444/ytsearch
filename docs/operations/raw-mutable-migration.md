@@ -100,6 +100,23 @@ The deployment interrupted one write for video `g20JZ2HNZaw`. That video must
 be replayed after the channel batch, followed by the final explicit publication,
 restart, and public contract/load gates before Typesense resources are destroyed.
 
+### Streaming publication gate
+
+Commit `204f754` removes the materialized merged corpus. The publisher now
+filters the gzip base and chains serialized replacement chunks directly into the
+builder. A release-build full-corpus publication on the development machine
+completed at 03:59:07 UTC with the same 8,142,650 documents, 32,822 videos, 61
+channels, and 293,152 terms. The completed mutable directory was 1,445,988,194
+bytes, `work/` stayed empty, process HWM was 2,575,380 KiB, and RSS returned to
+about 145 MiB after `malloc_trim`.
+
+This removes roughly 6.6 GiB of scratch data and one complete write/read pass.
+It does not yet solve builder heap: term/posting accumulation still owns the
+roughly 2.46 GiB HWM. The image was prebuilt as
+`registry.fly.io/ytsearch-raw-production:raw-streaming-204f754`; deploy it only
+after the active indexing batch completes, then measure the final generation on
+the 4 GiB Machine before retirement.
+
 ## Fly retirement inventory
 
 The following resources are legacy dependencies and must be treated as

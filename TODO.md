@@ -68,8 +68,10 @@ Raw can replace Typesense as the canonical search index.
     mutations arriving during a build remain durable for the next requested
     generation instead of triggering an unbounded rebuild loop.
   - [x] Remove abandoned `work/*` and `*.candidate` artifacts before recovery.
-  - [ ] Eliminate the 6.6 GiB uncompressed merged-JSON scratch file and the
-    retained in-memory postings builder.
+  - [x] Eliminate the 6.6 GiB uncompressed merged-JSON scratch file by streaming
+    the filtered base plus replacements directly into the builder.
+  - [ ] Replace the retained in-memory postings builder with bounded external
+    runs or immutable delta segments.
 - [ ] Upload checksummed versioned artifacts to private R2 once R2 is enabled.
 - [x] Bootstrap Raw from the final matched snapshot and remove dual-writing from
   the repository. The deployed legacy queue remains a cutover task below.
