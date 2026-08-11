@@ -23,6 +23,17 @@ case "$1 $2" in
     done
     cat "$FLY_FIXTURES/$app.json"
     ;;
+  "volumes list")
+    shift 2
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --app) app="$2"; shift 2 ;;
+        --json) shift ;;
+        *) shift ;;
+      esac
+    done
+    cat "$FLY_FIXTURES/$app-volumes.json"
+    ;;
   "machine destroy"|"volumes destroy"|"apps destroy")
     printf '%s\n' "$*" >>"$FLY_CALLS"
     ;;
@@ -64,9 +75,26 @@ machine 1855eddf654298 stopped vol_vwnydd578odzzo8v ytsearch-api-raw-production 
   >"$tmp/fixtures/ytsearch-api-typesense-fly-staging.json"
 machine 68352d2be17728 stopped vol_r68z3gl5wq7jkqd4 ytsearch-indexer-raw-production \
   >"$tmp/fixtures/ytsearch-indexer-staging.json"
+jq -n '[
+  {id:"vol_v8e6yy17jo63nplv"},
+  {id:"vol_vdezd781q880qm34"}
+]' >"$tmp/fixtures/ytsearch-typesense-staging-volumes.json"
+jq -n '[{id:"vol_vwnydd578odzzo8v"}]' \
+  >"$tmp/fixtures/ytsearch-api-typesense-fly-staging-volumes.json"
+jq -n '[
+  {id:"vol_v8e6wk3g1l6kj15v"},
+  {id:"vol_458zq611m0yppz14"},
+  {id:"vol_4qlzgynglnz786gr"},
+  {id:"vol_r68z3gl5wq7jkqd4"}
+]' >"$tmp/fixtures/ytsearch-indexer-staging-volumes.json"
 
 PATH="$tmp/bin:$PATH" FLY_FIXTURES="$tmp/fixtures" FLY_CALLS="$tmp/calls" \
   "$SCRIPT_DIR/destroy-deprecated-typesense-fly.sh" >/dev/null 2>&1
+test ! -e "$tmp/calls"
+
+PATH="$tmp/bin:$PATH" FLY_FIXTURES="$tmp/fixtures" FLY_CALLS="$tmp/calls" \
+  APPLY_TYPESENSE_RETIREMENT=verify-exact-deprecated-typesense-resources \
+  "$SCRIPT_DIR/destroy-deprecated-typesense-fly.sh" >/dev/null
 test ! -e "$tmp/calls"
 
 jq '.[0].state = "started"' "$tmp/fixtures/ytsearch-typesense-staging.json" \
@@ -83,6 +111,24 @@ test ! -e "$tmp/calls"
 jq '.[0].state = "stopped"' "$tmp/fixtures/ytsearch-typesense-staging.json" \
   >"$tmp/valid.json"
 mv "$tmp/valid.json" "$tmp/fixtures/ytsearch-typesense-staging.json"
+
+jq '.[0].id = "vol_unexpected"' \
+  "$tmp/fixtures/ytsearch-indexer-staging-volumes.json" >"$tmp/invalid-volumes.json"
+mv "$tmp/invalid-volumes.json" \
+  "$tmp/fixtures/ytsearch-indexer-staging-volumes.json"
+if PATH="$tmp/bin:$PATH" FLY_FIXTURES="$tmp/fixtures" FLY_CALLS="$tmp/calls" \
+  APPLY_TYPESENSE_RETIREMENT=destroy-exact-deprecated-typesense-resources \
+  "$SCRIPT_DIR/destroy-deprecated-typesense-fly.sh" >/dev/null 2>&1; then
+  echo "retirement should fail before deleting an unexpected volume set" >&2
+  exit 1
+fi
+test ! -e "$tmp/calls"
+
+jq '.[0].id = "vol_v8e6wk3g1l6kj15v"' \
+  "$tmp/fixtures/ytsearch-indexer-staging-volumes.json" >"$tmp/valid-volumes.json"
+mv "$tmp/valid-volumes.json" \
+  "$tmp/fixtures/ytsearch-indexer-staging-volumes.json"
+
 PATH="$tmp/bin:$PATH" FLY_FIXTURES="$tmp/fixtures" FLY_CALLS="$tmp/calls" \
   APPLY_TYPESENSE_RETIREMENT=destroy-exact-deprecated-typesense-resources \
   "$SCRIPT_DIR/destroy-deprecated-typesense-fly.sh" >/dev/null
@@ -90,7 +136,7 @@ PATH="$tmp/bin:$PATH" FLY_FIXTURES="$tmp/fixtures" FLY_CALLS="$tmp/calls" \
 test "$(wc -l <"$tmp/calls" | tr -d ' ')" -eq 7
 rg -q '^machine destroy --app ytsearch-typesense-staging 8147deb94937e8 d8de466f330468$' \
   "$tmp/calls"
-rg -q '^volumes destroy --app ytsearch-indexer-staging --yes vol_r68z3gl5wq7jkqd4$' \
+rg -q '^volumes destroy --app ytsearch-indexer-staging --yes vol_458zq611m0yppz14 vol_4qlzgynglnz786gr vol_r68z3gl5wq7jkqd4 vol_v8e6wk3g1l6kj15v$' \
   "$tmp/calls"
 rg -q '^apps destroy --yes ytsearch-typesense-staging ytsearch-api-typesense-fly-staging ytsearch-indexer-staging$' \
   "$tmp/calls"
