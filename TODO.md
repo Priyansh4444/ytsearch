@@ -92,6 +92,16 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Deploy that write/control path, copy and drain the durable queue, prove a
   mutation across restart, then deprecate and destroy the exact legacy Fly
   resources in `docs/operations/typesense-retirement.md`.
+  - [x] Deploy the mutable Raw engine on its encrypted 20 GB volume and the Raw
+    queue API on its encrypted 1 GB volume.
+  - [x] Copy all five durable legacy queue rows without changing their request
+    IDs, then process and acknowledge `1786191981-typesense-fly-t3dotgg` through
+    Raw (95 videos / 30,684 transcript chunks imported).
+  - [x] Prove idempotent replace and delete operations, publication, and both
+    post-publication Machine restarts without leaving the synthetic document.
+  - [x] Deploy `search.pronsh.dev` with Raw-only search and queue origins.
+  - [ ] Finish the nine-channel drift reconciliation, post-publication restart,
+    browser/load gates, and exact legacy Fly resource destruction.
 
 ### Non-negotiable performance and resource gates
 

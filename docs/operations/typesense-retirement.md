@@ -43,13 +43,24 @@ Never delete the legacy queue before its request IDs have been copied and
 acknowledged by the Raw queue. A successful search-read cutover alone is not a
 write-path migration.
 
-## Current execution blocker
+## Current execution status (2026-08-10)
 
-The repository migration and local full-corpus proof are complete, but this
-shell has no Fly access token (`flyctl auth whoami` returns “no access token
-available”). No Fly metadata, deployment, queue copy, stop, or destructive
-operation can be performed until `flyctl auth login` succeeds in this shell.
+Fly authentication is restored. The mutable Raw engine, durable Raw queue API,
+Raw indexer, and Raw-only Worker are deployed. All five legacy queue records
+were copied with their original IDs. Request
+`1786191981-typesense-fly-t3dotgg` completed through Raw, importing 95 videos
+and 30,684 chunks, and was acknowledged only after generation 102 activated.
+The four remaining copied records preserve their historical failed/rejected
+states.
 
-The deprecation script defaults to a no-op and requires an exact acknowledgement
-because its metadata update may restart a Machine. Destruction remains a manual,
-separately reviewed operation after all gates above are recorded.
+The live restart proof also completed: one synthetic replacement reused the
+same operation sequence for an identical idempotency key, survived publication
+and restart, and its idempotent deletion survived a second publication and
+restart. No synthetic document remains. `search.pronsh.dev` now sends both
+search and queue traffic exclusively to `ytsearch-api-raw-production`.
+
+A bounded nine-channel drift reconciliation is running before the irreversible
+stage. After it publishes, the remaining gates are a Raw restart, differential
+corpus checks, browser/search/load checks, and the explicit retirement steps 6
+and 7 above. The deprecation script remains a no-op unless its exact
+acknowledgement is supplied.
