@@ -10,8 +10,14 @@ dist
 data
 temp_research
 .search-experiment/*
-!.search-experiment/raw-index
+!.search-experiment/raw-index/
 !.search-experiment/raw-index/**
+!.search-experiment/backups/
+.search-experiment/backups/*
+!.search-experiment/backups/20260809T002826Z/
+.search-experiment/backups/20260809T002826Z/*
+!.search-experiment/backups/20260809T002826Z/youtube_transcript_chunks.engagement.jsonl.gz
+!.search-experiment/backups/20260809T002826Z/youtube_youtubers.jsonl.gz
 .wrangler
 .output
 .vercel
