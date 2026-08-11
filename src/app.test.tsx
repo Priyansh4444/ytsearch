@@ -53,6 +53,7 @@ const ready: SearchAvailability = {
   status: "ready",
   search_enabled: true,
   enforced: true,
+  schedule_policy: "scheduled",
   schedule_phase: "open",
   time_zone: "America/Los_Angeles",
   daily_window: {

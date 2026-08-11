@@ -16,6 +16,7 @@ export type SearchAvailability = {
   status: SearchAvailabilityStatus;
   search_enabled: boolean;
   enforced: boolean;
+  schedule_policy: "always_on" | "scheduled" | "observe";
   schedule_phase: ScheduleEvaluation["phase"];
   time_zone: "America/Los_Angeles";
   daily_window: {
@@ -39,6 +40,12 @@ export function searchAlwaysOn(env: AvailabilityEnvironment): boolean {
   return env.SEARCH_SCHEDULE_MODE === "always_on";
 }
 
+function schedulePolicy(env: AvailabilityEnvironment): SearchAvailability["schedule_policy"] {
+  if (scheduleEnforced(env)) return "scheduled";
+  if (searchAlwaysOn(env)) return "always_on";
+  return "observe";
+}
+
 export const searchAvailabilityEffect = (
   env: AvailabilityEnvironment,
   now = new Date(),
@@ -46,18 +53,20 @@ export const searchAvailabilityEffect = (
   Effect.gen(function* () {
     const schedule = evaluateSearchSchedule(now);
     const enforced = scheduleEnforced(env);
+    const policy = schedulePolicy(env);
     if (enforced && schedule.phase !== "open") {
       return availability(
         schedule.phase === "prewarm" ? "prewarming" : "scheduled_offline",
         false,
         enforced,
+        policy,
         schedule,
       );
     }
 
     const healthy = yield* rawSearchHealthyEffect(env);
     const status = healthy ? "ready" : schedule.phase === "open" ? "starting" : "degraded";
-    return availability(status, healthy, enforced, schedule);
+    return availability(status, healthy, enforced, policy, schedule);
   });
 
 export const searchAvailability = (
@@ -108,12 +117,14 @@ function availability(
   status: SearchAvailabilityStatus,
   searchEnabled: boolean,
   enforced: boolean,
+  policy: SearchAvailability["schedule_policy"],
   schedule: ScheduleEvaluation,
 ): SearchAvailability {
   return {
     status,
     search_enabled: searchEnabled,
     enforced,
+    schedule_policy: policy,
     schedule_phase: schedule.phase,
     time_zone: "America/Los_Angeles",
     daily_window: {

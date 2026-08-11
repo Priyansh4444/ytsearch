@@ -27,7 +27,12 @@ pacific_hhmm="$(TZ=America/Los_Angeles date +%H%M)"
 availability_url="${SEARCH_AVAILABILITY_URL:-https://search.pronsh.dev/api/availability}"
 availability_json="$(curl -fsS --max-time 5 "$availability_url" 2>/dev/null || true)"
 if [ -n "$availability_json" ]; then
-  live_schedule_mode="$(printf '%s' "$availability_json" | jq -r 'if .enforced == true then "enforce" else "observe" end')"
+  live_schedule_mode="$(printf '%s' "$availability_json" | jq -r '
+    if .schedule_policy == "always_on" then "always_on"
+    elif .schedule_policy == "scheduled" or .enforced == true then "enforce"
+    else "observe"
+    end
+  ')"
 else
   live_schedule_mode="unknown"
   availability_ok=false

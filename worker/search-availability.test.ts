@@ -26,6 +26,7 @@ describe("search availability", () => {
       schedule_phase: phase,
       search_enabled: false,
       enforced: true,
+      schedule_policy: "scheduled",
     });
   });
 
@@ -69,6 +70,26 @@ describe("search availability", () => {
       schedule_phase: "closed",
       search_enabled: false,
       enforced: false,
+      schedule_policy: "always_on",
+    });
+  });
+
+  it("distinguishes observation mode from an always-on commitment", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
+
+    const result = await searchAvailability(
+      {
+        SEARCH_SCHEDULE_MODE: "observe",
+        RAW_SEARCH_HEALTH_URL: healthUrl,
+      },
+      new Date("2026-01-15T18:00:00Z"),
+    );
+
+    expect(result).toMatchObject({
+      status: "ready",
+      search_enabled: true,
+      enforced: false,
+      schedule_policy: "observe",
     });
   });
 

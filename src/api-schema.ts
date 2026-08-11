@@ -88,6 +88,7 @@ export const SearchAvailabilitySchema = Schema.Struct({
   status: Schema.Literals(["scheduled_offline", "prewarming", "ready", "starting", "degraded"]),
   search_enabled: Schema.Boolean,
   enforced: Schema.Boolean,
+  schedule_policy: Schema.Literals(["always_on", "scheduled", "observe"]),
   schedule_phase: Schema.Literals(["closed", "prewarm", "open"]),
   time_zone: Schema.Literal("America/Los_Angeles"),
   daily_window: Schema.Struct({

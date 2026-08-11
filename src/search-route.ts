@@ -14,6 +14,7 @@ export const provisionalAvailability = (now = new Date()): SearchAvailability =>
           : "scheduled_offline",
     search_enabled: schedule.phase === "open",
     enforced: true,
+    schedule_policy: "scheduled",
     schedule_phase: schedule.phase,
     time_zone: "America/Los_Angeles",
     daily_window: {

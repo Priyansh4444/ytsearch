@@ -11,7 +11,7 @@ export const AvailabilityNotice: Component<{ availability: SearchAvailability }>
   const [now, setNow] = createSignal(Date.now());
 
   createEffect(() => {
-    if (!props.availability.enforced) return;
+    if (props.availability.schedule_policy !== "scheduled") return;
     const interval = window.setInterval(() => setNow(Date.now()), 1_000);
     onCleanup(() => window.clearInterval(interval));
   });
@@ -53,7 +53,8 @@ function availabilityMessage(availability: SearchAvailability, timer: () => Time
       return `Search is warming up and will be available at ${atLabel} in ${countdown}.`;
     }
     case "ready": {
-      if (!availability.enforced) return "Search is available 24/7.";
+      if (availability.schedule_policy === "always_on") return "Search is available 24/7.";
+      if (availability.schedule_policy === "observe") return "Search is available now.";
       const { atLabel, countdown } = timer();
       return `Search is available now. Expires at ${atLabel} in ${countdown}.`;
     }

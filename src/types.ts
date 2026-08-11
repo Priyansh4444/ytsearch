@@ -85,6 +85,7 @@ export type SearchAvailability = {
   status: SearchAvailabilityStatus;
   search_enabled: boolean;
   enforced: boolean;
+  schedule_policy: "always_on" | "scheduled" | "observe";
   schedule_phase: "closed" | "prewarm" | "open";
   time_zone: "America/Los_Angeles";
   daily_window: {

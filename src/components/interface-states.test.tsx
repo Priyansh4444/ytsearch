@@ -15,6 +15,7 @@ const availability = (
   status,
   search_enabled: searchEnabled,
   enforced: true,
+  schedule_policy: "scheduled",
   schedule_phase: searchEnabled ? "open" : "closed",
   time_zone: "America/Los_Angeles",
   daily_window: {
@@ -61,10 +62,30 @@ describe("interface states", () => {
 
   test("describes an always-on ready service without an expiry", () => {
     render(() => (
-      <AvailabilityNotice availability={{ ...availability("ready"), enforced: false }} />
+      <AvailabilityNotice
+        availability={{
+          ...availability("ready"),
+          enforced: false,
+          schedule_policy: "always_on",
+        }}
+      />
     ));
     expect(screen.getByRole("status")).toHaveTextContent("Search is available 24/7.");
     expect(screen.getByRole("status")).not.toHaveTextContent(/Expires|returns/);
+  });
+
+  test("does not promise 24/7 service in observation mode", () => {
+    render(() => (
+      <AvailabilityNotice
+        availability={{
+          ...availability("ready"),
+          enforced: false,
+          schedule_policy: "observe",
+        }}
+      />
+    ));
+    expect(screen.getByRole("status")).toHaveTextContent("Search is available now.");
+    expect(screen.getByRole("status")).not.toHaveTextContent(/24\/7|Expires|returns/);
   });
 
   test("renders accessible loading, error, empty, and welcome states", () => {

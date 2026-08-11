@@ -155,6 +155,7 @@ describe("scheduled search availability", () => {
       status: "scheduled_offline",
       search_enabled: false,
       enforced: true,
+      schedule_policy: "scheduled",
       schedule_phase: "closed",
       time_zone: "America/Los_Angeles",
     });
