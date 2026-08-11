@@ -79,6 +79,13 @@ ordered token dropping instead; the corrected query returns fifteen videos
 with 9/10 overlap. This is useful evidence, but seven cases do not satisfy the
 planned 300-query human-judged oracle.
 
+A later live differential exposed a separate prefix-recall error. Raw stopped
+expanding the final token when five exact candidates existed, so `linux exploit`
+returned only 96 videos. Typesense returned 189. After moving ordinary prefix
+expansion ahead of the typo threshold, Raw also returns 189 videos and 486 true
+transcript moments. Ordered top-10 overlap is 4/10, however, so equal recall is
+not evidence of equal ranking quality; this case belongs in the judged oracle.
+
 Production rollout checks passed through all layers:
 
 - Raw engine: <https://ytsearch-raw-production.fly.dev/health>

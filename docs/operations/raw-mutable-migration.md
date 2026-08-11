@@ -44,20 +44,25 @@ the final irreversible stage.
 | Raw engine searches/errors | 86 / 0 |
 | Internal engine search time | 2.044 seconds |
 
-Current Fly list pricing for `sjc` is $0.1027/hour for the Raw engine and
-$0.0053/hour for the API. At the enforced 12-hour daily search window, compute
-is approximately $36.97 + $3.81 = $40.78 per 30 days. The 20 GB engine volume
-costs $3/month and the 1 GB API queue volume costs $0.15/month at
-$0.15/GB-month, producing an expected mutable-stack baseline of about
-$43.94/month before bandwidth, snapshot bytes above the included tier,
-stopped-rootfs bytes, and Cloudflare usage. Always-on compute would instead be
-approximately $80.88/month including both volumes.
+Current [Fly list pricing](https://fly.io/docs/about/pricing/) is $0.0894/hour
+for the 4 GiB `performance-2x` Raw engine, $3.32/month for the 512 MiB
+`shared-cpu-1x` API, $0.0329/hour while the 4 GiB `shared-cpu-4x` indexer runs,
+and $0.15/GB-month for volumes. At the enforced 12-hour daily search window,
+engine compute is about $32.20 per 30 days. Engine/API/indexer volumes total 31
+GB ($4.65/month), so the scheduled engine, always-on API, and volumes are about
+$40.17/month before variable indexer runtime, stopped rootfs, snapshots,
+bandwidth, and Cloudflare usage. An always-on engine plus API and the same
+volumes is about $72.36/month before those variable charges.
 
 ## Design
 
 The mmap schema-v6 generation remains immutable. Mutability is implemented as
 a durable control plane and atomic generation publication, not by placing locks
-inside the query hot path.
+inside the query hot path. SQLite is not the search engine: public searches do
+no SQL query and acquire no SQLite lock. SQLite WAL is the small crash-safe
+operation journal used for idempotency keys, latest complete-video/channel
+intent, tombstones, and publication sequence tracking. Replacing it would mean
+building and validating a custom transactional log without making reads faster.
 
 1. Store idempotent operations, complete replacement chunks, channel updates,
    and tombstones in SQLite WAL on the Raw volume.
@@ -66,9 +71,10 @@ inside the query hot path.
    replacements, merges channel updates, and builds a versioned candidate.
 3. Open and validate the candidate before atomically changing the active
    generation manifest and swapping the in-process reader.
-4. Video writes become durable without rebuilding immediately. The channel
-   upsert at the end of an indexing batch publishes all pending mutations once,
-   preventing an 8.14-million-document rebuild per video.
+4. Video writes become durable without rebuilding immediately. An explicit
+   publish captures a target operation sequence; mutations that arrive while it
+   builds remain durable for the next explicit publish instead of making the
+   worker chase a moving sequence. The indexing batch publishes once at its end.
 5. On restart, open the manifest-selected generation, replay SQLite WAL state,
    and resume any durable unpublished operation.
 6. Expose readiness, operation state, counts, video-ID pagination, replacement,
@@ -78,6 +84,21 @@ inside the query hot path.
 This design removes work from the common write batch and keeps query reads on
 an immutable `Arc<RawSearchEngine>`. The generic fallback is a full verified
 generation rebuild; no unsafe mutable posting manipulation is introduced.
+
+## Live migration checkpoint on 2026-08-10
+
+Generation 461 activated while the nine-channel drift repair continued writing.
+It contains 8,169,501 documents. The corrected publisher stopped after that
+captured target rather than immediately starting another generation. During the
+build, process HWM was 2,796,580 KiB and total cgroup usage briefly reached about
+3.90 GiB; after activation and scratch deletion cgroup usage fell to about 1.97
+GB. The temporary merged `chunks.jsonl` was 6.6 GiB and the candidate was 1.4
+GiB. This passes the 4 GiB allocation gate narrowly but does not satisfy the 512
+MiB compaction goal, so streaming external runs/delta segments remain required.
+
+The deployment interrupted one write for video `g20JZ2HNZaw`. That video must
+be replayed after the channel batch, followed by the final explicit publication,
+restart, and public contract/load gates before Typesense resources are destroyed.
 
 ## Fly retirement inventory
 

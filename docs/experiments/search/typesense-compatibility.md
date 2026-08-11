@@ -54,15 +54,15 @@ Primary source locations:
 Raw keeps its immutable mmap representation and adds `fuzzy.bin`, a compact
 20-byte-node breadth-first trie. It is not loaded into a process-owned map.
 The exact path remains a binary lookup in `lexicon.bin`; the trie is consulted
-only for guarded prefix/typo fallback.
+for ordinary last-token prefix expansion and guarded typo fallback.
 
 | Behavior | Raw implementation |
 | --- | --- |
 | Adjacent transpositions | Optimal-string-alignment Damerau-Levenshtein rows |
 | One/two typo gates | 4-byte and 7-byte minimums, matching active Typesense defaults |
 | Candidate cap | Four terms per edit distance, ranked by field-weighted posting frequency |
-| Progressive expansion | Exact/split, then prefix, then distance one, then distance two; stop at five grouped results |
-| Prefix search | Guarded fallback when exact/split coverage is below five |
+| Progressive expansion | Exact/split plus last-token prefix, then distance one, then distance two; typo work stops once five grouped results exist |
+| Prefix search | Last-token prefix candidates participate before the typo threshold, including when exact candidates already cover five videos |
 | Exact priority | Four-bit exact-token mask packed into the 8-byte candidate; compare count, then earlier query terms; prefix/fuzzy alternatives contribute zero bits |
 | First-token position | Compact `positions.bin` sidecar; decoded only for exact postings and used as a bounded score multiplier |
 | Token dropping | Conjunctive right-to-left suffix drops, then left-to-right prefix drops, filter-aware threshold one, maximum 20 candidates |
@@ -85,7 +85,8 @@ components such as `black + he`, and returns the same top result as
 | Phrase/proximity scoring | Partial | Schema v6 supports ordered quoted phrases, bounded slop, and a guarded 10-token same-field proximity window; the 300-query judged oracle remains open |
 | Exhaustive cost combinations | Deliberately bounded | The public query uses default non-exhaustive search |
 | Arbitrary filter language/faceting | Out of scope | The application uses creator/video equality filters only; every other field/operator and all facet parameters fail closed |
-| Dynamic writes and replication | Out of scope | Raw is a read-only serving index built offline |
+| Dynamic writes | Implemented by generation | Complete-video/channel mutations are durable and idempotent in SQLite WAL, then become visible through an atomic immutable generation swap; reads never query SQLite |
+| Replication | Open | A second independently refreshing reader and artifact distribution are not deployed yet |
 | Locale tokenizers/stemming/synonyms/infix | Not configured | The active collection does not use them |
 
 Full phrase/proximity ranking and a larger human-judged query set remain the

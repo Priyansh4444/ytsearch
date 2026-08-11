@@ -64,6 +64,12 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Make acknowledged writes visible on both readers within 60 seconds at p95.
 - [x] Add checksummed atomic generations, crash recovery, and one-generation rollback.
 - [ ] Replace full-generation publication with streaming bounded-memory compaction.
+  - [x] Coalesce explicit publication requests to a captured operation sequence;
+    mutations arriving during a build remain durable for the next requested
+    generation instead of triggering an unbounded rebuild loop.
+  - [x] Remove abandoned `work/*` and `*.candidate` artifacts before recovery.
+  - [ ] Eliminate the 6.6 GiB uncompressed merged-JSON scratch file and the
+    retained in-memory postings builder.
 - [ ] Upload checksummed versioned artifacts to private R2 once R2 is enabled.
 - [x] Bootstrap Raw from the final matched snapshot and remove dual-writing from
   the repository. The deployed legacy queue remains a cutover task below.
@@ -110,9 +116,10 @@ Raw can replace Typesense as the canonical search index.
   matched 1,956-video comparison (71% lower p95 and 73% lower CPU).
 - [x] Raw steady-state RSS is at most 60% of Typesense. The full Raw snapshot
   warmed to 347 MiB versus about 3.9 GiB for the restored Typesense clone.
-- [ ] Full-snapshot compaction peak RSS stays below 512 MiB. The current mutable
-  full-corpus publication peaks at about 2.46 GiB; replace retained builder state with
-  streaming runs before treating the writer as production-ready.
+- [ ] Full-snapshot compaction peak RSS stays below 512 MiB. Live generation 461
+  reached 2,796,580 KiB process HWM and about 3.90 GiB total cgroup usage
+  including reclaimable page cache; replace retained builder state and the
+  uncompressed merged corpus with streaming runs.
 - [x] Complete-position artifact growth is measured and documented.
 - [x] Benchmarks name corpus, hardware, build mode, concurrency, and cache state.
 - [x] Every optimization has a correctness invariant and rollback condition.
@@ -131,6 +138,15 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Update this ledger in the same commit that completes each item.
 
 ## Regression Log
+
+- [x] Prefix candidates were skipped whenever five exact candidates existed,
+  hiding valid videos for multi-token queries such as `linux exploit`. Prefix
+  expansion now participates before the typo threshold; the full corpus returns
+  the same 189-video recall as the Typesense control.
+- [x] Startup recovery and `publish_pending` chased every mutation sequence while
+  a batch writer was active, repeatedly rebuilding the entire corpus and leaving
+  abandoned scratch directories. Publication now targets a captured explicit
+  sequence, coalesces only explicit requests, and removes uncommitted scratch.
 
 - [x] A browser tab could retain a pre-cutover Typesense search response because
   the API advertised a public stale-while-revalidate window. Search and
