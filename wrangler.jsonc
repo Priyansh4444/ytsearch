@@ -17,7 +17,7 @@
     "FLY_API_BASE_URL": "https://api.machines.dev",
     "FLY_APP_NAME": "ytsearch-indexer-raw-production",
     "FLY_RAW_SEARCH_APP_NAME": "ytsearch-raw-production",
-    "FLY_RAW_SEARCH_MACHINE_ID": "7813351a005348",
+    "FLY_RAW_SEARCH_MACHINE_ID": "d89303da029328",
     "RAW_SEARCH_HEALTH_URL": "https://ytsearch-raw-production.fly.dev/health",
     "SEARCH_SCHEDULE_MODE": "enforce",
   },
