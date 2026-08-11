@@ -135,6 +135,16 @@ fn publication_atomically_replaces_adds_and_deletes_videos() {
         0,
         "publication must not materialize a merged JSON corpus"
     );
+    assert!(
+        fs::read_dir(&published.path).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with('.')
+        }),
+        "completed generations must not retain builder spools"
+    );
 }
 
 #[test]

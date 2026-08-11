@@ -36,6 +36,43 @@ struct PositionSpoolWriter {
     scratch: Vec<u8>,
 }
 
+struct PostingShardWriter {
+    directory: PathBuf,
+    outputs: Vec<Option<BufWriter<File>>>,
+}
+
+impl PostingShardWriter {
+    fn create(directory: PathBuf) -> Result<Self> {
+        fs::create_dir_all(&directory)?;
+        Ok(Self {
+            directory,
+            outputs: (0..POSTING_SHARDS).map(|_| None).collect(),
+        })
+    }
+
+    fn append(&mut self, term: &str, posting: BuildPosting, title: bool) -> Result<()> {
+        let shard = usize::from(term.as_bytes()[0]);
+        if self.outputs[shard].is_none() {
+            self.outputs[shard] = Some(BufWriter::new(File::create(
+                self.directory.join(format!("{shard:03}.bin")),
+            )?));
+        }
+        write_spool_posting(
+            self.outputs[shard].as_mut().expect("posting shard exists"),
+            term,
+            posting,
+            title,
+        )
+    }
+
+    fn finish(mut self) -> Result<()> {
+        for output in self.outputs.iter_mut().flatten() {
+            output.flush()?;
+        }
+        Ok(())
+    }
+}
+
 impl PositionSpoolWriter {
     fn create(path: &Path) -> Result<Self> {
         let mut output = BufWriter::new(File::create(path)?);
@@ -102,7 +139,7 @@ impl TokenBuild {
 }
 
 fn append_token_postings(
-    terms: &mut HashMap<String, TermBuild>,
+    postings: &mut PostingShardWriter,
     counts: TokenCounts,
     id: u32,
     title: bool,
@@ -122,12 +159,7 @@ fn append_token_postings(
             position_length,
             frequency,
         };
-        let lists = terms.entry(term).or_default();
-        if title {
-            lists.title.push(posting);
-        } else {
-            lists.text.push(posting);
-        }
+        postings.append(&term, posting, title)?;
     }
     Ok(())
 }
@@ -167,10 +199,14 @@ where
     let mut position_spool = PositionSpoolWriter::create(&position_spool_path)?;
     let mut position_scratch = Vec::new();
 
-    let mut terms: HashMap<String, TermBuild> = HashMap::new();
+    let posting_spool_path = index_path.join(POSTING_SPOOL_DIRECTORY);
+    let mut posting_spool = PostingShardWriter::create(posting_spool_path.clone())?;
     let mut videos = Vec::<VideoMeta>::new();
     let mut video_ids = HashMap::<String, u32>::new();
-    let mut document_records = Vec::<DocumentRecord>::new();
+    let document_record_spool_path = index_path.join(DOCUMENT_RECORD_SPOOL_FILE);
+    let mut document_record_spool = BufWriter::new(File::create(&document_record_spool_path)?);
+    let mut document_count = 0_u32;
+    let mut last_document_start = Vec::<Option<u32>>::new();
     let mut block_records = Vec::<BlockRecord>::new();
     let mut block_bytes = Vec::<u8>::with_capacity(256 * 1024);
     let mut block_document_count = 0_usize;
@@ -199,7 +235,7 @@ where
             let video = videos.len() as u32;
             let title_counts = token_counts(&source.title)?;
             append_token_postings(
-                &mut terms,
+                &mut posting_spool,
                 title_counts,
                 video,
                 true,
@@ -217,11 +253,15 @@ where
                 comment_count: source.comment_count,
                 documents: Vec::new(),
             });
+            last_document_start.push(None);
             video_ids.insert(source.video_id, video);
             video
         };
 
-        let document = document_records.len() as u32;
+        let document = document_count;
+        document_count = document_count.checked_add(1).ok_or_else(|| {
+            Error::InvalidInput("corpus contains more than 4 billion documents".to_string())
+        })?;
         let text_counts = token_counts(&source.text)?;
         let document_tokens = text_counts
             .terms
@@ -230,7 +270,7 @@ where
             .sum::<u32>();
         total_tokens = total_tokens.saturating_add(u64::from(document_tokens));
         append_token_postings(
-            &mut terms,
+            &mut posting_spool,
             text_counts,
             document,
             false,
@@ -241,23 +281,24 @@ where
         let line_bytes = line.as_bytes();
         let offset = block_bytes.len() as u32;
         block_bytes.extend_from_slice(line_bytes);
-        if let Some(previous_document) = videos[video as usize].documents.last().copied() {
-            let previous_start = document_records[previous_document as usize].t_start_ms;
-            if source.t_start_ms < previous_start {
-                return Err(Error::InvalidInput(format!(
-                    "video {} has out-of-order moments: {} follows {}",
-                    videos[video as usize].id, source.t_start_ms, previous_start
-                )));
-            }
+        if let Some(previous_start) = last_document_start[video as usize]
+            && source.t_start_ms < previous_start
+        {
+            return Err(Error::InvalidInput(format!(
+                "video {} has out-of-order moments: {} follows {}",
+                videos[video as usize].id, source.t_start_ms, previous_start
+            )));
         }
-        document_records.push(DocumentRecord {
+        let record = DocumentRecord {
             block: block_records.len() as u32,
             offset,
             length: line_bytes.len() as u32,
             video,
             tokens: document_tokens,
             t_start_ms: source.t_start_ms,
-        });
+        };
+        write_document_record(&mut document_record_spool, record)?;
+        last_document_start[video as usize] = Some(source.t_start_ms);
         videos[video as usize].documents.push(document);
         block_document_count += 1;
 
@@ -270,7 +311,10 @@ where
         flush_document_block(&mut document_output, &mut block_bytes, &mut block_records)?;
     }
     document_output.flush()?;
+    document_record_spool.flush()?;
+    drop(document_record_spool);
     position_spool.finish()?;
+    posting_spool.finish()?;
 
     serde_json::to_writer(
         BufWriter::new(File::create(index_path.join(CHANNELS_FILE))?),
@@ -280,13 +324,19 @@ where
         BufWriter::new(File::create(index_path.join(VIDEOS_FILE))?),
         &videos,
     )?;
-    write_metadata(index_path, &document_records, &block_records)?;
+    write_metadata(
+        index_path,
+        document_count,
+        &document_record_spool_path,
+        &block_records,
+    )?;
+    fs::remove_file(&document_record_spool_path)?;
     let position_spool = MappedFile::open(&position_spool_path, POSITION_SPOOL_MAGIC)?;
-    let term_count = write_postings(index_path, terms, &videos, &position_spool)?;
+    let term_count = write_postings(index_path, &posting_spool_path, &videos, &position_spool)?;
     drop(position_spool);
     fs::remove_file(&position_spool_path)?;
+    fs::remove_dir_all(&posting_spool_path)?;
 
-    let document_count = document_records.len() as u32;
     let average_document_tokens = if document_count == 0 {
         0.0
     } else {
@@ -399,23 +449,17 @@ fn flush_document_block(
 
 fn write_metadata(
     index_path: &Path,
-    documents: &[DocumentRecord],
+    document_count: u32,
+    document_record_spool: &Path,
     blocks: &[BlockRecord],
 ) -> Result<()> {
     let mut output = BufWriter::new(File::create(index_path.join(METADATA_FILE))?);
     let mut header = Vec::with_capacity(METADATA_PREFIX_BYTES);
-    write_header(&mut header, METADATA_MAGIC, documents.len() as u32);
+    write_header(&mut header, METADATA_MAGIC, document_count);
     header.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
     header.extend_from_slice(&0_u32.to_le_bytes());
     output.write_all(&header)?;
-    for document in documents {
-        output.write_all(&document.block.to_le_bytes())?;
-        output.write_all(&document.offset.to_le_bytes())?;
-        output.write_all(&document.length.to_le_bytes())?;
-        output.write_all(&document.video.to_le_bytes())?;
-        output.write_all(&document.tokens.to_le_bytes())?;
-        output.write_all(&document.t_start_ms.to_le_bytes())?;
-    }
+    std::io::copy(&mut File::open(document_record_spool)?, &mut output)?;
     for block in blocks {
         output.write_all(&block.offset.to_le_bytes())?;
         output.write_all(&block.compressed_length.to_le_bytes())?;
@@ -425,32 +469,48 @@ fn write_metadata(
     Ok(())
 }
 
+fn write_document_record(output: &mut impl Write, document: DocumentRecord) -> Result<()> {
+    output.write_all(&document.block.to_le_bytes())?;
+    output.write_all(&document.offset.to_le_bytes())?;
+    output.write_all(&document.length.to_le_bytes())?;
+    output.write_all(&document.video.to_le_bytes())?;
+    output.write_all(&document.tokens.to_le_bytes())?;
+    output.write_all(&document.t_start_ms.to_le_bytes())?;
+    Ok(())
+}
+
 fn write_postings(
     index_path: &Path,
-    terms: HashMap<String, TermBuild>,
+    posting_spool_directory: &Path,
     videos: &[VideoMeta],
     position_spool: &MappedFile,
 ) -> Result<usize> {
-    let mut terms = terms.into_iter().collect::<Vec<_>>();
-    terms.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    let shard_paths = refine_posting_shards(posting_spool_directory)?;
+    let mut term_count = 0_usize;
+    for path in &shard_paths {
+        term_count = term_count
+            .checked_add(read_posting_shard(path)?.len())
+            .ok_or_else(|| Error::Corrupt("term count overflows usize".to_string()))?;
+    }
+    let term_count_u32 = u32::try_from(term_count)
+        .map_err(|_| Error::Corrupt("term count exceeds u32".to_string()))?;
     let mut postings = BufWriter::new(File::create(index_path.join(POSTINGS_FILE))?);
     let mut postings_header = Vec::with_capacity(HEADER_BYTES);
-    write_header(&mut postings_header, POSTINGS_MAGIC, terms.len() as u32);
+    write_header(&mut postings_header, POSTINGS_MAGIC, term_count_u32);
     postings.write_all(&postings_header)?;
     let mut positions = BufWriter::new(File::create(index_path.join(POSITIONS_FILE))?);
     let mut positions_header = Vec::with_capacity(HEADER_BYTES);
-    write_header(&mut positions_header, POSITIONS_MAGIC, terms.len() as u32);
+    write_header(&mut positions_header, POSITIONS_MAGIC, term_count_u32);
     positions.write_all(&positions_header)?;
     let mut full_positions = BufWriter::new(File::create(index_path.join(FULL_POSITIONS_FILE))?);
     let mut full_positions_header = Vec::with_capacity(HEADER_BYTES);
     write_header(
         &mut full_positions_header,
         FULL_POSITIONS_MAGIC,
-        terms.len() as u32,
+        term_count_u32,
     );
     full_positions.write_all(&full_positions_header)?;
-    let position_offsets_count = terms
-        .len()
+    let position_offsets_count = term_count
         .checked_mul(2)
         .and_then(|count| count.checked_add(1))
         .ok_or_else(|| Error::Corrupt("position offset count overflows".to_string()))?;
@@ -464,65 +524,73 @@ fn write_postings(
     let mut full_positions_position = 0_u32;
     let mut position_offsets = Vec::with_capacity(position_offsets_count);
     let mut full_position_offsets = Vec::with_capacity(position_offsets_count);
-    let mut lexicon = Vec::with_capacity(terms.len());
+    let mut lexicon = Vec::with_capacity(term_count);
     let mut position_scratch = Vec::with_capacity(5);
 
-    for (term, lists) in terms {
-        let text = encode_postings(&lists.text);
-        let text_offset = postings_position;
-        postings.write_all(&text)?;
-        postings_position += text.len() as u64;
-        position_offsets.push(positions_position);
-        full_position_offsets.push(full_positions_position);
-        let (text_first_bytes, text_remaining_bytes) = write_position_lists(
-            &lists.text,
-            position_spool,
-            &mut positions,
-            &mut full_positions,
-            &mut position_scratch,
-        )?;
-        positions_position = positions_position
-            .checked_add(text_first_bytes)
-            .ok_or_else(|| Error::Corrupt("positions file exceeds u32 length".to_string()))?;
-        full_positions_position = full_positions_position
-            .checked_add(text_remaining_bytes)
-            .ok_or_else(|| Error::Corrupt("full positions file exceeds u32 length".to_string()))?;
-        let title = encode_postings(&lists.title);
-        let fuzzy_title_frequency = lists.title.iter().fold(0_u32, |frequency, posting| {
-            frequency.saturating_add(
-                videos
-                    .get(posting.id as usize)
-                    .map_or(0, |video| video.documents.len() as u32),
-            )
-        });
-        let title_offset = postings_position;
-        postings.write_all(&title)?;
-        postings_position += title.len() as u64;
-        position_offsets.push(positions_position);
-        full_position_offsets.push(full_positions_position);
-        let (title_first_bytes, title_remaining_bytes) = write_position_lists(
-            &lists.title,
-            position_spool,
-            &mut positions,
-            &mut full_positions,
-            &mut position_scratch,
-        )?;
-        positions_position = positions_position
-            .checked_add(title_first_bytes)
-            .ok_or_else(|| Error::Corrupt("positions file exceeds u32 length".to_string()))?;
-        full_positions_position = full_positions_position
-            .checked_add(title_remaining_bytes)
-            .ok_or_else(|| Error::Corrupt("full positions file exceeds u32 length".to_string()))?;
-        lexicon.push(LexiconBuildEntry {
-            term,
-            text_offset,
-            text_length: text.len() as u32,
-            text_frequency: lists.text.len() as u32,
-            title_offset,
-            title_length: title.len() as u32,
-            title_frequency: lists.title.len() as u32,
-            fuzzy_title_frequency,
-        });
+    for path in shard_paths {
+        let mut terms = read_posting_shard(&path)?.into_iter().collect::<Vec<_>>();
+        terms.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        for (term, lists) in terms {
+            let text = encode_postings(&lists.text);
+            let text_offset = postings_position;
+            postings.write_all(&text)?;
+            postings_position += text.len() as u64;
+            position_offsets.push(positions_position);
+            full_position_offsets.push(full_positions_position);
+            let (text_first_bytes, text_remaining_bytes) = write_position_lists(
+                &lists.text,
+                position_spool,
+                &mut positions,
+                &mut full_positions,
+                &mut position_scratch,
+            )?;
+            positions_position = positions_position
+                .checked_add(text_first_bytes)
+                .ok_or_else(|| Error::Corrupt("positions file exceeds u32 length".to_string()))?;
+            full_positions_position = full_positions_position
+                .checked_add(text_remaining_bytes)
+                .ok_or_else(|| {
+                    Error::Corrupt("full positions file exceeds u32 length".to_string())
+                })?;
+            let title = encode_postings(&lists.title);
+            let fuzzy_title_frequency = lists.title.iter().fold(0_u32, |frequency, posting| {
+                frequency.saturating_add(
+                    videos
+                        .get(posting.id as usize)
+                        .map_or(0, |video| video.documents.len() as u32),
+                )
+            });
+            let title_offset = postings_position;
+            postings.write_all(&title)?;
+            postings_position += title.len() as u64;
+            position_offsets.push(positions_position);
+            full_position_offsets.push(full_positions_position);
+            let (title_first_bytes, title_remaining_bytes) = write_position_lists(
+                &lists.title,
+                position_spool,
+                &mut positions,
+                &mut full_positions,
+                &mut position_scratch,
+            )?;
+            positions_position = positions_position
+                .checked_add(title_first_bytes)
+                .ok_or_else(|| Error::Corrupt("positions file exceeds u32 length".to_string()))?;
+            full_positions_position = full_positions_position
+                .checked_add(title_remaining_bytes)
+                .ok_or_else(|| {
+                    Error::Corrupt("full positions file exceeds u32 length".to_string())
+                })?;
+            lexicon.push(LexiconBuildEntry {
+                term,
+                text_offset,
+                text_length: text.len() as u32,
+                text_frequency: lists.text.len() as u32,
+                title_offset,
+                title_length: title.len() as u32,
+                title_frequency: lists.title.len() as u32,
+                fuzzy_title_frequency,
+            });
+        }
     }
     position_offsets.push(positions_position);
     full_position_offsets.push(full_positions_position);
@@ -550,6 +618,159 @@ fn write_postings(
     )?;
     write_lexicon(index_path, &lexicon)?;
     Ok(lexicon.len())
+}
+
+fn refine_posting_shards(directory: &Path) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    let mut next_id = 0_u64;
+    for shard in 0..POSTING_SHARDS {
+        let path = directory.join(format!("{shard:03}.bin"));
+        if path.exists() {
+            refine_posting_shard(directory, path, 1, &mut next_id, &mut paths)?;
+        }
+    }
+    Ok(paths)
+}
+
+fn refine_posting_shard(
+    directory: &Path,
+    path: PathBuf,
+    depth: usize,
+    next_id: &mut u64,
+    output_paths: &mut Vec<PathBuf>,
+) -> Result<()> {
+    if fs::metadata(&path)?.len() <= MAX_POSTING_SHARD_BYTES {
+        output_paths.push(path);
+        return Ok(());
+    }
+
+    let mut input = BufReader::new(File::open(&path)?);
+    let mut outputs = (0..257)
+        .map(|_| None)
+        .collect::<Vec<Option<BufWriter<File>>>>();
+    let mut child_paths = vec![None; 257];
+    let mut can_refine = false;
+    while let Some(record) = read_spool_posting(&mut input)? {
+        let key = record
+            .term
+            .as_bytes()
+            .get(depth)
+            .map_or(0, |byte| usize::from(*byte) + 1);
+        can_refine |= record.term.len() > depth;
+        if outputs[key].is_none() {
+            let child = directory.join(format!("refined-{:08}.bin", *next_id));
+            *next_id = next_id
+                .checked_add(1)
+                .ok_or_else(|| Error::Corrupt("posting shard id overflows".to_string()))?;
+            outputs[key] = Some(BufWriter::new(File::create(&child)?));
+            child_paths[key] = Some(child);
+        }
+        write_spool_posting(
+            outputs[key].as_mut().expect("refined shard exists"),
+            &record.term,
+            record.posting,
+            record.title,
+        )?;
+    }
+    for output in outputs.iter_mut().flatten() {
+        output.flush()?;
+    }
+    drop(outputs);
+    fs::remove_file(path)?;
+
+    let populated = child_paths.iter().flatten().count();
+    for child in child_paths.into_iter().flatten() {
+        if populated == 1 && !can_refine {
+            output_paths.push(child);
+        } else {
+            refine_posting_shard(directory, child, depth + 1, next_id, output_paths)?;
+        }
+    }
+    Ok(())
+}
+
+struct SpoolPosting {
+    term: String,
+    posting: BuildPosting,
+    title: bool,
+}
+
+fn write_spool_posting(
+    output: &mut impl Write,
+    term: &str,
+    posting: BuildPosting,
+    title: bool,
+) -> Result<()> {
+    let term_bytes = term.as_bytes();
+    let term_length = u16::try_from(term_bytes.len())
+        .map_err(|_| Error::InvalidInput("term exceeds 65,535 bytes".to_string()))?;
+    output.write_all(&term_length.to_le_bytes())?;
+    output.write_all(term_bytes)?;
+    output.write_all(&[u8::from(title)])?;
+    output.write_all(&posting.id.to_le_bytes())?;
+    output.write_all(&posting.position_offset.to_le_bytes())?;
+    output.write_all(&posting.position_length.to_le_bytes())?;
+    output.write_all(&posting.frequency.to_le_bytes())?;
+    Ok(())
+}
+
+fn read_spool_posting(input: &mut impl Read) -> Result<Option<SpoolPosting>> {
+    let mut length_bytes = [0_u8; 2];
+    if input.read(&mut length_bytes[..1])? == 0 {
+        return Ok(None);
+    }
+    input.read_exact(&mut length_bytes[1..])?;
+    let length = usize::from(u16::from_le_bytes(length_bytes));
+    if length == 0 {
+        return Err(Error::Corrupt(
+            "posting shard contains an empty term".to_string(),
+        ));
+    }
+    let mut term = vec![0_u8; length];
+    input.read_exact(&mut term)?;
+    let term = String::from_utf8(term)
+        .map_err(|_| Error::Corrupt("posting shard term is not UTF-8".to_string()))?;
+    let mut encoded = [0_u8; 13];
+    input.read_exact(&mut encoded)?;
+    let title = match encoded[0] {
+        0 => false,
+        1 => true,
+        _ => {
+            return Err(Error::Corrupt(
+                "posting shard field discriminator is invalid".to_string(),
+            ));
+        }
+    };
+    Ok(Some(SpoolPosting {
+        term,
+        posting: BuildPosting {
+            id: u32::from_le_bytes(encoded[1..5].try_into().expect("posting id bytes")),
+            position_offset: u32::from_le_bytes(
+                encoded[5..9].try_into().expect("posting offset bytes"),
+            ),
+            position_length: u16::from_le_bytes(
+                encoded[9..11].try_into().expect("posting length bytes"),
+            ),
+            frequency: u16::from_le_bytes(
+                encoded[11..13].try_into().expect("posting frequency bytes"),
+            ),
+        },
+        title,
+    }))
+}
+
+fn read_posting_shard(path: &Path) -> Result<HashMap<String, TermBuild>> {
+    let mut input = BufReader::new(File::open(path)?);
+    let mut terms = HashMap::<String, TermBuild>::new();
+    while let Some(record) = read_spool_posting(&mut input)? {
+        let lists = terms.entry(record.term).or_default();
+        if record.title {
+            lists.title.push(record.posting);
+        } else {
+            lists.text.push(record.posting);
+        }
+    }
+    Ok(terms)
 }
 
 fn write_position_lists(
