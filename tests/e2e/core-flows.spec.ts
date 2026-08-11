@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { SearchAvailability } from "../../src/types";
 
 test.use({ timezoneId: "America/Los_Angeles" });
 
@@ -57,7 +58,7 @@ const searchResponse = {
   ],
 };
 
-const readyAvailability = {
+const readyAvailability: SearchAvailability = {
   status: "ready",
   search_enabled: true,
   enforced: true,
