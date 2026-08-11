@@ -9,6 +9,7 @@ scripts/check-rust-dependency-policy.sh
 scripts/test-setup-dev.sh
 scripts/test-doctor.sh
 scripts/test-check-queue-indexers.sh
+scripts/test-destroy-deprecated-typesense-fly.sh
 scripts/test-index-conference-playlists.sh
 scripts/test-compare-autoresearch-search.sh
 scripts/test-idle-gap-fill.sh

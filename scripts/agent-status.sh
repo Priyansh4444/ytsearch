@@ -52,7 +52,23 @@ if [ -n "$ENGINE_URL" ]; then
 fi
 
 machines="$(flyctl machine list --app "$INDEXER_APP" --json 2>/dev/null || printf '[]')"
-worker="$(printf '%s' "$machines" | jq -c '[.[] | select(.config.env.QUEUE_TARGET_BACKEND == "raw") | {id,name,state,restart:(.config.restart.policy // "")} ] | first // null')"
+worker="$(printf '%s' "$machines" | jq -c '
+  [.[] | select(.config.env.QUEUE_TARGET_BACKEND == "raw") |
+    (.config.init.cmd // [] | join(" ")) as $command |
+    {
+      id,
+      name,
+      state,
+      restart:(.config.restart.policy // ""),
+      mode:(
+        if ($command | contains("cloud-index-all")) then "corpus_repair"
+        elif ($command | contains("cloud-index-queue")) then "queue"
+        else "unknown"
+        end
+      )
+    }
+  ] | first // null
+')"
 
 json="$(jq -nc \
   --argjson frontend_http "$(printf '%s' "$frontend_result" | cut -f1)" \
@@ -66,7 +82,7 @@ json="$(jq -nc \
   --slurpfile search "$tmp/search" \
   --slurpfile index_status "$tmp/status" \
   --slurpfile channels "$tmp/channels" \
-  '{ok:($frontend_http==200 and $engine_http==200 and $search_http==200 and $status_http==200 and $channels_http==200 and (if ($index_status[0].status // "idle") == "idle" then ($worker.state == "started" or $worker.state == "stopped") else $worker.state == "started" end)),frontend_http:$frontend_http,engine_http:$engine_http,search:{http:$search_http,seconds:$search_seconds,total_videos:($search[0].total_videos // null),total_moments:($search[0].total_moments // null)},indexing:($index_status[0] | {status,handle,indexed:(.channel.indexed_video_count // null),public:(.channel.public_video_count // null)}),corpus:{channels_http:$channels_http,channels:(($channels[0].channels // [])|length),incomplete_channels:([($channels[0].channels // [])[] | select((.public_video_count // 0) > (.indexed_video_count // 0))]|length),reported_video_gap:([($channels[0].channels // [])[] | ((.public_video_count // 0)-(.indexed_video_count // 0)) | select(. > 0)]|add // 0)},worker:$worker,engine:$metrics}')"
+  '{ok:($frontend_http==200 and $engine_http==200 and $search_http==200 and $status_http==200 and $channels_http==200 and (if ($index_status[0].status // "idle") == "idle" then ($worker.state == "started" or $worker.state == "stopped") else $worker.state == "started" end)),frontend_http:$frontend_http,engine_http:$engine_http,search:{http:$search_http,seconds:$search_seconds,total_videos:($search[0].total_videos // null),total_moments:($search[0].total_moments // null)},indexing:($index_status[0] | {status,handle,indexed:(.channel.indexed_video_count // null),public:(.channel.public_video_count // null)} + {worker_mode:$worker.mode,active:((.status // "idle") != "idle" or ($worker.state == "started" and $worker.mode == "corpus_repair"))}),corpus:{channels_http:$channels_http,channels:(($channels[0].channels // [])|length),incomplete_channels:([($channels[0].channels // [])[] | select((.public_video_count // 0) > (.indexed_video_count // 0))]|length),reported_video_gap:([($channels[0].channels // [])[] | ((.public_video_count // 0)-(.indexed_video_count // 0)) | select(. > 0)]|add // 0)},worker:$worker,engine:$metrics}')"
 
 case "$FORMAT" in
   json) printf '%s\n' "$json" ;;

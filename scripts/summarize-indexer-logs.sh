@@ -39,7 +39,7 @@ latest_summary="$(rg -i 'Index summary:|pass complete|acked request=' "$clean" |
 [ -z "$latest_active" ] || printf 'active\t%s\n' "$latest_active"
 [ -z "$latest_summary" ] || printf 'summary\t%s\n' "$latest_summary"
 
-errors="$(rg -i 'failed|error|panic|killed|out of memory|write to disk|health check.*failed' "$clean" | tail -n "$ERROR_LINES" || true)"
+errors="$(rg -i '\[error\]|panic|killed|out of memory|write to disk|health check.*failed|YouTuber\(s\) failed|backend failed|skipped .* error|publication failed' "$clean" | tail -n "$ERROR_LINES" || true)"
 if [ -n "$errors" ]; then
   printf '%s\n' "$errors" | cut -c1-400 | sed 's/^/error\t/'
 fi

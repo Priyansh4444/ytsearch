@@ -82,8 +82,10 @@ bun run check:precommit
 scripts/cloudflare-worker-deploy.sh
 ```
 
-The Worker enforces the Pacific search window. `observe` logs desired lifecycle
-changes without starting/stopping Machines; `enforce` is production mode.
+Production uses `always_on`: the five-minute reconciler restarts a stopped Raw
+reader and the availability contract explicitly promises 24/7 service.
+`observe` reports health without lifecycle changes; `enforce` is the optional
+Pacific-window policy.
 
 ## Cutover gates
 
