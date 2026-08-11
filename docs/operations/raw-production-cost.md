@@ -16,12 +16,20 @@ billing is prorated and egress remains usage-dependent.
 | Stopped indexer rootfs ceiling | 10 GB | $1.50 |
 | **Fixed Raw-only total** | | **about $21.30/month** |
 
+The fixed total is about **$0.71/day**. This is below both a $65/day ceiling and
+the stricter $65/month target used for this migration.
+
 The indexer normally starts only for queued work or scheduled repair. Its
 current `shared-cpu-4x`, 4 GB allocation is $0.0329/hour while started. Even if
 it ran continuously, the Raw-only fixed total would be about $43.46/month
-before variable egress. After the corpus migration, resize it to
+($1.45/day) before variable egress. After the corpus migration, resize it to
 `shared-cpu-2x`, 2 GB if the observed ingestion RSS remains below the rollback
 threshold.
+
+Destroying the complete verified legacy set removes 61 GB of old encrypted
+volumes, or another $9.15/month, in addition to any retired Machine rootfs
+charges. Those savings are not subtracted from the Raw-only total above because
+they are legacy cleanup rather than Raw capacity.
 
 The previous `performance-2x`, 4 GB Raw reader alone cost about $64.39/month.
 Moving the measured workload to the shared 2 GB allocation removes about
