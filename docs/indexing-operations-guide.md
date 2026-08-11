@@ -63,8 +63,8 @@ Never rewipe while the queue worker is indexing the same creator.
 Run the versioned creator list in a persistent shell/background process:
 
 ```bash
-BACKENDS=raw JOBS=1 nohup \
-  scripts/index-all-backends-update.sh scripts/indexed-channels.txt \
+JOBS=1 CHANNEL_JOBS=1 nohup \
+  scripts/index-all-raw.sh scripts/indexed-channels.txt \
   > /tmp/ytsearch-index-all.log 2>&1 &
 tail -f /tmp/ytsearch-index-all.log
 ```
@@ -72,14 +72,16 @@ tail -f /tmp/ytsearch-index-all.log
 Quiet failure-only output:
 
 ```bash
-BACKENDS=raw JOBS=1 nohup \
+BACKENDS=raw JOBS=1 CHANNEL_JOBS=1 nohup \
   scripts/run-index-all-quiet.sh scripts/indexed-channels.txt \
   > /tmp/ytsearch-index-all.quiet.out 2>&1 &
 ```
 
 Start with `JOBS=1`. Increase fetch concurrency only after measuring YouTube
 error rate, publisher peak RSS, publication latency, and public search latency.
-The full-corpus publisher currently peaks at 2.46 GiB and takes 70–80 seconds.
+`CHANNEL_JOBS` controls creator concurrency independently. The bounded
+full-corpus publisher peaked at 447.2 MiB standalone and 736 MiB while the old
+reader remained live.
 
 ## Conference playlists
 

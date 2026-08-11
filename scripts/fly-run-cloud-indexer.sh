@@ -93,6 +93,7 @@ exec flyctl machine run \
   --env "MODE=${MODE:-update}" \
   --env "JOBS=${JOBS:-3}" \
   --env "RAW_JOBS=${RAW_JOBS:-3}" \
+  --env "CHANNEL_JOBS=${CHANNEL_JOBS:-1}" \
   --env "EXISTING_TAIL=${EXISTING_TAIL:-0}" \
   --env "VIDEO_TIMEOUT_SECONDS=${VIDEO_TIMEOUT_SECONDS:-300}" \
   --env "RUST_LOG=${RUST_LOG:-youtube_cli=info,youtube_sources=info,youtube_ytdlp=warn}" \

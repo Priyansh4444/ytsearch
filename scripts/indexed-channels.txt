@@ -1,29 +1,61 @@
-@t3dotgg | Theo - t3.gg | 973 indexed
-@rasmic | Ras Mic | 124 indexed
-@bmdavis419 | Ben Davis | 115 indexed
-@benjdicken | Ben Dicken | 42 indexed
-@nerd-snipe | Nerd Snipe | 34 indexed
-@vsauce | Vsauce
-@ThePrimeagen | ThePrimeagen
-@DwarkeshPatel
-@cursor_ai
-@lexfridman
-@RyanLPeterman
-@hankschannel
-@rossmanngroup
-@pragmaticengineer
-@BetterSoftwareConference
-@MollyRocket
-@aiDotEngineer
-@LowLevelTV
-@bawad
-@Fireship
-@michaelreeves
-@DougDoug
-@codebullet
-@AppleDeveloper | Apple Developer (WWDC; broad channel until playlist scoping is available)
+@3blue1brown | 3Blue1Brown
+@_johnhammond | John Hammond
+@aidenbai | Aiden Bai
+@aiDotEngineer | AI Engineer
+@andrejkarpathy | Andrej Karpathy
+@appledeveloper | Apple Developer (WWDC; broad channel until playlist scoping is available)
+@appliedscience | Applied Science
+@ardens. | Ardens
+@asianometry | Asianometry
+@bawad | Ben Awad
+@benjdicken | Ben Dicken
+@bettersoftwareconference | Better Software Conference
+@bmdavis419 | Ben Davis
+@brancheducation | Branch Education
+@bycloudai | bycloud
+@codebullet | Code Bullet
+@computerphile | Computerphile
+@convex-dev | Convex
+@cursor_ai | Cursor
 @DEFCONConference | DEF CON Conference
-@GoogleDevelopers | Google for Developers (Google I/O; broad channel until playlist scoping is available)
-@NeetCode
-@PawelCodeStuff
-@ryansolid | Ryan Carniato (video uploads and public streams)
+@dougdoug | DougDoug
+@dwarkeshpatel | Dwarkesh Patel
+@fireship | Fireship
+@googledevelopers | Google for Developers (Google I/O; broad channel until playlist scoping is available)
+@hankschannel | Hank Green
+@healthygamergg | HealthyGamerGG
+@hyperplexed | Hyperplexed
+@jeffgeerling | Jeff Geerling
+@lauriewired | LaurieWired
+@leerob | leerob
+@lexfridman | Lex Fridman
+@liveoverflow | LiveOverflow
+@lowleveltv | Low Level
+@marimo-team | marimo
+@masterdotdev | MasterDotDev
+@mattpocockuk | Matt Pocock
+@michaelreeves | Michael Reeves
+@mollyrocket | Molly Rocket
+@neetcode | NeetCode
+@nerd-snipe | Nerd Snipe
+@planetscale | PlanetScale
+@practicalengineeringchannel | Practical Engineering
+@pragmaticengineer | The Pragmatic Engineer
+@rasmic | Ras Mic
+@reactconferences | React Conferences by GitNation
+@reducible | Reducible
+@rossmanngroup | Louis Rossmann
+@RyanLPeterman | Ryan Peterman
+@ryansolid | Ryan Carniato
+@sebastianlague | Sebastian Lague
+@smartereveryday | SmarterEveryDay
+@t3dotgg | Theo - t3.gg
+@technologyconnections | Technology Connections
+@theavocoder | Lydia Hallie
+@theprimeagen | ThePrimeagen
+@TomScottGo | Tom Scott
+@TwoMinutePapers | Two Minute Papers
+@VercelHQ | Vercel
+@veritasium | Veritasium
+@vimjoyer | Vimjoyer
+@vsauce | Vsauce

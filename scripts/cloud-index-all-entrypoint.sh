@@ -6,6 +6,7 @@ BACKENDS="${BACKENDS:-raw}"
 MODE="${MODE:-update}"
 JOBS="${JOBS:-2}"
 RAW_JOBS="${RAW_JOBS:-3}"
+CHANNEL_JOBS="${CHANNEL_JOBS:-1}"
 COLLECTION="${COLLECTION:-youtube_transcript_chunks}"
 VIDEO_TIMEOUT_SECONDS="${VIDEO_TIMEOUT_SECONDS:-300}"
 EXISTING_TAIL="${EXISTING_TAIL:-0}"
@@ -46,6 +47,7 @@ index_backend() {
     --mode "$MODE" \
     --collection "$COLLECTION" \
     --jobs "$jobs" \
+    --channel-jobs "$CHANNEL_JOBS" \
     --video-timeout-seconds "$VIDEO_TIMEOUT_SECONDS" \
     --stop-after-existing "$EXISTING_TAIL" \
     --transcript-cache-dir "$TRANSCRIPT_CACHE_DIR" \

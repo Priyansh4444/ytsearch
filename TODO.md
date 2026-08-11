@@ -86,7 +86,9 @@ Raw can replace Typesense as the canonical search index.
   resume incomplete channels after restarts through the durable gap cursor.
 - [ ] Batch by bytes and document count; avoid retaining transcripts twice.
 - [ ] Emit progress, retry, failure-reason, throughput, and freshness metrics.
-- [ ] Add `scripts/index-all-raw.sh` only after restart and recovery tests pass.
+- [x] Add `scripts/index-all-raw.sh` after restart and recovery tests passed;
+  the canonical list now covers all 61 live creator profiles and one CLI process
+  coalesces their mutations into a single verified generation.
 
 ### P2: operations and cutover
 

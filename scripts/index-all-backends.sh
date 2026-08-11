@@ -11,6 +11,7 @@ MODE="${MODE:-update}"
 # serialized unless an operator has provisioned and measured separate ingest
 # capacity.
 JOBS="${JOBS:-1}"
+CHANNEL_JOBS="${CHANNEL_JOBS:-1}"
 if [ "${BACKENDS+x}" != "x" ]; then
   BACKENDS="raw"
 fi
@@ -43,6 +44,7 @@ run_index_raw() {
     --mode "$MODE" \
     --collection "$COLLECTION" \
     --jobs "$JOBS" \
+    --channel-jobs "$CHANNEL_JOBS" \
     $REWIPE_ACK_ARG \
     "$@"
 }
