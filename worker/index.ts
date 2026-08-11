@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import { shouldWakeIndexer } from "./wake-policy";
 import { upstreamApiBase } from "./upstream-route";
 import { requestOriginAllowed } from "./origin-policy";
-import { evaluateSearchSchedule } from "../shared/service-schedule";
+import { evaluateSearchSchedule, type ScheduleEvaluation } from "../shared/service-schedule";
 import {
   type FlyMachine,
   flyMachineStateEffect,
@@ -13,6 +13,7 @@ import {
 } from "./fly-machine";
 import {
   scheduleEnforced,
+  searchAlwaysOn,
   scheduledOfflineResponse,
   searchAvailabilityEffect,
   rawSearchHealthyEffect,
@@ -170,12 +171,24 @@ function reconcileSearchMachineEffect(env: Env, now: Date): Effect.Effect<void> 
       env.FLY_RAW_SEARCH_APP_NAME,
       env.FLY_RAW_SEARCH_MACHINE_ID,
     );
-    if (!scheduleEnforced(env)) {
+    if (searchAlwaysOn(env)) {
       yield* Effect.sync(() =>
-        logEvent("raw_search_schedule_observed", {
+        logEvent("raw_search_always_on_reconciled", {
           schedule_phase: schedule.phase,
           machine_state: state,
-          desired_state: schedule.phase === "closed" ? "stopped" : "started",
+          desired_state: "started",
+        }),
+      );
+      yield* ensureSearchMachineStartedEffect(env, state, schedule.phase);
+      return;
+    }
+
+    if (!scheduleEnforced(env)) {
+      yield* Effect.sync(() =>
+        logEvent("raw_search_schedule_mode_invalid", {
+          configured_mode: env.SEARCH_SCHEDULE_MODE ?? "missing",
+          schedule_phase: schedule.phase,
+          machine_state: state,
         }),
       );
       return;
@@ -266,7 +279,7 @@ function isStopped(state: FlyMachineState): boolean {
 function ensureSearchMachineStartedEffect(
   env: Env,
   state: FlyMachineState,
-  schedulePhase: "prewarm" | "open",
+  schedulePhase: ScheduleEvaluation["phase"],
 ): Effect.Effect<void, Error> {
   return Effect.gen(function* () {
     if (state === "started" || state === "starting") {

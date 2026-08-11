@@ -243,6 +243,51 @@ describe("scheduled search availability", () => {
     );
   });
 
+  test("restarts a stopped Raw machine after midnight in always-on mode", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ state: "stopped" }))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await worker.scheduled(
+      scheduledController("*/5 * * * *", "2026-07-27T07:00:00Z"),
+      testEnv({ SEARCH_SCHEDULE_MODE: "always_on" }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      "/apps/ytsearch-raw-production/machines/8147deb94937e8/start",
+    );
+  });
+
+  test("accepts an indexer wake after midnight in always-on mode", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-27T07:00:00Z"));
+    const ack = vi.fn();
+    const retry = vi.fn();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json([indexerMachine("stopped")]))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await worker.queue(
+      {
+        messages: [{ body: { reason: "scheduled-repair" }, attempts: 1, ack, retry }],
+      } as unknown as MessageBatch<WakeMessage>,
+      testEnv({ SEARCH_SCHEDULE_MODE: "always_on" }),
+    );
+
+    expect(ack).toHaveBeenCalledOnce();
+    expect(retry).not.toHaveBeenCalled();
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      "/apps/ytsearch-indexer-raw-production/machines/current-indexer/start",
+    );
+  });
+
   test("acknowledges and defers an off-hours indexer wake", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-26T17:00:00Z"));

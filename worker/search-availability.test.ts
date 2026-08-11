@@ -58,7 +58,7 @@ describe("search availability", () => {
 
     const result = await searchAvailability(
       {
-        SEARCH_SCHEDULE_MODE: "observe",
+        SEARCH_SCHEDULE_MODE: "always_on",
         RAW_SEARCH_HEALTH_URL: healthUrl,
       },
       new Date("2026-01-15T18:00:00Z"),

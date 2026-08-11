@@ -35,6 +35,10 @@ export function scheduleEnforced(env: AvailabilityEnvironment): boolean {
   return env.SEARCH_SCHEDULE_MODE === "enforce";
 }
 
+export function searchAlwaysOn(env: AvailabilityEnvironment): boolean {
+  return env.SEARCH_SCHEDULE_MODE === "always_on";
+}
+
 export const searchAvailabilityEffect = (
   env: AvailabilityEnvironment,
   now = new Date(),
