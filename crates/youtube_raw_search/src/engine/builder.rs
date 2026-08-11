@@ -137,6 +137,21 @@ pub fn build_index(
     channels_path: &Path,
     index_path: &Path,
 ) -> Result<BuildReport> {
+    let chunk_lines = BufReader::new(File::open(chunks_path)?)
+        .lines()
+        .map(|line| line.map_err(Error::from));
+    let channels = read_json_lines(channels_path)?;
+    build_index_from_lines(chunk_lines, channels, index_path)
+}
+
+pub(crate) fn build_index_from_lines<I>(
+    chunk_lines: I,
+    channels: Vec<Value>,
+    index_path: &Path,
+) -> Result<BuildReport>
+where
+    I: Iterator<Item = Result<String>>,
+{
     let started = Instant::now();
     if index_path.join(MANIFEST_FILE).exists() {
         return Err(Error::ExistingIndex(index_path.display().to_string()));
@@ -161,7 +176,7 @@ pub fn build_index(
     let mut block_document_count = 0_usize;
     let mut total_tokens = 0_u64;
 
-    for line in BufReader::new(File::open(chunks_path)?).lines() {
+    for line in chunk_lines {
         let line = line?;
         if line.trim().is_empty() {
             continue;
@@ -257,7 +272,6 @@ pub fn build_index(
     document_output.flush()?;
     position_spool.finish()?;
 
-    let channels = read_json_lines(channels_path)?;
     serde_json::to_writer(
         BufWriter::new(File::create(index_path.join(CHANNELS_FILE))?),
         &channels,

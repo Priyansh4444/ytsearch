@@ -1,4 +1,6 @@
-use crate::{BuildReport, MutationSnapshot, MutationStore, RawSearchEngine, build_index};
+use crate::{
+    BuildReport, MutationSnapshot, MutationStore, RawSearchEngine, engine::build_index_from_lines,
+};
 use flate2::read::MultiGzDecoder;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -41,11 +43,6 @@ struct ActiveGeneration {
 struct ChunkKey {
     video_id: String,
     youtuber_id: String,
-}
-
-struct MergedCorpus {
-    chunks: PathBuf,
-    channels: PathBuf,
 }
 
 impl Publisher {
@@ -107,25 +104,15 @@ impl Publisher {
         }
 
         let candidate_path = final_path.with_extension("candidate");
-        let work_path = self
-            .paths
-            .state_directory
-            .join("work")
-            .join(format!("{:020}", snapshot.through_sequence));
         reset_private_directory(&self.paths.state_directory, &candidate_path)?;
-        reset_private_directory(&self.paths.state_directory, &work_path)?;
-        fs::create_dir_all(&work_path).map_err(map_io)?;
 
-        let corpus = self.write_merged_corpus(&snapshot, &work_path)?;
-        let report =
-            build_index(&corpus.chunks, &corpus.channels, &candidate_path).map_err(map_raw)?;
+        let report = self.build_generation(&snapshot, &candidate_path)?;
         let engine = RawSearchEngine::open(&candidate_path).map_err(map_raw)?;
         sync_directory_tree(&candidate_path)?;
         fs::rename(&candidate_path, &final_path).map_err(map_io)?;
         sync_directory(&self.paths.state_directory.join("generations"))?;
         self.activate(snapshot.through_sequence, &generation_name)?;
         store.mark_published(snapshot.through_sequence)?;
-        fs::remove_dir_all(&work_path).map_err(map_io)?;
         self.remove_old_generations(snapshot.through_sequence)?;
 
         Ok(Some(PublishedGeneration {
@@ -136,13 +123,11 @@ impl Publisher {
         }))
     }
 
-    fn write_merged_corpus(
+    fn build_generation(
         &self,
         snapshot: &MutationSnapshot,
-        work_path: &Path,
-    ) -> Result<MergedCorpus, IndexStoreError> {
-        let chunks_path = work_path.join("chunks.jsonl");
-        let channels_path = work_path.join("channels.jsonl");
+        candidate_path: &Path,
+    ) -> Result<BuildReport, IndexStoreError> {
         let video_mutations = snapshot
             .videos
             .iter()
@@ -155,34 +140,39 @@ impl Publisher {
             .map(|mutation| mutation.channel_id.as_str())
             .collect::<HashSet<_>>();
 
-        let mut chunks_output = BufWriter::new(File::create(&chunks_path).map_err(map_io)?);
-        for line in gzip_lines(&self.paths.base_chunks_gzip)? {
-            let line = line.map_err(map_io)?;
-            let key: ChunkKey = serde_json::from_str(&line).map_err(map_json)?;
+        let base_documents = gzip_lines(&self.paths.base_chunks_gzip)?.filter_map(|line| {
+            let line = match line {
+                Ok(line) => line,
+                Err(error) => return Some(Err(crate::Error::Io(error))),
+            };
+            let key = match serde_json::from_str::<ChunkKey>(&line) {
+                Ok(key) => key,
+                Err(error) => return Some(Err(crate::Error::Json(error))),
+            };
             if video_mutations.contains_key(key.video_id.as_str())
                 || cascaded_channels.contains(key.youtuber_id.as_str())
             {
-                continue;
+                None
+            } else {
+                Some(Ok(line))
             }
-            chunks_output.write_all(line.as_bytes()).map_err(map_io)?;
-            chunks_output.write_all(b"\n").map_err(map_io)?;
-        }
-        for mutation in &snapshot.videos {
-            let Some(chunks) = &mutation.chunks else {
-                continue;
-            };
-            if chunks
-                .first()
-                .is_some_and(|chunk| cascaded_channels.contains(chunk.youtuber_id()))
-            {
-                continue;
-            }
-            for chunk in chunks {
-                serde_json::to_writer(&mut chunks_output, chunk).map_err(map_json)?;
-                chunks_output.write_all(b"\n").map_err(map_io)?;
-            }
-        }
-        chunks_output.flush().map_err(map_io)?;
+        });
+        let replacement_documents = snapshot
+            .videos
+            .iter()
+            .flat_map(|mutation| {
+                mutation
+                    .chunks
+                    .as_deref()
+                    .filter(|chunks| {
+                        !chunks
+                            .first()
+                            .is_some_and(|chunk| cascaded_channels.contains(chunk.youtuber_id()))
+                    })
+                    .unwrap_or_default()
+                    .iter()
+            })
+            .map(|chunk| serde_json::to_string(chunk).map_err(crate::Error::Json));
 
         let mut channels = BTreeMap::<String, ChannelDocument>::new();
         for line in gzip_lines(&self.paths.base_channels_gzip)? {
@@ -200,17 +190,16 @@ impl Publisher {
                 }
             }
         }
-        let mut channels_output = BufWriter::new(File::create(&channels_path).map_err(map_io)?);
-        for channel in channels.values() {
-            serde_json::to_writer(&mut channels_output, channel).map_err(map_json)?;
-            channels_output.write_all(b"\n").map_err(map_io)?;
-        }
-        channels_output.flush().map_err(map_io)?;
-
-        Ok(MergedCorpus {
-            chunks: chunks_path,
-            channels: channels_path,
-        })
+        build_index_from_lines(
+            base_documents.chain(replacement_documents),
+            channels
+                .into_values()
+                .map(serde_json::to_value)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(map_json)?,
+            candidate_path,
+        )
+        .map_err(map_raw)
     }
 
     fn activate(&self, sequence: u64, directory: &str) -> Result<(), IndexStoreError> {

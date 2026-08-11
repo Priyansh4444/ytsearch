@@ -160,6 +160,7 @@ mod tests;
 
 #[cfg(test)]
 use builder::BuildPosting;
+pub(crate) use builder::build_index_from_lines;
 pub use builder::{build_index, slice_corpus};
 use query_support::*;
 

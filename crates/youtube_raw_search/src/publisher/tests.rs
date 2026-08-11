@@ -1,4 +1,5 @@
 use super::*;
+use crate::build_index;
 use flate2::{Compression, write::GzEncoder};
 use serde::Serialize;
 use serde_json::json;
@@ -126,6 +127,13 @@ fn publication_atomically_replaces_adds_and_deletes_videos() {
     assert_eq!(
         store.operation("add-video").unwrap().state,
         youtube_index_store::IndexOperationState::Published
+    );
+    assert_eq!(
+        fs::read_dir(publisher.paths.state_directory.join("work"))
+            .unwrap()
+            .count(),
+        0,
+        "publication must not materialize a merged JSON corpus"
     );
 }
 
