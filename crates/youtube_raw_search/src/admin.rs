@@ -13,7 +13,7 @@ use std::{
     num::NonZeroU16,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 use youtube_index_store::{
@@ -33,6 +33,7 @@ pub struct AdminState {
     publisher: Arc<Publisher>,
     api_key: Arc<str>,
     publication_scheduled: Arc<AtomicBool>,
+    publication_target: Arc<AtomicU64>,
 }
 
 #[derive(Deserialize)]
@@ -95,10 +96,17 @@ impl AdminState {
             publisher,
             api_key: Arc::from(api_key),
             publication_scheduled: Arc::new(AtomicBool::new(false)),
+            publication_target: Arc::new(AtomicU64::new(0)),
         })
     }
 
     pub fn trigger_publication(&self) -> bool {
+        let target = self.store.last_sequence().unwrap_or_default();
+        self.publication_target.fetch_max(target, Ordering::AcqRel);
+        self.start_publication_worker()
+    }
+
+    fn start_publication_worker(&self) -> bool {
         if self
             .publication_scheduled
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -150,19 +158,19 @@ impl AdminState {
                 }
             }
 
-            let last_sequence = self.store.last_sequence().unwrap_or(u64::MAX);
-            if last_sequence <= self.engine.sequence() {
+            // Only chase a sequence explicitly requested through /admin/publish
+            // (or captured once at startup). Mutations arriving during a build
+            // remain durable but do not turn one request into an endless series
+            // of full-corpus rebuilds.
+            if self.engine.sequence() >= self.publication_target.load(Ordering::Acquire) {
                 break;
             }
         }
         self.publication_scheduled.store(false, Ordering::Release);
 
-        let pending = self
-            .store
-            .last_sequence()
-            .is_ok_and(|sequence| sequence > self.engine.sequence());
-        if completed && pending {
-            self.trigger_publication();
+        let requested = self.publication_target.load(Ordering::Acquire);
+        if completed && requested > self.engine.sequence() {
+            self.start_publication_worker();
         }
     }
 }
