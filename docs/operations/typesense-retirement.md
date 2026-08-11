@@ -8,10 +8,10 @@ for the Raw relevance and resource claims.
 
 | State | App | Machine | Attached volume | Replacement |
 | --- | --- | --- | --- | --- |
-| Retire after cutover | `ytsearch-typesense-staging` | `8147deb94937e8` | `vol_v8e6yy17jo63nplv` (10 GB) | `ytsearch-raw-production` |
-| Retire after cutover | `ytsearch-typesense-staging` | `d8de466f330468` | `vol_vdezd781q880qm34` (10 GB) | Historical benchmark only |
-| Retire after queue drain | `ytsearch-api-typesense-fly-staging` | `1855eddf654298` | `vol_vwnydd578odzzo8v` (1 GB) | `ytsearch-api-raw-production` |
-| Retire after queue drain | `ytsearch-indexer-staging` | `68352d2be17728` | `vol_r68z3gl5wq7jkqd4` (10 GB) | `ytsearch-indexer-raw-production` |
+| Deprecated; retained for browser gate | `ytsearch-typesense-staging` | `8147deb94937e8` | `vol_v8e6yy17jo63nplv` (10 GB) | `ytsearch-raw-production` |
+| Deprecated; retained for browser gate | `ytsearch-typesense-staging` | `d8de466f330468` | `vol_vdezd781q880qm34` (10 GB) | Historical benchmark only |
+| Deprecated; retained for browser gate | `ytsearch-api-typesense-fly-staging` | `1855eddf654298` | `vol_vwnydd578odzzo8v` (1 GB) | `ytsearch-api-raw-production` |
+| Deprecated; retained for browser gate | `ytsearch-indexer-staging` | `68352d2be17728` | `vol_r68z3gl5wq7jkqd4` (10 GB) | `ytsearch-indexer-raw-production` |
 
 The following unattached volumes are historical and are intentionally outside
 the automatic retirement scope: `vol_v8e6wk3g1l6kj15v`,
@@ -59,8 +59,17 @@ and restart, and its idempotent deletion survived a second publication and
 restart. No synthetic document remains. `search.pronsh.dev` now sends both
 search and queue traffic exclusively to `ytsearch-api-raw-production`.
 
-A bounded nine-channel drift reconciliation is running before the irreversible
-stage. After it publishes, the remaining gates are a Raw restart, differential
-corpus checks, browser/search/load checks, and the explicit retirement steps 6
-and 7 above. The deprecation script remains a no-op unless its exact
-acknowledgement is supplied.
+The nine-channel reconciliation published generation 1166. The interrupted
+Veritasium video was replayed, generation 1167 published 8,198,020 documents and
+33,823 videos, and a clean restart reopened it. Search, queue, bundle, fail-closed
+sort validation, last-page, and 75-request concurrent-load gates passed. The
+Raw indexer was restored to a five-minute idle shutdown and is stopped.
+
+All four exact legacy Machines now carry `lifecycle=deprecated`,
+`deprecated_reason=raw-search-cutover`, and their Raw successor metadata. No
+Machine, volume, or app has been destroyed. The sole remaining irreversible
+gate is visual browser automation: T3 snapshot/evaluate/wait timed out on the
+production page and failed identically on `example.com`, demonstrating a
+tool-wide automation failure. Destruction remains intentionally blocked until
+that result can be observed; HTTP or unit-test evidence is not recorded as a
+visual pass.

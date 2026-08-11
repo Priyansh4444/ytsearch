@@ -128,6 +128,32 @@ remain intentionally ignored), and Clippy is clean. The deployable image is
 the active indexing batch completes, then repeat the memory/artifact gate on the
 4 GiB Machine before retirement.
 
+### Final live publication gate
+
+The nine-channel repair completed and atomically activated generation 1166 with
+8,197,954 documents. The bounded image was then deployed without rebuilding the
+active snapshot. The previously interrupted Veritasium video `g20JZ2HNZaw` was
+replayed as 66 transcript chunks; the bounded publisher activated generation
+1167 with 8,198,020 documents, 33,823 videos, 61 channels, and 294,414 terms.
+The completed search artifacts total 1,456,328,161 bytes, `work/` is empty, and
+no posting or document-metadata spool remains.
+
+The standalone builder's full-corpus HWM remains 457,928 KiB. The live serving
+process reached 753,764 KiB while it kept the old mmap generation queryable and
+built the replacement concurrently. This is a different, stricter measurement:
+it includes the serving reader's resident file pages as well as publisher work.
+After a clean restart, process RSS was 359,004 KiB (350.6 MiB), process HWM was
+431,648 KiB, and cgroup usage was 1,705,377,792 bytes (1.59 GiB), including
+Linux's reclaimable file cache. Both live measurements remain well inside the
+4 GiB allocation, but only the standalone builder is below 512 MiB.
+
+The restart reopened sequence 1167 and the replayed video was publicly
+searchable. All 160 Rust workspace tests, 80 frontend tests, and 32 Worker tests
+passed; five real-network/manual Rust benchmarks remain intentionally ignored.
+Clippy, frontend typecheck, formatting, lint, and production build passed. A
+75-request, five-concurrent production run had zero errors and a 308 ms p95.
+The initial browser route is 24,343 bytes gzip.
+
 ## Fly retirement inventory
 
 The following resources are legacy dependencies and must be treated as
@@ -141,7 +167,7 @@ deprecated during the migration:
 - `ytsearch-indexer-staging`: stopped Typesense indexer `68352d2be17728` and
   attached volume `vol_r68z3gl5wq7jkqd4`.
 
-The queue currently contains one pending `@t3dotgg` request. It must be copied
-to the persistent Raw API queue and processed through Raw before destruction.
-Historical unattached indexer volumes are audited separately and are not
-implicitly deleted by this migration.
+All five legacy queue rows were copied with their request IDs. The `@t3dotgg`
+request completed through Raw with 95 videos and 30,684 chunks; the other four
+retain their historical failed/rejected states. Historical unattached indexer
+volumes are audited separately and are not implicitly deleted by this migration.

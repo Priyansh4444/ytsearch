@@ -108,8 +108,17 @@ Raw can replace Typesense as the canonical search index.
   - [x] Prove idempotent replace and delete operations, publication, and both
     post-publication Machine restarts without leaving the synthetic document.
   - [x] Deploy `search.pronsh.dev` with Raw-only search and queue origins.
-  - [ ] Finish the nine-channel drift reconciliation, post-publication restart,
-    browser/load gates, and exact legacy Fly resource destruction.
+  - [x] Finish the nine-channel drift reconciliation, publish generation 1166,
+    replay the interrupted Veritasium video into bounded generation 1167, and
+    pass a post-publication restart.
+  - [x] Pass final search, queue, sort-validation, last-page, bundle, and
+    75-request/five-concurrent production load gates.
+  - [x] Mark the four exact legacy Fly Machines deprecated with explicit Raw
+    successors; no Machine, volume, or app was destroyed.
+  - [ ] Observe the final visual browser gate, then destroy the four exact
+    legacy Machines, their attached volumes, and the three legacy apps. T3's
+    automation channel currently fails identically on production and
+    `example.com`; do not mislabel HTTP evidence as a browser pass.
 
 ### Non-negotiable performance and resource gates
 
@@ -118,16 +127,19 @@ Raw can replace Typesense as the canonical search index.
   matched 1,956-video comparison (71% lower p95 and 73% lower CPU).
 - [x] Raw steady-state RSS is at most 60% of Typesense. The full Raw snapshot
   warmed to 347 MiB versus about 3.9 GiB for the restored Typesense clone.
-- [x] Full-snapshot compaction peak RSS stays below 512 MiB. The release-build
-  bounded compactor peaked at 457,928 KiB (447.2 MiB), down from 2,575,380 KiB
-  (2.46 GiB), while reproducing every search-artifact checksum.
+- [x] Standalone full-snapshot compaction peak RSS stays below 512 MiB. The
+  release-build bounded compactor peaked at 457,928 KiB (447.2 MiB), down from
+  2,575,380 KiB (2.46 GiB), while reproducing every search-artifact checksum.
+- [x] Live publication stays below the 4 GiB allocation while the old reader
+  remains queryable. Generation 1167 peaked at 753,764 KiB process RSS; a clean
+  restart settled at 359,004 KiB RSS.
 - [x] Complete-position artifact growth is measured and documented.
 - [x] Benchmarks name corpus, hardware, build mode, concurrency, and cache state.
 - [x] Every optimization has a correctness invariant and rollback condition.
 - [x] Experimental browser JavaScript remains at or below 30 KB gzip (24,340
   bytes for the initial route after the full-corpus deployment).
 - [x] Production browser JavaScript remains below 30 KB gzip after cutover and
-  the no-stale-search-cache fix (24,342 bytes for the initial route).
+  the no-stale-search-cache fix (24,343 bytes for the initial route).
 
 ### Documentation and evidence
 
