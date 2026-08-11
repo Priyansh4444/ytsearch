@@ -121,10 +121,12 @@ Raw can replace Typesense as the canonical search index.
   - [x] Mark the four exact legacy Fly Machines deprecated with explicit Raw
     successors, stop all four, and disable autostart on the former engine/API;
     no Machine, volume, or app was destroyed.
-  - [ ] Observe the final visual browser gate, then destroy the four exact
-    legacy Machines, their attached volumes, and the three legacy apps. T3's
-    automation channel currently fails identically on production and
-    `example.com`; do not mislabel HTTP evidence as a browser pass.
+  - [x] Observe the current production visual browser gate: T3 rendered twelve
+    Raw-ranked cards, every active sort, 24/7 availability, and the 21-video
+    Veritasium `blackhole` scope without an alert.
+  - [ ] Finish the classified 61-creator repair and post-publication gates, then
+    destroy the four exact legacy Machines, all seven verified volumes, and the
+    three legacy apps.
 
 ### Non-negotiable performance and resource gates
 
@@ -208,7 +210,11 @@ Raw can replace Typesense as the canonical search index.
 - [x] Regression found in conference imports: `index-video` used its destructive default even though the playlist runner is resumable. The runner now always passes `--no-wipe`, and its fixture fails if that guard is removed.
 - [x] Regression found in creator discovery: an unavailable or empty uploads tab aborted before the streams tab was considered, so stream-only creators could not validate or index. Validation and discovery now fall back independently across both tabs while retaining `yt-dlp` as primary.
 - [x] Regression found in conference imports: a valid video ID beginning with `-` was parsed as a CLI option. The runner now places video IDs after an explicit `--` argument boundary.
-- [ ] Three unattached legacy indexer volumes still exist (`vol_v8e6wk3g1l6kj15v`, `vol_458zq611m0yppz14`, and `vol_4qlzgynglnz786gr`). Verify they contain no unique data, then delete them with explicit approval to save about $4.50/month; see `docs/cost-optimization.md`.
+- [x] Audit the three unattached legacy indexer volumes
+  (`vol_v8e6wk3g1l6kj15v`, `vol_458zq611m0yppz14`, and
+  `vol_4qlzgynglnz786gr`) and preserve their useful data. The active Raw cache
+  now contains all historical transcripts; exact deletion remains part of the
+  final seven-volume retirement gate.
 
 ## Product/UI Behavior
 
