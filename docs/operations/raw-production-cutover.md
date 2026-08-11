@@ -54,7 +54,9 @@ returned 400. The true final `blackhole` page returned five videos and
 T3's collaborative snapshot/evaluate channel remained unavailable after the
 deployment and failed identically on `example.com`. Therefore the final visual
 browser gate is explicitly not claimed. The legacy resources are marked
-deprecated but retained until that one gate can be observed.
+deprecated and all four Machines are stopped. Autostart is disabled on the two
+former services. Their volumes are retained until that one gate can be
+observed; this rollback storage costs about $4.65/month.
 
 ## Rollback
 

@@ -67,7 +67,14 @@ Raw indexer was restored to a five-minute idle shutdown and is stopped.
 
 All four exact legacy Machines now carry `lifecycle=deprecated`,
 `deprecated_reason=raw-search-cutover`, and their Raw successor metadata. No
-Machine, volume, or app has been destroyed. The sole remaining irreversible
+Machine, volume, or app has been destroyed. The two services that were still
+running (`8147deb94937e8` and `1855eddf654298`) are now stopped with autostart
+disabled; all four legacy Machines are stopped. Production frontend, search,
+creator-directory, and queue checks remained healthy after the stop, proving
+that no live request depends on Typesense. The retained four attached volumes
+total 31 GB and cost about $4.65/month at current Fly list pricing.
+
+The sole remaining irreversible
 gate is visual browser automation: T3 snapshot/evaluate/wait timed out on the
 production page and failed identically on `example.com`, demonstrating a
 tool-wide automation failure. Destruction remains intentionally blocked until

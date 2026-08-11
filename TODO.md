@@ -114,7 +114,8 @@ Raw can replace Typesense as the canonical search index.
   - [x] Pass final search, queue, sort-validation, last-page, bundle, and
     75-request/five-concurrent production load gates.
   - [x] Mark the four exact legacy Fly Machines deprecated with explicit Raw
-    successors; no Machine, volume, or app was destroyed.
+    successors, stop all four, and disable autostart on the former engine/API;
+    no Machine, volume, or app was destroyed.
   - [ ] Observe the final visual browser gate, then destroy the four exact
     legacy Machines, their attached volumes, and the three legacy apps. T3's
     automation channel currently fails identically on production and
