@@ -220,6 +220,7 @@ impl RawSearchEngine {
                         record.tokens,
                         self.inner.manifest.average_document_tokens,
                     ) * idf
+                        * TEXT_QUERY_WEIGHT
                         * token_position_multiplier(
                             first_position,
                             alternative.fields.prioritize_position,
@@ -234,7 +235,7 @@ impl RawSearchEngine {
                         token_stats(&title_tokens, &alternative.term)
                 {
                     contribution.score += idf
-                        * 6.0
+                        * TITLE_QUERY_WEIGHT
                         * (1.0 + (frequency as f32).ln())
                         * token_position_multiplier(
                             first_position,

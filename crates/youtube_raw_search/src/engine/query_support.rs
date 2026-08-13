@@ -2,9 +2,10 @@ use super::*;
 
 impl DocMatch {
     const TEXT_MATCH_FLAG: u32 = 1 << 31;
+    const ORDERED_PHRASE_FLAG: u32 = 1 << 26;
     const EXACT_MASK_SHIFT: u32 = 27;
     const EXACT_MASK_BITS: u32 = 0b1111 << Self::EXACT_MASK_SHIFT;
-    const DOCUMENT_MASK: u32 = (1 << Self::EXACT_MASK_SHIFT) - 1;
+    const DOCUMENT_MASK: u32 = Self::ORDERED_PHRASE_FLAG - 1;
 
     pub(super) fn new(document: u32, score: f32, matches_text: bool) -> Self {
         Self::with_exact_mask(document, score, matches_text, 1)
@@ -36,6 +37,7 @@ impl DocMatch {
     pub(super) fn set_matches_text(&mut self, matches_text: bool) {
         self.document_with_flags = self.document()
             | (self.document_with_flags & Self::EXACT_MASK_BITS)
+            | (self.document_with_flags & Self::ORDERED_PHRASE_FLAG)
             | (u32::from(matches_text) * Self::TEXT_MATCH_FLAG);
     }
 
@@ -50,11 +52,23 @@ impl DocMatch {
     pub(super) fn set_exact_mask(&mut self, exact_mask: u8) {
         self.document_with_flags = self.document()
             | (self.document_with_flags & Self::TEXT_MATCH_FLAG)
+            | (self.document_with_flags & Self::ORDERED_PHRASE_FLAG)
             | (u32::from(exact_mask & 0b1111) << Self::EXACT_MASK_SHIFT);
+    }
+
+    pub(super) fn ordered_phrase(self) -> bool {
+        self.document_with_flags & Self::ORDERED_PHRASE_FLAG != 0
+    }
+
+    pub(super) fn set_ordered_phrase(&mut self, ordered: bool) {
+        self.document_with_flags = self.document()
+            | (self.document_with_flags & Self::TEXT_MATCH_FLAG)
+            | (self.document_with_flags & Self::EXACT_MASK_BITS)
+            | (u32::from(ordered) * Self::ORDERED_PHRASE_FLAG);
     }
 }
 
-const _: () = assert!(DocMatch::DOCUMENT_MASK >= 100_000_000);
+const _: () = assert!(DocMatch::DOCUMENT_MASK >= 50_000_000);
 
 pub(super) fn compare_video_sort(
     left: &VideoMeta,
@@ -79,6 +93,7 @@ pub(super) fn compare_video_sort(
                 .exact_tokens
                 .cmp(&left_rank.exact_tokens)
                 .then_with(|| right_rank.exact_mask.cmp(&left_rank.exact_mask))
+                .then_with(|| right_rank.ordered_phrase.cmp(&left_rank.ordered_phrase))
                 .then_with(|| {
                     blended_relevance(right_rank.score, right, manifest)
                         .total_cmp(&blended_relevance(left_rank.score, left, manifest))
@@ -87,6 +102,7 @@ pub(super) fn compare_video_sort(
                 .exact_tokens
                 .cmp(&left_rank.exact_tokens)
                 .then_with(|| right_rank.exact_mask.cmp(&left_rank.exact_mask))
+                .then_with(|| right_rank.ordered_phrase.cmp(&left_rank.ordered_phrase))
                 .then_with(|| right_rank.score.total_cmp(&left_rank.score)),
         };
     ordering
@@ -130,6 +146,7 @@ pub(super) fn retain_best_document(
             .exact_tokens()
             .cmp(&right.1.exact_tokens())
             .then_with(|| left.1.exact_mask().cmp(&right.1.exact_mask()))
+            .then_with(|| left.1.ordered_phrase().cmp(&right.1.ordered_phrase()))
             .then_with(|| left.1.score.total_cmp(&right.1.score))
     }) else {
         return;
@@ -139,6 +156,11 @@ pub(super) fn retain_best_document(
             && candidate.exact_mask() > worst.exact_mask())
         || (candidate.exact_tokens() == worst.exact_tokens()
             && candidate.exact_mask() == worst.exact_mask()
+            && candidate.ordered_phrase()
+            && !worst.ordered_phrase())
+        || (candidate.exact_tokens() == worst.exact_tokens()
+            && candidate.exact_mask() == worst.exact_mask()
+            && candidate.ordered_phrase() == worst.ordered_phrase()
             && candidate.score > worst.score)
     {
         documents[worst_index] = candidate;
@@ -150,6 +172,7 @@ pub(super) fn descending_doc_score(left: &DocMatch, right: &DocMatch) -> Orderin
         .exact_tokens()
         .cmp(&left.exact_tokens())
         .then_with(|| right.exact_mask().cmp(&left.exact_mask()))
+        .then_with(|| right.ordered_phrase().cmp(&left.ordered_phrase()))
         .then_with(|| right.score.total_cmp(&left.score))
         .then_with(|| left.document().cmp(&right.document()))
 }

@@ -62,6 +62,8 @@ const MAX_QUERY_BYTES: usize = 512;
 const MAX_FILTER_VALUE_BYTES: usize = 256;
 const MAX_PAGE_SIZE: u8 = 250;
 const ACTIVE_INCLUDE_FIELDS: &str = "id,video_id,title,text,prev_text,next_text,youtuber_handle,youtuber_name,thumbnail,published_at,duration,t_start_ms,t_end_ms";
+const TEXT_QUERY_WEIGHT: f32 = 4.0;
+const TITLE_QUERY_WEIGHT: f32 = 6.0;
 const POSITION_SCORE_BOOST: f32 = 0.15;
 const PROXIMITY_SCORE_BOOST: f32 = 0.20;
 const PROXIMITY_POSITION_BOOST: f32 = 0.05;
@@ -317,6 +319,7 @@ struct VideoMatches {
     score: f32,
     exact_tokens: u8,
     exact_mask: u8,
+    ordered_phrase: bool,
     moments: MomentCounter,
     documents: Vec<DocMatch>,
 }
@@ -326,6 +329,7 @@ struct RelevanceRank {
     score: f32,
     exact_tokens: u8,
     exact_mask: u8,
+    ordered_phrase: bool,
 }
 
 #[derive(Default)]
@@ -749,6 +753,7 @@ impl RawSearchEngine {
                 } else {
                     1.0
                 };
+            candidate.set_ordered_phrase(ordered);
         }
         Ok(())
     }
@@ -796,6 +801,7 @@ impl RawSearchEngine {
                 } else {
                     1.0
                 };
+            candidate.set_ordered_phrase(ordered);
         }
         Ok(())
     }
@@ -1371,6 +1377,7 @@ impl RawSearchEngine {
                 record.tokens,
                 self.inner.manifest.average_document_tokens,
             ) * idf
+                * TEXT_QUERY_WEIGHT
                 * token_position_multiplier(first_position, prioritize_position);
             matches.push(DocMatch::with_exact_mask(document, score, true, exact_mask));
         }
@@ -1418,7 +1425,7 @@ impl RawSearchEngine {
                 Error::Corrupt("title posting video is out of bounds".to_string())
             })?;
             let score = idf
-                * 6.0
+                * TITLE_QUERY_WEIGHT
                 * (1.0 + (frequency as f32).ln())
                 * token_position_multiplier(first_position, prioritize_position);
             for &document in &video.documents {
@@ -1563,24 +1570,37 @@ impl RawSearchEngine {
                 score: candidate.score,
                 exact_tokens: candidate.exact_tokens(),
                 exact_mask: candidate.exact_mask(),
+                ordered_phrase: candidate.ordered_phrase(),
                 moments: MomentCounter::default(),
                 documents: Vec::with_capacity(hits_per_group),
             });
             let candidate_rank = (
                 candidate.exact_tokens(),
                 candidate.exact_mask(),
+                candidate.ordered_phrase(),
                 candidate.score,
             );
-            let group_rank = (group.exact_tokens, group.exact_mask, group.score);
+            let group_rank = (
+                group.exact_tokens,
+                group.exact_mask,
+                group.ordered_phrase,
+                group.score,
+            );
             if candidate_rank.0 > group_rank.0
                 || (candidate_rank.0 == group_rank.0 && candidate_rank.1 > group_rank.1)
                 || (candidate_rank.0 == group_rank.0
                     && candidate_rank.1 == group_rank.1
-                    && candidate_rank.2 > group_rank.2)
+                    && candidate_rank.2
+                    && !group_rank.2)
+                || (candidate_rank.0 == group_rank.0
+                    && candidate_rank.1 == group_rank.1
+                    && candidate_rank.2 == group_rank.2
+                    && candidate_rank.3 > group_rank.3)
             {
                 group.exact_tokens = candidate_rank.0;
                 group.exact_mask = candidate_rank.1;
-                group.score = candidate_rank.2;
+                group.ordered_phrase = candidate_rank.2;
+                group.score = candidate_rank.3;
             }
             if candidate.matches_text() {
                 group.moments.record(record.t_start_ms);
@@ -1666,12 +1686,14 @@ impl RawSearchEngine {
                         score: left.score,
                         exact_tokens: left.exact_tokens(),
                         exact_mask: left.exact_mask(),
+                        ordered_phrase: left.ordered_phrase(),
                     },
                     right_video,
                     RelevanceRank {
                         score: right.score,
                         exact_tokens: right.exact_tokens(),
                         exact_mask: right.exact_mask(),
+                        ordered_phrase: right.ordered_phrase(),
                     },
                     params.sort_by.as_deref(),
                     &self.inner.manifest,
@@ -1704,12 +1726,14 @@ impl RawSearchEngine {
                     score: left.score,
                     exact_tokens: left.exact_tokens,
                     exact_mask: left.exact_mask,
+                    ordered_phrase: left.ordered_phrase,
                 },
                 right_video,
                 RelevanceRank {
                     score: right.score,
                     exact_tokens: right.exact_tokens,
                     exact_mask: right.exact_mask,
+                    ordered_phrase: right.ordered_phrase,
                 },
                 sort_by,
                 &self.inner.manifest,
@@ -1745,12 +1769,14 @@ impl RawSearchEngine {
                         score: 0.0,
                         exact_tokens: 0,
                         exact_mask: 0,
+                        ordered_phrase: false,
                     },
                     right,
                     RelevanceRank {
                         score: 0.0,
                         exact_tokens: 0,
                         exact_mask: 0,
+                        ordered_phrase: false,
                     },
                     params
                         .sort_by
@@ -1809,12 +1835,14 @@ impl RawSearchEngine {
                         score: 0.0,
                         exact_tokens: 0,
                         exact_mask: 0,
+                        ordered_phrase: false,
                     },
                     right_video,
                     RelevanceRank {
                         score: 0.0,
                         exact_tokens: 0,
                         exact_mask: 0,
+                        ordered_phrase: false,
                     },
                     params
                         .sort_by
