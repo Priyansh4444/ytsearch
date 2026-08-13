@@ -188,6 +188,8 @@ fn classify(stage: FailureStage, reason: &str) -> FailureCategory {
         || reason.contains("premiere will begin")
         || reason.contains("upcoming live event")
         || reason.contains("live event will begin")
+        || reason.contains("we're processing this video")
+        || reason.contains("we are processing this video")
     {
         return FailureCategory::Scheduled;
     }
@@ -390,6 +392,13 @@ mod tests {
         );
         assert_eq!(
             classify(FailureStage::Metadata, "Premieres in 9 hours"),
+            FailureCategory::Scheduled
+        );
+        assert_eq!(
+            classify(
+                FailureStage::Transcript,
+                "We're processing this video. Check back later."
+            ),
             FailureCategory::Scheduled
         );
         assert_eq!(
