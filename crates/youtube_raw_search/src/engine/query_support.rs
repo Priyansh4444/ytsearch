@@ -1073,7 +1073,7 @@ pub(super) fn validate_manifest_files(index_path: &Path, manifest: &Manifest) ->
 }
 
 pub(super) fn checksum_file(path: &Path) -> Result<String> {
-    let mut input = BufReader::new(File::open(path)?);
+    let mut input = BufReader::new(ColdReader::open(path)?);
     let mut hasher = blake3::Hasher::new();
     let mut buffer = vec![0_u8; 256 * 1024];
     loop {

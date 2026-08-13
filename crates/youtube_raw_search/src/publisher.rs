@@ -1,5 +1,6 @@
 use crate::{
-    BuildReport, MutationSnapshot, MutationStore, RawSearchEngine, engine::build_index_from_lines,
+    BuildReport, MutationSnapshot, MutationStore, RawSearchEngine, cache_io::ColdReader,
+    engine::build_index_from_lines,
 };
 use flate2::read::MultiGzDecoder;
 use serde::{Deserialize, Serialize};
@@ -283,7 +284,7 @@ fn remove_scratch_entry(root: &Path, entry: fs::DirEntry) -> Result<(), IndexSto
 fn gzip_lines(
     path: &Path,
 ) -> Result<impl Iterator<Item = std::io::Result<String>>, IndexStoreError> {
-    let input = File::open(path).map_err(map_io)?;
+    let input = ColdReader::open(path).map_err(map_io)?;
     Ok(BufReader::new(MultiGzDecoder::new(input)).lines())
 }
 

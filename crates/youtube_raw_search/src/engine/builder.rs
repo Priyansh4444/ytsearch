@@ -31,14 +31,14 @@ struct TokenCounts {
 }
 
 struct PositionSpoolWriter {
-    output: BufWriter<File>,
+    output: ColdWriter,
     position: u32,
     scratch: Vec<u8>,
 }
 
 struct PostingShardWriter {
     directory: PathBuf,
-    outputs: Vec<Option<BufWriter<File>>>,
+    outputs: Vec<Option<ColdWriter>>,
 }
 
 impl PostingShardWriter {
@@ -53,9 +53,10 @@ impl PostingShardWriter {
     fn append(&mut self, term: &str, posting: BuildPosting, title: bool) -> Result<()> {
         let shard = usize::from(term.as_bytes()[0]);
         if self.outputs[shard].is_none() {
-            self.outputs[shard] = Some(BufWriter::new(File::create(
-                self.directory.join(format!("{shard:03}.bin")),
-            )?));
+            self.outputs[shard] = Some(ColdWriter::create_with_reclaim_bytes(
+                &self.directory.join(format!("{shard:03}.bin")),
+                1024 * 1024,
+            )?);
         }
         write_spool_posting(
             self.outputs[shard].as_mut().expect("posting shard exists"),
@@ -65,9 +66,9 @@ impl PostingShardWriter {
         )
     }
 
-    fn finish(mut self) -> Result<()> {
-        for output in self.outputs.iter_mut().flatten() {
-            output.flush()?;
+    fn finish(self) -> Result<()> {
+        for output in self.outputs.into_iter().flatten() {
+            output.finish()?;
         }
         Ok(())
     }
@@ -75,7 +76,7 @@ impl PostingShardWriter {
 
 impl PositionSpoolWriter {
     fn create(path: &Path) -> Result<Self> {
-        let mut output = BufWriter::new(File::create(path)?);
+        let mut output = ColdWriter::create(path)?;
         let mut header = Vec::with_capacity(HEADER_BYTES);
         write_header(&mut header, POSITION_SPOOL_MAGIC, 0);
         output.write_all(&header)?;
@@ -110,8 +111,8 @@ impl PositionSpoolWriter {
         Ok((offset, length, frequency))
     }
 
-    fn finish(mut self) -> Result<()> {
-        self.output.flush()?;
+    fn finish(self) -> Result<()> {
+        self.output.finish()?;
         Ok(())
     }
 }
@@ -169,7 +170,7 @@ pub fn build_index(
     channels_path: &Path,
     index_path: &Path,
 ) -> Result<BuildReport> {
-    let chunk_lines = BufReader::new(File::open(chunks_path)?)
+    let chunk_lines = BufReader::new(ColdReader::open(chunks_path)?)
         .lines()
         .map(|line| line.map_err(Error::from));
     let channels = read_json_lines(channels_path)?;
@@ -191,7 +192,7 @@ where
     fs::create_dir_all(index_path)?;
 
     let documents_path = index_path.join(DOCUMENTS_FILE);
-    let mut document_output = BufWriter::new(File::create(&documents_path)?);
+    let mut document_output = ColdWriter::create(&documents_path)?;
     let mut document_header = Vec::with_capacity(HEADER_BYTES);
     write_header(&mut document_header, DOCUMENTS_MAGIC, 0);
     document_output.write_all(&document_header)?;
@@ -204,7 +205,7 @@ where
     let mut videos = Vec::<VideoMeta>::new();
     let mut video_ids = HashMap::<String, u32>::new();
     let document_record_spool_path = index_path.join(DOCUMENT_RECORD_SPOOL_FILE);
-    let mut document_record_spool = BufWriter::new(File::create(&document_record_spool_path)?);
+    let mut document_record_spool = ColdWriter::create(&document_record_spool_path)?;
     let mut document_count = 0_u32;
     let mut last_document_start = Vec::<Option<u32>>::new();
     let mut block_records = Vec::<BlockRecord>::new();
@@ -310,20 +311,17 @@ where
     if !block_bytes.is_empty() {
         flush_document_block(&mut document_output, &mut block_bytes, &mut block_records)?;
     }
-    document_output.flush()?;
-    document_record_spool.flush()?;
-    drop(document_record_spool);
+    document_output.finish()?;
+    document_record_spool.finish()?;
     position_spool.finish()?;
     posting_spool.finish()?;
 
-    serde_json::to_writer(
-        BufWriter::new(File::create(index_path.join(CHANNELS_FILE))?),
-        &channels,
-    )?;
-    serde_json::to_writer(
-        BufWriter::new(File::create(index_path.join(VIDEOS_FILE))?),
-        &videos,
-    )?;
+    let mut channel_output = ColdWriter::create(&index_path.join(CHANNELS_FILE))?;
+    serde_json::to_writer(&mut channel_output, &channels)?;
+    channel_output.finish()?;
+    let mut video_output = ColdWriter::create(&index_path.join(VIDEOS_FILE))?;
+    serde_json::to_writer(&mut video_output, &videos)?;
+    video_output.finish()?;
     write_metadata(
         index_path,
         document_count,
@@ -367,10 +365,9 @@ where
             .unwrap_or(0),
         files: build_manifest_files(index_path)?,
     };
-    serde_json::to_writer_pretty(
-        BufWriter::new(File::create(index_path.join(MANIFEST_FILE))?),
-        &manifest,
-    )?;
+    let mut manifest_output = ColdWriter::create(&index_path.join(MANIFEST_FILE))?;
+    serde_json::to_writer_pretty(&mut manifest_output, &manifest)?;
+    manifest_output.finish()?;
 
     Ok(BuildReport {
         documents: u64::from(document_count),
@@ -388,7 +385,7 @@ pub fn slice_corpus(
     max_videos: usize,
 ) -> Result<SliceReport> {
     let mut videos = HashSet::new();
-    for line in BufReader::new(File::open(input_path)?).lines() {
+    for line in BufReader::new(ColdReader::open(input_path)?).lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
@@ -405,10 +402,10 @@ pub fn slice_corpus(
     videos.truncate(max_videos);
     let selected = videos.into_iter().collect::<HashSet<_>>();
 
-    let mut output = BufWriter::new(File::create(output_path)?);
+    let mut output = ColdWriter::create(output_path)?;
     let mut documents = 0_u64;
     let mut bytes = 0_u64;
-    for line in BufReader::new(File::open(input_path)?).lines() {
+    for line in BufReader::new(ColdReader::open(input_path)?).lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
@@ -422,7 +419,7 @@ pub fn slice_corpus(
         documents += 1;
         bytes = bytes.saturating_add(line.len() as u64 + 1);
     }
-    output.flush()?;
+    output.finish()?;
     Ok(SliceReport {
         documents,
         videos: selected.len(),
@@ -431,7 +428,7 @@ pub fn slice_corpus(
 }
 
 fn flush_document_block(
-    output: &mut BufWriter<File>,
+    output: &mut (impl Write + Seek),
     uncompressed: &mut Vec<u8>,
     blocks: &mut Vec<BlockRecord>,
 ) -> Result<()> {
@@ -453,19 +450,19 @@ fn write_metadata(
     document_record_spool: &Path,
     blocks: &[BlockRecord],
 ) -> Result<()> {
-    let mut output = BufWriter::new(File::create(index_path.join(METADATA_FILE))?);
+    let mut output = ColdWriter::create(&index_path.join(METADATA_FILE))?;
     let mut header = Vec::with_capacity(METADATA_PREFIX_BYTES);
     write_header(&mut header, METADATA_MAGIC, document_count);
     header.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
     header.extend_from_slice(&0_u32.to_le_bytes());
     output.write_all(&header)?;
-    std::io::copy(&mut File::open(document_record_spool)?, &mut output)?;
+    std::io::copy(&mut ColdReader::open(document_record_spool)?, &mut output)?;
     for block in blocks {
         output.write_all(&block.offset.to_le_bytes())?;
         output.write_all(&block.compressed_length.to_le_bytes())?;
         output.write_all(&block.uncompressed_length.to_le_bytes())?;
     }
-    output.flush()?;
+    output.finish()?;
     Ok(())
 }
 
@@ -494,15 +491,15 @@ fn write_postings(
     }
     let term_count_u32 = u32::try_from(term_count)
         .map_err(|_| Error::Corrupt("term count exceeds u32".to_string()))?;
-    let mut postings = BufWriter::new(File::create(index_path.join(POSTINGS_FILE))?);
+    let mut postings = ColdWriter::create(&index_path.join(POSTINGS_FILE))?;
     let mut postings_header = Vec::with_capacity(HEADER_BYTES);
     write_header(&mut postings_header, POSTINGS_MAGIC, term_count_u32);
     postings.write_all(&postings_header)?;
-    let mut positions = BufWriter::new(File::create(index_path.join(POSITIONS_FILE))?);
+    let mut positions = ColdWriter::create(&index_path.join(POSITIONS_FILE))?;
     let mut positions_header = Vec::with_capacity(HEADER_BYTES);
     write_header(&mut positions_header, POSITIONS_MAGIC, term_count_u32);
     positions.write_all(&positions_header)?;
-    let mut full_positions = BufWriter::new(File::create(index_path.join(FULL_POSITIONS_FILE))?);
+    let mut full_positions = ColdWriter::create(&index_path.join(FULL_POSITIONS_FILE))?;
     let mut full_positions_header = Vec::with_capacity(HEADER_BYTES);
     write_header(
         &mut full_positions_header,
@@ -594,17 +591,17 @@ fn write_postings(
     }
     position_offsets.push(positions_position);
     full_position_offsets.push(full_positions_position);
-    postings.flush()?;
+    postings.finish()?;
     positions.seek(SeekFrom::Start(HEADER_BYTES as u64))?;
     for offset in position_offsets {
         positions.write_all(&offset.to_le_bytes())?;
     }
-    positions.flush()?;
+    positions.finish()?;
     full_positions.seek(SeekFrom::Start(HEADER_BYTES as u64))?;
     for offset in full_position_offsets {
         full_positions.write_all(&offset.to_le_bytes())?;
     }
-    full_positions.flush()?;
+    full_positions.finish()?;
     write_fuzzy_index(
         index_path,
         lexicon.iter().enumerate().map(|(index, entry)| {
@@ -644,10 +641,8 @@ fn refine_posting_shard(
         return Ok(());
     }
 
-    let mut input = BufReader::new(File::open(&path)?);
-    let mut outputs = (0..257)
-        .map(|_| None)
-        .collect::<Vec<Option<BufWriter<File>>>>();
+    let mut input = BufReader::new(ColdReader::open(&path)?);
+    let mut outputs = (0..257).map(|_| None).collect::<Vec<Option<ColdWriter>>>();
     let mut child_paths = vec![None; 257];
     let mut can_refine = false;
     while let Some(record) = read_spool_posting(&mut input)? {
@@ -662,7 +657,7 @@ fn refine_posting_shard(
             *next_id = next_id
                 .checked_add(1)
                 .ok_or_else(|| Error::Corrupt("posting shard id overflows".to_string()))?;
-            outputs[key] = Some(BufWriter::new(File::create(&child)?));
+            outputs[key] = Some(ColdWriter::create_with_reclaim_bytes(&child, 1024 * 1024)?);
             child_paths[key] = Some(child);
         }
         write_spool_posting(
@@ -672,10 +667,9 @@ fn refine_posting_shard(
             record.title,
         )?;
     }
-    for output in outputs.iter_mut().flatten() {
-        output.flush()?;
+    for output in outputs.into_iter().flatten() {
+        output.finish()?;
     }
-    drop(outputs);
     fs::remove_file(path)?;
 
     let populated = child_paths.iter().flatten().count();
@@ -760,7 +754,7 @@ fn read_spool_posting(input: &mut impl Read) -> Result<Option<SpoolPosting>> {
 }
 
 fn read_posting_shard(path: &Path) -> Result<HashMap<String, TermBuild>> {
-    let mut input = BufReader::new(File::open(path)?);
+    let mut input = BufReader::new(ColdReader::open(path)?);
     let mut terms = HashMap::<String, TermBuild>::new();
     while let Some(record) = read_spool_posting(&mut input)? {
         let lists = terms.entry(record.term).or_default();
@@ -776,8 +770,8 @@ fn read_posting_shard(path: &Path) -> Result<HashMap<String, TermBuild>> {
 fn write_position_lists(
     postings: &[BuildPosting],
     spool: &MappedFile,
-    first_positions: &mut BufWriter<File>,
-    remaining_positions: &mut BufWriter<File>,
+    first_positions: &mut impl Write,
+    remaining_positions: &mut impl Write,
     scratch: &mut Vec<u8>,
 ) -> Result<(u32, u32)> {
     let mut first_bytes = 0_u32;
@@ -851,7 +845,7 @@ fn write_lexicon(index_path: &Path, entries: &[LexiconBuildEntry]) -> Result<()>
     }
     offsets.push(entry_bytes.len() as u64);
 
-    let mut output = BufWriter::new(File::create(index_path.join(LEXICON_FILE))?);
+    let mut output = ColdWriter::create(&index_path.join(LEXICON_FILE))?;
     let mut header = Vec::with_capacity(HEADER_BYTES);
     write_header(&mut header, LEXICON_MAGIC, entries.len() as u32);
     output.write_all(&header)?;
@@ -859,7 +853,7 @@ fn write_lexicon(index_path: &Path, entries: &[LexiconBuildEntry]) -> Result<()>
         output.write_all(&offset.to_le_bytes())?;
     }
     output.write_all(&entry_bytes)?;
-    output.flush()?;
+    output.finish()?;
     Ok(())
 }
 

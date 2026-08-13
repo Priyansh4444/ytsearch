@@ -1,12 +1,9 @@
 use crate::{
     Error, Result,
+    cache_io::ColdWriter,
     format::{FUZZY_MAGIC, HEADER_BYTES, MappedFile, read_u16, read_u32, write_header},
 };
-use std::{
-    fs::File,
-    io::{BufWriter, Write},
-    path::Path,
-};
+use std::{io::Write, path::Path};
 
 pub const FUZZY_FILE: &str = "fuzzy.bin";
 
@@ -118,7 +115,7 @@ where
 
     let node_count = u32::try_from(order.len())
         .map_err(|_| Error::Corrupt("fuzzy trie exceeds u32 nodes".to_string()))?;
-    let mut output = BufWriter::new(File::create(path.join(FUZZY_FILE))?);
+    let mut output = ColdWriter::create(&path.join(FUZZY_FILE))?;
     let mut header = Vec::with_capacity(HEADER_BYTES);
     write_header(&mut header, FUZZY_MAGIC, node_count);
     output.write_all(&header)?;
@@ -146,7 +143,7 @@ where
                 .to_le_bytes(),
         )?;
     }
-    output.flush()?;
+    output.finish()?;
     Ok(())
 }
 

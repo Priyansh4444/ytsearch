@@ -2416,6 +2416,7 @@ dependencies = [
  "axum",
  "blake3",
  "flate2",
+ "libc",
  "memmap2",
  "rusqlite",
  "serde",

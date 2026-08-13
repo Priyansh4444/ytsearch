@@ -1,4 +1,5 @@
 mod admin;
+mod cache_io;
 mod engine;
 mod format;
 mod fuzzy;

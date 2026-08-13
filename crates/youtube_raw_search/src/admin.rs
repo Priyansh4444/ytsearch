@@ -1,4 +1,6 @@
-use crate::{MutationStore, Publisher, ReloadableEngine, channel_ids_equal};
+use crate::{
+    MutationStore, Publisher, ReloadableEngine, cache_io::BackgroundIoGuard, channel_ids_equal,
+};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State},
@@ -127,6 +129,7 @@ impl AdminState {
             let publisher = Arc::clone(&self.publisher);
             let store = Arc::clone(&self.store);
             let result = tokio::task::spawn_blocking(move || {
+                let _background_io = BackgroundIoGuard::enter();
                 let result = publisher.publish(&store);
                 release_builder_heap();
                 result
