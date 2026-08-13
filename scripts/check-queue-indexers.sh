@@ -24,7 +24,7 @@ fi
 printf 'backend\tmachine\tstate\trestart\n'
 printf '%s' "$machines" | jq -r '
   .[]
-  | select((.config.env.QUEUE_TARGET_BACKEND // "") != "")
+  | select((.config.env.YTSEARCH_MACHINE_ROLE // "") == "queue-indexer")
   | [
       .config.env.QUEUE_TARGET_BACKEND,
       .name,
@@ -34,14 +34,20 @@ printf '%s' "$machines" | jq -r '
   | @tsv
 '
 
-count="$(printf '%s' "$machines" | jq '[.[] | select(.config.env.QUEUE_TARGET_BACKEND == "raw")] | length')"
+count="$(printf '%s' "$machines" | jq '[.[] | select(
+  .config.env.YTSEARCH_MACHINE_ROLE == "queue-indexer"
+  and .config.env.QUEUE_TARGET_BACKEND == "raw"
+)] | length')"
 if [ "$count" -ne 1 ]; then
   echo "Expected exactly one configured raw queue worker; found $count." >&2
   exit 1
 fi
 
 if ! printf '%s' "$machines" | jq -e '
-  first(.[] | select(.config.env.QUEUE_TARGET_BACKEND == "raw"))
+  first(.[] | select(
+    .config.env.YTSEARCH_MACHINE_ROLE == "queue-indexer"
+    and .config.env.QUEUE_TARGET_BACKEND == "raw"
+  ))
   | (.state == "started" or .state == "starting" or .state == "stopped")
     and (.config.env.QUEUE_LOOP == "1")
     and ((.config.env.IDLE_EXIT_AFTER_SECONDS | tonumber?) // 0) > 0

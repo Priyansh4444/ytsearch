@@ -367,6 +367,41 @@ describe("scheduled search availability", () => {
     expect(ack).not.toHaveBeenCalled();
     expect(retry).toHaveBeenCalledWith({ delaySeconds: 30 });
   });
+
+  test("ignores a bulk repair Machine that targets Raw", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T20:00:00Z"));
+    const ack = vi.fn();
+    const retry = vi.fn();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json([
+          indexerMachine("stopped"),
+          {
+            id: "bulk-repair",
+            state: "stopped",
+            config: { env: { QUEUE_TARGET_BACKEND: "raw" } },
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await worker.queue(
+      {
+        messages: [{ body: { reason: "index-request" }, attempts: 1, ack, retry }],
+      } as unknown as MessageBatch<WakeMessage>,
+      testEnv(),
+    );
+
+    expect(ack).toHaveBeenCalledOnce();
+    expect(retry).not.toHaveBeenCalled();
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      "/apps/ytsearch-indexer-raw-production/machines/current-indexer/start",
+    );
+  });
 });
 
 type WakeMessage = {
@@ -395,7 +430,9 @@ function indexerMachine(state: string, id = "current-indexer") {
   return {
     id,
     state,
-    config: { env: { QUEUE_TARGET_BACKEND: "raw" } },
+    config: {
+      env: { YTSEARCH_MACHINE_ROLE: "queue-indexer", QUEUE_TARGET_BACKEND: "raw" },
+    },
   };
 }
 

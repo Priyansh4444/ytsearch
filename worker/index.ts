@@ -23,6 +23,8 @@ type WakeMessage = {
   reason: "index-request" | "scheduled-repair" | "availability-open";
 };
 
+const QUEUE_INDEXER_ROLE = "queue-indexer";
+
 export default {
   fetch: (request, env): Promise<Response> =>
     Effect.runPromise(fetchEffect(request, env), { signal: request.signal }),
@@ -261,7 +263,9 @@ function reconcileSearchMachineEffect(env: Env, now: Date): Effect.Effect<void> 
 function queueIndexerMachineEffect(env: Env): Effect.Effect<FlyMachine | undefined, Error> {
   return Effect.gen(function* () {
     const machines = (yield* flyMachinesEffect(env, env.FLY_APP_NAME)).filter(
-      (machine) => machine.config?.env?.QUEUE_TARGET_BACKEND === "raw",
+      (machine) =>
+        machine.config?.env?.YTSEARCH_MACHINE_ROLE === QUEUE_INDEXER_ROLE &&
+        machine.config.env.QUEUE_TARGET_BACKEND === "raw",
     );
     if (machines.length > 1) {
       return yield* Effect.fail(

@@ -166,6 +166,7 @@ exec flyctl machine run \
   $cookie_secret_args \
   $youtube_secret_args \
   $daily_update_file_args \
+  --env "YTSEARCH_MACHINE_ROLE=queue-indexer" \
   --env "BACKENDS=$BACKENDS" \
   --env "QUEUE_TARGET_BACKEND=$QUEUE_TARGET_BACKEND" \
   --env "RAW_SEARCH_API_URL=${RAW_SEARCH_API_URL:-http://ytsearch-raw-production.internal:8108}" \

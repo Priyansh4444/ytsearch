@@ -14,7 +14,12 @@ fixture() {
     name:"ytsearch-queue-raw",
     state:$state,
     config:{
-      env:{QUEUE_TARGET_BACKEND:"raw",QUEUE_LOOP:"1",IDLE_EXIT_AFTER_SECONDS:$idle},
+      env:{
+        YTSEARCH_MACHINE_ROLE:"queue-indexer",
+        QUEUE_TARGET_BACKEND:"raw",
+        QUEUE_LOOP:"1",
+        IDLE_EXIT_AFTER_SECONDS:$idle
+      },
       restart:{policy:$restart}
     }
   }]'
@@ -34,5 +39,16 @@ if MACHINES_JSON_FILE="$tmp/duplicate.json" "$SCRIPT_DIR/check-queue-indexers.sh
   echo "duplicate workers should fail" >&2
   exit 1
 fi
+
+jq '. + [{
+  id:"repair-1",
+  name:"ytsearch-corpus-repair",
+  state:"stopped",
+  config:{
+    env:{QUEUE_TARGET_BACKEND:"raw",QUEUE_LOOP:"1",IDLE_EXIT_AFTER_SECONDS:"300"},
+    restart:{policy:"no"}
+  }
+}]' "$tmp/healthy.json" >"$tmp/repair.json"
+MACHINES_JSON_FILE="$tmp/repair.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null
 
 echo "queue_indexer_checks=ok"
