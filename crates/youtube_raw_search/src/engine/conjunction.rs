@@ -1,7 +1,7 @@
 use super::*;
 
-#[derive(Clone, Copy)]
 struct TermAlternative {
+    term: String,
     entry: TermEntry,
     fields: QueryFields,
     score_multiplier: f32,
@@ -36,6 +36,7 @@ impl RawSearchEngine {
             let mut alternatives = Vec::with_capacity(if index == last_index { 5 } else { 1 });
             if let Some(entry) = self.inner.lexicon.lookup(term)? {
                 alternatives.push(TermAlternative {
+                    term: term.clone(),
                     entry,
                     fields: QueryFields {
                         exact_mask,
@@ -60,6 +61,7 @@ impl RawSearchEngine {
                     let (candidate_term, entry) =
                         self.inner.lexicon.entry_at(candidate.term as usize)?;
                     alternatives.push(TermAlternative {
+                        term: candidate_term.to_string(),
                         entry,
                         fields: QueryFields {
                             prioritize_position: false,
@@ -87,12 +89,13 @@ impl RawSearchEngine {
 
         plans.sort_unstable_by_key(|plan| plan.estimated_documents);
         let mut plans = plans.into_iter();
+        let mut block_cache = BlockCache::default();
         let Some(first) = plans.next() else {
             return Ok((Vec::new(), highlights));
         };
-        let mut matches = self.matches_for_plan(&first, None)?;
+        let mut matches = self.matches_for_plan(&first, None, &mut block_cache)?;
         for plan in plans {
-            let plan_matches = self.matches_for_plan(&plan, Some(&matches))?;
+            let plan_matches = self.matches_for_plan(&plan, Some(&matches), &mut block_cache)?;
             matches = intersect_sorted(matches, plan_matches);
             if matches.is_empty() {
                 break;
@@ -105,7 +108,13 @@ impl RawSearchEngine {
         &self,
         plan: &TermPlan,
         targets: Option<&[DocMatch]>,
+        block_cache: &mut BlockCache,
     ) -> Result<Vec<DocMatch>> {
+        if let Some(targets) = targets
+            && targets.len() <= 128
+        {
+            return self.matches_for_plan_documents(plan, targets, block_cache);
+        }
         let mut alternatives = Vec::with_capacity(plan.alternatives.len());
         for alternative in &plan.alternatives {
             let mut matches = if let Some(targets) = targets {
@@ -119,6 +128,86 @@ impl RawSearchEngine {
             alternatives.push(matches);
         }
         Ok(union_all(alternatives))
+    }
+
+    fn matches_for_plan_documents(
+        &self,
+        plan: &TermPlan,
+        targets: &[DocMatch],
+        block_cache: &mut BlockCache,
+    ) -> Result<Vec<DocMatch>> {
+        let mut matches = Vec::with_capacity(targets.len());
+        for target in targets {
+            let document = target.document();
+            let record = self.inner.metadata.document(document)?;
+            let video = self
+                .inner
+                .videos
+                .get(record.video as usize)
+                .ok_or_else(|| Error::Corrupt("document video is out of bounds".to_string()))?;
+            let source = self.document_value(document, block_cache)?;
+            let text_tokens = source
+                .get("text")
+                .and_then(Value::as_str)
+                .map(ordered_tokens)
+                .unwrap_or_default();
+            let title_tokens = ordered_tokens(&video.title);
+            let mut contribution = TargetContribution::default();
+
+            for alternative in &plan.alternatives {
+                let effective_frequency = self
+                    .estimated_entry_documents(alternative.entry)
+                    .min(u64::from(self.inner.manifest.documents));
+                let idf = inverse_document_frequency(
+                    self.inner.manifest.documents,
+                    u32::try_from(effective_frequency)
+                        .unwrap_or(u32::MAX)
+                        .max(1),
+                );
+                if alternative.fields.text
+                    && let Some((frequency, first_position)) =
+                        token_stats(&text_tokens, &alternative.term)
+                {
+                    contribution.score += bm25(
+                        frequency,
+                        record.tokens,
+                        self.inner.manifest.average_document_tokens,
+                    ) * idf
+                        * token_position_multiplier(
+                            first_position,
+                            alternative.fields.prioritize_position,
+                        )
+                        * alternative.score_multiplier;
+                    contribution.exact_mask |= alternative.fields.exact_mask;
+                    contribution.matched = true;
+                    contribution.matches_text = true;
+                }
+                if alternative.fields.title
+                    && let Some((frequency, first_position)) =
+                        token_stats(&title_tokens, &alternative.term)
+                {
+                    contribution.score += idf
+                        * 6.0
+                        * (1.0 + (frequency as f32).ln())
+                        * token_position_multiplier(
+                            first_position,
+                            alternative.fields.prioritize_position,
+                        )
+                        * alternative.score_multiplier;
+                    contribution.exact_mask |= alternative.fields.exact_mask;
+                    contribution.matched = true;
+                }
+            }
+            if contribution.matched {
+                matches.push(DocMatch::with_exact_mask(
+                    document,
+                    contribution.score,
+                    contribution.matches_text,
+                    contribution.exact_mask,
+                ));
+            }
+        }
+        Ok(matches)
     }
 
     fn estimated_entry_documents(&self, entry: TermEntry) -> u64 {
@@ -288,4 +377,19 @@ impl RawSearchEngine {
         }
         Ok(())
     }
+}
+
+fn token_stats(tokens: &[String], term: &str) -> Option<(u32, u32)> {
+    let mut frequency = 0_u32;
+    let mut first_position = 0_u32;
+    for (position, token) in tokens.iter().enumerate() {
+        if token != term {
+            continue;
+        }
+        if frequency == 0 {
+            first_position = u32::try_from(position).unwrap_or(u32::MAX);
+        }
+        frequency = frequency.saturating_add(1);
+    }
+    (frequency > 0).then_some((frequency, first_position))
 }
