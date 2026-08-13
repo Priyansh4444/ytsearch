@@ -159,6 +159,7 @@ struct ManifestFile {
 }
 
 mod builder;
+mod conjunction;
 mod query_support;
 mod storage;
 #[cfg(test)]
@@ -488,6 +489,17 @@ impl RawSearchEngine {
 
         if terms.len() == 1 {
             return self.search_single_token(params, &terms[0], fields, &excluded_documents);
+        }
+
+        // Most successful multi-token searches should never materialize the
+        // posting list for a high-frequency token. Start with the rarest token
+        // and decode later terms only for surviving document identifiers.
+        let (mut fast_matches, fast_highlights) =
+            self.exact_prefix_conjunction(&terms, fields, true)?;
+        retain_not_excluded(&mut fast_matches, &excluded_documents);
+        if self.reaches_result_threshold(params, &fast_matches, TYPO_RESULT_THRESHOLD)? {
+            self.apply_exact_proximity(&terms, fields, &mut fast_matches)?;
+            return self.format_conjunctive(params, fast_highlights, fast_matches);
         }
 
         let exact_term_matches = self.exact_term_matches(&terms, fields)?;

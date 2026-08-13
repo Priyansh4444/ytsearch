@@ -811,6 +811,40 @@ fn fully_exact_matches_rank_before_higher_frequency_typo_matches() {
 }
 
 #[test]
+fn rarest_first_exact_prefix_conjunction_matches_the_materialized_contract() {
+    let (_root, engine) = token_drop_engine();
+    let terms = vec!["relativity".to_string(), "explained".to_string()];
+    let fields = query_fields(None, true).expect("query fields");
+    let (fast, _) = engine
+        .exact_prefix_conjunction(&terms, fields, true)
+        .expect("rarest-first conjunction");
+
+    let mut materialized = engine
+        .exact_term_matches(&terms, fields)
+        .expect("materialized term matches");
+    let (prefix, _) = engine
+        .fuzzy_alternatives(&terms[1], fields, 0, None, true)
+        .expect("last-token prefixes");
+    let last = materialized.last_mut().expect("last term matches");
+    *last = union_sorted(std::mem::take(last), prefix);
+    let materialized = intersect_all_borrowed(&materialized);
+
+    assert_eq!(fast.len(), materialized.len());
+    for (fast, materialized) in fast.iter().zip(materialized) {
+        assert_eq!(fast.document(), materialized.document());
+        assert_eq!(fast.exact_mask(), materialized.exact_mask());
+        assert_eq!(fast.matches_text(), materialized.matches_text());
+        let tolerance = materialized.score.abs().max(1.0) * 1e-6;
+        assert!(
+            (fast.score - materialized.score).abs() <= tolerance,
+            "fast={} materialized={} tolerance={tolerance}",
+            fast.score,
+            materialized.score
+        );
+    }
+}
+
+#[test]
 fn earlier_exact_query_tokens_break_equal_exact_count_ties() {
     let (_root, engine) = token_drop_engine();
     let response = engine
