@@ -960,11 +960,27 @@ pub(super) fn highlighted_snippet(
     terms: &[String],
     maximum_chars: usize,
 ) -> Option<String> {
-    let lowercase = value.to_ascii_lowercase();
-    let (start, term_length) = terms
-        .iter()
-        .filter_map(|term| lowercase.find(term).map(|start| (start, term.len())))
-        .min_by_key(|(start, _)| *start)?;
+    let terms = terms.iter().map(String::as_str).collect::<HashSet<_>>();
+    let mut matches = Vec::new();
+    let mut token_start = None;
+    let mut token = String::new();
+    for (index, character) in value
+        .char_indices()
+        .chain(std::iter::once((value.len(), ' ')))
+    {
+        if character.is_alphanumeric() {
+            token_start.get_or_insert(index);
+            token.extend(character.to_lowercase());
+            continue;
+        }
+        if let Some(start) = token_start.take()
+            && terms.contains(token.as_str())
+        {
+            matches.push((start, index));
+        }
+        token.clear();
+    }
+    let &(start, _) = matches.first()?;
     let mut snippet_start = start.saturating_sub(maximum_chars / 3);
     while !value.is_char_boundary(snippet_start) {
         snippet_start += 1;
@@ -973,14 +989,19 @@ pub(super) fn highlighted_snippet(
     while !value.is_char_boundary(snippet_end) {
         snippet_end -= 1;
     }
-    let mark_start = start.max(snippet_start);
-    let mark_end = (start + term_length).min(snippet_end);
-    let mut output = String::with_capacity(snippet_end - snippet_start + 13);
-    escape_html(&value[snippet_start..mark_start], &mut output);
-    output.push_str("<mark>");
-    escape_html(&value[mark_start..mark_end], &mut output);
-    output.push_str("</mark>");
-    escape_html(&value[mark_end..snippet_end], &mut output);
+    let mut output = String::with_capacity(snippet_end - snippet_start + matches.len() * 13);
+    let mut cursor = snippet_start;
+    for (mark_start, mark_end) in matches {
+        if mark_start < snippet_start || mark_end > snippet_end {
+            continue;
+        }
+        escape_html(&value[cursor..mark_start], &mut output);
+        output.push_str("<mark>");
+        escape_html(&value[mark_start..mark_end], &mut output);
+        output.push_str("</mark>");
+        cursor = mark_end;
+    }
+    escape_html(&value[cursor..snippet_end], &mut output);
     Some(output)
 }
 

@@ -169,6 +169,25 @@ fn raw_index_groups_chunks_and_highlights_matches() {
 }
 
 #[test]
+fn highlights_every_whole_query_token_without_matching_token_substrings() {
+    let snippet = highlighted_snippet(
+        "includes things like Uno CSS Wy CSS which I think is dead now Panda CSS",
+        &ordered_tokens("Css which i think is dead now"),
+        360,
+    )
+    .expect("highlighted snippet");
+
+    assert!(snippet.starts_with("includes"));
+    assert!(!snippet.starts_with("<mark>i</mark>ncludes"));
+    for token in ["CSS", "which", "I", "think", "is", "dead", "now"] {
+        assert!(
+            snippet.contains(&format!("<mark>{token}</mark>")),
+            "missing token highlight: {token} in {snippet}"
+        );
+    }
+}
+
+#[test]
 fn schema_six_reconstructs_complete_positions_from_aligned_sidecars() {
     let root = TempDir::new().expect("temp dir");
     let chunks_path = root.path().join("chunks.jsonl");
@@ -455,6 +474,34 @@ fn complete_positions_prefer_the_tightest_bounded_token_window() {
         ),
         1.0
     );
+}
+
+#[test]
+fn long_exact_phrase_ranks_before_the_same_tokens_out_of_order() {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    for document in [
+        json!({"video_id":"shuffled","title":"Shuffled","text":"now dead is think i which css","youtuber_handle":"@t3dotgg"}),
+        json!({"video_id":"ordered","title":"Ordered","text":"CSS which I think is dead now","youtuber_handle":"@t3dotgg"}),
+    ] {
+        writeln!(chunks, "{document}").expect("write chunk");
+    }
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build");
+    let engine = RawSearchEngine::open(&index_path).expect("open");
+    let mut query = grouped_query("Css which i think is dead now");
+    query.query_by = Some("text".to_string());
+
+    let response = engine.search(&query).expect("search");
+
+    assert_eq!(response["grouped_hits"][0]["group_key"][0], "ordered");
+    let snippet = response["grouped_hits"][0]["hits"][0]["highlights"][0]["snippet"]
+        .as_str()
+        .expect("snippet");
+    assert_eq!(snippet.matches("<mark>").count(), 7);
 }
 
 #[test]

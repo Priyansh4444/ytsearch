@@ -75,6 +75,34 @@ describe("VideoResult", () => {
     expect(screen.queryByRole("button", { name: "Show all moments" })).not.toBeInTheDocument();
   });
 
+  test("renders every backend-provided whole-token highlight", () => {
+    const highlightedHit = {
+      ...hits[0],
+      text: "includes things like CSS which I think is dead now",
+      text_highlight:
+        "includes things like <mark>CSS</mark> <mark>which</mark> <mark>I</mark> <mark>think</mark> <mark>is</mark> <mark>dead</mark> <mark>now</mark>",
+    };
+    const highlightedVideo = {
+      ...video,
+      match_count: 1,
+      hits: [highlightedHit],
+    };
+
+    render(() => (
+      <VideoResult video={highlightedVideo} query="Css which i think is dead now" rank={1} />
+    ));
+
+    expect(Array.from(document.querySelectorAll("mark"), (mark) => mark.textContent)).toEqual([
+      "CSS",
+      "which",
+      "I",
+      "think",
+      "is",
+      "dead",
+      "now",
+    ]);
+  });
+
   test("records feedback against the selected moment", () => {
     render(() => <VideoResult video={video} query="moment" rank={2} />);
 
