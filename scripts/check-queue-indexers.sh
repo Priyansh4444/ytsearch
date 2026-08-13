@@ -51,6 +51,7 @@ if ! printf '%s' "$machines" | jq -e '
   | (.state == "started" or .state == "starting" or .state == "stopped")
     and (.config.env.QUEUE_LOOP == "1")
     and ((.config.env.IDLE_EXIT_AFTER_SECONDS | tonumber?) // 0) > 0
+    and ((.config.env.RAW_PUBLICATION_TIMEOUT_SECONDS | tonumber?) // 0) >= 2700
     and ((.config.restart.policy // "no") == "no")
 ' >/dev/null; then
   echo "The raw worker does not satisfy the on-demand queue invariant." >&2

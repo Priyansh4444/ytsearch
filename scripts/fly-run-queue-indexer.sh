@@ -170,6 +170,7 @@ exec flyctl machine run \
   --env "BACKENDS=$BACKENDS" \
   --env "QUEUE_TARGET_BACKEND=$QUEUE_TARGET_BACKEND" \
   --env "RAW_SEARCH_API_URL=${RAW_SEARCH_API_URL:-http://ytsearch-raw-production.internal:8108}" \
+  --env "RAW_PUBLICATION_TIMEOUT_SECONDS=${RAW_PUBLICATION_TIMEOUT_SECONDS:-3600}" \
   --env "JOBS=${JOBS:-1}" \
   --env "RAW_JOBS=${RAW_JOBS:-1}" \
   --env "LIMIT=$queue_limit" \

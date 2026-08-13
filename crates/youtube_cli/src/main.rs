@@ -28,6 +28,10 @@ mod failure_ledger;
 use args::*;
 use failure_ledger::{FailureCategory, FailureLedger, FailureStage};
 
+const DEFAULT_RAW_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(45 * 60);
+const MAX_RAW_PUBLICATION_TIMEOUT_SECONDS: u64 = 2 * 60 * 60;
+const RAW_PUBLICATION_TIMEOUT_ENV: &str = "RAW_PUBLICATION_TIMEOUT_SECONDS";
+
 #[derive(Debug, Error)]
 enum CliError {
     #[error("youtube api failed: {0}")]
@@ -363,7 +367,9 @@ fn unique_operation_key(kind: &str, target: &str) -> String {
 async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> {
     let readiness = search.publish().await?;
     let target = readiness.last_sequence.unwrap_or_default();
-    let deadline = Instant::now() + Duration::from_secs(20 * 60);
+    let timeout =
+        raw_publication_timeout(std::env::var(RAW_PUBLICATION_TIMEOUT_ENV).ok().as_deref())?;
+    let deadline = Instant::now() + timeout;
     loop {
         let readiness = search.readiness().await?;
         let active = readiness
@@ -382,6 +388,23 @@ async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> 
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
+}
+
+fn raw_publication_timeout(value: Option<&str>) -> Result<Duration, CliError> {
+    let Some(value) = value else {
+        return Ok(DEFAULT_RAW_PUBLICATION_TIMEOUT);
+    };
+    let seconds = value.parse::<u64>().map_err(|_| {
+        CliError::Message(format!(
+            "{RAW_PUBLICATION_TIMEOUT_ENV} must be an integer number of seconds"
+        ))
+    })?;
+    if !(60..=MAX_RAW_PUBLICATION_TIMEOUT_SECONDS).contains(&seconds) {
+        return Err(CliError::Message(format!(
+            "{RAW_PUBLICATION_TIMEOUT_ENV} must be between 60 and {MAX_RAW_PUBLICATION_TIMEOUT_SECONDS} seconds"
+        )));
+    }
+    Ok(Duration::from_secs(seconds))
 }
 
 async fn all_indexed_video_ids(
@@ -2075,6 +2098,21 @@ mod tests {
         assert!(!should_use_worker_existing_checks(true, None, 101));
         assert!(!should_use_worker_existing_checks(false, None, 10));
         assert!(!should_use_worker_existing_checks(true, Some(50), 10));
+    }
+
+    #[test]
+    fn raw_publication_timeout_covers_a_full_production_generation() {
+        assert_eq!(
+            raw_publication_timeout(None).unwrap(),
+            Duration::from_secs(45 * 60)
+        );
+        assert_eq!(
+            raw_publication_timeout(Some("3600")).unwrap(),
+            Duration::from_secs(3600)
+        );
+        assert!(raw_publication_timeout(Some("59")).is_err());
+        assert!(raw_publication_timeout(Some("7201")).is_err());
+        assert!(raw_publication_timeout(Some("forever")).is_err());
     }
 
     #[test]

@@ -18,7 +18,8 @@ fixture() {
         YTSEARCH_MACHINE_ROLE:"queue-indexer",
         QUEUE_TARGET_BACKEND:"raw",
         QUEUE_LOOP:"1",
-        IDLE_EXIT_AFTER_SECONDS:$idle
+        IDLE_EXIT_AFTER_SECONDS:$idle,
+        RAW_PUBLICATION_TIMEOUT_SECONDS:"3600"
       },
       restart:{policy:$restart}
     }
@@ -31,6 +32,13 @@ MACHINES_JSON_FILE="$tmp/healthy.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/d
 fixture stopped 0 no >"$tmp/no-idle-exit.json"
 if MACHINES_JSON_FILE="$tmp/no-idle-exit.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then
   echo "worker without idle exit should fail" >&2
+  exit 1
+fi
+
+jq '.[0].config.env.RAW_PUBLICATION_TIMEOUT_SECONDS = "1200"' \
+  "$tmp/healthy.json" >"$tmp/short-publication-timeout.json"
+if MACHINES_JSON_FILE="$tmp/short-publication-timeout.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then
+  echo "worker with a short Raw publication timeout should fail" >&2
   exit 1
 fi
 
