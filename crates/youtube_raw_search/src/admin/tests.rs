@@ -8,9 +8,13 @@ use youtube_search_service::{SearchBackend, SearchParams};
 const KEY: &str = "test-admin-key-24-bytes-long";
 
 fn chunk(video_id: &str, token: &str) -> TranscriptChunk {
+    chunk_for_channel(video_id, token, "creator")
+}
+
+fn chunk_for_channel(video_id: &str, token: &str, youtuber_id: &str) -> TranscriptChunk {
     serde_json::from_value(serde_json::json!({
         "id": format!("{video_id}-0"),
-        "youtuber_id": "creator",
+        "youtuber_id": youtuber_id,
         "youtuber_handle": "@creator",
         "youtuber_name": "Creator",
         "channel_id": "UCcreator",
@@ -142,6 +146,34 @@ async fn video_mutation_is_durable_then_atomically_published() {
         })
         .unwrap();
     assert_eq!(result["found"], 1);
+}
+
+#[tokio::test]
+async fn handle_form_mutations_keep_canonical_channel_counts_and_scope() {
+    let (_root, state) = setup();
+    let _ = replace_video(
+        State(state.clone()),
+        Path("handle-video".to_string()),
+        headers(),
+        Json(ReplaceVideoRequest {
+            idempotency_key: "replace-handle-video".to_string(),
+            chunks: vec![chunk_for_channel("handle-video", "handletoken", "@Creator")],
+        }),
+    )
+    .await
+    .unwrap();
+
+    let Json(pending) = channel_stats(State(state.clone()), Path("creator".to_string()), headers())
+        .await
+        .unwrap();
+    assert_eq!(pending.indexed_videos, 2);
+    assert_eq!(pending.indexed_chunks, 2);
+
+    state.clone().publish_pending().await;
+
+    let published = state.engine.active().unwrap().channel_stats("creator");
+    assert_eq!(published.indexed_videos, 2);
+    assert_eq!(published.indexed_chunks, 2);
 }
 
 #[tokio::test]

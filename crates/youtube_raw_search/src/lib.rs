@@ -36,3 +36,8 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub use admin::{AdminState, router as admin_router};
+
+fn channel_ids_equal(left: &str, right: &str) -> bool {
+    left.trim_start_matches('@')
+        .eq_ignore_ascii_case(right.trim_start_matches('@'))
+}

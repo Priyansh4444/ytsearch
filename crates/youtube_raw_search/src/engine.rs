@@ -1,5 +1,5 @@
 use crate::{
-    Error, Result,
+    Error, Result, channel_ids_equal,
     format::{
         BLOCK_RECORD_BYTES, DOCUMENT_RECORD_BYTES, DOCUMENTS_MAGIC, FULL_POSITIONS_MAGIC,
         HEADER_BYTES, LEXICON_MAGIC, METADATA_MAGIC, MappedFile, POSITION_SPOOL_MAGIC,
@@ -1832,7 +1832,7 @@ impl RawSearchEngine {
 
 impl VideoMeta {
     fn belongs_to(&self, channel_id: &str) -> bool {
-        self.youtuber_id == channel_id
+        channel_ids_equal(&self.youtuber_id, channel_id)
             || (self.youtuber_id.is_empty()
                 && self
                     .handle

@@ -1,4 +1,4 @@
-use crate::{MutationStore, Publisher, ReloadableEngine};
+use crate::{MutationStore, Publisher, ReloadableEngine, channel_ids_equal};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State},
@@ -407,7 +407,10 @@ fn merged_video_counts(
     };
     for mutation in state.store.video_mutation_summaries()? {
         counts.remove(&mutation.video_id);
-        if mutation.youtuber_id.as_deref() == Some(channel_id)
+        if mutation
+            .youtuber_id
+            .as_deref()
+            .is_some_and(|candidate| channel_ids_equal(candidate, channel_id))
             && let Some(chunk_count) = mutation.chunk_count
         {
             counts.insert(mutation.video_id, chunk_count);
