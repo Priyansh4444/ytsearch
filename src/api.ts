@@ -15,7 +15,13 @@ export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\
 const INDEX_QUEUE_API_BASE_URL = (
   import.meta.env.VITE_INDEX_QUEUE_API_BASE_URL ?? API_BASE_URL
 ).replace(/\/$/, "");
-const inflightSearches = new Map<string, Promise<SearchResponse>>();
+interface InflightSearch {
+  readonly controller: AbortController;
+  readonly promise: Promise<SearchResponse>;
+  subscribers: number;
+}
+
+const inflightSearches = new Map<string, InflightSearch>();
 let inflightChannels: Promise<IndexedChannel[]> | undefined;
 
 export { ApiResponseError };
@@ -24,25 +30,65 @@ export function searchTranscripts(
   request: SearchRequest,
   signal?: AbortSignal,
 ): Promise<SearchResponse> {
+  if (signal?.aborted)
+    return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
   const cacheKey = JSON.stringify(request);
-  const inflight = inflightSearches.get(cacheKey);
-  if (inflight) return inflight;
-
-  const started = performance.now();
-  const response = loadEffectRuntime()
-    .then(({ runSearchTranscripts }) => runSearchTranscripts(API_BASE_URL, request, signal))
-    .then((result) => ({
-      ...result,
-      request_duration_ms: Math.max(0, Math.round(performance.now() - started)),
-    }))
-    .finally(() => {
-      if (inflightSearches.get(cacheKey) === response) inflightSearches.delete(cacheKey);
-    });
-  inflightSearches.set(cacheKey, response);
-  if (inflightSearches.size > SEARCH_CACHE_LIMIT) {
-    inflightSearches.delete(inflightSearches.keys().next().value!);
+  let inflight = inflightSearches.get(cacheKey);
+  if (!inflight) {
+    const controller = new AbortController();
+    const entry: InflightSearch = {
+      controller,
+      subscribers: 0,
+      promise: loadEffectRuntime()
+        .then(({ runSearchTranscripts }) =>
+          runSearchTranscripts(API_BASE_URL, request, controller.signal),
+        )
+        .finally(() => {
+          if (inflightSearches.get(cacheKey) === entry) inflightSearches.delete(cacheKey);
+        }),
+    };
+    inflight = entry;
+    inflightSearches.set(cacheKey, entry);
+    if (inflightSearches.size > SEARCH_CACHE_LIMIT) {
+      const oldestKey = inflightSearches.keys().next().value!;
+      const oldest = inflightSearches.get(oldestKey);
+      inflightSearches.delete(oldestKey);
+      oldest?.controller.abort();
+    }
   }
-  return response;
+
+  const callerStarted = performance.now();
+  inflight.subscribers += 1;
+  const shared = inflight;
+  return new Promise<SearchResponse>((resolve, reject) => {
+    let settled = false;
+    const finish = (complete: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", abort);
+      shared.subscribers -= 1;
+      if (shared.subscribers === 0 && inflightSearches.get(cacheKey) === shared) {
+        inflightSearches.delete(cacheKey);
+        shared.controller.abort();
+      }
+      complete();
+    };
+    const abort = () =>
+      finish(() => reject(signal?.reason ?? new DOMException("Aborted", "AbortError")));
+
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+    shared.promise.then(
+      (result) => finish(() => resolve(result)),
+      (error: unknown) => finish(() => reject(error)),
+    );
+  }).then((result) => ({
+    ...result,
+    request_duration_ms: Math.max(0, Math.round(performance.now() - callerStarted)),
+  }));
 }
 
 export function fetchSearchAvailability(signal?: AbortSignal): Promise<SearchAvailability> {

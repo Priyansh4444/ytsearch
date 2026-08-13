@@ -20,6 +20,7 @@ const emptySearch = (query = "rust"): SearchResponse => ({
 
 describe("frontend API client", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.resetModules();
     vi.restoreAllMocks();
   });
@@ -137,7 +138,8 @@ describe("frontend API client", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  test("coalesces only concurrent searches and measures each completed request", async () => {
+  test("coalesces the fetch while measuring each caller's own wait", async () => {
+    vi.useFakeTimers();
     let resolveFetch: ((response: Response) => void) | undefined;
     const fetchMock = vi.fn(
       () =>
@@ -155,23 +157,100 @@ describe("frontend API client", () => {
     };
 
     const first = searchTranscripts(request);
+    await vi.dynamicImportSettled();
+    vi.advanceTimersByTime(250);
     const second = searchTranscripts(request);
-    expect(first).toBe(second);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(first).not.toBe(second);
+    expect(fetchMock).toHaveBeenCalledOnce();
 
+    vi.advanceTimersByTime(50);
     resolveFetch?.(Response.json(emptySearch()));
-    await expect(first).resolves.toMatchObject({
-      ...emptySearch(),
-      request_duration_ms: expect.any(Number),
-    });
+    await expect(first).resolves.toMatchObject({ request_duration_ms: 300 });
+    await expect(second).resolves.toMatchObject({ request_duration_ms: 50 });
 
     const third = searchTranscripts(request);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await vi.dynamicImportSettled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(20);
     resolveFetch?.(Response.json(emptySearch()));
-    await expect(third).resolves.toMatchObject({
-      ...emptySearch(),
-      request_duration_ms: expect.any(Number),
+    await expect(third).resolves.toMatchObject({ request_duration_ms: 20 });
+  });
+
+  test("isolates cancellation between callers sharing one fetch", async () => {
+    let resolveFetch: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { searchTranscripts } = await import("./api");
+    const request = {
+      query: "rust",
+      youtuber: "",
+      page: 1,
+      sort: "relevance" as const,
+    };
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+
+    const first = searchTranscripts(request, firstController.signal);
+    const second = searchTranscripts(request, secondController.signal);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    firstController.abort();
+    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+
+    resolveFetch?.(Response.json(emptySearch()));
+    await expect(second).resolves.toMatchObject(emptySearch());
+    const sharedSignal = fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal;
+    expect(sharedSignal.aborted).toBe(false);
+  });
+
+  test("aborts shared work only after every caller cancels", async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
     });
+    vi.stubGlobal("fetch", fetchMock);
+    const { searchTranscripts } = await import("./api");
+    const request = {
+      query: "rust",
+      youtuber: "",
+      page: 1,
+      sort: "relevance" as const,
+    };
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const first = searchTranscripts(request, firstController.signal);
+    const second = searchTranscripts(request, secondController.signal);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+
+    secondController.abort();
+    await expect(second).rejects.toMatchObject({ name: "AbortError" });
+    const sharedSignal = fetchMock.mock.calls[0]?.[1]?.signal;
+    expect(sharedSignal).toBeInstanceOf(AbortSignal);
+    expect(sharedSignal?.aborted).toBe(false);
+    firstController.abort();
+    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+    expect(sharedSignal?.aborted).toBe(true);
+  });
+
+  test("does not start shared work for an already-aborted caller", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { searchTranscripts } = await import("./api");
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      searchTranscripts(
+        { query: "rust", youtuber: "", page: 1, sort: "relevance" },
+        controller.signal,
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   test("coalesces concurrent indexed-channel refreshes", async () => {
