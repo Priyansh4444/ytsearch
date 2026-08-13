@@ -28,7 +28,14 @@ Machines and their 61 GB volume set are intentionally retained as deprecated
 rollback and differential-test evidence. Their $9.15/month volume cost is part
 of the ceiling above, not a pending deletion assumption.
 
-The previous `performance-2x`, 4 GB Raw reader alone cost about $64.39/month.
+The hourly durable repair wake may start the on-demand 2 GB indexer, which exits
+after five idle minutes. An entirely idle month is at most about 60 runtime
+hours; the envelope above reserves 100 hours so retry and bounded repair work
+still fit. The hourly cadence keeps a six-hour transcript cooldown from slipping
+to nearly twelve hours when a wake lands just before its retry deadline.
+
+At current SJC pricing, the previous `performance-2x`, 4 GB Raw reader alone
+would cost about $73.92/month and violate the complete-system ceiling.
 Moving the workload to the shared 2 GB allocation keeps the complete retained
 topology below the $65/month target without destroying the Typesense trial.
 
@@ -56,9 +63,12 @@ seconds to 86 seconds; that is acceptable only while the service remains
 always-on and the five-minute reconciler restarts failures. A successful live
 full-corpus publication on 2 GB remains the final sizing gate.
 
-Rollback to `performance-2x`, 4 GB if publication OOMs, swap remains active
-after publication, the search error count increases, or a repeated matched
-workload regresses p95 by more than 25%.
+If publication OOMs, swap remains active after publication, the search error
+count increases, or a repeated matched workload regresses p95 by more than 25%,
+roll back the binary while retaining `shared-cpu-2x`, 2 GB. Fail closed on a
+resize: any larger allocation requires a newly calculated complete-system cost
+gate and explicit authorization. Never use `performance-2x`, 4 GB as an
+automatic fallback because that Machine alone exceeds the $65 ceiling.
 
 ## Why SQLite remains in the control plane
 

@@ -3,19 +3,18 @@ set -eu
 
 confirmation="${APPLY_TYPESENSE_RETIREMENT:-}"
 case "$confirmation" in
-  destroy-exact-deprecated-typesense-resources) destroy=1 ;;
-  verify-exact-deprecated-typesense-resources) destroy=0 ;;
+  verify-exact-deprecated-typesense-resources) ;;
   *)
   cat >&2 <<'EOF'
-Dry run only. No Fly resources were changed.
+Preservation mode only. This branch cannot destroy Typesense resources.
 
-To resolve and verify the complete target set without deleting it, run:
+To verify the complete stopped rollback set without changing it, run:
   APPLY_TYPESENSE_RETIREMENT=verify-exact-deprecated-typesense-resources \
     scripts/destroy-deprecated-typesense-fly.sh
 
-After every Raw publication, restart, search, load, browser, and queue gate passes, run:
-  APPLY_TYPESENSE_RETIREMENT=destroy-exact-deprecated-typesense-resources \
-    scripts/destroy-deprecated-typesense-fly.sh
+Any future destruction requires a new explicit user decision and a separately
+reviewed implementation. The historical destructive implementation is retained
+on the Typesense archive branch as trial evidence only.
 EOF
   exit 0
   ;;
@@ -65,7 +64,7 @@ verify_machine() {
   fi
 }
 
-# Resolve the full destructive target set before deleting the first resource.
+# Resolve the complete preservation set and fail if it drifts or restarts.
 verify_app ytsearch-typesense-staging "8147deb94937e8 d8de466f330468"
 verify_app ytsearch-api-typesense-fly-staging "1855eddf654298"
 verify_app ytsearch-indexer-staging "68352d2be17728"
@@ -77,27 +76,4 @@ verify_machine ytsearch-typesense-staging d8de466f330468 vol_vdezd781q880qm34 yt
 verify_machine ytsearch-api-typesense-fly-staging 1855eddf654298 vol_vwnydd578odzzo8v ytsearch-api-raw-production
 verify_machine ytsearch-indexer-staging 68352d2be17728 vol_r68z3gl5wq7jkqd4 ytsearch-indexer-raw-production
 
-if [ "$destroy" -eq 0 ]; then
-  echo "Verified the four exact deprecated Machines and complete seven-volume legacy set. No resources were changed."
-  exit 0
-fi
-
-flyctl machine destroy --app ytsearch-typesense-staging 8147deb94937e8 d8de466f330468
-flyctl machine destroy --app ytsearch-api-typesense-fly-staging 1855eddf654298
-flyctl machine destroy --app ytsearch-indexer-staging 68352d2be17728
-
-flyctl volumes destroy --app ytsearch-typesense-staging --yes \
-  vol_v8e6yy17jo63nplv vol_vdezd781q880qm34
-flyctl volumes destroy --app ytsearch-api-typesense-fly-staging --yes vol_vwnydd578odzzo8v
-flyctl volumes destroy --app ytsearch-indexer-staging --yes \
-  vol_458zq611m0yppz14 \
-  vol_4qlzgynglnz786gr \
-  vol_r68z3gl5wq7jkqd4 \
-  vol_v8e6wk3g1l6kj15v
-
-flyctl apps destroy --yes \
-  ytsearch-typesense-staging \
-  ytsearch-api-typesense-fly-staging \
-  ytsearch-indexer-staging
-
-echo "Destroyed the four exact deprecated Machines, all seven verified legacy volumes, and three legacy apps."
+echo "Verified the four exact stopped deprecated Machines and complete seven-volume preservation set. No resources were changed."

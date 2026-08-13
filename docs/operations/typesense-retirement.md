@@ -10,10 +10,10 @@ Raw relevance and resource claims. Deprecation does not authorize deletion.
 
 | State | App | Machine | Attached volume | Replacement |
 | --- | --- | --- | --- | --- |
-| Deprecated; pending final repair gates | `ytsearch-typesense-staging` | `8147deb94937e8` | `vol_v8e6yy17jo63nplv` (10 GB) | `ytsearch-raw-production` |
-| Deprecated; pending final repair gates | `ytsearch-typesense-staging` | `d8de466f330468` | `vol_vdezd781q880qm34` (10 GB) | Historical benchmark only |
-| Deprecated; pending final repair gates | `ytsearch-api-typesense-fly-staging` | `1855eddf654298` | `vol_vwnydd578odzzo8v` (1 GB) | `ytsearch-api-raw-production` |
-| Deprecated; pending final repair gates | `ytsearch-indexer-staging` | `68352d2be17728` | `vol_r68z3gl5wq7jkqd4` (10 GB) | `ytsearch-indexer-raw-production` |
+| Deprecated, stopped, preserved | `ytsearch-typesense-staging` | `8147deb94937e8` | `vol_v8e6yy17jo63nplv` (10 GB) | `ytsearch-raw-production` |
+| Deprecated, stopped, preserved | `ytsearch-typesense-staging` | `d8de466f330468` | `vol_vdezd781q880qm34` (10 GB) | Historical benchmark only |
+| Deprecated, stopped, preserved | `ytsearch-api-typesense-fly-staging` | `1855eddf654298` | `vol_vwnydd578odzzo8v` (1 GB) | `ytsearch-api-raw-production` |
+| Deprecated, stopped, preserved | `ytsearch-indexer-staging` | `68352d2be17728` | `vol_r68z3gl5wq7jkqd4` (10 GB) | `ytsearch-indexer-raw-production` |
 
 The same indexer app owns three unattached historical volumes. They are now
 inside the exact retirement scope because their complete contents were audited
@@ -27,9 +27,9 @@ and preserved:
   in the Raw cache: 2,779 absent from the active index were imported first, then
   a cache-to-cache audit imported the remaining 468 missing files.
 
-The Raw cache now holds 8,829 transcript files. The retirement script verifies
-the complete seven-volume inventory before its first deletion; an unexpected
-Machine or volume makes it fail closed.
+The Raw cache now holds 8,829 transcript files. The preservation verifier checks
+the complete seven-volume inventory and exact stopped-Machine metadata; an
+unexpected Machine or volume makes it fail closed without changing anything.
 
 ## Required order
 
@@ -53,11 +53,11 @@ Machine or volume makes it fail closed.
    prove that nothing has restarted. Destruction requires a new, explicit user
    decision and is not part of the Raw migration.
 
-The historical cleanup mechanism remains archived in
-`scripts/destroy-deprecated-typesense-fly.sh`. Its default verification-only
-mode resolves every exact Machine and volume and remains useful for detecting
-inventory drift. Its destructive mode is dormant and must not be run without a
-new explicit decision that names the exact resources.
+The historical cleanup implementation remains on the Typesense archive branch.
+On master, `scripts/destroy-deprecated-typesense-fly.sh` is verification-only:
+it resolves every exact Machine and volume and detects inventory drift but has
+no destructive mode. A future deletion requires a new explicit user decision
+and a separately reviewed implementation naming the exact resources.
 
 Never delete the legacy queue before its request IDs have been copied and
 acknowledged by the Raw queue. A successful search-read cutover alone is not a

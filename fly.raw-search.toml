@@ -27,11 +27,10 @@ primary_region = 'sjc'
   initial_size = '20gb'
 
 [[vm]]
-  # Half the current Typesense production allocation (8 GB / 4 performance
-  # CPUs). The full schema-v6 Raw generation warms below 400 MB RSS, leaving
-  # substantial headroom for concurrency and page-cache growth.
-  memory = '4096mb'
-  cpu_kind = 'performance'
+  # Keep routine deploys aligned with the cost-gated live allocation. The
+  # 2 GiB cgroup leaves room for the reader, file cache, and bounded publisher.
+  memory = '2048mb'
+  cpu_kind = 'shared'
   cpus = 2
 
 [checks]

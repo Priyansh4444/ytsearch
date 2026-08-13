@@ -15,17 +15,15 @@ there is no Typesense dependency in the live read or write path.
 | --- | --- | --- |
 | Raw engine | `ytsearch-raw-production` / `d89303da029328` | 2 GiB, 2 shared vCPUs; 512 MiB swap recovery margin |
 | Raw API | `ytsearch-api-raw-production` / `8e7204a7694d28` | 512 MiB, 1 shared vCPU |
-| Raw indexer | `ytsearch-indexer-raw-production` / `8e426df7e305e8` | 4 GiB, 4 shared vCPUs; stops after five idle minutes |
-| Production Worker | `ytsearch-search` | `5e4f60d7-8036-4ecb-9329-233a09925354` |
-| Pre-cutover Worker rollback | `ytsearch-search` | `1b873022-c9df-48c0-a4df-dda0337344a4` |
-| Deprecated Typesense engine | `ytsearch-typesense-staging` / `8147deb94937e8` | Stopped; pending exact-resource destruction after the active full repair gate |
-| Deprecated Typesense API | `ytsearch-api-typesense-fly-staging` / `1855eddf654298` | Stopped; pending exact-resource destruction after the active full repair gate |
+| Raw indexer | `ytsearch-indexer-raw-production` / `8e426df7e305e8` | 2 GiB, 2 shared vCPUs; stopped/on demand, five-minute idle exit |
+| Production Worker | `ytsearch-search` | Cloudflare deployment; exact version recorded by each deployment log |
+| Deprecated Typesense engine | `ytsearch-typesense-staging` / `8147deb94937e8` | Stopped and preserved with benchmark Machine `d8de466f330468` |
+| Deprecated Typesense API | `ytsearch-api-typesense-fly-staging` / `1855eddf654298` | Stopped and preserved |
+| Deprecated Typesense indexer | `ytsearch-indexer-staging` / `68352d2be17728` | Stopped and preserved |
 
-The production Raw engine runs the bounded publisher image
-`registry.fly.io/ytsearch-raw-production:raw-bounded-2ddbb5b` at digest
-`sha256:f6b81ddbf6625d6ca108ae7117ee1ee0658f26011b36c4ac758bdd883434315c`.
-The API facade reuses the contract-compatible image
-`registry.fly.io/ytsearch-api-raw-experiment:deployment-01KZ12A540RH0Q39WTW4XPDM0A`.
+Image digests and Worker version IDs are deployment outputs, not stable topology.
+Resolve them from Fly and Cloudflare immediately before rollback instead of
+copying an old value from this document.
 
 ## Promotion gates
 
@@ -41,27 +39,23 @@ The API facade reuses the contract-compatible image
 - Post-load Raw RSS: 373,096,448 bytes; engine-reported search errors: zero.
 - Initial-route JavaScript: 24,342 bytes gzip, below the 30 KB limit.
 
-After the complete mutable migration, generation 1167 contains 8,198,020
-documents, 33,823 videos, 61 channels, and 294,414 terms. The nine-channel
-drift repair published generation 1166; the one write interrupted by an earlier
-deployment (`g20JZ2HNZaw`) was replayed as 66 chunks and published as generation
-1167. A clean Machine restart re-opened that generation, and the video is
-publicly searchable.
+The current pre-rollout production baseline on 2026-08-13 is generation 2144
+with 8,322,725 documents on the 2 GiB shared Raw Machine. Earlier generation
+1166/1167 repair results remain historical evidence in the experiment reports,
+not a statement of current production state.
 
-The final public contract returned 200 for relevance, combined engagement,
-views, likes, comments, and both publication-date sorts; an unknown sort
-returned 400. The true final `blackhole` page returned five videos and
-`has_next_page=false`. A 75-request, five-concurrent run had zero errors and a
-308 ms p95. The redeployed initial route is 24,343 bytes gzip.
-
-T3's collaborative snapshot/evaluate channel remained unavailable after the
-deployment and failed identically on `example.com`. Therefore the final visual
-browser gate is explicitly not claimed. The legacy resources are marked
-deprecated and all four Machines are stopped. Autostart is disabled on the two
-former services. Their volumes are retained until that one gate can be
-observed; this rollback storage costs about $4.65/month.
+The last verified browser build remains below the 30 KB initial-JavaScript
+ceiling. Treat old 308 ms/75-request and generation-1167 results as historical
+gates; each rollout must record fresh latency, ordering, highlight, cache, and
+browser evidence. The four legacy Machines are stopped and deprecated. Their
+seven volumes total 61 GB ($9.15/month); they remain preserved unless the user
+makes a new explicit destruction decision. Current complete pricing is in
+[Raw production cost and persistence decision](raw-production-cost.md).
 
 ## Rollback
+
+Rollback is intentionally reversible because the deprecated resources remain
+stopped and preserved:
 
 1. Set `API_BASE_URL` in `wrangler.jsonc` back to
    `https://ytsearch-api-typesense-fly-staging.fly.dev`.
@@ -71,8 +65,8 @@ observed; this rollback storage costs about $4.65/month.
 4. Verify `blackhole`, `blackhole/@veritasium`, and the Cursor regression URL in
    a clean browser before declaring rollback complete.
 
-The pre-cutover Worker version is retained above as forensic evidence, but a
-configuration redeploy is preferred because it keeps current frontend fixes.
+A configuration redeploy is preferred to a stale Worker binary because it keeps
+current frontend and cache-correctness fixes.
 
 ## Mutable write path
 

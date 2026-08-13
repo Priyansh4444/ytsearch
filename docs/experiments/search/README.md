@@ -6,9 +6,9 @@ browser code.
 
 | Backend   | Implementation       | Status                           |
 | --------- | -------------------- | -------------------------------- |
-| Typesense | Production control   | Supported production backend     |
+| Typesense | Archived control     | Deprecated, stopped oracle        |
 | Tantivy   | Archived branch      | Retired trial; machine destroyed |
-| Raw       | `youtube_raw_search` | Active experiment                |
+| Raw       | `youtube_raw_search` | Production backend               |
 
 Raw uses `youtube_search_service` for HTTP routing, authentication, metrics,
 and the bounded response cache. Index layout, query evaluation, scoring, and

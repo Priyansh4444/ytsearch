@@ -14,8 +14,10 @@ Primary metric: pooled warm p95 HTTP latency on localhost. Secondary metrics
 are p50 and mean latency, process CPU ticks, warm RSS, index bytes, build/import
 time, relevance overlap, startup behavior, and cached response cost.
 
-Rollback: production remains on Typesense. The experiments expose no write API,
-run in separate Fly apps, and can be stopped without touching production data.
+Historical rollback during this experiment kept production on Typesense. Raw
+was later promoted; Typesense now remains stopped and preserved as the rollback
+and differential oracle. The experiment apps exposed no write API and were
+isolated from production data.
 
 ## Corpus
 

@@ -46,6 +46,9 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Add safe phrase-aware, configurable multi-snippet highlights and match metadata.
   - [x] Highlight complete token boundaries, prefer a hit's original exact
     tokens over fuzzy alternatives, and regression-test the reported CSS query.
+  - [x] Preserve alternatives by originating query token through candidate
+    generation, including typo and one-to-many split/plural replacements, so
+    each hit highlights only relevant alternatives instead of a global union.
 - [x] Fail closed on every unknown filter, sort, facet, operator, and malformed value in the active application contract.
 - [ ] Add a versioned 300-query human-judged relevance oracle.
 - [x] Cover global and channel-specific `blackhole` searches for Veritasium and Vsauce.
@@ -172,6 +175,14 @@ Raw can replace Typesense as the canonical search index.
   6,140 ms origin sample. API, Worker subrequest, CDN, browser, and frontend
   persistent caches now fail closed with `no-store`; the UI separately reports
   the current browser request duration and backend search duration.
+- [x] A typing prefetch and a later submitted search shared the prefetch's start
+  timestamp, overstating the wait visible to the submitting user. Fetch work is
+  still coalesced, but each caller now measures its own wait interval.
+- [x] A creator could publish some videos, return success despite retryable
+  per-video gaps, and be deleted from the Cloudflare queue. Retryable gaps now
+  fail the indexing pass, return the request to `queued`, retry idempotently on
+  a later pass, and acknowledge only after a checked successful deletion;
+  transport and malformed queue responses fail closed.
 
 - [x] The Pacific-hours lifecycle policy stopped an active repair at midnight
   and intentionally made production search unavailable for half the day.

@@ -13,8 +13,9 @@ rollback before it can become a production proposal.
 - [Raw validation](search/raw-validation.md)
 - [Tantivy design](search/tantivy.md)
 
-Production continues to use Typesense unless an experiment document explicitly
-records a completed promotion decision.
+Historical reports retain their original control labels. Raw was promoted to
+production in August 2026; Typesense is now a stopped, deprecated rollback and
+differential oracle preserved outside the live read/write path.
 
 ## Indexing
 

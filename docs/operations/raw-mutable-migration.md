@@ -35,7 +35,12 @@ and leave the durable mutation log pending for retry. Keep Typesense resources
 stopped and recoverable after the Raw restart gate as a rollback and relevance
 oracle; migration completion does not require an irreversible stage.
 
-## Baseline on 2026-08-09
+## Historical baseline on 2026-08-09
+
+This section records the machine used to validate the first mutable publisher.
+It is not the current topology or pricing. The live engine is now 2 GiB on two
+shared vCPUs and the current cost ceiling is maintained in
+[Raw production cost and persistence decision](raw-production-cost.md).
 
 | Measurement | Value |
 | --- | ---: |
@@ -46,10 +51,10 @@ oracle; migration completion does not require an irreversible stage.
 | Raw engine searches/errors | 86 / 0 |
 | Internal engine search time | 2.044 seconds |
 
-Current [Fly list pricing](https://fly.io/docs/about/pricing/) is $0.0894/hour
+At that time, Fly list pricing was $0.0894/hour
 for the 4 GiB `performance-2x` Raw engine, $3.32/month for the 512 MiB
 `shared-cpu-1x` API, $0.0329/hour while the 4 GiB `shared-cpu-4x` indexer runs,
-and $0.15/GB-month for volumes. At the enforced 12-hour daily search window,
+and $0.15/GB-month for volumes. Under the then-enforced 12-hour search window,
 engine compute is about $32.20 per 30 days. Engine/API/indexer volumes total 31
 GB ($4.65/month), so the scheduled engine, always-on API, and volumes are about
 $40.17/month before variable indexer runtime, stopped rootfs, snapshots,

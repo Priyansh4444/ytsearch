@@ -1,7 +1,8 @@
 # Fetch, import, and scaling audit
 
-Measured and validated 2026-08-01. This record covers the supported indexing
-pipeline shared by the Typesense production path and the Raw corpus exporter.
+Measured and validated 2026-08-01, before the Raw production cutover. This
+historical record covers the indexing pipeline then shared by the Typesense
+production path and Raw corpus exporter; Raw is now the live backend.
 
 ## Contract
 

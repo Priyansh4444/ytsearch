@@ -101,9 +101,9 @@ jq '.[0].state = "started"' "$tmp/fixtures/ytsearch-typesense-staging.json" \
   >"$tmp/invalid.json"
 mv "$tmp/invalid.json" "$tmp/fixtures/ytsearch-typesense-staging.json"
 if PATH="$tmp/bin:$PATH" FLY_FIXTURES="$tmp/fixtures" FLY_CALLS="$tmp/calls" \
-  APPLY_TYPESENSE_RETIREMENT=destroy-exact-deprecated-typesense-resources \
+  APPLY_TYPESENSE_RETIREMENT=verify-exact-deprecated-typesense-resources \
   "$SCRIPT_DIR/destroy-deprecated-typesense-fly.sh" >/dev/null 2>&1; then
-  echo "retirement should fail before deleting a started Machine" >&2
+  echo "preservation verification should reject a started Machine" >&2
   exit 1
 fi
 test ! -e "$tmp/calls"
@@ -117,9 +117,9 @@ jq '.[0].id = "vol_unexpected"' \
 mv "$tmp/invalid-volumes.json" \
   "$tmp/fixtures/ytsearch-indexer-staging-volumes.json"
 if PATH="$tmp/bin:$PATH" FLY_FIXTURES="$tmp/fixtures" FLY_CALLS="$tmp/calls" \
-  APPLY_TYPESENSE_RETIREMENT=destroy-exact-deprecated-typesense-resources \
+  APPLY_TYPESENSE_RETIREMENT=verify-exact-deprecated-typesense-resources \
   "$SCRIPT_DIR/destroy-deprecated-typesense-fly.sh" >/dev/null 2>&1; then
-  echo "retirement should fail before deleting an unexpected volume set" >&2
+  echo "preservation verification should reject an unexpected volume set" >&2
   exit 1
 fi
 test ! -e "$tmp/calls"
@@ -130,15 +130,13 @@ mv "$tmp/valid-volumes.json" \
   "$tmp/fixtures/ytsearch-indexer-staging-volumes.json"
 
 PATH="$tmp/bin:$PATH" FLY_FIXTURES="$tmp/fixtures" FLY_CALLS="$tmp/calls" \
-  APPLY_TYPESENSE_RETIREMENT=destroy-exact-deprecated-typesense-resources \
+  APPLY_TYPESENSE_RETIREMENT=verify-exact-deprecated-typesense-resources \
   "$SCRIPT_DIR/destroy-deprecated-typesense-fly.sh" >/dev/null
+test ! -e "$tmp/calls"
 
-test "$(wc -l <"$tmp/calls" | tr -d ' ')" -eq 7
-rg -q '^machine destroy --app ytsearch-typesense-staging 8147deb94937e8 d8de466f330468$' \
-  "$tmp/calls"
-rg -q '^volumes destroy --app ytsearch-indexer-staging --yes vol_458zq611m0yppz14 vol_4qlzgynglnz786gr vol_r68z3gl5wq7jkqd4 vol_v8e6wk3g1l6kj15v$' \
-  "$tmp/calls"
-rg -q '^apps destroy --yes ytsearch-typesense-staging ytsearch-api-typesense-fly-staging ytsearch-indexer-staging$' \
-  "$tmp/calls"
+PATH="$tmp/bin:$PATH" FLY_FIXTURES="$tmp/fixtures" FLY_CALLS="$tmp/calls" \
+  APPLY_TYPESENSE_RETIREMENT=unsupported-destructive-request \
+  "$SCRIPT_DIR/destroy-deprecated-typesense-fly.sh" >/dev/null 2>&1
+test ! -e "$tmp/calls"
 
 echo "typesense_retirement_checks=ok"
