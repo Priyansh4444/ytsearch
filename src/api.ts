@@ -26,6 +26,10 @@ let inflightChannels: Promise<IndexedChannel[]> | undefined;
 
 export { ApiResponseError };
 
+export function prepareSearchRuntime(): Promise<void> {
+  return loadEffectRuntime().then(() => undefined);
+}
+
 export function searchTranscripts(
   request: SearchRequest,
   signal?: AbortSignal,

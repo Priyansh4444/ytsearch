@@ -8,7 +8,13 @@ import {
   onCleanup,
 } from "solid-js";
 import type { Component } from "solid-js";
-import { indexStatus, indexedChannels, requestIndex, searchTranscripts } from "./api";
+import {
+  indexStatus,
+  indexedChannels,
+  prepareSearchRuntime,
+  requestIndex,
+  searchTranscripts,
+} from "./api";
 import { capture, captureSearchLoaded, captureSearchSubmitted } from "./analytics";
 import { useAppLifecycle } from "./app-lifecycle";
 import { ChannelPicker } from "./components/channel-picker";
@@ -299,27 +305,14 @@ const App: Component = () => {
     const searchQuery = mentionedChannel() ? mentionQuery() : normalizedQuery;
     const currentFormMode =
       normalizedQuery.startsWith("@") && !mentionedChannel() ? "index" : "search";
-    const currentYoutuber = mentionedChannel()?.handle ?? youtuber();
-    const currentSort = sort();
-    const currentSubmitted = submitted();
     if (currentFormMode !== "search" || searchQuery.length < 2 || !availability().search_enabled)
       return;
-    if (
-      currentSubmitted?.query === searchQuery &&
-      currentSubmitted.youtuber === currentYoutuber &&
-      currentSubmitted.sort === currentSort &&
-      currentSubmitted.page === 1
-    ) {
-      return;
-    }
 
     const timeout = window.setTimeout(() => {
-      void searchTranscripts({
-        query: searchQuery,
-        youtuber: currentYoutuber,
-        page: 1,
-        sort: currentSort,
-      }).catch(() => undefined);
+      // Warm only the lazy Effect runtime. Speculative network searches become
+      // duplicate origin work whenever a user pauses before submitting, and a
+      // completed speculative response cannot provide honest click-to-result timing.
+      void prepareSearchRuntime().catch(() => undefined);
     }, 900);
 
     onCleanup(() => window.clearTimeout(timeout));

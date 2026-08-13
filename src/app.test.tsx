@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   fetchSearchAvailability: vi.fn<() => Promise<SearchAvailability>>(),
   indexStatus: vi.fn(),
   indexedChannels: vi.fn<() => Promise<IndexedChannel[]>>(),
+  prepareSearchRuntime: vi.fn<() => Promise<void>>(),
   requestIndex: vi.fn(),
   searchTranscripts: vi.fn<(request: SearchRequest) => Promise<SearchResponse>>(),
   capture: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("./api", () => ({
   fetchSearchAvailability: mocks.fetchSearchAvailability,
   indexStatus: mocks.indexStatus,
   indexedChannels: mocks.indexedChannels,
+  prepareSearchRuntime: mocks.prepareSearchRuntime,
   requestIndex: mocks.requestIndex,
   searchTranscripts: mocks.searchTranscripts,
 }));
@@ -126,6 +128,7 @@ describe("App", () => {
         ),
       );
     mocks.indexedChannels.mockReset().mockResolvedValue([channel]);
+    mocks.prepareSearchRuntime.mockReset().mockResolvedValue(undefined);
     mocks.requestIndex.mockReset().mockResolvedValue({
       id: "request-1",
       handle: "@newcreator",
@@ -181,6 +184,23 @@ describe("App", () => {
       expect.any(AbortSignal),
     );
     await waitFor(() => expect(mocks.captureSearchLoaded).toHaveBeenCalled());
+  });
+
+  test("warms code without issuing a speculative search request", async () => {
+    render(() => <App />);
+
+    const input = screen.getByRole("combobox", { name: "Search transcripts" });
+    await waitFor(() => expect(screen.getByText(/Search is available now/)).toBeInTheDocument());
+    vi.useFakeTimers();
+    try {
+      fireEvent.input(input, { target: { value: "rust" } });
+      await vi.advanceTimersByTimeAsync(901);
+
+      expect(mocks.prepareSearchRuntime).toHaveBeenCalledOnce();
+      expect(mocks.searchTranscripts).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("submits an indexing request only after confirmation", async () => {
