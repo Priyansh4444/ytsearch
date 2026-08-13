@@ -504,6 +504,31 @@ pub(super) fn ordered_tokens(value: &str) -> Vec<String> {
     output
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct PositionalSummary {
+    pub(super) window: Option<PositionalWindow>,
+    pub(super) ordered: bool,
+}
+
+pub(super) fn positional_summary(value: &str, terms: &[String]) -> PositionalSummary {
+    let tokens = ordered_tokens(value);
+    let mut positions = vec![Vec::new(); terms.len()];
+    for (position, token) in tokens.iter().enumerate() {
+        let Ok(position) = u32::try_from(position) else {
+            break;
+        };
+        for (term_positions, term) in positions.iter_mut().zip(terms) {
+            if token == term {
+                term_positions.push(position);
+            }
+        }
+    }
+    let window =
+        minimum_position_window_slices(&positions.iter().map(Vec::as_slice).collect::<Vec<_>>());
+    let ordered = tokens.windows(terms.len()).any(|window| window == terms);
+    PositionalSummary { window, ordered }
+}
+
 pub(super) fn ordered_phrase_positions_match(cursors: &[PhraseCursor<'_>], slop: u8) -> bool {
     let Some(first) = cursors.first() else {
         return false;
@@ -529,16 +554,26 @@ pub(super) fn ordered_phrase_positions_match(cursors: &[PhraseCursor<'_>], slop:
 }
 
 pub(super) fn minimum_position_window(cursors: &[PhraseCursor<'_>]) -> Option<PositionalWindow> {
-    if cursors.len() < 2 || cursors.iter().any(|cursor| cursor.positions.is_empty()) {
+    minimum_position_window_slices(
+        &cursors
+            .iter()
+            .map(|cursor| cursor.positions.as_slice())
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn minimum_position_window_slices(positions: &[&[u32]]) -> Option<PositionalWindow> {
+    if positions.len() < 2 || positions.iter().any(|values| values.is_empty()) {
         return None;
     }
-    let mut indices = vec![0_usize; cursors.len()];
+    let mut indices = vec![0_usize; positions.len()];
     let mut best: Option<PositionalWindow> = None;
     loop {
         let mut minimum = (0_usize, u32::MAX);
         let mut maximum = 0_u32;
-        for (cursor_index, (cursor, &position_index)) in cursors.iter().zip(&indices).enumerate() {
-            let position = cursor.positions[position_index];
+        for (cursor_index, (values, &position_index)) in positions.iter().zip(&indices).enumerate()
+        {
+            let position = values[position_index];
             if position < minimum.1 {
                 minimum = (cursor_index, position);
             }
@@ -555,12 +590,12 @@ pub(super) fn minimum_position_window(cursors: &[PhraseCursor<'_>]) -> Option<Po
         }) {
             best = Some(window);
         }
-        if window.displacement == cursors.len().saturating_sub(1) as u32 {
+        if window.displacement == positions.len().saturating_sub(1) as u32 {
             break;
         }
         let minimum_index = &mut indices[minimum.0];
         *minimum_index += 1;
-        if *minimum_index == cursors[minimum.0].positions.len() {
+        if *minimum_index == positions[minimum.0].len() {
             break;
         }
     }
@@ -1003,6 +1038,28 @@ pub(super) fn highlighted_snippet(
     }
     escape_html(&value[cursor..snippet_end], &mut output);
     Some(output)
+}
+
+pub(super) fn preferred_highlight_terms(
+    value: &str,
+    terms: &[String],
+    original_term_count: usize,
+) -> Vec<String> {
+    let present = ordered_tokens(value).into_iter().collect::<HashSet<_>>();
+    let original_term_count = original_term_count.min(terms.len());
+    let originals = terms[..original_term_count]
+        .iter()
+        .filter(|term| present.contains(term.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !originals.is_empty() {
+        return originals;
+    }
+    terms[original_term_count..]
+        .iter()
+        .filter(|term| present.contains(term.as_str()))
+        .cloned()
+        .collect()
 }
 
 pub(super) fn escape_html(value: &str, output: &mut String) {

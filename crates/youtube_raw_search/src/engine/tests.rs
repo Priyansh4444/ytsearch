@@ -834,6 +834,45 @@ fn token_drop_threshold_applies_the_active_filter() {
 }
 
 #[test]
+fn an_exact_phrase_outside_the_filter_cannot_suppress_scoped_prefix_recall() {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    for document in [
+        json!({
+            "id": "global-phrase-1",
+            "video_id": "global-phrase",
+            "title": "Global phrase",
+            "text": "alpha beta gamma delta",
+            "youtuber_handle": "@one",
+            "youtuber_name": "One"
+        }),
+        json!({
+            "id": "scoped-prefix-1",
+            "video_id": "scoped-prefix",
+            "title": "Scoped prefix",
+            "text": "alpha beta gamma deltas",
+            "youtuber_handle": "@two",
+            "youtuber_name": "Two"
+        }),
+    ] {
+        writeln!(chunks, "{document}").expect("write chunk");
+    }
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+    let engine = RawSearchEngine::open(&index_path).expect("open raw index");
+    let mut query = grouped_query("alpha beta gamma delta");
+    query.filter_by = Some("youtuber_handle:=@two".to_string());
+
+    let response = engine.search(&query).expect("filtered prefix search");
+
+    assert_eq!(response["found"], 1);
+    assert_eq!(response["grouped_hits"][0]["group_key"][0], "scoped-prefix");
+}
+
+#[test]
 fn typo_expansion_stays_conjunctive_inside_a_retained_subset() {
     let (_root, engine) = token_drop_engine();
     let response = engine
@@ -864,7 +903,7 @@ fn rarest_first_exact_prefix_conjunction_matches_the_materialized_contract() {
     let terms = vec!["relativity".to_string(), "explained".to_string()];
     let fields = query_fields(None, true).expect("query fields");
     let (fast, _) = engine
-        .exact_prefix_conjunction(&terms, fields, true)
+        .exact_prefix_conjunction(&terms, fields, true, None, &mut BlockCache::default())
         .expect("rarest-first conjunction");
 
     let mut materialized = engine
@@ -889,6 +928,64 @@ fn rarest_first_exact_prefix_conjunction_matches_the_materialized_contract() {
             fast.score,
             materialized.score
         );
+    }
+}
+
+#[test]
+fn document_local_proximity_matches_postings_at_the_direct_path_boundary() {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    for index in 0..129 {
+        let document = json!({
+            "id": format!("video-{index}-1"),
+            "video_id": format!("video-{index}"),
+            "title": if index % 2 == 0 { "alpha beta" } else { "beta alpha" },
+            "text": if index % 3 == 0 { "alpha beta alpha" } else { "beta then alpha" },
+            "youtuber_handle": "@boundary",
+            "youtuber_name": "Boundary"
+        });
+        writeln!(chunks, "{document}").expect("write chunk");
+    }
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+    let engine = RawSearchEngine::open(&index_path).expect("open raw index");
+    let terms = ordered_tokens("alpha beta");
+    let fields = query_fields(Some("text,title"), true).expect("query fields");
+    let (candidates, _) = engine
+        .exact_prefix_conjunction(&terms, fields, false, None, &mut BlockCache::default())
+        .expect("candidates");
+    assert_eq!(candidates.len(), 129);
+
+    for target_count in [127, 128, 129] {
+        let mut direct = candidates[..target_count].to_vec();
+        let mut postings = direct.clone();
+        engine
+            .apply_exact_proximity_from_documents(
+                &terms,
+                fields,
+                &mut direct,
+                &mut BlockCache::default(),
+            )
+            .expect("document-local proximity");
+        engine
+            .apply_exact_proximity_from_postings(&terms, fields, &mut postings)
+            .expect("posting proximity");
+
+        for (direct, postings) in direct.iter().zip(postings) {
+            assert_eq!(direct.document(), postings.document());
+            assert_eq!(direct.exact_mask(), postings.exact_mask());
+            assert_eq!(direct.matches_text(), postings.matches_text());
+            let tolerance = postings.score.abs().max(1.0) * 1e-6;
+            assert!(
+                (direct.score - postings.score).abs() <= tolerance,
+                "count={target_count} direct={} postings={} tolerance={tolerance}",
+                direct.score,
+                postings.score
+            );
+        }
     }
 }
 

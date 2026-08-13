@@ -26,6 +26,20 @@ impl RawSearchEngine {
         terms: &[String],
         fields: QueryFields,
         prefix_last: bool,
+        filter: Option<(&str, &str)>,
+        block_cache: &mut BlockCache,
+    ) -> Result<(Vec<DocMatch>, Vec<String>)> {
+        self.fuzzy_prefix_conjunction(terms, fields, prefix_last, 0, filter, block_cache)
+    }
+
+    pub(super) fn fuzzy_prefix_conjunction(
+        &self,
+        terms: &[String],
+        fields: QueryFields,
+        prefix_last: bool,
+        maximum_distance: u8,
+        filter: Option<(&str, &str)>,
+        block_cache: &mut BlockCache,
     ) -> Result<(Vec<DocMatch>, Vec<String>)> {
         let mut plans = Vec::with_capacity(terms.len());
         let mut highlights = terms.to_vec();
@@ -46,16 +60,21 @@ impl RawSearchEngine {
                 });
             }
 
-            if prefix_last && index == last_index {
+            if maximum_distance > 0 || (prefix_last && index == last_index) {
                 for candidate in self.inner.fuzzy.candidates(
                     term,
-                    0,
+                    maximum_distance.min(bounded_typo_distance(term)),
                     MAX_FUZZY_TERMS_PER_DISTANCE,
                     true,
                     fields.text,
                     fields.title,
                 )? {
-                    if candidate.exact || candidate.distance != 0 {
+                    let prefix_candidate =
+                        candidate.distance == 0 && prefix_last && index == last_index;
+                    let typo_candidate = candidate.distance > 0
+                        && candidate.distance <= maximum_distance
+                        && candidate.distance <= bounded_typo_distance(term);
+                    if candidate.exact || (!prefix_candidate && !typo_candidate) {
                         continue;
                     }
                     let (candidate_term, entry) =
@@ -68,7 +87,11 @@ impl RawSearchEngine {
                             exact_mask: 0,
                             ..fields
                         },
-                        score_multiplier: 0.9,
+                        score_multiplier: match candidate.distance {
+                            0 => 0.9,
+                            1 => 0.65,
+                            _ => 0.4,
+                        },
                     });
                     highlights.push(candidate_term.to_string());
                 }
@@ -89,19 +112,43 @@ impl RawSearchEngine {
 
         plans.sort_unstable_by_key(|plan| plan.estimated_documents);
         let mut plans = plans.into_iter();
-        let mut block_cache = BlockCache::default();
         let Some(first) = plans.next() else {
             return Ok((Vec::new(), highlights));
         };
-        let mut matches = self.matches_for_plan(&first, None, &mut block_cache)?;
+        let mut matches = self.matches_for_plan(&first, None, block_cache)?;
+        self.retain_video_filter(&mut matches, filter)?;
         for plan in plans {
-            let plan_matches = self.matches_for_plan(&plan, Some(&matches), &mut block_cache)?;
+            let plan_matches = self.matches_for_plan(&plan, Some(&matches), block_cache)?;
             matches = intersect_sorted(matches, plan_matches);
             if matches.is_empty() {
                 break;
             }
         }
         Ok((matches, highlights))
+    }
+
+    fn retain_video_filter(
+        &self,
+        matches: &mut Vec<DocMatch>,
+        filter: Option<(&str, &str)>,
+    ) -> Result<()> {
+        let Some(filter) = filter else {
+            return Ok(());
+        };
+        let mut retained = Vec::with_capacity(matches.len());
+        for candidate in matches.drain(..) {
+            let record = self.inner.metadata.document(candidate.document())?;
+            let video = self
+                .inner
+                .videos
+                .get(record.video as usize)
+                .ok_or_else(|| Error::Corrupt("document video is out of bounds".to_string()))?;
+            if video_matches_filter(video, Some(filter)) {
+                retained.push(candidate);
+            }
+        }
+        *matches = retained;
+        Ok(())
     }
 
     fn matches_for_plan(

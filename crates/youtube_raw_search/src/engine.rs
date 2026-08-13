@@ -66,8 +66,8 @@ const POSITION_SCORE_BOOST: f32 = 0.15;
 const PROXIMITY_SCORE_BOOST: f32 = 0.20;
 const PROXIMITY_POSITION_BOOST: f32 = 0.05;
 const ORDERED_PHRASE_MULTIPLIER: f32 = 1.25;
-const MIN_ORDERED_PHRASE_FAST_PATH_TOKENS: usize = 4;
 const MAX_PROXIMITY_TOKENS: usize = 10;
+const MAX_DIRECT_POSITION_TARGETS: usize = 128;
 const MAX_PHRASE_TOKENS: usize = 32;
 const MAX_PHRASE_SLOP: u8 = 8;
 const GENERATION_FILES: [&str; 9] = [
@@ -288,6 +288,12 @@ struct PositionTargets {
 }
 
 #[derive(Clone, Copy)]
+struct SearchConstraints<'a> {
+    filter: Option<(&'a str, &'a str)>,
+    excluded_documents: &'a [u32],
+}
+
+#[derive(Clone, Copy)]
 struct PositionalWindow {
     displacement: u32,
     max_offset: u32,
@@ -479,8 +485,13 @@ impl RawSearchEngine {
             params.query_by.as_deref(),
             params.prioritize_token_position.unwrap_or(true),
         )?;
+        let filter = parse_filter(params.filter_by.as_deref())?;
         let excluded_documents =
             self.excluded_documents(&parsed.excluded_terms, &parsed.excluded_phrases, fields)?;
+        let constraints = SearchConstraints {
+            filter,
+            excluded_documents: &excluded_documents,
+        };
         if params.q.trim() == "*" || parsed.terms.is_empty() {
             return self.search_all(params, &excluded_documents);
         }
@@ -496,29 +507,20 @@ impl RawSearchEngine {
         // Most successful multi-token searches should never materialize the
         // posting list for a high-frequency token. Start with the rarest token
         // and decode later terms only for surviving document identifiers.
+        let mut block_cache = BlockCache::default();
         let (mut fast_matches, fast_highlights) =
-            self.exact_prefix_conjunction(&terms, fields, true)?;
+            self.exact_prefix_conjunction(&terms, fields, true, filter, &mut block_cache)?;
         retain_not_excluded(&mut fast_matches, &excluded_documents);
         if self.reaches_result_threshold(params, &fast_matches, TYPO_RESULT_THRESHOLD)? {
-            self.apply_exact_proximity(&terms, fields, &mut fast_matches)?;
-            return self.format_conjunctive(params, fast_highlights, fast_matches);
+            self.apply_exact_proximity(&terms, fields, &mut fast_matches, &mut block_cache)?;
+            return self.format_matches(
+                params,
+                &fast_highlights,
+                terms.len(),
+                fast_matches,
+                &mut block_cache,
+            );
         }
-
-        // A complete four-plus-token ordered phrase is already the strongest
-        // interpretation of an unquoted query. Do not spend the combinatorial
-        // long-query typo budget manufacturing weaker candidates (or exposing
-        // their terms as highlights) just because the exact phrase is rare.
-        // Short queries retain the broader Typesense-compatible typo recall.
-        // This second targeted pass runs only below the ordinary threshold,
-        // where fallback would otherwise decode common postings in full.
-        let (mut exact_matches, _) = self.exact_prefix_conjunction(&terms, fields, false)?;
-        retain_not_excluded(&mut exact_matches, &excluded_documents);
-        if self.contains_ordered_exact_phrase(&terms, fields, &exact_matches)? {
-            self.apply_exact_proximity(&terms, fields, &mut exact_matches)?;
-            return self.format_conjunctive(params, terms, exact_matches);
-        }
-
-        let exact_term_matches = self.exact_term_matches(&terms, fields)?;
 
         // Typesense includes the last-token prefix in the ordinary query even
         // when the exact conjunction already clears the typo threshold. Typos
@@ -530,10 +532,16 @@ impl RawSearchEngine {
             &terms,
             fields,
             true,
-            Some(exact_term_matches),
-            &excluded_documents,
+            constraints,
+            &mut block_cache,
         )? {
-            return self.format_conjunctive(params, highlights, matches);
+            return self.format_matches(
+                params,
+                &highlights,
+                terms.len(),
+                matches,
+                &mut block_cache,
+            );
         }
 
         // Match Typesense's default right_to_left progression. Prefer the longest
@@ -546,10 +554,16 @@ impl RawSearchEngine {
                 &terms[..retained],
                 fields,
                 false,
-                None,
-                &excluded_documents,
+                constraints,
+                &mut block_cache,
             )? {
-                return self.format_conjunctive(params, highlights, matches);
+                return self.format_matches(
+                    params,
+                    &highlights,
+                    retained,
+                    matches,
+                    &mut block_cache,
+                );
             }
         }
         for dropped in 1..terms.len().min(MAX_TOKEN_DROP_CANDIDATES + 1) {
@@ -558,10 +572,16 @@ impl RawSearchEngine {
                 &terms[dropped..],
                 fields,
                 true,
-                None,
-                &excluded_documents,
+                constraints,
+                &mut block_cache,
             )? {
-                return self.format_conjunctive(params, highlights, matches);
+                return self.format_matches(
+                    params,
+                    &highlights,
+                    terms.len() - dropped,
+                    matches,
+                    &mut block_cache,
+                );
             }
         }
 
@@ -677,10 +697,23 @@ impl RawSearchEngine {
         terms: &[String],
         fields: QueryFields,
         matches: &mut [DocMatch],
+        cache: &mut BlockCache,
     ) -> Result<()> {
         if terms.len() < 2 || matches.is_empty() || self.inner.full_positions.is_none() {
             return Ok(());
         }
+        if matches.len() <= MAX_DIRECT_POSITION_TARGETS {
+            return self.apply_exact_proximity_from_documents(terms, fields, matches, cache);
+        }
+        self.apply_exact_proximity_from_postings(terms, fields, matches)
+    }
+
+    fn apply_exact_proximity_from_postings(
+        &self,
+        terms: &[String],
+        fields: QueryFields,
+        matches: &mut [DocMatch],
+    ) -> Result<()> {
         let terms = &terms[..terms.len().min(MAX_PROXIMITY_TOKENS)];
         let targets = self.position_targets(matches)?;
         let text_windows = if fields.text {
@@ -720,22 +753,51 @@ impl RawSearchEngine {
         Ok(())
     }
 
-    fn contains_ordered_exact_phrase(
+    fn apply_exact_proximity_from_documents(
         &self,
         terms: &[String],
         fields: QueryFields,
-        matches: &[DocMatch],
-    ) -> Result<bool> {
-        if terms.len() < MIN_ORDERED_PHRASE_FAST_PATH_TOKENS
-            || terms.len() > MAX_PROXIMITY_TOKENS
-            || matches.is_empty()
-            || self.inner.full_positions.is_none()
-        {
-            return Ok(false);
+        matches: &mut [DocMatch],
+        cache: &mut BlockCache,
+    ) -> Result<()> {
+        let terms = &terms[..terms.len().min(MAX_PROXIMITY_TOKENS)];
+        for candidate in matches {
+            let record = self.inner.metadata.document(candidate.document())?;
+            let video = self
+                .inner
+                .videos
+                .get(record.video as usize)
+                .ok_or_else(|| Error::Corrupt("document video is out of bounds".to_string()))?;
+            let document = self.document_value(candidate.document(), cache)?;
+            let text_summary = if fields.text && candidate.matches_text() {
+                document
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(|value| positional_summary(value, terms))
+            } else {
+                None
+            };
+            let title_summary = fields
+                .title
+                .then(|| positional_summary(&video.title, terms));
+            let text_multiplier = text_summary
+                .and_then(|summary| summary.window)
+                .map(|window| proximity_multiplier(window, terms.len(), fields.prioritize_position))
+                .unwrap_or(1.0);
+            let title_multiplier = title_summary
+                .and_then(|summary| summary.window)
+                .map(|window| proximity_multiplier(window, terms.len(), fields.prioritize_position))
+                .unwrap_or(1.0);
+            let ordered = text_summary.is_some_and(|summary| summary.ordered)
+                || title_summary.is_some_and(|summary| summary.ordered);
+            candidate.score *= text_multiplier.max(title_multiplier)
+                * if ordered {
+                    ORDERED_PHRASE_MULTIPLIER
+                } else {
+                    1.0
+                };
         }
-        let targets = self.position_targets(matches)?;
-        let phrase_matches = self.phrase_field_matches(terms, fields, &targets, 0)?;
-        Ok(!phrase_matches.documents.is_empty() || !phrase_matches.videos.is_empty())
+        Ok(())
     }
 
     fn evaluate_positions_for_field<T, F>(
@@ -829,7 +891,7 @@ impl RawSearchEngine {
         if bounded_typo_distance(term) == 0
             || self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)?
         {
-            return self.format_matches(params, &highlight_terms, matches, &mut cache);
+            return self.format_matches(params, &highlight_terms, 1, matches, &mut cache);
         }
         // Treat a missing separator plus one corrected component as a more
         // specific hypothesis than an unrelated whole-token typo. The path is
@@ -842,7 +904,7 @@ impl RawSearchEngine {
             retain_not_excluded(&mut matches, excluded_documents);
             highlight_terms.extend(fuzzy_split_terms);
             if self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)? {
-                return self.format_matches(params, &highlight_terms, matches, &mut cache);
+                return self.format_matches(params, &highlight_terms, 1, matches, &mut cache);
             }
         }
         let maximum_distance = bounded_typo_distance(term);
@@ -858,7 +920,7 @@ impl RawSearchEngine {
                 break;
             }
         }
-        self.format_matches(params, &highlight_terms, matches, &mut cache)
+        self.format_matches(params, &highlight_terms, 1, matches, &mut cache)
     }
 
     fn reaches_result_threshold(
@@ -1101,53 +1163,27 @@ impl RawSearchEngine {
         terms: &[String],
         fields: QueryFields,
         prefix_last: bool,
-        initial_term_matches: Option<Vec<Vec<DocMatch>>>,
-        excluded_documents: &[u32],
+        constraints: SearchConstraints<'_>,
+        block_cache: &mut BlockCache,
     ) -> Result<Option<(Vec<DocMatch>, Vec<String>)>> {
         let maximum_distance = terms
             .iter()
             .map(|term| bounded_typo_distance(term))
             .max()
             .unwrap_or(0);
-        let mut term_matches = match initial_term_matches {
-            Some(matches) => matches,
-            None => self.exact_term_matches(terms, fields)?,
-        };
-        let mut highlight_terms = terms.to_vec();
-        if prefix_last {
-            let last = terms
-                .last()
-                .ok_or_else(|| Error::InvalidInput("query has no searchable tokens".to_string()))?;
-            let (prefix, prefix_terms) = self.fuzzy_alternatives(last, fields, 0, None, true)?;
-            let last_matches = term_matches
-                .last_mut()
-                .ok_or_else(|| Error::InvalidInput("query has no searchable tokens".to_string()))?;
-            *last_matches = union_sorted(std::mem::take(last_matches), prefix);
-            highlight_terms.extend(prefix_terms);
-        }
-
         for typo_distance in 0..=maximum_distance {
-            if typo_distance > 0 {
-                for (term, matches) in terms.iter().zip(&mut term_matches) {
-                    if typo_distance > bounded_typo_distance(term) {
-                        continue;
-                    }
-                    let (fuzzy, fuzzy_terms) = self.fuzzy_alternatives(
-                        term,
-                        fields,
-                        typo_distance,
-                        Some(typo_distance),
-                        false,
-                    )?;
-                    *matches = union_sorted(std::mem::take(matches), fuzzy);
-                    highlight_terms.extend(fuzzy_terms);
-                }
-            }
-            let mut matches = intersect_all_borrowed(&term_matches);
-            retain_not_excluded(&mut matches, excluded_documents);
+            let (mut matches, highlight_terms) = self.fuzzy_prefix_conjunction(
+                terms,
+                fields,
+                prefix_last,
+                typo_distance,
+                constraints.filter,
+                block_cache,
+            )?;
+            retain_not_excluded(&mut matches, constraints.excluded_documents);
             let enough = self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)?;
             if enough {
-                self.apply_exact_proximity(terms, fields, &mut matches)?;
+                self.apply_exact_proximity(terms, fields, &mut matches, block_cache)?;
                 return Ok(Some((matches, highlight_terms)));
             }
             if typo_distance == maximum_distance {
@@ -1158,7 +1194,7 @@ impl RawSearchEngine {
                 let has_sparse_result =
                     self.reaches_result_threshold(params, &matches, DROP_RESULT_THRESHOLD)?;
                 return if has_complete_exact_match && has_sparse_result {
-                    self.apply_exact_proximity(terms, fields, &mut matches)?;
+                    self.apply_exact_proximity(terms, fields, &mut matches, block_cache)?;
                     Ok(Some((matches, highlight_terms)))
                 } else {
                     Ok(None)
@@ -1261,7 +1297,14 @@ impl RawSearchEngine {
         matches: Vec<DocMatch>,
     ) -> Result<Value> {
         let mut cache = BlockCache::default();
-        self.format_matches(params, &highlight_terms, matches, &mut cache)
+        let original_term_count = highlight_terms.len();
+        self.format_matches(
+            params,
+            &highlight_terms,
+            original_term_count,
+            matches,
+            &mut cache,
+        )
     }
 
     fn matches_for_term(&self, term: &str, fields: QueryFields) -> Result<Vec<DocMatch>> {
@@ -1494,11 +1537,12 @@ impl RawSearchEngine {
         &self,
         params: &SearchParams,
         terms: &[String],
+        original_term_count: usize,
         matches: Vec<DocMatch>,
         cache: &mut BlockCache,
     ) -> Result<Value> {
         if params.group_by.as_deref() != Some("video_id") {
-            return self.format_ungrouped(params, terms, matches, cache);
+            return self.format_ungrouped(params, terms, original_term_count, matches, cache);
         }
 
         let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
@@ -1556,7 +1600,12 @@ impl RawSearchEngine {
             let video_id = self.inner.videos[group.video as usize].id.clone();
             let mut hits = Vec::with_capacity(group.documents.len());
             for document in group.documents {
-                hits.push(self.hit_value(document.document(), terms, cache)?);
+                hits.push(self.hit_value(
+                    document.document(),
+                    terms,
+                    original_term_count,
+                    cache,
+                )?);
             }
             grouped_hits.push(json!({
                 "group_key": [video_id],
@@ -1576,6 +1625,7 @@ impl RawSearchEngine {
         &self,
         params: &SearchParams,
         terms: &[String],
+        original_term_count: usize,
         matches: Vec<DocMatch>,
         cache: &mut BlockCache,
     ) -> Result<Value> {
@@ -1634,7 +1684,7 @@ impl RawSearchEngine {
         let (offset, limit) = result_window(params);
         let mut hits = Vec::with_capacity(limit.min(matches.len()));
         for candidate in matches.into_iter().skip(offset).take(limit) {
-            hits.push(self.hit_value(candidate.document(), terms, cache)?);
+            hits.push(self.hit_value(candidate.document(), terms, original_term_count, cache)?);
         }
         Ok(json!({
             "found": found,
@@ -1721,7 +1771,7 @@ impl RawSearchEngine {
                     .filter(|document| excluded_documents.binary_search(document).is_err())
                     .take(hits_per_group)
                 {
-                    hits.push(self.hit_value(document, &[], &mut cache)?);
+                    hits.push(self.hit_value(document, &[], 0, &mut cache)?);
                 }
                 grouped_hits.push(json!({
                     "group_key": [video.id],
@@ -1779,7 +1829,7 @@ impl RawSearchEngine {
         let found = documents.len();
         let mut hits = Vec::with_capacity(limit.min(documents.len()));
         for document in documents.into_iter().skip(offset).take(limit) {
-            hits.push(self.hit_value(document, &[], &mut cache)?);
+            hits.push(self.hit_value(document, &[], 0, &mut cache)?);
         }
         Ok(json!({
             "found": found,
@@ -1797,7 +1847,13 @@ impl RawSearchEngine {
             .and_then(|record| self.inner.videos.get(record.video as usize))
     }
 
-    fn hit_value(&self, document: u32, terms: &[String], cache: &mut BlockCache) -> Result<Value> {
+    fn hit_value(
+        &self,
+        document: u32,
+        terms: &[String],
+        original_term_count: usize,
+        cache: &mut BlockCache,
+    ) -> Result<Value> {
         let mut source = self.document_value(document, cache)?;
         if let Some(video) = self.video_for_document(document)
             && let Some(object) = source.as_object_mut()
@@ -1808,12 +1864,20 @@ impl RawSearchEngine {
         }
         let mut highlights = Vec::with_capacity(2);
         if let Some(text) = source.get("text").and_then(Value::as_str)
-            && let Some(snippet) = highlighted_snippet(text, terms, 360)
+            && let Some(snippet) = highlighted_snippet(
+                text,
+                &preferred_highlight_terms(text, terms, original_term_count),
+                360,
+            )
         {
             highlights.push(json!({ "field": "text", "snippet": snippet }));
         }
         if let Some(title) = source.get("title").and_then(Value::as_str)
-            && let Some(snippet) = highlighted_snippet(title, terms, 180)
+            && let Some(snippet) = highlighted_snippet(
+                title,
+                &preferred_highlight_terms(title, terms, original_term_count),
+                180,
+            )
         {
             highlights.push(json!({ "field": "title", "snippet": snippet }));
         }
