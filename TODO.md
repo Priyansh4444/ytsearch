@@ -176,6 +176,18 @@ Raw can replace Typesense as the canonical search index.
   reclassifies preserved unknown records by reason, uses a one-hour jittered
   cooldown, and aborts every remaining creator task without publishing a
   partial generation.
+- [x] Direct YouTube caption-track URLs failed for videos whose English
+  subtitles were still retrievable through `yt-dlp`, leaving repairable corpus
+  gaps. Added one bounded subtitle-download fallback that reuses the existing
+  parser, cache, timeout, classification, and circuit-breaker contracts; live
+  John Hammond and Asianometry canaries recovered, while truly captionless
+  videos remain terminally classified.
+- [x] Mutable creator counts compared canonical IDs such as
+  `bettersoftwareconference` with handle-form mutation IDs such as
+  `@BetterSoftwareConference` byte-for-byte, temporarily reporting 0/15 while
+  a repair was pending. Counts and published ownership now ignore an optional
+  leading `@` and ASCII case, with pre- and post-publication regression tests;
+  production reports the correct 15/15.
 - [x] Prefix candidates were skipped whenever five exact candidates existed,
   hiding valid videos for multi-token queries such as `linux exploit`. Prefix
   expansion now participates before the typo threshold; the full corpus returns

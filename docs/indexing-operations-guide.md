@@ -183,6 +183,21 @@ operator clears the record or indexing capabilities change. The configured
 default base remains six hours (`TRANSCRIPT_FAILURE_RETRY_SECONDS=21600`), while
 Raw import failures retry sooner.
 
+YouTube can return a usable caption track in video metadata while rejecting the
+track's short-lived direct URL. After bounded direct-fetch retries, the indexer
+now asks `yt-dlp` to download English subtitles or automatic captions for that
+same video. The fallback reuses the normal parser, cache, timeout, pacing,
+failure classifier, and batch circuit breaker; it is not a second unbounded
+fetch path. A successful fallback is cached exactly like a direct response.
+When both paths report no English track, the video is recorded as
+`no_captions` instead of repeatedly blocking completion.
+
+The production canaries were `mWPWTy7quYU` from John Hammond and
+`itSJ66QSzyA` from Asianometry. Both failed through the direct track URL and
+were recovered through the bounded `yt-dlp` fallback. The completed
+Asianometry pass classified all 697 public videos: 686 searchable and 11 with
+no English captions.
+
 A bot challenge or session-level rate limit is a batch circuit breaker. The
 CLI aborts outstanding video and creator tasks, retains every already durable
 idempotent mutation, and does not publish the incomplete generation. Keep a
