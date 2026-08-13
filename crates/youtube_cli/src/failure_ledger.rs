@@ -42,7 +42,7 @@ impl FailureCategory {
         }
     }
 
-    const fn retryable(self) -> bool {
+    pub(super) const fn retryable(self) -> bool {
         !matches!(
             self,
             Self::NoCaptions | Self::Private | Self::Unavailable | Self::Chunking

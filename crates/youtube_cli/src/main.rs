@@ -94,6 +94,7 @@ struct IndexStats {
     deferred_transcript_failures: u32,
     deferred_failure_categories: BTreeMap<String, u32>,
     failure_categories: BTreeMap<String, u32>,
+    retryable_failures: u32,
     kind_filtered_videos: u32,
     existing_videos: u32,
     existing_chunks: u32,
@@ -695,11 +696,13 @@ async fn index_youtuber(
             }
             Ok(Err(error)) => {
                 stats.skipped_videos = stats.skipped_videos.saturating_add(1);
+                stats.retryable_failures = stats.retryable_failures.saturating_add(1);
                 tracing::warn!(%error, "skipped video after indexing task failed");
                 println!("Done {completed_videos}/{worker_total}: skipped indexing error: {error}");
             }
             Err(error) => {
                 stats.skipped_videos = stats.skipped_videos.saturating_add(1);
+                stats.retryable_failures = stats.retryable_failures.saturating_add(1);
                 tracing::warn!(%error, "skipped video after indexing task panicked");
                 println!("Done {completed_videos}/{worker_total}: skipped task error: {error}");
             }
@@ -794,6 +797,13 @@ async fn index_youtuber(
     println!("Upserted YouTuber document: {}", youtuber_doc.id);
     if publish_when_complete {
         publish_and_wait(&transcript_search).await?;
+    }
+
+    if stats.retryable_failures > 0 {
+        return Err(CliError::Message(format!(
+            "Indexing {} published available videos but retained {} retryable video gap(s); the queue request must remain for retry",
+            youtuber.handle, stats.retryable_failures
+        )));
     }
 
     Ok(())
@@ -981,6 +991,9 @@ fn defer_recent_transcript_failures(
                 stats.deferred_transcript_failures.saturating_add(1);
             if let Some(category) = decision.category {
                 increment_category(&mut stats.deferred_failure_categories, category);
+                if category.retryable() {
+                    stats.retryable_failures = stats.retryable_failures.saturating_add(1);
+                }
             }
         }
         !decision.deferred
@@ -1337,6 +1350,9 @@ fn apply_index_outcome(
         } => {
             stats.skipped_videos = stats.skipped_videos.saturating_add(1);
             increment_category(&mut stats.failure_categories, category);
+            if category.retryable() {
+                stats.retryable_failures = stats.retryable_failures.saturating_add(1);
+            }
             println!("Done {completed}/{total}: {video_id} {title} — skipped {reason}");
         }
     }
@@ -1906,12 +1922,13 @@ fn saturating_u32(value: impl TryInto<u32>) -> u32 {
 
 fn print_index_summary(stats: &IndexStats) {
     println!(
-        "Index summary: discovered={}, attempted={}, indexed={}, existing={}, skipped={}, deferred_transcript_failures={}, kind_filtered={}, audio_transcribed={}, chunks={}, existing_chunks={}",
+        "Index summary: discovered={}, attempted={}, indexed={}, existing={}, skipped={}, retryable_failures={}, deferred_transcript_failures={}, kind_filtered={}, audio_transcribed={}, chunks={}, existing_chunks={}",
         stats.discovered_videos,
         stats.attempted_videos,
         stats.indexed_videos,
         stats.existing_videos,
         stats.skipped_videos,
+        stats.retryable_failures,
         stats.deferred_transcript_failures,
         stats.kind_filtered_videos,
         stats.audio_transcribed_videos,
@@ -2166,6 +2183,48 @@ mod tests {
             Some(FailureCategory::RateLimited)
         );
         assert_eq!(captionless.upstream_blocking_category(), None);
+    }
+
+    #[test]
+    fn mixed_success_retains_retryable_gaps_but_accepts_terminal_gaps() {
+        let mut stats = IndexStats::default();
+        apply_index_outcome(
+            &mut stats,
+            IndexVideoOutcome::Indexed {
+                video_id: "indexed".to_string(),
+                title: "Indexed".to_string(),
+                chunks: 2,
+                audio_transcribed: false,
+            },
+            1,
+            3,
+        );
+        apply_index_outcome(
+            &mut stats,
+            IndexVideoOutcome::Skipped {
+                video_id: "captionless".to_string(),
+                title: "Captionless".to_string(),
+                reason: "no captions".to_string(),
+                category: FailureCategory::NoCaptions,
+            },
+            2,
+            3,
+        );
+        assert_eq!(stats.retryable_failures, 0);
+
+        apply_index_outcome(
+            &mut stats,
+            IndexVideoOutcome::Skipped {
+                video_id: "timed-out".to_string(),
+                title: "Timed out".to_string(),
+                reason: "timeout".to_string(),
+                category: FailureCategory::Timeout,
+            },
+            3,
+            3,
+        );
+        assert_eq!(stats.indexed_videos, 1);
+        assert_eq!(stats.retryable_failures, 1);
     }
 
     #[test]
