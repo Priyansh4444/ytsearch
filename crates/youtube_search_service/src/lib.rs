@@ -18,10 +18,12 @@ use std::{
     },
     time::Instant,
 };
+use tokio::sync::Semaphore;
 
 const TRANSCRIPT_COLLECTION: &str = "youtube_transcript_chunks";
 const CHANNEL_COLLECTION: &str = "youtube_youtubers";
 const MAX_CACHE_TTL_SECONDS: u64 = 300;
+const MAX_CONCURRENT_BACKEND_SEARCHES: usize = 4;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -104,6 +106,7 @@ struct AppState {
     started: Instant,
     api_key: Option<Arc<str>>,
     cache: Arc<Mutex<SearchCache>>,
+    search_permits: Arc<Semaphore>,
 }
 
 #[derive(Default)]
@@ -155,6 +158,7 @@ pub fn router(config: &ServerConfig, backend: Arc<dyn SearchBackend>) -> Router 
         started: Instant::now(),
         api_key: config.api_key.as_deref().map(Arc::from),
         cache: Arc::new(Mutex::new(SearchCache::default())),
+        search_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_BACKEND_SEARCHES)),
     };
     let mut app = Router::new()
         .route("/health", get(health))
@@ -238,11 +242,35 @@ async fn search(
         return Ok(json_bytes_response(value));
     }
 
-    let result = match collection.as_str() {
-        TRANSCRIPT_COLLECTION => state.backend.search(&params),
-        CHANNEL_COLLECTION => state.backend.search_channels(&params),
+    let channel_search = match collection.as_str() {
+        TRANSCRIPT_COLLECTION => false,
+        CHANNEL_COLLECTION => true,
         _ => return Err(ServerError::NotFound(collection)),
     };
+    let permit = Arc::clone(&state.search_permits)
+        .acquire_owned()
+        .await
+        .map_err(|error| {
+            ServerError::Backend(BackendError::Internal(format!(
+                "search concurrency limiter closed: {error}"
+            )))
+        })?;
+    let backend = Arc::clone(&state.backend);
+    let backend_params = params.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        if channel_search {
+            backend.search_channels(&backend_params)
+        } else {
+            backend.search(&backend_params)
+        }
+    })
+    .await
+    .map_err(|error| {
+        ServerError::Backend(BackendError::Internal(format!(
+            "search task terminated: {error}"
+        )))
+    })?;
     record_elapsed(&state, started);
     match result {
         Ok(value) => {
@@ -366,6 +394,43 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{thread, time::Duration};
+
+    struct SlowBackend;
+
+    impl SearchBackend for SlowBackend {
+        fn name(&self) -> &'static str {
+            "slow-test"
+        }
+
+        fn search(&self, _params: &SearchParams) -> Result<Value, BackendError> {
+            thread::sleep(Duration::from_millis(200));
+            Ok(json!({ "found": 1 }))
+        }
+
+        fn search_channels(&self, params: &SearchParams) -> Result<Value, BackendError> {
+            self.search(params)
+        }
+
+        fn documents(&self) -> u64 {
+            1
+        }
+
+        fn index_bytes(&self) -> u64 {
+            1
+        }
+    }
+
+    fn test_state(backend: Arc<dyn SearchBackend>) -> AppState {
+        AppState {
+            backend,
+            metrics: Arc::new(Metrics::default()),
+            started: Instant::now(),
+            api_key: None,
+            cache: Arc::new(Mutex::new(SearchCache::default())),
+            search_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_BACKEND_SEARCHES)),
+        }
+    }
 
     #[test]
     fn unknown_search_parameters_fail_closed() {
@@ -407,5 +472,29 @@ mod tests {
             params.cache_ttl = Some(ttl);
             assert!(validate_cache_params(&params).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn blocking_backend_search_does_not_starve_request_runtime() {
+        let state = test_state(Arc::new(SlowBackend));
+        let started = Instant::now();
+        let search_task = tokio::spawn(search(
+            State(state.clone()),
+            Path(TRANSCRIPT_COLLECTION.to_string()),
+            Query(SearchParams {
+                q: "blackhole".to_string(),
+                ..SearchParams::default()
+            }),
+            HeaderMap::new(),
+        ));
+        tokio::task::yield_now().await;
+
+        let health = health(State(state)).await;
+        assert_eq!(health.0["ok"], true);
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "health handler was starved by synchronous search work"
+        );
+        assert!(search_task.await.unwrap().is_ok());
     }
 }
