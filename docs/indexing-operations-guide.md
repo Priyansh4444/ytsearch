@@ -176,12 +176,14 @@ record. Old text markers remain readable and are upgraded when that video fails
 again.
 
 The ledger distinguishes bot challenges, throttling, future premieres,
-captionless/private/deleted videos, timeouts, metadata failures, chunking, and
-Raw imports. Retryable categories use bounded exponential backoff with stable
-per-video jitter; deterministic terminal failures stay deferred until an
-operator clears the record or indexing capabilities change. The configured
-default base remains six hours (`TRANSCRIPT_FAILURE_RETRY_SECONDS=21600`), while
-Raw import failures retry sooner.
+videos that YouTube is still processing, captionless/private/deleted videos,
+timeouts, metadata failures, chunking, and Raw imports. Premiere and processing
+responses share the retryable `scheduled` category. Retryable categories use
+bounded exponential backoff with stable per-video jitter; deterministic
+terminal failures stay deferred until an operator clears the record or
+indexing capabilities change. The configured default base remains six hours
+(`TRANSCRIPT_FAILURE_RETRY_SECONDS=21600`), while Raw import failures retry
+sooner.
 
 YouTube can return a usable caption track in video metadata while rejecting the
 track's short-lived direct URL. After bounded direct-fetch retries, the indexer

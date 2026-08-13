@@ -182,6 +182,10 @@ Raw can replace Typesense as the canonical search index.
   parser, cache, timeout, classification, and circuit-breaker contracts; live
   John Hammond and Asianometry canaries recovered, while truly captionless
   videos remain terminally classified.
+- [x] YouTube's `We're processing this video. Check back later.` response was
+  stored as `unknown`. It is now classified as retryable `scheduled`, including
+  reclassification of preserved unknown records through the current retry
+  policy, so processing uploads cannot become permanent unexplained gaps.
 - [x] Mutable creator counts compared canonical IDs such as
   `bettersoftwareconference` with handle-form mutation IDs such as
   `@BetterSoftwareConference` byte-for-byte, temporarily reporting 0/15 while
