@@ -192,6 +192,12 @@ Raw can replace Typesense as the canonical search index.
   a repair was pending. Counts and published ownership now ignore an optional
   leading `@` and ASCII case, with pre- and post-publication regression tests;
   production reports the correct 15/15.
+- [x] The first creator-ID compatibility fix still treated legacy
+  `@cursor_ai` and canonical `cursor-ai` as different, briefly computing 5/51
+  in the pending control plane. Raw now applies the same allocation-free ASCII
+  canonicalization used when creator IDs are created: optional `@`, lowercase,
+  punctuation-run collapse, and no trailing separator. The corrected live
+  pending count is 50/51 before publication.
 - [x] Prefix candidates were skipped whenever five exact candidates existed,
   hiding valid videos for multi-token queries such as `linux exploit`. Prefix
   expansion now participates before the typo threshold; the full corpus returns
