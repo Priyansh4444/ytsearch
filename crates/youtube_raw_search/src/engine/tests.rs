@@ -485,7 +485,7 @@ fn long_exact_phrase_ranks_before_the_same_tokens_out_of_order() {
     let mut chunks = File::create(&chunks_path).expect("chunks");
     for document in [
         json!({"video_id":"shuffled","title":"Shuffled","text":"now dead is think i which css","youtuber_handle":"@t3dotgg"}),
-        json!({"video_id":"ordered","title":"Ordered","text":"CSS which I think is dead now","youtuber_handle":"@t3dotgg"}),
+        json!({"video_id":"ordered","title":"Ordered","text":"includes things like CSS which I think is dead now","youtuber_handle":"@t3dotgg"}),
     ] {
         writeln!(chunks, "{document}").expect("write chunk");
     }
@@ -502,6 +502,7 @@ fn long_exact_phrase_ranks_before_the_same_tokens_out_of_order() {
         .as_str()
         .expect("snippet");
     assert_eq!(snippet.matches("<mark>").count(), 7);
+    assert!(!snippet.contains("<mark>things</mark>"));
 }
 
 #[test]

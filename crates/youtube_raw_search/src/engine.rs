@@ -65,6 +65,8 @@ const ACTIVE_INCLUDE_FIELDS: &str = "id,video_id,title,text,prev_text,next_text,
 const POSITION_SCORE_BOOST: f32 = 0.15;
 const PROXIMITY_SCORE_BOOST: f32 = 0.20;
 const PROXIMITY_POSITION_BOOST: f32 = 0.05;
+const ORDERED_PHRASE_MULTIPLIER: f32 = 1.25;
+const MIN_ORDERED_PHRASE_FAST_PATH_TOKENS: usize = 4;
 const MAX_PROXIMITY_TOKENS: usize = 10;
 const MAX_PHRASE_TOKENS: usize = 32;
 const MAX_PHRASE_SLOP: u8 = 8;
@@ -502,6 +504,20 @@ impl RawSearchEngine {
             return self.format_conjunctive(params, fast_highlights, fast_matches);
         }
 
+        // A complete four-plus-token ordered phrase is already the strongest
+        // interpretation of an unquoted query. Do not spend the combinatorial
+        // long-query typo budget manufacturing weaker candidates (or exposing
+        // their terms as highlights) just because the exact phrase is rare.
+        // Short queries retain the broader Typesense-compatible typo recall.
+        // This second targeted pass runs only below the ordinary threshold,
+        // where fallback would otherwise decode common postings in full.
+        let (mut exact_matches, _) = self.exact_prefix_conjunction(&terms, fields, false)?;
+        retain_not_excluded(&mut exact_matches, &excluded_documents);
+        if self.contains_ordered_exact_phrase(&terms, fields, &exact_matches)? {
+            self.apply_exact_proximity(&terms, fields, &mut exact_matches)?;
+            return self.format_conjunctive(params, terms, exact_matches);
+        }
+
         let exact_term_matches = self.exact_term_matches(&terms, fields)?;
 
         // Typesense includes the last-token prefix in the ordinary query even
@@ -677,6 +693,7 @@ impl RawSearchEngine {
         } else {
             Vec::new()
         };
+        let ordered_phrases = self.phrase_field_matches(terms, fields, &targets, 0)?;
         for candidate in matches {
             let text_multiplier = candidate
                 .matches_text()
@@ -688,9 +705,37 @@ impl RawSearchEngine {
             let title_multiplier = positional_window(&title_windows, record.video)
                 .map(|window| proximity_multiplier(window, terms.len(), fields.prioritize_position))
                 .unwrap_or(1.0);
-            candidate.score *= text_multiplier.max(title_multiplier);
+            let ordered = ordered_phrases
+                .documents
+                .binary_search(&candidate.document())
+                .is_ok()
+                || ordered_phrases.videos.binary_search(&record.video).is_ok();
+            candidate.score *= text_multiplier.max(title_multiplier)
+                * if ordered {
+                    ORDERED_PHRASE_MULTIPLIER
+                } else {
+                    1.0
+                };
         }
         Ok(())
+    }
+
+    fn contains_ordered_exact_phrase(
+        &self,
+        terms: &[String],
+        fields: QueryFields,
+        matches: &[DocMatch],
+    ) -> Result<bool> {
+        if terms.len() < MIN_ORDERED_PHRASE_FAST_PATH_TOKENS
+            || terms.len() > MAX_PROXIMITY_TOKENS
+            || matches.is_empty()
+            || self.inner.full_positions.is_none()
+        {
+            return Ok(false);
+        }
+        let targets = self.position_targets(matches)?;
+        let phrase_matches = self.phrase_field_matches(terms, fields, &targets, 0)?;
+        Ok(!phrase_matches.documents.is_empty() || !phrase_matches.videos.is_empty())
     }
 
     fn evaluate_positions_for_field<T, F>(
