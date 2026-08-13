@@ -67,30 +67,20 @@ function fetchEffect(request: Request, env: Env): Effect.Effect<Response, Error>
       upstreamApiBase(url.pathname, env.API_BASE_URL, env.INDEX_QUEUE_API_BASE_URL),
     );
     const upstreamRequest = new Request(upstreamUrl, request);
-    const requestOrigin = request.headers.get("Origin");
-    const cacheableSearch =
-      request.method === "GET" &&
-      url.pathname === "/api/search" &&
-      (requestOrigin === null || requestOrigin === url.origin);
+    const dynamicSearch = request.method === "GET" && url.pathname === "/api/search";
     const upstreamResponse = yield* fromPromise(() =>
-      cacheableSearch
-        ? fetch(upstreamRequest, {
-            cf: {
-              cacheEverything: true,
-              cacheTtlByStatus: {
-                "200-299": 30,
-                "300-399": 0,
-                "400-499": 0,
-                "500-599": 0,
-              },
-            },
-          })
-        : fetch(upstreamRequest),
+      fetch(upstreamRequest, dynamicSearch ? { cache: "no-store" } : undefined),
     );
     if (shouldWakeIndexer(request.method, url.pathname, upstreamResponse.ok)) {
       yield* fromPromise(() => env.INDEX_WAKE_QUEUE.send({ reason: "index-request" }));
     }
-    return new Response(upstreamResponse.body, upstreamResponse);
+    const response = new Response(upstreamResponse.body, upstreamResponse);
+    if (dynamicSearch) {
+      response.headers.set("Cache-Control", "no-store");
+      response.headers.set("CDN-Cache-Control", "no-store");
+      response.headers.set("Cloudflare-CDN-Cache-Control", "no-store");
+    }
+    return response;
   });
 }
 

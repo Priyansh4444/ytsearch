@@ -133,11 +133,11 @@ describe("frontend API client", () => {
       sort: "relevance" as const,
     };
 
-    await expect(searchTranscripts(request)).resolves.toEqual(response);
+    await expect(searchTranscripts(request)).resolves.toMatchObject(response);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  test("reuses identical searches briefly for search-ahead submission", async () => {
+  test("coalesces only concurrent searches and measures each completed request", async () => {
     let resolveFetch: ((response: Response) => void) | undefined;
     const fetchMock = vi.fn(
       () =>
@@ -160,9 +160,18 @@ describe("frontend API client", () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
 
     resolveFetch?.(Response.json(emptySearch()));
-    await expect(first).resolves.toEqual(emptySearch());
-    await expect(searchTranscripts(request)).resolves.toEqual(emptySearch());
-    expect(fetchMock).toHaveBeenCalledOnce();
+    await expect(first).resolves.toMatchObject({
+      ...emptySearch(),
+      request_duration_ms: expect.any(Number),
+    });
+
+    const third = searchTranscripts(request);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    resolveFetch?.(Response.json(emptySearch()));
+    await expect(third).resolves.toMatchObject({
+      ...emptySearch(),
+      request_duration_ms: expect.any(Number),
+    });
   });
 
   test("coalesces concurrent indexed-channel refreshes", async () => {

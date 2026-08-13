@@ -118,7 +118,7 @@ test("loads channels and completes a basic search", async ({ page }) => {
   await expect(page).toHaveURL(/q=rust\+testing/);
   await expect(page.getByRole("link", { name: /Reliable Rust testing/ })).toBeVisible();
   await expect(page.getByText("All channels", { exact: true })).toBeVisible();
-  await expect(page.getByText("1 video · 1 moment · 8 ms to first result")).toBeVisible();
+  await expect(page.getByText(/1 video · 1 moment · \d+ ms request · 8 ms search/)).toBeVisible();
   await expect(page.locator("iframe")).toHaveCount(0);
   await page.getByRole("button", { name: "Play Reliable Rust testing at 0:12" }).click();
   await expect(page.locator("iframe")).toHaveCount(1);

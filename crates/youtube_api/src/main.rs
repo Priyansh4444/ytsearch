@@ -45,7 +45,7 @@ const MAX_PER_PAGE: u8 = 100;
 const MERGE_TRANSCRIPT_HIT_WINDOW_MS: u32 = 20_000;
 const MAX_SEARCH_PAGE_FETCHES: u32 = 10;
 const CACHE_YOUTUBERS: &str = "public, max-age=30, stale-while-revalidate=300";
-const CACHE_SEARCH: &str = "public, max-age=30, stale-while-revalidate=300";
+const CACHE_SEARCH: &str = "no-store";
 const CACHE_CHANNEL_IMAGE: &str = "public, max-age=86400, stale-while-revalidate=604800";
 const CACHE_NO_STORE: &str = "no-store";
 const DEFAULT_SEARCH_RATE_LIMIT_PER_MINUTE: usize = 120;

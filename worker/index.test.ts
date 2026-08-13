@@ -89,7 +89,7 @@ describe("scheduled search availability", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  test("proxies open-window searches unchanged", async () => {
+  test("bypasses every persistent cache for dynamic searches", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-26T20:00:00Z"));
     const fetchMock = vi
@@ -106,24 +106,17 @@ describe("scheduled search availability", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("x-upstream")).toBe("yes");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("CDN-Cache-Control")).toBe("no-store");
+    expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBe("no-store");
     expect(fetchMock).toHaveBeenCalledOnce();
     expect((fetchMock.mock.calls[0][0] as Request).url).toContain(
       "ytsearch-api-raw-staging.fly.dev/api/search?q=rust",
     );
-    expect(fetchMock.mock.calls[0][1]).toEqual({
-      cf: {
-        cacheEverything: true,
-        cacheTtlByStatus: {
-          "200-299": 30,
-          "300-399": 0,
-          "400-499": 0,
-          "500-599": 0,
-        },
-      },
-    });
+    expect(fetchMock.mock.calls[0][1]).toEqual({ cache: "no-store" });
   });
 
-  test("does not edge-cache cross-origin search responses", async () => {
+  test("also bypasses caches for development-origin search responses", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-26T20:00:00Z"));
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ query: "rust", videos: [] }));
@@ -137,7 +130,7 @@ describe("scheduled search availability", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock.mock.calls[0][1]).toBeUndefined();
+    expect(fetchMock.mock.calls[0][1]).toEqual({ cache: "no-store" });
   });
 
   test("returns normalized availability without provider identifiers", async () => {

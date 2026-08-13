@@ -445,8 +445,12 @@ const App: Component = () => {
                     </span>
                   </div>
                   <span class="text-xs tabular-nums sm:text-sm">
-                    {searchResultCountLabel(response())} · {response().time_to_first_result_ms} ms
-                    to first result
+                    {searchResultCountLabel(response())} ·{" "}
+                    {response().request_duration_ms ?? response().time_to_first_result_ms} ms
+                    request
+                    {response().request_duration_ms === undefined
+                      ? ""
+                      : ` · ${response().time_to_first_result_ms} ms search`}
                   </span>
                 </div>
 

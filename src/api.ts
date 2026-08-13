@@ -10,13 +10,12 @@ import type {
   SearchResponse,
 } from "./types";
 
-const SEARCH_CACHE_MS = 10_000;
 const SEARCH_CACHE_LIMIT = 16;
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 const INDEX_QUEUE_API_BASE_URL = (
   import.meta.env.VITE_INDEX_QUEUE_API_BASE_URL ?? API_BASE_URL
 ).replace(/\/$/, "");
-const searchCache = new Map<string, { expiresAt: number; response: Promise<SearchResponse> }>();
+const inflightSearches = new Map<string, Promise<SearchResponse>>();
 let inflightChannels: Promise<IndexedChannel[]> | undefined;
 
 export { ApiResponseError };
@@ -26,18 +25,23 @@ export function searchTranscripts(
   signal?: AbortSignal,
 ): Promise<SearchResponse> {
   const cacheKey = JSON.stringify(request);
-  const cached = searchCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.response;
-  searchCache.delete(cacheKey);
+  const inflight = inflightSearches.get(cacheKey);
+  if (inflight) return inflight;
 
+  const started = performance.now();
   const response = loadEffectRuntime()
     .then(({ runSearchTranscripts }) => runSearchTranscripts(API_BASE_URL, request, signal))
-    .catch((error) => {
-      if (searchCache.get(cacheKey)?.response === response) searchCache.delete(cacheKey);
-      throw error;
+    .then((result) => ({
+      ...result,
+      request_duration_ms: Math.max(0, Math.round(performance.now() - started)),
+    }))
+    .finally(() => {
+      if (inflightSearches.get(cacheKey) === response) inflightSearches.delete(cacheKey);
     });
-  searchCache.set(cacheKey, { expiresAt: Date.now() + SEARCH_CACHE_MS, response });
-  if (searchCache.size > SEARCH_CACHE_LIMIT) searchCache.delete(searchCache.keys().next().value!);
+  inflightSearches.set(cacheKey, response);
+  if (inflightSearches.size > SEARCH_CACHE_LIMIT) {
+    inflightSearches.delete(inflightSearches.keys().next().value!);
+  }
   return response;
 }
 

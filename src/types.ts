@@ -58,6 +58,7 @@ export type SearchResponse = {
   total_found: number;
   out_of: number;
   time_to_first_result_ms: number;
+  request_duration_ms?: number;
   page: number;
   per_page: number;
   sort: SearchSort;
