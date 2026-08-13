@@ -295,6 +295,18 @@ struct SearchConstraints<'a> {
     excluded_documents: &'a [u32],
 }
 
+struct InitialConjunction {
+    matches: Vec<DocMatch>,
+    highlights: HighlightGroups,
+}
+
+type HighlightGroups = Vec<Vec<String>>;
+
+struct CandidateSearch<'a> {
+    constraints: SearchConstraints<'a>,
+    initial: Option<InitialConjunction>,
+}
+
 #[derive(Clone, Copy)]
 struct PositionalWindow {
     displacement: u32,
@@ -310,8 +322,9 @@ struct DocumentTable {
 
 #[derive(Clone, Copy)]
 struct DocMatch {
-    document_with_flags: u32,
+    document: u32,
     score: f32,
+    flags: u8,
 }
 
 struct VideoMatches {
@@ -515,15 +528,11 @@ impl RawSearchEngine {
         let (mut fast_matches, fast_highlights) =
             self.exact_prefix_conjunction(&terms, fields, true, filter, &mut block_cache)?;
         retain_not_excluded(&mut fast_matches, &excluded_documents);
-        if self.reaches_result_threshold(params, &fast_matches, TYPO_RESULT_THRESHOLD)? {
+        let fast_enough =
+            self.reaches_result_threshold(params, &fast_matches, TYPO_RESULT_THRESHOLD)?;
+        if fast_enough {
             self.apply_exact_proximity(&terms, fields, &mut fast_matches, &mut block_cache)?;
-            return self.format_matches(
-                params,
-                &fast_highlights,
-                terms.len(),
-                fast_matches,
-                &mut block_cache,
-            );
+            return self.format_matches(params, &fast_highlights, fast_matches, &mut block_cache);
         }
 
         // Typesense includes the last-token prefix in the ordinary query even
@@ -536,16 +545,16 @@ impl RawSearchEngine {
             &terms,
             fields,
             true,
-            constraints,
+            CandidateSearch {
+                constraints,
+                initial: Some(InitialConjunction {
+                    matches: fast_matches,
+                    highlights: fast_highlights,
+                }),
+            },
             &mut block_cache,
         )? {
-            return self.format_matches(
-                params,
-                &highlights,
-                terms.len(),
-                matches,
-                &mut block_cache,
-            );
+            return self.format_matches(params, &highlights, matches, &mut block_cache);
         }
 
         // Match Typesense's default right_to_left progression. Prefer the longest
@@ -558,16 +567,13 @@ impl RawSearchEngine {
                 &terms[..retained],
                 fields,
                 false,
-                constraints,
+                CandidateSearch {
+                    constraints,
+                    initial: None,
+                },
                 &mut block_cache,
             )? {
-                return self.format_matches(
-                    params,
-                    &highlights,
-                    retained,
-                    matches,
-                    &mut block_cache,
-                );
+                return self.format_matches(params, &highlights, matches, &mut block_cache);
             }
         }
         for dropped in 1..terms.len().min(MAX_TOKEN_DROP_CANDIDATES + 1) {
@@ -576,16 +582,13 @@ impl RawSearchEngine {
                 &terms[dropped..],
                 fields,
                 true,
-                constraints,
+                CandidateSearch {
+                    constraints,
+                    initial: None,
+                },
                 &mut block_cache,
             )? {
-                return self.format_matches(
-                    params,
-                    &highlights,
-                    terms.len() - dropped,
-                    matches,
-                    &mut block_cache,
-                );
+                return self.format_matches(params, &highlights, matches, &mut block_cache);
             }
         }
 
@@ -883,9 +886,9 @@ impl RawSearchEngine {
         let has_exact_split = !split.is_empty();
         let mut matches = union_sorted(exact, split);
         retain_not_excluded(&mut matches, excluded_documents);
-        let mut highlight_terms = Vec::with_capacity(1 + split_terms.len());
-        highlight_terms.push(term.to_string());
-        highlight_terms.extend(split_terms);
+        let mut highlight_group = Vec::with_capacity(1 + split_terms.len());
+        highlight_group.push(term.to_string());
+        highlight_group.extend(split_terms);
 
         // Prefix matching is part of Typesense's ordinary candidate set, not a
         // typo fallback. Always merge it before applying the typo threshold so
@@ -893,11 +896,11 @@ impl RawSearchEngine {
         let (prefix, prefix_terms) = self.fuzzy_alternatives(term, fields, 0, None, true)?;
         matches = union_sorted(matches, prefix);
         retain_not_excluded(&mut matches, excluded_documents);
-        highlight_terms.extend(prefix_terms);
+        highlight_group.extend(prefix_terms);
         if bounded_typo_distance(term) == 0
             || self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)?
         {
-            return self.format_matches(params, &highlight_terms, 1, matches, &mut cache);
+            return self.format_matches(params, &[highlight_group], matches, &mut cache);
         }
         // Treat a missing separator plus one corrected component as a more
         // specific hypothesis than an unrelated whole-token typo. The path is
@@ -908,16 +911,16 @@ impl RawSearchEngine {
                 self.fuzzy_split_term_matches(term, fields, &mut cache)?;
             matches = union_sorted(matches, fuzzy_split);
             retain_not_excluded(&mut matches, excluded_documents);
-            highlight_terms.extend(fuzzy_split_terms);
+            highlight_group.extend(fuzzy_split_terms);
             if self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)? {
-                return self.format_matches(params, &highlight_terms, 1, matches, &mut cache);
+                return self.format_matches(params, &[highlight_group], matches, &mut cache);
             }
         }
         let maximum_distance = bounded_typo_distance(term);
         for distance in 1..=maximum_distance {
             let (fuzzy, fuzzy_terms) =
                 self.fuzzy_alternatives(term, fields, distance, Some(distance), false)?;
-            highlight_terms.extend(fuzzy_terms);
+            highlight_group.extend(fuzzy_terms);
             matches = union_sorted(matches, fuzzy);
             retain_not_excluded(&mut matches, excluded_documents);
             if distance == maximum_distance
@@ -926,7 +929,7 @@ impl RawSearchEngine {
                 break;
             }
         }
-        self.format_matches(params, &highlight_terms, 1, matches, &mut cache)
+        self.format_matches(params, &[highlight_group], matches, &mut cache)
     }
 
     fn reaches_result_threshold(
@@ -994,21 +997,28 @@ impl RawSearchEngine {
             }
             let left = &term[..byte_index];
             let right = &term[byte_index..];
-            let left_matches = self.matches_for_split_component(left, fields)?;
-            let right_matches = self.matches_for_split_component(right, fields)?;
-            if left_matches.is_empty() || right_matches.is_empty() {
-                continue;
+            let left_candidates = self.exact_split_components(left, fields)?;
+            let right_candidates = self.exact_split_components(right, fields)?;
+            'pairs: for left_candidate in &left_candidates {
+                for right_candidate in &right_candidates {
+                    let mut matches = intersect_sorted(
+                        left_candidate.matches.clone(),
+                        right_candidate.matches.clone(),
+                    );
+                    if matches.is_empty() {
+                        continue;
+                    }
+                    for candidate in &mut matches {
+                        candidate.score += SPLIT_SCORE_BONUS;
+                    }
+                    alternatives.push(matches);
+                    highlight_terms.push(left_candidate.highlight.clone());
+                    highlight_terms.push(right_candidate.highlight.clone());
+                    if alternatives.len() == MAX_SPLIT_ALTERNATIVES {
+                        break 'pairs;
+                    }
+                }
             }
-            let mut matches = intersect_sorted(left_matches, right_matches);
-            if matches.is_empty() {
-                continue;
-            }
-            for candidate in &mut matches {
-                candidate.score += SPLIT_SCORE_BONUS;
-            }
-            alternatives.push(matches);
-            highlight_terms.push(left.to_string());
-            highlight_terms.push(right.to_string());
             if alternatives.len() == MAX_SPLIT_ALTERNATIVES {
                 break;
             }
@@ -1017,22 +1027,30 @@ impl RawSearchEngine {
         Ok((union_all(alternatives), highlight_terms))
     }
 
-    fn matches_for_split_component(
+    fn exact_split_components(
         &self,
         term: &str,
         fields: QueryFields,
-    ) -> Result<Vec<DocMatch>> {
+    ) -> Result<Vec<SplitComponent>> {
         let mut alternatives = Vec::with_capacity(2);
         if let Some(entry) = self.inner.lexicon.lookup(term)? {
-            alternatives.push(self.matches_for_entry(entry, fields)?);
+            alternatives.push(SplitComponent {
+                matches: self.matches_for_entry(entry, fields)?,
+                highlight: term.to_string(),
+                fuzzy: false,
+            });
         }
         if term.len() >= 3 && !term.ends_with('s') {
             let plural = format!("{term}s");
             if let Some(entry) = self.inner.lexicon.lookup(&plural)? {
-                alternatives.push(self.matches_for_entry(entry, fields)?);
+                alternatives.push(SplitComponent {
+                    matches: self.matches_for_entry(entry, fields)?,
+                    highlight: plural,
+                    fuzzy: false,
+                });
             }
         }
-        Ok(union_all(alternatives))
+        Ok(alternatives)
     }
 
     fn fuzzy_split_term_matches(
@@ -1114,15 +1132,7 @@ impl RawSearchEngine {
         term: &str,
         fields: QueryFields,
     ) -> Result<Vec<SplitComponent>> {
-        let exact = self.matches_for_split_component(term, fields)?;
-        let mut output = Vec::new();
-        if !exact.is_empty() {
-            output.push(SplitComponent {
-                matches: exact,
-                highlight: term.to_string(),
-                fuzzy: false,
-            });
-        }
+        let mut output = self.exact_split_components(term, fields)?;
         if term.len() < MIN_FUZZY_SPLIT_COMPONENT_CHARS {
             return Ok(output);
         }
@@ -1147,18 +1157,17 @@ impl RawSearchEngine {
             if candidate_term.len() < term.len() {
                 continue;
             }
-            let matches = self.matches_for_split_component(
+            let candidates = self.exact_split_components(
                 candidate_term,
                 QueryFields {
                     prioritize_position: false,
                     ..fields
                 },
             )?;
-            output.push(SplitComponent {
-                matches,
-                highlight: candidate_term.to_string(),
+            output.extend(candidates.into_iter().map(|candidate| SplitComponent {
                 fuzzy: true,
-            });
+                ..candidate
+            }));
         }
         Ok(output)
     }
@@ -1169,34 +1178,49 @@ impl RawSearchEngine {
         terms: &[String],
         fields: QueryFields,
         prefix_last: bool,
-        constraints: SearchConstraints<'_>,
+        mut search: CandidateSearch<'_>,
         block_cache: &mut BlockCache,
-    ) -> Result<Option<(Vec<DocMatch>, Vec<String>)>> {
+    ) -> Result<Option<(Vec<DocMatch>, HighlightGroups)>> {
         let maximum_distance = terms
             .iter()
             .map(|term| bounded_typo_distance(term))
             .max()
             .unwrap_or(0);
         for typo_distance in 0..=maximum_distance {
-            let (mut matches, highlight_terms) = self.fuzzy_prefix_conjunction(
-                terms,
-                fields,
-                prefix_last,
-                typo_distance,
-                constraints.filter,
-                block_cache,
-            )?;
-            retain_not_excluded(&mut matches, constraints.excluded_documents);
+            let (mut matches, highlight_terms) = if typo_distance == 0 {
+                match search.initial.take() {
+                    Some(initial) => (initial.matches, initial.highlights),
+                    None => {
+                        self.fuzzy_prefix_conjunction(
+                            terms,
+                            fields,
+                            prefix_last,
+                            0,
+                            search.constraints.filter,
+                            block_cache,
+                        )
+                    }?,
+                }
+            } else {
+                self.fuzzy_prefix_conjunction(
+                    terms,
+                    fields,
+                    prefix_last,
+                    typo_distance,
+                    search.constraints.filter,
+                    block_cache,
+                )?
+            };
+            retain_not_excluded(&mut matches, search.constraints.excluded_documents);
             let enough = self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)?;
             if enough {
                 self.apply_exact_proximity(terms, fields, &mut matches, block_cache)?;
                 return Ok(Some((matches, highlight_terms)));
             }
             if typo_distance == maximum_distance {
-                let tracked_query_tokens = terms.len().min(4) as u8;
                 let has_complete_exact_match = matches
                     .iter()
-                    .any(|candidate| candidate.exact_tokens() >= tracked_query_tokens);
+                    .any(|candidate| candidate.all_retained_exact());
                 let has_sparse_result =
                     self.reaches_result_threshold(params, &matches, DROP_RESULT_THRESHOLD)?;
                 return if has_complete_exact_match && has_sparse_result {
@@ -1303,14 +1327,11 @@ impl RawSearchEngine {
         matches: Vec<DocMatch>,
     ) -> Result<Value> {
         let mut cache = BlockCache::default();
-        let original_term_count = highlight_terms.len();
-        self.format_matches(
-            params,
-            &highlight_terms,
-            original_term_count,
-            matches,
-            &mut cache,
-        )
+        let highlight_groups = highlight_terms
+            .into_iter()
+            .map(|term| vec![term])
+            .collect::<HighlightGroups>();
+        self.format_matches(params, &highlight_groups, matches, &mut cache)
     }
 
     fn matches_for_term(&self, term: &str, fields: QueryFields) -> Result<Vec<DocMatch>> {
@@ -1543,13 +1564,12 @@ impl RawSearchEngine {
     fn format_matches(
         &self,
         params: &SearchParams,
-        terms: &[String],
-        original_term_count: usize,
+        highlight_groups: &[Vec<String>],
         matches: Vec<DocMatch>,
         cache: &mut BlockCache,
     ) -> Result<Value> {
         if params.group_by.as_deref() != Some("video_id") {
-            return self.format_ungrouped(params, terms, original_term_count, matches, cache);
+            return self.format_ungrouped(params, highlight_groups, matches, cache);
         }
 
         let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
@@ -1620,12 +1640,7 @@ impl RawSearchEngine {
             let video_id = self.inner.videos[group.video as usize].id.clone();
             let mut hits = Vec::with_capacity(group.documents.len());
             for document in group.documents {
-                hits.push(self.hit_value(
-                    document.document(),
-                    terms,
-                    original_term_count,
-                    cache,
-                )?);
+                hits.push(self.hit_value(document.document(), highlight_groups, cache)?);
             }
             grouped_hits.push(json!({
                 "group_key": [video_id],
@@ -1644,8 +1659,7 @@ impl RawSearchEngine {
     fn format_ungrouped(
         &self,
         params: &SearchParams,
-        terms: &[String],
-        original_term_count: usize,
+        highlight_groups: &[Vec<String>],
         matches: Vec<DocMatch>,
         cache: &mut BlockCache,
     ) -> Result<Value> {
@@ -1706,7 +1720,7 @@ impl RawSearchEngine {
         let (offset, limit) = result_window(params);
         let mut hits = Vec::with_capacity(limit.min(matches.len()));
         for candidate in matches.into_iter().skip(offset).take(limit) {
-            hits.push(self.hit_value(candidate.document(), terms, original_term_count, cache)?);
+            hits.push(self.hit_value(candidate.document(), highlight_groups, cache)?);
         }
         Ok(json!({
             "found": found,
@@ -1797,7 +1811,7 @@ impl RawSearchEngine {
                     .filter(|document| excluded_documents.binary_search(document).is_err())
                     .take(hits_per_group)
                 {
-                    hits.push(self.hit_value(document, &[], 0, &mut cache)?);
+                    hits.push(self.hit_value(document, &[], &mut cache)?);
                 }
                 grouped_hits.push(json!({
                     "group_key": [video.id],
@@ -1857,7 +1871,7 @@ impl RawSearchEngine {
         let found = documents.len();
         let mut hits = Vec::with_capacity(limit.min(documents.len()));
         for document in documents.into_iter().skip(offset).take(limit) {
-            hits.push(self.hit_value(document, &[], 0, &mut cache)?);
+            hits.push(self.hit_value(document, &[], &mut cache)?);
         }
         Ok(json!({
             "found": found,
@@ -1878,8 +1892,7 @@ impl RawSearchEngine {
     fn hit_value(
         &self,
         document: u32,
-        terms: &[String],
-        original_term_count: usize,
+        highlight_groups: &[Vec<String>],
         cache: &mut BlockCache,
     ) -> Result<Value> {
         let mut source = self.document_value(document, cache)?;
@@ -1892,18 +1905,15 @@ impl RawSearchEngine {
         }
         let mut highlights = Vec::with_capacity(2);
         if let Some(text) = source.get("text").and_then(Value::as_str)
-            && let Some(snippet) = highlighted_snippet(
-                text,
-                &preferred_highlight_terms(text, terms, original_term_count),
-                360,
-            )
+            && let Some(snippet) =
+                highlighted_snippet(text, &matched_highlight_terms(text, highlight_groups), 360)
         {
             highlights.push(json!({ "field": "text", "snippet": snippet }));
         }
         if let Some(title) = source.get("title").and_then(Value::as_str)
             && let Some(snippet) = highlighted_snippet(
                 title,
-                &preferred_highlight_terms(title, terms, original_term_count),
+                &matched_highlight_terms(title, highlight_groups),
                 180,
             )
         {

@@ -1,11 +1,10 @@
 use super::*;
 
 impl DocMatch {
-    const TEXT_MATCH_FLAG: u32 = 1 << 31;
-    const ORDERED_PHRASE_FLAG: u32 = 1 << 26;
-    const EXACT_MASK_SHIFT: u32 = 27;
-    const EXACT_MASK_BITS: u32 = 0b1111 << Self::EXACT_MASK_SHIFT;
-    const DOCUMENT_MASK: u32 = Self::ORDERED_PHRASE_FLAG - 1;
+    const EXACT_MASK_BITS: u8 = 0b0000_1111;
+    const TEXT_MATCH_FLAG: u8 = 1 << 4;
+    const ORDERED_PHRASE_FLAG: u8 = 1 << 5;
+    const ALL_RETAINED_EXACT_FLAG: u8 = 1 << 6;
 
     pub(super) fn new(document: u32, score: f32, matches_text: bool) -> Self {
         Self::with_exact_mask(document, score, matches_text, 1)
@@ -17,32 +16,30 @@ impl DocMatch {
         matches_text: bool,
         exact_mask: u8,
     ) -> Self {
-        debug_assert_eq!(document & !Self::DOCUMENT_MASK, 0);
         Self {
-            document_with_flags: document
-                | (u32::from(exact_mask & 0b1111) << Self::EXACT_MASK_SHIFT)
-                | (u32::from(matches_text) * Self::TEXT_MATCH_FLAG),
+            document,
             score,
+            flags: (exact_mask & Self::EXACT_MASK_BITS)
+                | (u8::from(matches_text) * Self::TEXT_MATCH_FLAG)
+                | (u8::from(exact_mask != 0) * Self::ALL_RETAINED_EXACT_FLAG),
         }
     }
 
     pub(super) fn document(self) -> u32 {
-        self.document_with_flags & Self::DOCUMENT_MASK
+        self.document
     }
 
     pub(super) fn matches_text(self) -> bool {
-        self.document_with_flags & Self::TEXT_MATCH_FLAG != 0
+        self.flags & Self::TEXT_MATCH_FLAG != 0
     }
 
     pub(super) fn set_matches_text(&mut self, matches_text: bool) {
-        self.document_with_flags = self.document()
-            | (self.document_with_flags & Self::EXACT_MASK_BITS)
-            | (self.document_with_flags & Self::ORDERED_PHRASE_FLAG)
-            | (u32::from(matches_text) * Self::TEXT_MATCH_FLAG);
+        self.flags = (self.flags & !Self::TEXT_MATCH_FLAG)
+            | (u8::from(matches_text) * Self::TEXT_MATCH_FLAG);
     }
 
     pub(super) fn exact_mask(self) -> u8 {
-        ((self.document_with_flags & Self::EXACT_MASK_BITS) >> Self::EXACT_MASK_SHIFT) as u8
+        self.flags & Self::EXACT_MASK_BITS
     }
 
     pub(super) fn exact_tokens(self) -> u8 {
@@ -50,25 +47,32 @@ impl DocMatch {
     }
 
     pub(super) fn set_exact_mask(&mut self, exact_mask: u8) {
-        self.document_with_flags = self.document()
-            | (self.document_with_flags & Self::TEXT_MATCH_FLAG)
-            | (self.document_with_flags & Self::ORDERED_PHRASE_FLAG)
-            | (u32::from(exact_mask & 0b1111) << Self::EXACT_MASK_SHIFT);
+        self.flags = (self.flags & !Self::EXACT_MASK_BITS) | (exact_mask & Self::EXACT_MASK_BITS);
+        if exact_mask == 0 {
+            self.set_all_retained_exact(false);
+        }
+    }
+
+    pub(super) fn all_retained_exact(self) -> bool {
+        self.flags & Self::ALL_RETAINED_EXACT_FLAG != 0
+    }
+
+    pub(super) fn set_all_retained_exact(&mut self, exact: bool) {
+        self.flags = (self.flags & !Self::ALL_RETAINED_EXACT_FLAG)
+            | (u8::from(exact) * Self::ALL_RETAINED_EXACT_FLAG);
     }
 
     pub(super) fn ordered_phrase(self) -> bool {
-        self.document_with_flags & Self::ORDERED_PHRASE_FLAG != 0
+        self.flags & Self::ORDERED_PHRASE_FLAG != 0
     }
 
     pub(super) fn set_ordered_phrase(&mut self, ordered: bool) {
-        self.document_with_flags = self.document()
-            | (self.document_with_flags & Self::TEXT_MATCH_FLAG)
-            | (self.document_with_flags & Self::EXACT_MASK_BITS)
-            | (u32::from(ordered) * Self::ORDERED_PHRASE_FLAG);
+        self.flags = (self.flags & !Self::ORDERED_PHRASE_FLAG)
+            | (u8::from(ordered) * Self::ORDERED_PHRASE_FLAG);
     }
 }
 
-const _: () = assert!(DocMatch::DOCUMENT_MASK >= 50_000_000);
+const _: () = assert!(std::mem::size_of::<DocMatch>() <= 12);
 
 pub(super) fn compare_video_sort(
     left: &VideoMeta,
@@ -235,6 +239,10 @@ pub(super) fn intersect_sorted_borrowed(left: Vec<DocMatch>, right: &[DocMatch])
                 combined.set_exact_mask(
                     left[left_index].exact_mask() | right[right_index].exact_mask(),
                 );
+                combined.set_all_retained_exact(
+                    left[left_index].all_retained_exact()
+                        && right[right_index].all_retained_exact(),
+                );
                 output.push(combined);
                 left_index += 1;
                 right_index += 1;
@@ -263,6 +271,10 @@ pub(super) fn intersect_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec
                 );
                 combined.set_exact_mask(
                     left[left_index].exact_mask() | right[right_index].exact_mask(),
+                );
+                combined.set_all_retained_exact(
+                    left[left_index].all_retained_exact()
+                        && right[right_index].all_retained_exact(),
                 );
                 output.push(combined);
                 left_index += 1;
@@ -331,6 +343,9 @@ pub(super) fn union_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec<Doc
                             left_value.matches_text() || right_value.matches_text(),
                         );
                         combined.set_exact_mask(left_value.exact_mask() | right_value.exact_mask());
+                        combined.set_all_retained_exact(
+                            left_value.all_retained_exact() || right_value.all_retained_exact(),
+                        );
                         output.push(combined);
                     }
                 }
@@ -1063,26 +1078,26 @@ pub(super) fn highlighted_snippet(
     Some(output)
 }
 
-pub(super) fn preferred_highlight_terms(
-    value: &str,
-    terms: &[String],
-    original_term_count: usize,
-) -> Vec<String> {
+pub(super) fn matched_highlight_terms(value: &str, groups: &[Vec<String>]) -> Vec<String> {
     let present = ordered_tokens(value).into_iter().collect::<HashSet<_>>();
-    let original_term_count = original_term_count.min(terms.len());
-    let originals = terms[..original_term_count]
-        .iter()
-        .filter(|term| present.contains(term.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !originals.is_empty() {
-        return originals;
+    let mut selected = Vec::with_capacity(groups.len());
+    for group in groups {
+        let Some(original) = group.first() else {
+            continue;
+        };
+        if present.contains(original.as_str()) {
+            if !selected.contains(original) {
+                selected.push(original.clone());
+            }
+            continue;
+        }
+        for alternative in &group[1..] {
+            if present.contains(alternative.as_str()) && !selected.contains(alternative) {
+                selected.push(alternative.clone());
+            }
+        }
     }
-    terms[original_term_count..]
-        .iter()
-        .filter(|term| present.contains(term.as_str()))
-        .cloned()
-        .collect()
+    selected
 }
 
 pub(super) fn escape_html(value: &str, output: &mut String) {

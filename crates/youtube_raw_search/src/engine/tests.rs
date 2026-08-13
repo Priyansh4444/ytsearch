@@ -188,6 +188,32 @@ fn highlights_every_whole_query_token_without_matching_token_substrings() {
 }
 
 #[test]
+fn mixed_exact_and_typo_highlights_reconstruct_each_query_token() {
+    let groups = vec![
+        vec!["memroy".to_string(), "memory".to_string()],
+        vec!["mapped".to_string(), "mapping".to_string()],
+    ];
+    let selected = matched_highlight_terms("memory mapped systems", &groups);
+
+    assert_eq!(selected, ["memory", "mapped"]);
+    let snippet = highlighted_snippet("memory mapped systems", &selected, 180).expect("snippet");
+    assert_eq!(snippet, "<mark>memory</mark> <mark>mapped</mark> systems");
+}
+
+#[test]
+fn compact_split_highlights_both_matched_components() {
+    let groups = vec![vec![
+        "blackhole".to_string(),
+        "black".to_string(),
+        "hole".to_string(),
+    ]];
+    assert_eq!(
+        matched_highlight_terms("A Black Hole Is Not Black", &groups),
+        ["black", "hole"]
+    );
+}
+
+#[test]
 fn schema_six_reconstructs_complete_positions_from_aligned_sidecars() {
     let root = TempDir::new().expect("temp dir");
     let chunks_path = root.path().join("chunks.jsonl");
@@ -526,28 +552,32 @@ fn grouped_totals_include_all_moments_beyond_the_return_window() {
 }
 
 #[test]
-fn match_provenance_does_not_increase_the_hot_candidate_size() {
-    assert_eq!(std::mem::size_of::<DocMatch>(), 8);
-    // The extra four bytes are build-only spool coordinates. Query candidates stay compact.
+fn match_provenance_preserves_the_full_u32_document_space() {
+    assert_eq!(std::mem::size_of::<DocMatch>(), 12);
+    // The extra four bytes are build-only spool coordinates. Query candidates
+    // stay fixed-width while rank flags no longer steal bits from document IDs.
     assert_eq!(std::mem::size_of::<BuildPosting>(), 12);
-    let mut transcript = DocMatch::new(42, 1.0, true);
-    assert_eq!(transcript.document(), 42);
+    let mut transcript = DocMatch::new(u32::MAX, 1.0, true);
+    assert_eq!(transcript.document(), u32::MAX);
     assert!(transcript.matches_text());
     assert_eq!(transcript.exact_tokens(), 1);
     transcript.set_exact_mask(0b1000);
-    let mut fuzzy = DocMatch::new(42, 2.0, true);
+    let mut fuzzy = DocMatch::new(u32::MAX, 2.0, true);
     fuzzy.set_exact_mask(0);
     let union = union_sorted(vec![transcript], vec![fuzzy]);
     assert_eq!(union[0].exact_tokens(), 1);
     assert_eq!(union[0].exact_mask(), 0b1000);
+    assert!(union[0].all_retained_exact());
 
     let mut later_exact = transcript;
     later_exact.set_exact_mask(0b0100);
     let two_exact = intersect_sorted(vec![transcript], vec![later_exact]);
     assert_eq!(two_exact[0].exact_tokens(), 2);
     assert_eq!(two_exact[0].exact_mask(), 0b1100);
+    assert!(two_exact[0].all_retained_exact());
     let one_exact = intersect_sorted(vec![transcript], vec![fuzzy]);
     assert_eq!(one_exact[0].exact_tokens(), 1);
+    assert!(!one_exact[0].all_retained_exact());
 }
 
 #[test]
@@ -978,6 +1008,7 @@ fn document_local_proximity_matches_postings_at_the_direct_path_boundary() {
             assert_eq!(direct.document(), postings.document());
             assert_eq!(direct.exact_mask(), postings.exact_mask());
             assert_eq!(direct.matches_text(), postings.matches_text());
+            assert_eq!(direct.ordered_phrase(), postings.ordered_phrase());
             let tolerance = postings.score.abs().max(1.0) * 1e-6;
             assert!(
                 (direct.score - postings.score).abs() <= tolerance,
@@ -990,6 +1021,56 @@ fn document_local_proximity_matches_postings_at_the_direct_path_boundary() {
 }
 
 #[test]
+fn targeted_scoring_matches_materialized_scoring_above_the_direct_boundary() {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    for index in 0..130 {
+        writeln!(
+            chunks,
+            "{}",
+            json!({
+                "id": format!("candidate-{index}-1"),
+                "video_id": format!("candidate-{index}"),
+                "title": if index % 2 == 0 { "rare common" } else { "rare" },
+                "text": if index % 3 == 0 { "rare common common" } else { "rare common" },
+                "youtuber_handle": "@boundary",
+                "youtuber_name": "Boundary"
+            })
+        )
+        .expect("write chunk");
+    }
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+    let engine = RawSearchEngine::open(&index_path).expect("open raw index");
+    let terms = ordered_tokens("rare common");
+    let fields = query_fields(Some("text,title"), true).expect("query fields");
+    let (fast, _) = engine
+        .exact_prefix_conjunction(&terms, fields, false, None, &mut BlockCache::default())
+        .expect("targeted conjunction");
+    let materialized = intersect_all_borrowed(
+        &engine
+            .exact_term_matches(&terms, fields)
+            .expect("materialized matches"),
+    );
+
+    assert_eq!(fast.len(), 130);
+    assert_eq!(fast.len(), materialized.len());
+    for (fast, materialized) in fast.iter().zip(materialized) {
+        assert_eq!(fast.document(), materialized.document());
+        let tolerance = materialized.score.abs().max(1.0) * 1e-6;
+        assert!(
+            (fast.score - materialized.score).abs() <= tolerance,
+            "fast={} materialized={} tolerance={tolerance}",
+            fast.score,
+            materialized.score
+        );
+    }
+}
+
+#[test]
 fn earlier_exact_query_tokens_break_equal_exact_count_ties() {
     let (_root, engine) = token_drop_engine();
     let response = engine
@@ -998,6 +1079,164 @@ fn earlier_exact_query_tokens_break_equal_exact_count_ties() {
 
     assert_eq!(response["found"], 2);
     assert_eq!(response["grouped_hits"][0]["group_key"][0], "early-exact");
+}
+
+#[test]
+fn batched_document_validation_matches_materialized_multi_term_scoring() {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    for index in 0..120 {
+        writeln!(
+            chunks,
+            "{}",
+            json!({
+                "id": format!("batched-{index}-1"),
+                "video_id": format!("batched-{index}"),
+                "title": "rare alpha beta gamma",
+                "text": if index % 2 == 0 {
+                    "rare alpha beta gamma alpha"
+                } else {
+                    "gamma rare beta alpha"
+                },
+                "youtuber_handle": "@batched",
+                "youtuber_name": "Batched"
+            })
+        )
+        .expect("write chunk");
+    }
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+    let engine = RawSearchEngine::open(&index_path).expect("open raw index");
+    let terms = ordered_tokens("rare alpha beta gamma");
+    let fields = query_fields(Some("text,title"), true).expect("query fields");
+
+    let (batched, _) = engine
+        .exact_prefix_conjunction(&terms, fields, false, None, &mut BlockCache::default())
+        .expect("batched conjunction");
+    let materialized = intersect_all_borrowed(
+        &engine
+            .exact_term_matches(&terms, fields)
+            .expect("materialized matches"),
+    );
+
+    assert_eq!(batched.len(), materialized.len());
+    for (batched, materialized) in batched.iter().zip(materialized) {
+        assert_eq!(batched.document(), materialized.document());
+        assert_eq!(batched.exact_mask(), materialized.exact_mask());
+        assert_eq!(
+            batched.all_retained_exact(),
+            materialized.all_retained_exact()
+        );
+        assert_eq!(batched.matches_text(), materialized.matches_text());
+        let tolerance = materialized.score.abs().max(1.0) * 1e-6;
+        assert!(
+            (batched.score - materialized.score).abs() <= tolerance,
+            "batched={} materialized={} tolerance={tolerance}",
+            batched.score,
+            materialized.score
+        );
+    }
+}
+
+#[test]
+fn batched_document_validation_matches_materialized_typo_alternatives() {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    for index in 0..127 {
+        writeln!(
+            chunks,
+            "{}",
+            json!({
+                "id": format!("fuzzy-{index}-1"),
+                "video_id": format!("fuzzy-{index}"),
+                "title": "rare alpha beta gamma",
+                "text": "rare alpha beta gamma",
+                "youtuber_handle": "@fuzzy",
+                "youtuber_name": "Fuzzy"
+            })
+        )
+        .expect("write chunk");
+    }
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+    let engine = RawSearchEngine::open(&index_path).expect("open raw index");
+    let terms = ordered_tokens("raer alpha beta gamma");
+    let fields = query_fields(Some("text,title"), true).expect("query fields");
+
+    let (batched, _) = engine
+        .fuzzy_prefix_conjunction(&terms, fields, false, 1, None, &mut BlockCache::default())
+        .expect("batched fuzzy conjunction");
+    let mut materialized = Vec::with_capacity(terms.len());
+    for (index, term) in terms.iter().enumerate() {
+        let exact_mask = 1 << (3 - index.min(3));
+        let exact_fields = QueryFields {
+            exact_mask,
+            ..fields
+        };
+        let exact = engine.matches_for_term(term, exact_fields).expect("exact");
+        let (fuzzy, _) = engine
+            .fuzzy_alternatives(term, fields, 1, Some(1), false)
+            .expect("fuzzy alternatives");
+        materialized.push(union_sorted(exact, fuzzy));
+    }
+    let materialized = intersect_all_borrowed(&materialized);
+
+    assert_eq!(batched.len(), 127);
+    assert_eq!(batched.len(), materialized.len());
+    for (batched, materialized) in batched.iter().zip(materialized) {
+        assert_eq!(batched.document(), materialized.document());
+        assert_eq!(batched.exact_mask(), materialized.exact_mask());
+        assert_eq!(
+            batched.all_retained_exact(),
+            materialized.all_retained_exact()
+        );
+        assert!(!batched.all_retained_exact());
+        let tolerance = materialized.score.abs().max(1.0) * 1e-6;
+        assert!((batched.score - materialized.score).abs() <= tolerance);
+    }
+}
+
+#[test]
+fn fuzzy_later_token_does_not_stop_five_token_drop_progression() {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    for index in 0..3 {
+        writeln!(
+            chunks,
+            "{}",
+            json!({
+                "id": format!("drop-{index}-1"),
+                "video_id": format!("drop-{index}"),
+                "title": "Drop progression",
+                "text": if index == 0 {
+                    "alpha beta gamma memory delta"
+                } else {
+                    "alpha beta gamma"
+                },
+                "youtuber_handle": "@drop",
+                "youtuber_name": "Drop"
+            })
+        )
+        .expect("write chunk");
+    }
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+    let engine = RawSearchEngine::open(&index_path).expect("open raw index");
+    let mut query = grouped_query("alpha beta gamma memroy delta");
+    query.query_by = Some("text".to_string());
+
+    let response = engine.search(&query).expect("search");
+
+    assert_eq!(response["found"], 3);
 }
 
 #[test]
@@ -1021,12 +1260,10 @@ fn blackhole_split_is_consistent_globally_and_per_creator() {
         let response = engine.search(&query).expect("creator search");
         assert_eq!(response["found"], 1);
         assert_eq!(response["grouped_hits"][0]["group_key"][0], expected);
-        assert!(
-            response["grouped_hits"][0]["hits"][0]["highlights"][0]["snippet"]
-                .as_str()
-                .expect("split highlight")
-                .contains("<mark>")
-        );
+        let snippet = response["grouped_hits"][0]["hits"][0]["highlights"][0]["snippet"]
+            .as_str()
+            .unwrap_or_else(|| panic!("split highlight response={response}"));
+        assert!(snippet.contains("<mark>"), "response={response}");
     }
 }
 

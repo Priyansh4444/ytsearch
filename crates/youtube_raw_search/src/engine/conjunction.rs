@@ -28,7 +28,7 @@ impl RawSearchEngine {
         prefix_last: bool,
         filter: Option<(&str, &str)>,
         block_cache: &mut BlockCache,
-    ) -> Result<(Vec<DocMatch>, Vec<String>)> {
+    ) -> Result<(Vec<DocMatch>, HighlightGroups)> {
         self.fuzzy_prefix_conjunction(terms, fields, prefix_last, 0, filter, block_cache)
     }
 
@@ -40,9 +40,12 @@ impl RawSearchEngine {
         maximum_distance: u8,
         filter: Option<(&str, &str)>,
         block_cache: &mut BlockCache,
-    ) -> Result<(Vec<DocMatch>, Vec<String>)> {
+    ) -> Result<(Vec<DocMatch>, HighlightGroups)> {
         let mut plans = Vec::with_capacity(terms.len());
-        let mut highlights = terms.to_vec();
+        let mut highlights = terms
+            .iter()
+            .map(|term| vec![term.clone()])
+            .collect::<HighlightGroups>();
         let last_index = terms.len().saturating_sub(1);
 
         for (index, term) in terms.iter().enumerate() {
@@ -60,12 +63,15 @@ impl RawSearchEngine {
                 });
             }
 
-            if maximum_distance > 0 || (prefix_last && index == last_index) {
+            let term_typo_distance = bounded_typo_distance(term);
+            if (maximum_distance > 0 && term_typo_distance > 0)
+                || (prefix_last && index == last_index)
+            {
                 for candidate in self.inner.fuzzy.candidates(
                     term,
-                    maximum_distance.min(bounded_typo_distance(term)),
+                    maximum_distance.min(term_typo_distance),
                     MAX_FUZZY_TERMS_PER_DISTANCE,
-                    true,
+                    prefix_last && index == last_index,
                     fields.text,
                     fields.title,
                 )? {
@@ -93,7 +99,7 @@ impl RawSearchEngine {
                             _ => 0.4,
                         },
                     });
-                    highlights.push(candidate_term.to_string());
+                    highlights[index].push(candidate_term.to_string());
                 }
             }
 
@@ -117,8 +123,14 @@ impl RawSearchEngine {
         };
         let mut matches = self.matches_for_plan(&first, None, block_cache)?;
         self.retain_video_filter(&mut matches, filter)?;
-        for plan in plans {
-            let plan_matches = self.matches_for_plan(&plan, Some(&matches), block_cache)?;
+        let remaining = plans.collect::<Vec<_>>();
+        for (index, plan) in remaining.iter().enumerate() {
+            if matches.len() <= 128 {
+                matches =
+                    self.matches_for_plans_documents(&remaining[index..], &matches, block_cache)?;
+                break;
+            }
+            let plan_matches = self.matches_for_plan(plan, Some(&matches), block_cache)?;
             matches = intersect_sorted(matches, plan_matches);
             if matches.is_empty() {
                 break;
@@ -199,53 +211,8 @@ impl RawSearchEngine {
                 .map(ordered_tokens)
                 .unwrap_or_default();
             let title_tokens = ordered_tokens(&video.title);
-            let mut contribution = TargetContribution::default();
-
-            for alternative in &plan.alternatives {
-                let effective_frequency = self
-                    .estimated_entry_documents(alternative.entry)
-                    .min(u64::from(self.inner.manifest.documents));
-                let idf = inverse_document_frequency(
-                    self.inner.manifest.documents,
-                    u32::try_from(effective_frequency)
-                        .unwrap_or(u32::MAX)
-                        .max(1),
-                );
-                if alternative.fields.text
-                    && let Some((frequency, first_position)) =
-                        token_stats(&text_tokens, &alternative.term)
-                {
-                    contribution.score += bm25(
-                        frequency,
-                        record.tokens,
-                        self.inner.manifest.average_document_tokens,
-                    ) * idf
-                        * TEXT_QUERY_WEIGHT
-                        * token_position_multiplier(
-                            first_position,
-                            alternative.fields.prioritize_position,
-                        )
-                        * alternative.score_multiplier;
-                    contribution.exact_mask |= alternative.fields.exact_mask;
-                    contribution.matched = true;
-                    contribution.matches_text = true;
-                }
-                if alternative.fields.title
-                    && let Some((frequency, first_position)) =
-                        token_stats(&title_tokens, &alternative.term)
-                {
-                    contribution.score += idf
-                        * TITLE_QUERY_WEIGHT
-                        * (1.0 + (frequency as f32).ln())
-                        * token_position_multiplier(
-                            first_position,
-                            alternative.fields.prioritize_position,
-                        )
-                        * alternative.score_multiplier;
-                    contribution.exact_mask |= alternative.fields.exact_mask;
-                    contribution.matched = true;
-                }
-            }
+            let contribution =
+                self.plan_document_contribution(plan, record, &text_tokens, &title_tokens);
             if contribution.matched {
                 matches.push(DocMatch::with_exact_mask(
                     document,
@@ -256,6 +223,104 @@ impl RawSearchEngine {
             }
         }
         Ok(matches)
+    }
+
+    fn matches_for_plans_documents(
+        &self,
+        plans: &[TermPlan],
+        targets: &[DocMatch],
+        block_cache: &mut BlockCache,
+    ) -> Result<Vec<DocMatch>> {
+        let mut matches = Vec::with_capacity(targets.len());
+        'documents: for target in targets {
+            let document = target.document();
+            let record = self.inner.metadata.document(document)?;
+            let video = self
+                .inner
+                .videos
+                .get(record.video as usize)
+                .ok_or_else(|| Error::Corrupt("document video is out of bounds".to_string()))?;
+            let source = self.document_value(document, block_cache)?;
+            let text_tokens = source
+                .get("text")
+                .and_then(Value::as_str)
+                .map(ordered_tokens)
+                .unwrap_or_default();
+            let title_tokens = ordered_tokens(&video.title);
+            let mut combined = *target;
+
+            for plan in plans {
+                let contribution =
+                    self.plan_document_contribution(plan, record, &text_tokens, &title_tokens);
+                if !contribution.matched {
+                    continue 'documents;
+                }
+                combined.score += contribution.score;
+                combined.set_matches_text(combined.matches_text() || contribution.matches_text);
+                combined.set_exact_mask(combined.exact_mask() | contribution.exact_mask);
+                combined.set_all_retained_exact(
+                    combined.all_retained_exact() && contribution.exact_mask != 0,
+                );
+            }
+            matches.push(combined);
+        }
+        Ok(matches)
+    }
+
+    fn plan_document_contribution(
+        &self,
+        plan: &TermPlan,
+        record: DocumentRecord,
+        text_tokens: &[String],
+        title_tokens: &[String],
+    ) -> TargetContribution {
+        let mut contribution = TargetContribution::default();
+        for alternative in &plan.alternatives {
+            let effective_frequency = self
+                .estimated_entry_documents(alternative.entry)
+                .min(u64::from(self.inner.manifest.documents));
+            let idf = inverse_document_frequency(
+                self.inner.manifest.documents,
+                u32::try_from(effective_frequency)
+                    .unwrap_or(u32::MAX)
+                    .max(1),
+            );
+            if alternative.fields.text
+                && let Some((frequency, first_position)) =
+                    token_stats(text_tokens, &alternative.term)
+            {
+                contribution.score += bm25(
+                    frequency,
+                    record.tokens,
+                    self.inner.manifest.average_document_tokens,
+                ) * idf
+                    * TEXT_QUERY_WEIGHT
+                    * token_position_multiplier(
+                        first_position,
+                        alternative.fields.prioritize_position,
+                    )
+                    * alternative.score_multiplier;
+                contribution.exact_mask |= alternative.fields.exact_mask;
+                contribution.matched = true;
+                contribution.matches_text = true;
+            }
+            if alternative.fields.title
+                && let Some((frequency, first_position)) =
+                    token_stats(title_tokens, &alternative.term)
+            {
+                contribution.score += idf
+                    * TITLE_QUERY_WEIGHT
+                    * (1.0 + (frequency as f32).ln())
+                    * token_position_multiplier(
+                        first_position,
+                        alternative.fields.prioritize_position,
+                    )
+                    * alternative.score_multiplier;
+                contribution.exact_mask |= alternative.fields.exact_mask;
+                contribution.matched = true;
+            }
+        }
+        contribution
     }
 
     fn estimated_entry_documents(&self, entry: TermEntry) -> u64 {
@@ -357,6 +422,7 @@ impl RawSearchEngine {
                 record.tokens,
                 self.inner.manifest.average_document_tokens,
             ) * idf
+                * TEXT_QUERY_WEIGHT
                 * token_position_multiplier(first_position, fields.prioritize_position);
             contribution.exact_mask |= fields.exact_mask;
             contribution.matched = true;
@@ -406,7 +472,7 @@ impl RawSearchEngine {
                 continue;
             };
             let score = idf
-                * 6.0
+                * TITLE_QUERY_WEIGHT
                 * (1.0 + (frequency as f32).ln())
                 * token_position_multiplier(first_position, fields.prioritize_position);
             for &index in indices {
