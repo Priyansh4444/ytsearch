@@ -93,12 +93,12 @@ if [ "$ON_DEMAND" = "1" ]; then
   remove_arg=""
 fi
 
-indexer_cpu_kind="${INDEXER_CPU_KIND:-performance}"
+indexer_cpu_kind="${INDEXER_CPU_KIND:-shared}"
 indexer_cpus="${INDEXER_CPUS:-2}"
 idle_exit_after_seconds="${IDLE_EXIT_AFTER_SECONDS:-0}"
 if [ "$ON_DEMAND" = "1" ]; then
   indexer_cpu_kind="${INDEXER_CPU_KIND:-shared}"
-  indexer_cpus="${INDEXER_CPUS:-4}"
+  indexer_cpus="${INDEXER_CPUS:-2}"
   idle_exit_after_seconds="${IDLE_EXIT_AFTER_SECONDS:-300}"
 fi
 
@@ -158,9 +158,9 @@ exec flyctl machine run \
   $build_args \
   --vm-cpu-kind "$indexer_cpu_kind" \
   --vm-cpus "$indexer_cpus" \
-  --vm-memory "${INDEXER_MEMORY_MB:-8192}" \
+  --vm-memory "${INDEXER_MEMORY_MB:-2048}" \
   --rootfs-size "${INDEXER_ROOTFS_SIZE_GB:-10}" \
-  --swap-size "${INDEXER_SWAP_MB:-1024}" \
+  --swap-size "${INDEXER_SWAP_MB:-512}" \
   --volume "$VOLUME_NAME:/data" \
   --file-local "/usr/local/bin/cloud-index-queue=$(dirname "$0")/cloud-index-queue-entrypoint.sh" \
   $cookie_secret_args \
@@ -178,6 +178,8 @@ exec flyctl machine run \
   --env "MAX_VIDEOS_PER_PASS=${MAX_VIDEOS_PER_PASS:-0}" \
   --env "QUEUE_LOOP=${QUEUE_LOOP:-$QUEUE_DAEMON}" \
   --env "QUEUE_POLL_INTERVAL_SECONDS=${QUEUE_POLL_INTERVAL_SECONDS:-30}" \
+  --env "QUEUE_RETRY_STATE_FILE=/data/queue-retries.tsv" \
+  --env "QUEUE_ACK_RETRY_SECONDS=${QUEUE_ACK_RETRY_SECONDS:-300}" \
   --env "IDLE_EXIT_AFTER_SECONDS=$idle_exit_after_seconds" \
   --env "IDLE_GAP_FILL_ENABLED=${IDLE_GAP_FILL_ENABLED:-0}" \
   --env "IDLE_GAP_FILL_STATE_FILE=${IDLE_GAP_FILL_STATE_FILE:-/data/idle-gap-fill.cursor}" \

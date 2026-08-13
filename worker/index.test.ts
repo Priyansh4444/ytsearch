@@ -30,7 +30,7 @@ describe("scheduled repair wake", () => {
 
     await worker.scheduled(
       {
-        cron: "17 */6 * * *",
+        cron: "17 * * * *",
         scheduledTime,
         noRetry: vi.fn(),
       },
@@ -42,7 +42,7 @@ describe("scheduled repair wake", () => {
     expect(log).toHaveBeenCalledWith(
       JSON.stringify({
         event: "indexer_repair_wake_enqueued",
-        cron: "17 */6 * * *",
+        cron: "17 * * * *",
         scheduled_time: scheduledTime,
       }),
     );

@@ -123,7 +123,7 @@ function queueEffect(batch: MessageBatch<WakeMessage>, env: Env): Effect.Effect<
 }
 
 function scheduledEffect(controller: ScheduledController, env: Env): Effect.Effect<void, Error> {
-  if (controller.cron === "17 */6 * * *") {
+  if (controller.cron === "17 * * * *") {
     return Effect.gen(function* () {
       yield* fromPromise(() => env.INDEX_WAKE_QUEUE.send({ reason: "scheduled-repair" }));
       yield* Effect.sync(() =>

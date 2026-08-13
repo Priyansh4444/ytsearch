@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     num::NonZeroU16,
     path::PathBuf,
+    process::ExitCode,
     sync::Arc,
     time::{Duration, Instant, SystemTime},
 };
@@ -44,6 +45,8 @@ enum CliError {
     Ingest(#[from] youtube_ingest::IngestError),
     #[error("upstream indexing paused after {0}; retry after the provider cooldown")]
     UpstreamBlocked(&'static str),
+    #[error("{0}")]
+    RetryableGaps(String),
     #[error("{0}")]
     Message(String),
 }
@@ -103,11 +106,11 @@ struct IndexStats {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), CliError> {
+async fn main() -> ExitCode {
     let _ = dotenvy::dotenv();
     init_tracing();
 
-    match Cli::parse().command {
+    let result = match Cli::parse().command {
         Command::InitBackend(command) => init_backend_command(command).await,
         Command::Validate(command) => validate_command(command).await,
         Command::IndexYoutuber(command) => index_youtuber_command(command).await,
@@ -121,6 +124,17 @@ async fn main() -> Result<(), CliError> {
         Command::RemoveYoutuber(command) => remove_youtuber_command(command).await,
         Command::IndexVideo(command) => index_video_command(command).await,
         Command::Search(command) => search_command(command).await,
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error @ (CliError::RetryableGaps(_) | CliError::UpstreamBlocked(_))) => {
+            eprintln!("{error}");
+            ExitCode::from(75)
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -778,13 +792,18 @@ async fn index_youtuber(
         if publish_when_complete {
             publish_and_wait(&transcript_search).await?;
         }
-        return Err(CliError::Message(format!(
+        let message = format!(
             "No searchable transcript chunks were imported for {}. attempted={}, skipped={}, kind_filtered={}. Check yt-dlp/caption errors above.",
             youtuber.handle,
             stats.attempted_videos,
             stats.skipped_videos,
             stats.kind_filtered_videos
-        )));
+        );
+        return if stats.retryable_failures > 0 {
+            Err(CliError::RetryableGaps(message))
+        } else {
+            Err(CliError::Message(message))
+        };
     }
 
     let youtuber_doc = upsert_youtuber_document_from_chunks(
@@ -800,7 +819,7 @@ async fn index_youtuber(
     }
 
     if stats.retryable_failures > 0 {
-        return Err(CliError::Message(format!(
+        return Err(CliError::RetryableGaps(format!(
             "Indexing {} published available videos but retained {} retryable video gap(s); the queue request must remain for retry",
             youtuber.handle, stats.retryable_failures
         )));

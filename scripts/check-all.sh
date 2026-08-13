@@ -9,6 +9,8 @@ scripts/check-rust-dependency-policy.sh
 scripts/test-setup-dev.sh
 scripts/test-doctor.sh
 scripts/test-check-queue-indexers.sh
+scripts/test-cloud-index-queue-entrypoint.sh
+scripts/check-fly-cost-config.sh
 scripts/test-destroy-deprecated-typesense-fly.sh
 scripts/test-index-conference-playlists.sh
 scripts/test-compare-autoresearch-search.sh

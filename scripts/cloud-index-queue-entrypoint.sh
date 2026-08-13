@@ -8,6 +8,8 @@ COLLECTION="${COLLECTION:-youtube_transcript_chunks}"
 VIDEO_TIMEOUT_SECONDS="${VIDEO_TIMEOUT_SECONDS:-600}"
 TRANSCRIPT_CACHE_DIR="${TRANSCRIPT_CACHE_DIR:-/data/transcript-cache}"
 TRANSCRIPT_FAILURE_RETRY_SECONDS="${TRANSCRIPT_FAILURE_RETRY_SECONDS:-21600}"
+QUEUE_RETRY_STATE_FILE="${QUEUE_RETRY_STATE_FILE:-/data/queue-retries.tsv}"
+QUEUE_ACK_RETRY_SECONDS="${QUEUE_ACK_RETRY_SECONDS:-300}"
 LIMIT="${LIMIT:-10}"
 QUEUE_ONE_REQUEST_PER_PASS="${QUEUE_ONE_REQUEST_PER_PASS:-0}"
 DAILY_UPDATE_LIST_FILE="${DAILY_UPDATE_LIST_FILE:-/tmp/daily-indexed-channels.txt}"
@@ -265,8 +267,15 @@ PY
 }
 
 pull_queue_tsv() {
-  queue_body="$(queue_request GET "/api/index-requests?limit=1000" 2>/dev/null || true)"
-  QUEUE_BODY="$queue_body" QUEUE_PULL_LIMIT="$LIMIT" QUEUE_PRIORITY_LIST_FILE="$QUEUE_PRIORITY_LIST_FILE" QUEUE_TARGET_BACKEND="$(default_queue_target_backend)" \
+  if ! queue_body="$(queue_request GET "/api/index-requests?limit=1000")"; then
+    echo "cloud-queue-indexer: queue request failed" >&2
+    return 1
+  fi
+  if [ -z "$queue_body" ]; then
+    echo "cloud-queue-indexer: queue response was empty" >&2
+    return 1
+  fi
+  QUEUE_BODY="$queue_body" QUEUE_PULL_LIMIT="$LIMIT" QUEUE_PRIORITY_LIST_FILE="$QUEUE_PRIORITY_LIST_FILE" QUEUE_TARGET_BACKEND="$(default_queue_target_backend)" QUEUE_RETRY_STATE_FILE="$QUEUE_RETRY_STATE_FILE" \
     python3 <<'PY'
 import json
 import os
@@ -274,15 +283,27 @@ import sys
 
 raw = os.environ.get("QUEUE_BODY", "").strip()
 if not raw:
-    sys.exit(0)
+    print("cloud-queue-indexer: queue response was empty", file=sys.stderr)
+    sys.exit(1)
 try:
     body = json.loads(raw)
 except json.JSONDecodeError as error:
     print(f"cloud-queue-indexer: invalid queue response: {error}", file=sys.stderr)
-    sys.exit(0)
+    sys.exit(1)
+if not isinstance(body, dict) or not isinstance(body.get("requests"), list):
+    print("cloud-queue-indexer: queue response is missing a requests array", file=sys.stderr)
+    sys.exit(1)
 priority_file = os.environ.get("QUEUE_PRIORITY_LIST_FILE", "")
+retry_file = os.environ.get("QUEUE_RETRY_STATE_FILE", "")
 target_backend = os.environ.get("QUEUE_TARGET_BACKEND", "").strip()
 priority_handles = set()
+retry_after = {}
+if retry_file and os.path.isfile(retry_file):
+    with open(retry_file, encoding="utf-8") as handle:
+        for raw_line in handle:
+            request_id, separator, epoch = raw_line.strip().partition("\t")
+            if separator and request_id and epoch.isdigit():
+                retry_after[request_id] = int(epoch)
 if priority_file and os.path.isfile(priority_file):
     with open(priority_file, encoding="utf-8") as handle:
         for raw_line in handle:
@@ -307,6 +328,8 @@ for request in body.get("requests", []):
     if target_backend and request_target_backend != target_backend:
         continue
     if request_id and handle:
+        if retry_after.get(request_id, 0) > int(__import__("time").time()):
+            continue
         requests.append(
             {
                 "id": request_id,
@@ -341,6 +364,30 @@ for request in requests[:pull_limit]:
         )
     )
 PY
+}
+
+remember_queue_retry() {
+  request_id="$1"
+  delay_seconds="$2"
+  state_dir="$(dirname "$QUEUE_RETRY_STATE_FILE")"
+  mkdir -p "$state_dir"
+  tmp_state="${QUEUE_RETRY_STATE_FILE}.tmp.$$"
+  retry_at=$(( $(date +%s) + delay_seconds ))
+  if [ -f "$QUEUE_RETRY_STATE_FILE" ]; then
+    awk -F '\t' -v id="$request_id" '$1 != id' "$QUEUE_RETRY_STATE_FILE" > "$tmp_state"
+  else
+    : > "$tmp_state"
+  fi
+  printf '%s\t%s\n' "$request_id" "$retry_at" >> "$tmp_state"
+  mv "$tmp_state" "$QUEUE_RETRY_STATE_FILE"
+}
+
+forget_queue_retry() {
+  request_id="$1"
+  [ -f "$QUEUE_RETRY_STATE_FILE" ] || return 0
+  tmp_state="${QUEUE_RETRY_STATE_FILE}.tmp.$$"
+  awk -F '\t' -v id="$request_id" '$1 != id' "$QUEUE_RETRY_STATE_FILE" > "$tmp_state"
+  mv "$tmp_state" "$QUEUE_RETRY_STATE_FILE"
 }
 
 pull_idle_gap_handle() {
@@ -430,7 +477,7 @@ index_one_backend() {
 
   echo "cloud-queue-indexer: indexing $handle backend=$label jobs=$jobs"
   # shellcheck disable=SC2086
-  if ! ytsearch index-youtuber "$handle" \
+  if ytsearch index-youtuber "$handle" \
     --backend "$backend" \
     --mode update \
     --collection "$COLLECTION" \
@@ -440,7 +487,9 @@ index_one_backend() {
     --transcript-failure-retry-seconds "$TRANSCRIPT_FAILURE_RETRY_SECONDS" \
     $extra_args \
     "$@"; then
-    return 1
+    return 0
+  else
+    return $?
   fi
 }
 
@@ -476,7 +525,11 @@ index_youtuber_for_queue_target() {
 
   case "$target_backend" in
     raw)
-      BACKENDS="raw" index_youtuber_for_backends "$handle"
+      if [ -z "${RAW_SEARCH_API_URL:-}" ] || [ -z "${RAW_SEARCH_ADMIN_API_KEY:-}" ]; then
+        echo "cloud-queue-indexer: raw unavailable; missing RAW_SEARCH_API_URL or RAW_SEARCH_ADMIN_API_KEY" >&2
+        return 1
+      fi
+      index_one_backend raw raw "${RAW_JOBS:-$JOBS}" "$handle"
       ;;
     *)
       echo "cloud-queue-indexer: unsupported target_backend=$target_backend request skipped" >&2
@@ -550,24 +603,27 @@ process_idle_gap_once() {
   set_index_activity "" || true
 }
 
-if [ "${CLOUD_INDEX_QUEUE_LIBRARY_ONLY:-0}" = "1" ]; then
-  return 0 2>/dev/null || exit 0
+if [ "${CLOUD_INDEX_QUEUE_LIBRARY_ONLY:-0}" != "1" ]; then
+  require_env INDEX_QUEUE_API_BASE_URL
+  require_env YTSEARCH_INDEX_QUEUE_TOKEN
+  validate_backend_scope
+  validate_update_schedule
+  validate_idle_exit
+  validate_idle_gap_fill
 fi
-
-require_env INDEX_QUEUE_API_BASE_URL
-require_env YTSEARCH_INDEX_QUEUE_TOKEN
-validate_backend_scope
-validate_update_schedule
-validate_idle_exit
-validate_idle_gap_fill
 
 process_queue_once() {
   QUEUE_HAD_WORK=0
   processed=0
   failed=0
   failed_acked=0
+  unresolved=0
   tmp_queue="/tmp/ytsearch-queue.tsv"
-  pull_queue_tsv > "$tmp_queue"
+  if ! pull_queue_tsv > "$tmp_queue"; then
+    echo "cloud-queue-indexer: queue pull failed" >&2
+    log_queue_event error queue_pull_failed "" "" "" "$BACKENDS" "retrying"
+    return 1
+  fi
 
   if [ ! -s "$tmp_queue" ]; then
     echo "cloud-queue-indexer: queue is empty"
@@ -590,29 +646,57 @@ process_queue_once() {
     set_index_activity "$handle" || true
     if ! set_queue_status "$request_id" running; then
       echo "cloud-queue-indexer: could not claim request=$request_id" >&2
+      failed=$((failed + 1))
+      unresolved=$((unresolved + 1))
+      remember_queue_retry "$request_id" "$QUEUE_ACK_RETRY_SECONDS"
       continue
     fi
     log_queue_event info index_request_started "$request_id" "$handle" "$source_backend" "$active_backends" "running"
-    if index_youtuber_for_queue_target "$handle" "$target_backend"; then
-      queue_request DELETE "/api/index-requests/$request_id" >/dev/null
-      echo "cloud-queue-indexer: acked request=$request_id handle=$handle"
-      log_queue_event info index_request_completed "$request_id" "$handle" "$source_backend" "$active_backends" "acked"
-      processed=$((processed + 1))
+    index_status=0
+    index_youtuber_for_queue_target "$handle" "$target_backend" || index_status=$?
+    if [ "$index_status" -eq 0 ]; then
+      if queue_request DELETE "/api/index-requests/$request_id" >/dev/null; then
+        echo "cloud-queue-indexer: acked request=$request_id handle=$handle"
+        forget_queue_retry "$request_id"
+        log_queue_event info index_request_completed "$request_id" "$handle" "$source_backend" "$active_backends" "acked"
+        processed=$((processed + 1))
+      else
+        failed=$((failed + 1))
+        unresolved=$((unresolved + 1))
+        remember_queue_retry "$request_id" "$QUEUE_ACK_RETRY_SECONDS"
+        set_queue_status "$request_id" queued || true
+        log_queue_event error index_request_ack_failed "$request_id" "$handle" "$source_backend" "$active_backends" "queued"
+      fi
     else
       failed=$((failed + 1))
       log_queue_event error index_request_failed "$request_id" "$handle" "$source_backend" "$active_backends" "failed"
       if [ "$ACK_FAILED_REQUESTS" = "1" ]; then
         if queue_request DELETE "/api/index-requests/$request_id" >/dev/null; then
           failed_acked=$((failed_acked + 1))
+          forget_queue_retry "$request_id"
           log_queue_event warn index_request_failed_acked "$request_id" "$handle" "$source_backend" "$active_backends" "deleted"
         else
+          unresolved=$((unresolved + 1))
+          remember_queue_retry "$request_id" "$QUEUE_ACK_RETRY_SECONDS"
+          set_queue_status "$request_id" queued || true
           log_queue_event error index_request_failed_ack_error "$request_id" "$handle" "$source_backend" "$active_backends" "queued"
         fi
+      elif [ "$index_status" -eq 75 ]; then
+        # The CLI reports only retryable per-video gaps as failures. Put the
+        # request back into the runnable queue so a later pass can complete it.
+        unresolved=$((unresolved + 1))
+        remember_queue_retry "$request_id" "$TRANSCRIPT_FAILURE_RETRY_SECONDS"
+        set_queue_status "$request_id" queued || true
+        log_queue_event warn index_request_failed_retained "$request_id" "$handle" "$source_backend" "$active_backends" "queued"
       else
-        # Retain the failure for inspection without letting one invalid or
-        # unavailable channel starve every newer request in the queue.
-        set_queue_status "$request_id" failed || true
-        log_queue_event warn index_request_failed_retained "$request_id" "$handle" "$source_backend" "$active_backends" "failed"
+        if set_queue_status "$request_id" failed; then
+          forget_queue_retry "$request_id"
+          log_queue_event error index_request_terminal_failure "$request_id" "$handle" "$source_backend" "$active_backends" "failed"
+        else
+          unresolved=$((unresolved + 1))
+          remember_queue_retry "$request_id" "$QUEUE_ACK_RETRY_SECONDS"
+          log_queue_event error index_request_terminal_status_failed "$request_id" "$handle" "$source_backend" "$active_backends" "retrying"
+        fi
       fi
     fi
     if [ "$QUEUE_ONE_REQUEST_PER_PASS" = "1" ]; then
@@ -624,7 +708,12 @@ process_queue_once() {
   set_index_activity "" || true
 
   echo "cloud-queue-indexer: pass complete processed=$processed failed=$failed failed_acked=$failed_acked"
+  [ "$unresolved" -eq 0 ]
 }
+
+if [ "${CLOUD_INDEX_QUEUE_LIBRARY_ONLY:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 if [ "$QUEUE_LOOP" = "1" ]; then
   echo "cloud-queue-indexer: daemon mode enabled poll_interval=${QUEUE_POLL_INTERVAL_SECONDS}s"
