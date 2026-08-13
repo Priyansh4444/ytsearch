@@ -1,8 +1,10 @@
 # Typesense retirement ledger
 
-Typesense is no longer a source-code or production-target dependency. Its old
-comparison scripts and experiment reports remain only as reproducible evidence
-for the Raw relevance and resource claims.
+Typesense is no longer on the live read or write path. It remains a deprecated,
+stopped rollback and differential-testing artifact. Its source is retained on
+the `typesense-fly-selfhost-comparison` archive branch; its comparison scripts,
+compatibility notes, and experiment reports remain reproducible evidence for
+Raw relevance and resource claims. Deprecation does not authorize deletion.
 
 ## Known Fly resources
 
@@ -45,16 +47,17 @@ Machine or volume makes it fail closed.
    queue, and 30 KB browser-JavaScript gates.
 6. Stop the legacy indexer, API, and engine. Mark their Machines deprecated
    with `scripts/deprecate-typesense-fly.sh`.
-7. Observe Raw for a bounded rollback window, then destroy the four known
-   Machines, all seven verified legacy volumes, and the three legacy apps. Re-run
-   `fly apps list`, `fly machines list`, and `fly volumes list` to prove no
-   active Typesense resource remains.
+7. Keep the four known Machines stopped and deprecated and retain all seven
+   verified legacy volumes as the rollback/oracle snapshot. Re-run `fly apps
+   list`, `fly machines list`, and `fly volumes list` during cost reviews to
+   prove that nothing has restarted. Destruction requires a new, explicit user
+   decision and is not part of the Raw migration.
 
-The final destructive step is encoded in
-`scripts/destroy-deprecated-typesense-fly.sh`. It resolves every exact Machine,
-volume attachment, stopped state, deprecation marker, successor, complete app
-Machine set, and complete app volume set before deleting the first resource.
-Its verification-only mode has passed against the live Fly inventory.
+The historical cleanup mechanism remains archived in
+`scripts/destroy-deprecated-typesense-fly.sh`. Its default verification-only
+mode resolves every exact Machine and volume and remains useful for detecting
+inventory drift. Its destructive mode is dormant and must not be run without a
+new explicit decision that names the exact resources.
 
 Never delete the legacy queue before its request IDs have been copied and
 acknowledged by the Raw queue. A successful search-read cutover alone is not a
@@ -88,13 +91,13 @@ Machine, volume, or app has been destroyed. The two services that were still
 running (`8147deb94937e8` and `1855eddf654298`) are now stopped with autostart
 disabled; all four legacy Machines are stopped. Production frontend, search,
 creator-directory, and queue checks remained healthy after the stop, proving
-that no live request depends on Typesense. The retained four attached volumes
-total 31 GB and cost about $4.65/month at current Fly list pricing.
+that no live request depends on Typesense. The retained four attached and three
+historical volumes total 61 GB and cost $9.15/month at current Fly list pricing,
+excluding snapshots and stopped Machine root filesystems.
 
 The shared T3 browser now passes the production visual gate: the page reports
 24/7 availability, renders twelve result cards without an alert, supports every
 active sort, and returns 21 creator-scoped `blackhole` videos for Veritasium.
-The exact destruction set also passes its live verification-only gate. Actual
-destruction remains blocked only on the active 61-creator classified repair,
-its one-publication 2 GB memory gate, and the post-publication restart/search/
-load/browser checks.
+The exact retained set also passes its live verification-only gate. It remains
+deprecated and stopped after the repair and performance gates; those gates do
+not implicitly convert preservation into permission to destroy it.

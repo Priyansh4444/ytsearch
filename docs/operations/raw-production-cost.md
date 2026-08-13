@@ -1,6 +1,6 @@
 # Raw production cost and persistence decision
 
-Measured on 2026-08-11 in `sjc`. Prices are monthly estimates for a 30-day
+Measured on 2026-08-13 in `sjc`. Prices are monthly estimates for a 30-day
 month from [Fly.io resource pricing](https://fly.io/docs/about/pricing/); actual
 billing is prorated and egress remains usage-dependent.
 
@@ -8,40 +8,39 @@ billing is prorated and egress remains usage-dependent.
 
 | Resource | Allocation | Estimated monthly cost |
 | --- | ---: | ---: |
-| Raw reader/writer | `shared-cpu-2x`, 2 GB, always started | $11.83 |
-| Queue/profile API | `shared-cpu-1x`, 512 MB, always started | $3.32 |
-| Raw volume | 20 GB encrypted | $3.00 |
-| Queue API volume | 1 GB encrypted | $0.15 |
-| Indexer cache volume | 10 GB encrypted | $1.50 |
-| Stopped indexer rootfs ceiling | 10 GB | $1.50 |
-| **Fixed Raw-only total** | | **about $21.30/month** |
+| Raw reader/writer | `shared-cpu-2x`, 2 GB, always started | $13.58 |
+| Queue/profile API | `shared-cpu-1x`, 512 MB, always started | $3.81 |
+| All Raw and retained Typesense volumes | 102 GB encrypted | $15.30 |
+| Current volume snapshots | 108.61 GiB; first 10 GB free | about $7.89 |
+| Stopped Machine rootfs ceiling | at most 54 GB | at most $8.10 |
+| **Conservative fixed ceiling** | | **at most $48.68/month** |
 
-The fixed total is about **$0.71/day**. This is below both a $65/day ceiling and
-the stricter $65/month target used for this migration.
+The on-demand Raw indexer is `shared-cpu-2x`, 2 GB at $0.0189/hour and normally
+stops after queued work. Budgeting 100 hours adds $1.89. Reserving $8 for 400 GB
+of North American egress and $2 for snapshot growth produces a conservative
+**$60.57/month** total, leaving $4.43 below the hard $65/month ceiling. The
+Cloudflare Worker and Queue are outside this Fly subtotal, so that headroom
+must remain reserved if the ceiling covers both providers.
 
-The indexer normally starts only for queued work or scheduled repair. Its
-current `shared-cpu-4x`, 4 GB allocation is $0.0329/hour while started. Even if
-it ran continuously, the Raw-only fixed total would be about $43.46/month
-($1.45/day) before variable egress. After the corpus migration, resize it to
-`shared-cpu-2x`, 2 GB if the observed ingestion RSS remains below the rollback
-threshold.
-
-Destroying the complete verified legacy set removes 61 GB of old encrypted
-volumes, or another $9.15/month, in addition to any retired Machine rootfs
-charges. Those savings are not subtracted from the Raw-only total above because
-they are legacy cleanup rather than Raw capacity.
+The stopped 4 GB temporary repair Machine must run only for bounded migration
+work; continuous operation would add about $28.48/month. The stopped Typesense
+Machines and their 61 GB volume set are intentionally retained as deprecated
+rollback and differential-test evidence. Their $9.15/month volume cost is part
+of the ceiling above, not a pending deletion assumption.
 
 The previous `performance-2x`, 4 GB Raw reader alone cost about $64.39/month.
-Moving the measured workload to the shared 2 GB allocation removes about
-$52.56/month from the reader and brings the full fixed stack below the $65/month
-target with more than $40/month of headroom.
+Moving the workload to the shared 2 GB allocation keeps the complete retained
+topology below the $65/month target without destroying the Typesense trial.
 
 ## Resource and latency gates
 
-The full snapshot contains 8.19 million transcript documents. Before resizing,
-the clean Raw process settled near 351 MiB RSS and live bounded publication
-peaked near 736 MiB process RSS. The 2 GB allocation includes 512 MB swap as a
-last-resort recovery margin; normal operation must not depend on swap.
+The active generation contains 8.32 million transcript documents. On 2026-08-13
+the clean Raw process used about 275 MiB RSS, had a 365 MiB peak, and used no
+swap; live bounded publication has previously peaked near 736 MiB process RSS.
+The 2 GB allocation includes 512 MB swap as a last-resort recovery margin;
+normal operation must not depend on swap. Keep 2 GB until publication and load
+tests prove that 1 GB retains safe headroom. The 17 MiB API is a candidate for a
+separate 512-to-256 MiB load-gated reduction.
 
 A public 75-request, five-concurrent `blackhole` load check produced:
 

@@ -15,8 +15,10 @@ Invariants:
 - A candidate is activated only after checksums, counts, and `RawSearchEngine::open`
   succeed.
 - Idempotency keys make indexer retries safe.
-- Typesense is destroyed only after queue state, all active writes, search reads,
-  scheduler ownership, and recovery have moved to Raw and passed live gates.
+- Typesense stays stopped and deprecated after queue state, active writes,
+  search reads, scheduler ownership, and recovery move to Raw. Its source,
+  documentation, Machines, and volumes are preserved unless a later explicit
+  decision authorizes exact destruction targets.
 - The initial browser route remains below 30 KB gzip.
 
 Primary gate: an indexed test video and channel update become searchable after
@@ -30,8 +32,8 @@ disk growth, and no regression beyond the established production latency gate.
 Rollback: keep the current verified generation open until the candidate passes;
 on any build, integrity, memory, or freshness failure, retain that generation
 and leave the durable mutation log pending for retry. Keep Typesense resources
-stopped but recoverable until the Raw restart gate passes; destroy them only in
-the final irreversible stage.
+stopped and recoverable after the Raw restart gate as a rollback and relevance
+oracle; migration completion does not require an irreversible stage.
 
 ## Baseline on 2026-08-09
 
@@ -98,7 +100,8 @@ MiB compaction goal, so streaming external runs/delta segments remain required.
 
 The deployment interrupted one write for video `g20JZ2HNZaw`. That video must
 be replayed after the channel batch, followed by the final explicit publication,
-restart, and public contract/load gates before Typesense resources are destroyed.
+restart, and public contract/load gates before Typesense is considered fully
+deprecated. Its preserved resources remain stopped afterward.
 
 ### Streaming publication gate
 

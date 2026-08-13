@@ -44,6 +44,8 @@ Raw can replace Typesense as the canonical search index.
   - [x] Add exact negative phrases with grouped-search semantics.
   - [ ] Finish Unicode normalization and numerical-token typo rules.
 - [ ] Add safe phrase-aware, configurable multi-snippet highlights and match metadata.
+  - [x] Highlight complete token boundaries, prefer a hit's original exact
+    tokens over fuzzy alternatives, and regression-test the reported CSS query.
 - [x] Fail closed on every unknown filter, sort, facet, operator, and malformed value in the active application contract.
 - [ ] Add a versioned 300-query human-judged relevance oracle.
 - [x] Cover global and channel-specific `blackhole` searches for Veritasium and Vsauce.
@@ -103,7 +105,7 @@ Raw can replace Typesense as the canonical search index.
 - [x] Remove Typesense from the repository write/control path after the durable
   Raw writer, generation publication, and recovery gates passed locally.
 - [ ] Deploy that write/control path, copy and drain the durable queue, prove a
-  mutation across restart, then deprecate and destroy the exact legacy Fly
+  mutation across restart, then deprecate and preserve the exact legacy Fly
   resources in `docs/operations/typesense-retirement.md`.
   - [x] Deploy the mutable Raw engine on its encrypted 20 GB volume and the Raw
     queue API on its encrypted 1 GB volume.
@@ -124,9 +126,9 @@ Raw can replace Typesense as the canonical search index.
   - [x] Observe the current production visual browser gate: T3 rendered twelve
     Raw-ranked cards, every active sort, 24/7 availability, and the 21-video
     Veritasium `blackhole` scope without an alert.
-  - [ ] Finish the classified 61-creator repair and post-publication gates, then
-    destroy the four exact legacy Machines, all seven verified volumes, and the
-    three legacy apps.
+  - [ ] Finish the classified 61-creator repair and post-publication gates while
+    keeping the four exact legacy Machines stopped and all seven verified
+    volumes preserved. Any destruction requires a new explicit decision.
 
 ### Non-negotiable performance and resource gates
 
@@ -147,7 +149,7 @@ Raw can replace Typesense as the canonical search index.
 - [x] Experimental browser JavaScript remains at or below 30 KB gzip (24,340
   bytes for the initial route after the full-corpus deployment).
 - [x] Production browser JavaScript remains below 30 KB gzip after cutover and
-  the no-stale-search-cache fix (24,343 bytes for the initial route).
+  the no-stale-search-cache fix (24,492 bytes for the initial route).
 
 ### Documentation and evidence
 
@@ -159,6 +161,17 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Update this ledger in the same commit that completes each item.
 
 ## Regression Log
+
+- [x] A scoped long query paid global-corpus posting and position costs, while
+  an exact phrase outside the selected creator could suppress that creator's
+  prefix/typo fallback. The rarest posting is now filtered before later terms,
+  fuzzy combinations use the same bounded conjunction, and an adversarial
+  cross-creator test prevents the recall leak.
+- [x] Dynamic search JSON was edge-cacheable and a zone override retained it
+  for four hours, so a cache hit could display a previous request's 680 ms or
+  6,140 ms origin sample. API, Worker subrequest, CDN, browser, and frontend
+  persistent caches now fail closed with `no-store`; the UI separately reports
+  the current browser request duration and backend search duration.
 
 - [x] The Pacific-hours lifecycle policy stopped an active repair at midnight
   and intentionally made production search unavailable for half the day.

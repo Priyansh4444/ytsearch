@@ -112,13 +112,15 @@ Run a bounded concurrent search load while publishing and require zero errors.
 
 ## Retirement and rollback
 
-Only after every gate passes, stop the legacy writer/API/engine, mark the exact
-Machines with `scripts/deprecate-typesense-fly.sh`, observe a bounded rollback
-window, and destroy the resources listed in the retirement ledger.
+After every gate passes, stop the legacy writer/API/engine and mark the exact
+Machines with `scripts/deprecate-typesense-fly.sh`. Keep the source archive,
+documentation, stopped Machines, and verified volumes as deprecated rollback
+and differential-test evidence. Do not run the archived destructive cleanup
+without a new explicit user decision.
 
-Before destruction, rollback is a Worker configuration redeploy plus a restart
-of the retained legacy engine/API. After destruction, rollback is the previous
-verified Raw generation selected through the atomic manifest.
+Rollback to Typesense is a Worker configuration redeploy plus a restart of the
+retained legacy engine/API. Raw also retains its previous verified generation
+through the atomic manifest.
 
 ## Secret rules
 
