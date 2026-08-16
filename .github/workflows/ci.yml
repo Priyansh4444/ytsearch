@@ -29,10 +29,9 @@ jobs:
           bun-version: 1.3.14
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
-      - run: bun run check:all
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium
-      - run: bun run check:responsive
+      - run: bun run check:all
       - name: Validate Compose configuration
         env:
           TYPESENSE_SELFHOST_API_KEY: ci-placeholder
