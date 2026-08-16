@@ -441,3 +441,132 @@ implementation.
   invariants, tradeoffs, measurements, and rollback conditions.
 - [ ] Require optimized implementations to prove behavioral equivalence against
   the retained reference implementation before changing defaults.
+
+## Search Perceived-Speed Review (2026-08-16)
+
+The warm search engine is already fast enough that low-level Rust tuning is not
+the first user-visible priority. A live broad `rust` request took 7.70 seconds
+end to end and reported 7.56 seconds for its first Typesense request; the next
+five requests took 0.11–0.38 seconds end to end and 4–7 milliseconds in the
+engine. A direct Typesense health request also timed out at 10 seconds before
+the warm samples. Treat this as a verified backend-availability/tail symptom,
+not yet as a proven cold-start cause: this orb did not have `flyctl` available
+to correlate the event with Machine and indexer state.
+
+Historical public samples show the same boundary at lower magnitude: 7–20 ms
+backend work versus 253–780 ms public p95. Optimize click-to-visible latency,
+tail control, request count, payload, and rendering before micro-optimizing
+ranking code.
+
+### Perceived-speed service-level objectives
+
+- [ ] Measure and enforce warm click-to-first-visible-result p50 ≤ 200 ms, p95 ≤
+  500 ms, and p99 ≤ 1 second from representative client regions. Record DNS,
+  connection, Worker, API, backend, download, parse, and render spans.
+- [ ] Define a separate cold/recovery objective. Availability must not say
+  `ready` until a representative search succeeds, and a request accepted as
+  ready must either render results within 2 seconds or fail quickly with a
+  retryable `search_starting` response instead of hanging for up to 60 seconds.
+- [ ] Cap a normal first-page search at one backend result request on the
+  critical path. Measure exact-total work separately and cap all backend calls,
+  including counts and retries, at two unless the user explicitly expands a
+  video.
+- [ ] Add CI/scheduled warm and forced-cold probes. Keep the existing frontend
+  2.5-second budget as a coarse guard, but report p50/p95/p99 over repeated
+  runs and fail on readiness false positives, unstable counts, or HTTP errors.
+
+### P0: remove latency blind spots and unbounded tails
+
+- [ ] Correct search telemetry before changing behavior. The current
+  `backend_search_calls` and `backend_search_ms` exclude the distinct-video and
+  ungrouped-total queries, `result_processing_ms` starts after those queries,
+  and `time_to_first_result_ms` is only the first backend response—not browser
+  click-to-visible time. Include every call, count-query latency, queue time,
+  serialization/compression, total server duration, and a request/trace ID.
+- [ ] Add a public-search deadline substantially below the Typesense client's
+  shared 60-second administrative timeout. Use separate connect, per-call, and
+  total request budgets; cancel sibling count/page requests when the deadline
+  expires and return a stable retryable error.
+- [ ] Correlate slow probes with Typesense Machine state, CPU/RSS, indexer write
+  activity, Fly proxy events, and Worker availability logs. Verify whether the
+  7.56-second sample was startup, write pressure, health/readiness drift, or a
+  network/control-plane event before changing lifecycle policy.
+- [ ] Exercise the schedule in enforcement mode in an isolated environment.
+  The tracked production Worker remains in `observe`, while the Typesense Fly
+  config disables proxy autostart; prove prewarm, ready, stop deferral during
+  indexing, and recovery behavior before relying on the schedule for latency.
+- [ ] Remove unconditional exact totals from the first-result critical path.
+  The API currently fans out to grouped results, a `video_id` facet with up to
+  100,000 values, and an ungrouped moment-count search. Return useful cards and
+  pagination first; make exact totals optional, deferred, cached, or a separate
+  request while preserving an explicit exact-count path as the reference.
+- [ ] Bound sequential result filling. Normal search may issue up to 10 result
+  page requests and a video-scoped expansion up to 100. Stop from backend
+  exhaustion metadata rather than post-dedupe page length where possible, set
+  strict total hit/byte/call limits, and expose truncation instead of silently
+  spending the full request deadline.
+
+### P1: make repeated and first-visible searches feel instant
+
+- [ ] Reconcile search caching end to end. Source currently emits
+  `public, max-age=30, stale-while-revalidate=300`, but live Worker responses
+  returned `cache-control: no-store` and `cf-cache-status: DYNAMIC`. Determine
+  whether this is deployment drift or header replacement, then add an explicit
+  Cloudflare cache policy with normalized safe keys, short TTL/SWR, cache-status
+  telemetry, and bypasses for errors or non-GET requests.
+- [ ] Coalesce identical in-flight browser searches, not only completed
+  responses. The 900 ms speculative search and an explicit submit can currently
+  miss the completed-response cache and duplicate the same expensive request.
+  Keep abort semantics per consumer and cap the memory cache with an LRU.
+- [ ] Measure whether the 900 ms speculative request improves click-to-visible
+  latency enough to justify backend load. Prefer intent-aware prefetch, cancel
+  superseded requests, and never retry aborted requests.
+- [ ] Replace eager result-card YouTube iframes with thumbnail-first,
+  click-to-play players. Even lazy iframes add heavyweight third-party work near
+  the viewport. Preserve direct timestamp links and test keyboard activation,
+  mobile layout, privacy-enhanced embeds, and cumulative layout shift.
+- [ ] Remove duplicated search payload fields in a versioned response contract.
+  The same moments are serialized in top-level `hits` and `videos[].hits`, while
+  the frontend renders the grouped videos. Retain the old contract during
+  migration, compare gzip bytes/parse time, and only remove the duplicate after
+  confirming no operator or external consumer needs it.
+- [ ] Render the first useful cards independently of exact totals. Prefer a
+  small initial response plus deferred metadata over streaming one monolithic
+  JSON shape unless browser measurements prove streaming is simpler and faster.
+- [ ] Show honest user timing. Replace the UI's backend-only “ms to first
+  result” label with measured click-to-visible latency or label backend time
+  explicitly; capture the browser measurement in analytics without logging
+  query text.
+
+### P2: engine and architecture experiments
+
+- [ ] Change `collect_visible_videos` to incrementally deduplicate nearby hits
+  and maintain video groups instead of rebuilding all accumulated vectors after
+  every backend page. Benchmark only after page-call reduction, because network
+  tail latency currently dominates this CPU work.
+- [ ] Add a backend operation that returns result groups plus only the metadata
+  needed for pagination in one typed response. Keep the existing
+  `TranscriptSearchBackend` methods as a compatibility/reference adapter until
+  Typesense and Raw pass identical contract fixtures.
+- [ ] Restore the experimental Raw endpoint's DNS/deployment and run shadow
+  traffic against a matched corpus. Raw has strong direct-engine results, but
+  do not promote it until relevance judgments, concurrent p99, index-update
+  freshness, distribution, and cold-boot behavior pass; its recorded full-index
+  cold validation took about three minutes.
+- [ ] Keep Typesense as the rollback backend while evaluating Raw. Promotion
+  requires the planned human-judged query suite, exact/typo/filtered-query
+  parity, operational recovery drills, and an alternating end-to-end latency
+  comparison—not only direct-engine microbenchmarks.
+
+### Recommended execution order
+
+- [ ] Phase 1: fix spans and repeated warm/cold probes; diagnose the live
+  multi-second backend tail and readiness lifecycle.
+- [ ] Phase 2: add deadlines, remove exact counts from the critical path, and
+  cap backend calls. Require result-order fixtures and rollback switches.
+- [ ] Phase 3: enable measured edge caching, coalesce browser requests, and ship
+  thumbnail-first result cards.
+- [ ] Phase 4: shrink/version the response and evaluate first-card/deferred-total
+  delivery using browser click-to-visible measurements.
+- [ ] Phase 5: optimize incremental Rust grouping and run a matched Typesense
+  versus Raw shadow trial only if the earlier phases still miss the SLOs.
