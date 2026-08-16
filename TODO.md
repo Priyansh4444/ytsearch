@@ -289,3 +289,155 @@ Raw can replace Typesense as the canonical search index.
 - [x] Before replacing queue daemon, confirm existing `ytsearch-indexer-staging` queue daemon state and logs.
 - [x] After replacing queue daemon, confirm only one persistent daemon is processing the JSONL queue. Existing daemon was left running; no replacement daemon started.
 - [x] Record final machine state, frontend URLs, and indexing status.
+
+## Open-source Audit And Rust Optimization Backlog (2026-08-16)
+
+The tracked-file audit found no committed credentials, private keys, or immediate
+open-source blocker. Preserve useful historical implementations and experiment
+results, but clearly separate them from active production configuration.
+
+### Completed repository and CI preparation
+
+- [x] Add executable Amp orb setup and resume lifecycle scripts.
+- [x] Declare the Effect 4 dependency required by the engagement-enrichment
+  script and restore clean TypeScript checks.
+- [x] Run frontend tooling and Playwright through Bun without requiring Node.
+- [x] Install Chromium before the complete GitHub Actions check.
+- [x] Validate shell scripts with the interpreter declared by each shebang.
+- [x] Stop setup from creating an empty `.env` that overrides test fixtures.
+- [x] Update `actions/checkout` to v5 and verify the GitHub Actions PR job passes.
+
+### P0: open-source and security risks
+
+- [ ] Protect public index requests with rate limits, bounded note/request sizes,
+  a bounded queue, and abuse controls. The current JSONL implementation also
+  rereads the complete queue during enqueue (`crates/youtube_api/src/main.rs`).
+- [ ] Stop supplying the public API container with the Typesense admin key;
+  retain admin credentials only in trusted initialization/indexing services
+  (`compose.yaml`).
+- [ ] Exclude cookie files, private-key formats, and credential-like files from
+  every Docker build context (`.dockerignore`).
+
+### P1: security, deployment, and release hardening
+
+- [ ] Revalidate every redirect destination in the profile-image proxy before
+  fetching it to prevent redirect-based SSRF.
+- [ ] Validate or escape identifiers interpolated into destructive Typesense
+  filter expressions.
+- [ ] Run the primary API/indexer container as an unprivileged user.
+- [ ] Pin `yt-dlp` and production base images to reviewed versions/digests.
+- [ ] Change cloud indexing defaults to the documented conservative
+  single-writer concurrency (`JOBS=1`, `TYPESENSE_JOBS=1`).
+- [ ] Replace or formally justify `wrangler deploy --keep-vars`; deployments
+  should not silently preserve stale remote configuration.
+- [ ] Finish and publish the privacy notice, including retention, deletion,
+  contact, telemetry, and abuse-control details.
+- [ ] Add dependency vulnerability, license, and tracked-secret scanning to CI.
+- [ ] Build and smoke-test production Docker images in CI.
+- [ ] Pin third-party GitHub Actions to reviewed immutable SHAs where practical.
+- [ ] Add reviewed CSP, content-type, frame, permissions, and referrer headers
+  without breaking YouTube embeds or PostHog.
+
+### P2: repository hygiene and portability
+
+- [ ] Move machine IDs and environment-specific production topology out of
+  tracked Wrangler configuration while preserving a sanitized deployment example.
+- [ ] Move retired Fly, Wrangler, Raw, and semantic configurations under an
+  explicitly archived experiment hierarchy rather than deleting them.
+- [ ] Move exact volume IDs and detailed incident/control-plane ledgers to a
+  private runbook while retaining reusable lessons in public historical docs.
+- [ ] Decide and document whether the creator/indexing inventory is intentionally public.
+- [ ] Regenerate, isolate, or document ownership of the large generated
+  `worker-configuration.d.ts` artifact.
+- [ ] Correct the stale `vite-template-solid` root identity in `bun.lock`.
+- [ ] Add third-party license attribution appropriate for distributed artifacts.
+- [ ] Make the canonical frontend origin configurable instead of hardcoding it
+  in the Rust API.
+- [ ] Centralize Bun and Rust version declarations so setup, CI, and local
+  development consume one source of truth.
+- [ ] Split CI into independently cacheable Rust, frontend, browser, security,
+  and production-image jobs after measuring whether the added complexity
+  improves feedback time.
+
+### High-confidence Rust optimization candidates
+
+Every optimization must begin with a captured baseline, preserve result/order
+fixtures, state a rollback condition, and compare against the retained reference
+implementation.
+
+- [ ] Reduce API search fan-out. Avoid unconditional grouped-result,
+  distinct-video-count, and ungrouped-total requests when exact totals can be
+  deferred, made optional, or derived without changing pagination semantics
+  (`crates/youtube_api/src/main.rs`).
+- [ ] Incrementally maintain keyed video groups as backend pages arrive instead
+  of repeatedly deduplicating and regrouping the accumulated hit vector.
+- [ ] Normalize and cache relevance-scoring title/text/highlight inputs once per
+  hit instead of repeatedly lowercasing and cloning them.
+- [ ] Introduce an `IndexQueueStore` boundary with an append-only journal,
+  compacted snapshot, and explicit locking. Retain the current JSONL adapter for
+  migration, recovery testing, and historical comparison.
+- [ ] Replace per-video remote existing-count checks during indexing with bulk
+  or paginated membership queries when channel cardinality is affordable;
+  retain the bounded per-video path as a fallback.
+- [ ] Stream Typesense import validation and retain aggregate counters plus
+  failures instead of concatenating every successful response into one string.
+- [ ] Benchmark Typesense import batch sizes by bytes and document count instead
+  of relying permanently on a fixed batch of 500.
+- [ ] Push indexed-video pagination into Typesense or cache a stable sorted
+  snapshot instead of fetching and sorting every ID for every page.
+- [ ] Add a bounded top-K or pre-sorted catalog path for Raw empty/low-signal
+  searches instead of materializing and sorting every matching video.
+- [ ] Avoid complete zstd block decompression and generic JSON `Value` parsing
+  when Raw search only needs projected metadata and snippets; evaluate a compact
+  projection sidecar or typed borrowed deserialization.
+- [ ] Move synchronous transcript-cache filesystem work off async runtime
+  workers with `tokio::fs` or `spawn_blocking`, atomic unique temporary files,
+  and bounded child stdout/stderr capture.
+- [ ] Add a bounded transcription chunk pipeline and evaluate direct audio
+  streaming between `yt-dlp`, FFmpeg, and Voxtype. Retain disk-chunk mode as the
+  recoverable/debuggable adapter.
+- [ ] Share repeated creator/video/title metadata internally until backend
+  serialization rather than cloning it into every transcript chunk; preserve
+  the public `TranscriptChunk` contract.
+
+### Larger and experimental Rust optimizations
+
+- [ ] Build Raw indexes from bounded sorted disk runs and merge them to reduce
+  the current multi-gigabyte peak RSS. Keep the in-memory schema-v6 builder as
+  the small-corpus reference implementation.
+- [ ] Replace the experimental linear request cache with a hash/LRU structure
+  only if cache-hit and mutex-contention measurements justify it.
+- [ ] Use bounded top-K heaps in exact semantic search before introducing ANN.
+- [ ] Keep exact semantic search as the correctness/reference backend and place
+  any ANN implementation behind the existing vector-store abstraction.
+- [ ] Feature-gate Raw experiments, semantic examples, and serialization
+  benchmarks from default build paths after recording `cargo build --timings`
+  evidence that the feature matrix provides a meaningful win.
+- [ ] Introduce shared query/transport DTO boundaries only where measurements
+  show repeated Typesense-to-domain conversion and cloning costs.
+
+### Measurement plan for Rust optimization work
+
+- [ ] Extend API measurements with allocations, CPU/query, backend call count,
+  and p50/p95/p99 `result_processing_ms` while preserving result-order fixtures.
+- [ ] Extend indexing phase reports with peak RSS, bytes read/written, backend
+  request count, successful videos/minute, and cost per 1,000 videos.
+- [ ] Extend Raw build/search benchmarks with block-decompression time, cache
+  misses, disk I/O, peak RSS, index bytes, and cold/warm p95 latency.
+- [ ] Compare transcription changes on fixed cached inputs for wall time, CPU,
+  peak RSS, temporary bytes, transcript equivalence, and failure recovery.
+- [ ] Record clean and incremental compile time plus binary size before adding
+  shared DTO crates or feature gates.
+
+### History-preserving modularity rules
+
+- [ ] Add an archive README for every retired implementation with its status,
+  replacement, last-known result, reproduction command, and reason it is not active.
+- [ ] Keep reference implementations behind traits, adapters, or explicit
+  features instead of mixing historical branches into active production paths.
+- [ ] Preserve golden fixtures, benchmark corpora, and before/after reports so
+  future experiments can reproduce both successful and rejected approaches.
+- [ ] Record major architecture/optimization decisions as lightweight ADRs with
+  invariants, tradeoffs, measurements, and rollback conditions.
+- [ ] Require optimized implementations to prove behavioral equivalence against
+  the retained reference implementation before changing defaults.
