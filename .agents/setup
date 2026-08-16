@@ -10,7 +10,7 @@ cd "$repo_root"
 
 step "Configuring login-shell tool paths"
 profile_marker="# ytsearch orb toolchains"
-tool_path='export PATH="$HOME/.local/node-v22.12.0-linux-x64/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"'
+tool_path='export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"'
 if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
   cat >> "$HOME/.bash_profile" <<EOF
 
@@ -18,12 +18,12 @@ $profile_marker
 $tool_path
 EOF
 elif ! grep -Fqx "$tool_path" "$HOME/.bash_profile"; then
-  sed -i '/^# ytsearch orb toolchains$/{n;s|^export PATH=.*$|export PATH="$HOME/.local/node-v22.12.0-linux-x64/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"|;}' "$HOME/.bash_profile"
+  sed -i '/^# ytsearch orb toolchains$/{n;s|^export PATH=.*$|export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"|;}' "$HOME/.bash_profile"
 fi
-export PATH="$HOME/.local/node-v22.12.0-linux-x64/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
 step "Installing system prerequisites"
-packages=(ca-certificates curl build-essential pkg-config cmake ffmpeg python3-pip unzip xz-utils)
+packages=(ca-certificates curl build-essential pkg-config cmake ffmpeg python3-pip unzip)
 missing_packages=()
 for package in "${packages[@]}"; do
   if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq "install ok installed"; then
@@ -33,14 +33,6 @@ done
 if ((${#missing_packages[@]})); then
   sudo apt-get update
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing_packages[@]}"
-fi
-
-step "Installing Node.js 22.12.0"
-node_dir="$HOME/.local/node-v22.12.0-linux-x64"
-if [[ ! -x "$node_dir/bin/node" ]]; then
-  mkdir -p "$HOME/.local"
-  curl -fsSL https://nodejs.org/dist/v22.12.0/node-v22.12.0-linux-x64.tar.xz |
-    tar -xJ -C "$HOME/.local"
 fi
 
 step "Installing Bun 1.3.14"
