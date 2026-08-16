@@ -570,3 +570,130 @@ ranking code.
   delivery using browser click-to-visible measurements.
 - [ ] Phase 5: optimize incremental Rust grouping and run a matched Typesense
   versus Raw shadow trial only if the earlier phases still miss the SLOs.
+
+### Query-shape-specific execution plans
+
+Do not force every query through one generic expensive path. Normalize each
+request once into a semantic intent, let each backend choose its physical plan,
+and keep result/count/projection budgets explicit.
+
+- [ ] **Global rare/exact terms:** intersect the shortest posting lists first,
+  preserve exact/title/proximity signals, and stop ranking after a bounded top-K
+  plus one pagination sentinel. Do not compute exact corpus-wide totals on the
+  result critical path.
+- [ ] **Global broad/common terms:** avoid materializing and sorting every match.
+  Maintain a bounded per-video top-K while scanning candidates; offer deferred
+  exact counts because broad terms are where count and grouping work is most
+  expensive.
+- [ ] **Creator-filtered terms:** push creator scope into candidate generation,
+  typo thresholds, grouping, and counts—not only the final formatting loop. For
+  Raw, add a compact creator-to-video/document set and intersect it with term
+  postings before fuzzy expansion. Benchmark sparse and prolific creators.
+- [ ] **Single-video moment expansion:** resolve the video to its document range
+  first and search only that range. Return a continuation/truncation contract;
+  replace the API's possible 100 sequential backend pages with one bounded
+  video-local operation.
+- [ ] **Low-signal/wildcard/browse:** use precomputed video ordinals for newest,
+  oldest, and engagement sorts globally and per creator. Raw currently scans
+  and sorts every eligible video/document for `*`; serve page slices directly
+  and compute counts from catalog metadata.
+- [ ] **Explicit date/engagement sorts:** count matching candidates linearly only
+  when requested, but select the page with a bounded heap or pre-sorted ordinal
+  intersection rather than a full `O(m log m)` sort. Verify deterministic ID
+  tie-breaks across backends.
+- [ ] **Typo, prefix, split-token, and token-dropping queries:** retain the exact
+  first ladder and strict work caps. Make result thresholds filter-aware before
+  decoding broad alternatives, cache bounded lexicon expansions by normalized
+  token, and expose which fallback stage won for quality/latency analysis.
+- [ ] **Quoted phrases and exclusions:** intersect exact terms and scope filters
+  before positional checks or document hydration. Use adaptive sorted-set or
+  bitmap operations only after corpus measurements; large exclusion vectors
+  must not cause repeated binary searches across every candidate.
+- [ ] **Semantic/hybrid:** run bounded lexical and semantic candidate retrieval
+  concurrently and fuse only their top-K candidates. The API currently finishes
+  semantic search and response processing before its lexical HTTP fallback;
+  preserve lexical-only fallback, but remove this serial latency when semantic
+  mode is promoted.
+- [ ] **No-result and adversarial queries:** cap query bytes, normalized terms,
+  typo alternatives, posting bytes decoded, candidates visited, groups retained,
+  hydrated blocks, backend calls, response bytes, and wall time. Return stable
+  empty/truncated/error semantics instead of allowing one dimension to consume
+  the entire budget.
+
+### Composable search contract and hot-path structure
+
+- [ ] Introduce a validated backend-neutral `SearchIntent` with small enums for
+  `Scope` (`Global`, `Creator`, `Video`), `Retrieval` (`Browse`, `Lexical`,
+  `Hybrid`), `Ordering`, `Window`, `CountMode`, and `Projection`. Keep physical
+  Typesense parameters and Raw posting strategies behind backend adapters.
+- [ ] Replace the shared trait's `serde_json::Value` result with a typed
+  `SearchPage` containing groups/hits, an exhaustion or continuation signal,
+  optional exact/estimated totals, and backend work statistics. Migrate through
+  the current JSON adapter so Typesense compatibility remains reviewable and
+  reversible.
+- [ ] Separate the pipeline into clear ownership boundaries: parse/normalize,
+  plan, candidate retrieval, scope intersection, rank/group, hydrate/highlight,
+  and transport serialization. Keep hot loops concrete and monomorphic; do not
+  introduce a trait or allocation for every stage merely for architectural
+  symmetry.
+- [ ] Pass a `SearchBudget` through physical execution with deadline and work
+  counters. Every backend must report calls, candidates, posting bytes, fuzzy
+  expansions, groups, hydrated blocks, cache status, and truncation against the
+  same logical budget names.
+- [ ] Compile filters into typed validated values once. Remove string formatting
+  and reparsing between API, trait, Typesense, and Raw; canonical typed requests
+  also produce stable cache keys without parameter-order fragmentation.
+- [ ] Make count and projection independent of retrieval. A page request should
+  be able to ask for `CountMode::None` and compact cards, while an operator or
+  deferred UI request can ask for exact totals without rerunning highlighting
+  and full document hydration.
+- [ ] Give caches a corpus/index generation in their key so updates invalidate
+  deterministically. Separate result-page, total-count, lexicon-expansion, and
+  decompressed-block caches because their cardinality, TTL, and memory costs are
+  different; coalesce in-flight misses and prevent cache stampedes.
+- [ ] Preserve one obvious reference path per behavior. Optimized Raw plans must
+  compare against the exact implementation; Typesense parameter generation must
+  remain fixture-tested; compatibility adapters should be deleted only after
+  both implementations pass the typed contract and rollback window.
+
+### Raw physical-index opportunities by selectivity
+
+- [ ] Add creator/video ordinal indexes so filtering occurs before scoring and
+  fuzzy fallback. Prefer sorted compact integer sets initially; compare Roaring
+  bitmaps only for measured high-cardinality intersections.
+- [ ] Store global and per-creator video order arrays for publication and
+  engagement fields. Browse queries can then paginate in `O(page size)` after
+  scope resolution instead of sorting the complete catalog.
+- [ ] Replace full candidate sorts with deterministic bounded top-K heaps for
+  relevance and explicit sorts, while a separate optional counter tracks exact
+  cardinality. Compare output byte-for-byte with the retained full-sort path.
+- [ ] Add posting skip/block maxima only after candidate-visit telemetry shows
+  broad lexical scans dominate. Use exact dynamic pruning (for example a
+  block-max/WAND-style plan), retaining exhaustive scoring as the oracle.
+- [ ] Hydrate only winning groups. Ranking should use compact projected metadata
+  and document IDs; zstd block decode, generic JSON parse, snippet construction,
+  and repeated creator/video strings belong after top-K selection.
+- [ ] Reuse decompressed immutable blocks across requests with a byte-bounded
+  sharded cache if block-miss telemetry justifies it. The current per-request
+  cache avoids duplicate decode within one search but discards hot blocks at
+  response completion.
+- [ ] Replace the experimental service's linear 128-entry response-cache lookup
+  with a byte-bounded hash/LRU plus single-flight only after measuring lock wait
+  and cache hit distribution. Do not optimize this ahead of uncached execution.
+
+### Review and benchmark matrix
+
+- [ ] Build a pairwise contract matrix across scope (global/creator/video),
+  selectivity (none/rare/common/wildcard), matching (exact/prefix/typo/split/
+  phrase/exclusion), ordering, first/deep page, and count mode. Include filter
+  non-leakage, stable tie-breaks, total semantics, and continuation behavior.
+- [ ] Benchmark every representative shape cold, warm, cache-hit, cache-miss,
+  and under 1/8/32-way concurrency. Report p50/p95/p99/max, CPU, allocations,
+  candidates/posting bytes, hydrated blocks, response bytes, and backend calls.
+- [ ] Freeze matched-corpus Typesense/Raw golden outputs for exact, low-signal,
+  stopword, typo, filtered, phrase, and sorted cases. Separate permitted ranking
+  differences from invariant failures; require human judgments for promotions.
+- [ ] Keep performance patches small and single-purpose: telemetry, then typed
+  intent/adapter, then one query plan at a time. Every PR must state its affected
+  query shapes, before/after distribution, relevance evidence, memory/cost
+  impact, fallback flag, and rollback threshold.
