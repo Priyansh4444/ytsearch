@@ -67,9 +67,4 @@ bun install --frozen-lockfile
 step "Installing Chromium for Playwright checks"
 bunx playwright install --with-deps chromium
 
-step "Creating the local environment file"
-if [[ ! -f .env ]]; then
-  cp -- .env.example .env
-fi
-
 step "Orb setup complete"

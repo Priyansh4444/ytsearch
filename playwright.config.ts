@@ -6,7 +6,7 @@ export default defineConfig({
   retries: 1,
   reporter: "line",
   webServer: {
-    command: "bun run dev --host 127.0.0.1",
+    command: "./node_modules/.bin/vite --host 127.0.0.1",
     url: "http://127.0.0.1:3000",
     reuseExistingServer: true,
     env: { VITE_SEMANTIC_SEARCH_ENABLED: "true" },
