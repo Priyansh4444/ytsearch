@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+step() {
+  printf '\n==> %s\n' "$1"
+}
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+step "Configuring login-shell tool paths"
+profile_marker="# ytsearch orb toolchains"
+tool_path='export PATH="$HOME/.local/node-v22.12.0-linux-x64/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"'
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >> "$HOME/.bash_profile" <<EOF
+
+$profile_marker
+$tool_path
+EOF
+elif ! grep -Fqx "$tool_path" "$HOME/.bash_profile"; then
+  sed -i '/^# ytsearch orb toolchains$/{n;s|^export PATH=.*$|export PATH="$HOME/.local/node-v22.12.0-linux-x64/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"|;}' "$HOME/.bash_profile"
+fi
+export PATH="$HOME/.local/node-v22.12.0-linux-x64/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+
+step "Installing system prerequisites"
+packages=(ca-certificates curl build-essential pkg-config cmake ffmpeg python3-pip unzip xz-utils)
+missing_packages=()
+for package in "${packages[@]}"; do
+  if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq "install ok installed"; then
+    missing_packages+=("$package")
+  fi
+done
+if ((${#missing_packages[@]})); then
+  sudo apt-get update
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing_packages[@]}"
+fi
+
+step "Installing Node.js 22.12.0"
+node_dir="$HOME/.local/node-v22.12.0-linux-x64"
+if [[ ! -x "$node_dir/bin/node" ]]; then
+  mkdir -p "$HOME/.local"
+  curl -fsSL https://nodejs.org/dist/v22.12.0/node-v22.12.0-linux-x64.tar.xz |
+    tar -xJ -C "$HOME/.local"
+fi
+
+step "Installing Bun 1.3.14"
+if [[ "$(bun --version 2>/dev/null || true)" != "1.3.14" ]]; then
+  curl -fsSL https://bun.sh/install | bash -s -- bun-v1.3.14
+fi
+
+step "Installing the stable Rust toolchain"
+if ! command -v rustup >/dev/null 2>&1; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+    sh -s -- -y --profile minimal --default-toolchain none
+fi
+rustup toolchain install stable --profile minimal --component rustfmt,clippy
+rustup default stable
+
+step "Installing yt-dlp"
+if ! command -v yt-dlp >/dev/null 2>&1; then
+  /usr/bin/python3 -m pip install --user --break-system-packages 'yt-dlp[default]'
+fi
+
+step "Installing locked JavaScript dependencies"
+bun install --frozen-lockfile
+
+step "Installing Chromium for Playwright checks"
+bunx playwright install --with-deps chromium
+
+step "Creating the local environment file"
+if [[ ! -f .env ]]; then
+  cp -- .env.example .env
+fi
+
+step "Orb setup complete"
