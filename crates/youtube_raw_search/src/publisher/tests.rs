@@ -3,6 +3,10 @@ use crate::build_index;
 use flate2::{Compression, write::GzEncoder};
 use serde::Serialize;
 use serde_json::json;
+use std::{
+    fs::OpenOptions,
+    io::{Read, Seek, SeekFrom},
+};
 use tempfile::tempdir;
 use youtube_index_store::VideoReplacement;
 use youtube_ingest::TranscriptChunk;
@@ -159,6 +163,36 @@ fn failed_publication_keeps_the_previous_manifest_and_durable_wal() {
         store.operation("delete-old").unwrap().state,
         youtube_index_store::IndexOperationState::Durable
     );
+}
+
+#[test]
+fn restart_open_fully_revalidates_a_published_generation() {
+    let (_directory, publisher, store) = fixture();
+    store.delete_video("video-delete", "delete-video").unwrap();
+    let published = publisher.publish(&store).unwrap().unwrap();
+    let generation_path = published.path.clone();
+    drop(published);
+
+    let mut postings = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(generation_path.join("postings.bin"))
+        .expect("postings");
+    postings.seek(SeekFrom::End(-1)).expect("seek posting");
+    let mut byte = [0_u8; 1];
+    postings.read_exact(&mut byte).expect("read posting");
+    byte[0] ^= 0x01;
+    postings
+        .seek(SeekFrom::End(-1))
+        .expect("seek posting again");
+    postings.write_all(&byte).expect("corrupt posting");
+    postings.flush().expect("flush corruption");
+
+    let active_path = publisher.active_index_path().expect("active path");
+    assert!(matches!(
+        RawSearchEngine::open(&active_path),
+        Err(crate::Error::Corrupt(_))
+    ));
 }
 
 #[test]

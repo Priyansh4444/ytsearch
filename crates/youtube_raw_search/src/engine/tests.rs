@@ -1627,6 +1627,72 @@ fn typo_distance_uses_typesense_length_gates() {
 }
 
 #[test]
+fn newly_built_and_fully_verified_opens_have_response_parity() {
+    let (root, verified) = test_engine();
+    let newly_built =
+        RawSearchEngine::open_newly_built(&root.path().join("index")).expect("new build open");
+
+    for query in ["memory mapped", "bun", "relat", "*"] {
+        assert_eq!(
+            newly_built
+                .search(&grouped_query(query))
+                .expect("new build search"),
+            verified
+                .search(&grouped_query(query))
+                .expect("verified search"),
+            "query={query}"
+        );
+    }
+    assert_eq!(newly_built.document_count(), verified.document_count());
+    assert_eq!(newly_built.video_count(), verified.video_count());
+    assert_eq!(newly_built.term_count(), verified.term_count());
+    assert_eq!(newly_built.index_size(), verified.index_size());
+}
+
+#[test]
+fn newly_built_open_only_accepts_the_checksumming_builder_schema() {
+    let (root, engine) = test_engine();
+    drop(engine);
+    let manifest_path = root.path().join("index").join(MANIFEST_FILE);
+    let mut manifest: Value =
+        serde_json::from_reader(File::open(&manifest_path).expect("manifest"))
+            .expect("manifest JSON");
+    manifest["schema_version"] = json!(5);
+    serde_json::to_writer(
+        File::create(&manifest_path).expect("rewrite manifest"),
+        &manifest,
+    )
+    .expect("write manifest");
+
+    assert!(matches!(
+        RawSearchEngine::open_newly_built(&root.path().join("index")),
+        Err(Error::Corrupt(message)) if message.contains("newly built index")
+    ));
+}
+
+#[test]
+fn newly_built_open_still_rejects_candidate_size_corruption() {
+    let (root, engine) = test_engine();
+    drop(engine);
+    let postings_path = root.path().join("index").join(POSTINGS_FILE);
+    let truncated_length = fs::metadata(&postings_path)
+        .expect("postings metadata")
+        .len()
+        - 1;
+    OpenOptions::new()
+        .write(true)
+        .open(postings_path)
+        .expect("postings")
+        .set_len(truncated_length)
+        .expect("truncate postings");
+
+    assert!(matches!(
+        RawSearchEngine::open_newly_built(&root.path().join("index")),
+        Err(Error::Corrupt(message)) if message.contains("postings.bin")
+    ));
+}
+
+#[test]
 fn corrupt_file_magic_is_rejected_before_search() {
     let (root, engine) = test_engine();
     drop(engine);
