@@ -3,9 +3,54 @@ use std::{
     io::{self, BufWriter, Read, Seek, SeekFrom, Write},
     path::Path,
 };
+use tokio::sync::oneshot;
 
 const DEFAULT_RECLAIM_BYTES: u64 = 8 * 1024 * 1024;
 const SEQUENTIAL_RECLAIM_BYTES: u64 = 8 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const BACKGROUND_CPU_NICE: libc::c_int = 10;
+
+/// Runs full-corpus work on a disposable OS thread. On Linux the thread gets a
+/// lower CPU priority before `work` starts, so publication cannot consume an
+/// equal scheduler share with latency-sensitive query threads. A dedicated
+/// thread is required: an unprivileged process can increase niceness but
+/// generally cannot restore it before Tokio reuses a blocking-pool thread.
+pub(crate) async fn run_background_work<T, F>(name: &str, work: F) -> io::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (sender, receiver) = oneshot::channel();
+    std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn(move || {
+            lower_current_thread_cpu_priority();
+            let _ = sender.send(work());
+        })?;
+    receiver.await.map_err(|_| {
+        io::Error::other(format!(
+            "background thread {name:?} terminated without a result"
+        ))
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn lower_current_thread_cpu_priority() {
+    // SAFETY: setpriority only consumes integer arguments. On Linux, who=0
+    // targets the calling task/thread, which is disposable and never reused by
+    // the query executor.
+    let result = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, BACKGROUND_CPU_NICE) };
+    if result != 0 {
+        tracing::warn!(
+            error = %io::Error::last_os_error(),
+            nice = BACKGROUND_CPU_NICE,
+            "failed to lower background CPU priority"
+        );
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn lower_current_thread_cpu_priority() {}
 
 /// Writes build-only files through a bounded dirty-page window, then asks the
 /// kernel to reclaim those pages. Immutable generations are opened with mmap,
@@ -200,6 +245,22 @@ fn linux_ioprio_set(priority: i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn background_work_uses_a_disposable_named_thread() {
+        let caller = std::thread::current().id();
+        let (worker, name) = run_background_work("raw-publisher-test", move || {
+            (
+                std::thread::current().id(),
+                std::thread::current().name().map(str::to_owned),
+            )
+        })
+        .await
+        .unwrap();
+
+        assert_ne!(worker, caller);
+        assert_eq!(name.as_deref(), Some("raw-publisher-test"));
+    }
 
     #[test]
     fn cold_writer_preserves_write_and_seek_contract() {

@@ -1,5 +1,7 @@
 use crate::{
-    MutationStore, Publisher, ReloadableEngine, cache_io::BackgroundIoGuard, channel_ids_equal,
+    MutationStore, Publisher, ReloadableEngine,
+    cache_io::{BackgroundIoGuard, run_background_work},
+    channel_ids_equal,
 };
 use axum::{
     Json, Router,
@@ -128,7 +130,7 @@ impl AdminState {
         loop {
             let publisher = Arc::clone(&self.publisher);
             let store = Arc::clone(&self.store);
-            let result = tokio::task::spawn_blocking(move || {
+            let result = run_background_work("raw-index-publisher", move || {
                 let _background_io = BackgroundIoGuard::enter();
                 let result = publisher.publish(&store);
                 release_builder_heap();
