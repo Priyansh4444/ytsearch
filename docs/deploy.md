@@ -90,12 +90,18 @@ Pacific-window policy.
 ## Cutover gates
 
 ```bash
-scripts/check-frontend-backends.sh
-scripts/check-production-search-contract.sh
-scripts/check-staging-machines.sh
-scripts/check-queue-indexers.sh
-scripts/check-raw-search-engine.sh
-bun run perf:bundle
+scripts/verify-search-release.sh
+```
+
+This command is non-mutating. The full-corpus publication isolation benchmark
+remains an explicit operator action because it starts a pending generation:
+
+```bash
+ALLOW_PUBLISH_BENCHMARK=1 \
+SEARCH_URL="$RAW_SEARCH_URL" \
+SEARCH_API_KEY="$RAW_SEARCH_API_KEY" \
+RAW_ADMIN_API_KEY="$RAW_SEARCH_ADMIN_API_KEY" \
+scripts/benchmark-publication-isolation.sh
 ```
 
 Also verify in a clean browser:

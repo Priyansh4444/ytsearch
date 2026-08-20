@@ -77,6 +77,17 @@ Raw can replace Typesense as the canonical search index.
     the filtered base plus replacements directly into the builder.
   - [x] Replace the retained in-memory postings builder with lexicographically
     ordered, recursively bounded external runs and stream document metadata.
+- [ ] Move full-generation construction off the always-on reader.
+  - [x] Stop launching an implicit full-corpus publication during reader startup;
+    publication now requires an explicit authenticated request.
+  - [x] Pin mutation snapshots in an explicit SQLite read transaction and export
+    an immutable, checksummed, read-only backup through one captured sequence.
+  - [ ] Build and verify the generation on the existing on-demand SJC indexer,
+    then stream the nine allowlisted files back with corpus/schema/size/hash gates.
+  - [ ] Atomically activate the transferred generation, mark only the captured
+    sequence published, and leave later mutations durable for the next batch.
+  - [ ] Fail closed on local reader-side builds in production after the remote
+    builder passes crash, disk-full, upload-resume, and live latency gates.
 - [ ] Upload checksummed versioned artifacts to private R2 once R2 is enabled.
 - [x] Bootstrap Raw from the final matched snapshot and remove dual-writing from
   the repository. The deployed legacy queue remains a cutover task below.
@@ -149,6 +160,11 @@ Raw can replace Typesense as the canonical search index.
 - [x] Complete-position artifact growth is measured and documented.
 - [x] Benchmarks name corpus, hardware, build mode, concurrency, and cache state.
 - [x] Every optimization has a correctness invariant and rollback condition.
+- [ ] Every representative global and creator-scoped query completes within
+  200 ms during baseline, mutation-snapshot export, generation transfer,
+  activation, and warmed-new-generation phases. The isolated 8.32M-document
+  reader passed baseline (57/57, p95 143.3 ms, max 147.5 ms), but same-reader
+  publication still produced multiple 5-second timeouts and is rejected.
 - [x] Experimental browser JavaScript remains at or below 30 KB gzip (24,340
   bytes for the initial route after the full-corpus deployment).
 - [x] Production browser JavaScript remains below 30 KB gzip after cutover and
@@ -164,6 +180,29 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Update this ledger in the same commit that completes each item.
 
 ## Regression Log
+
+- [ ] Full-corpus generation publication shares the reader's 2-vCPU/2-GB
+  cgroup and causes synchronized multi-second search stalls. A clean canary
+  baseline passed the 200 ms ceiling, but requests timed out above five seconds
+  immediately after publication began. Keep full builds off the serving reader;
+  the remaining work is the external builder transfer/activation path above.
+- [x] Single-token compact-split fallback treated `react` as `re + act` and
+  `fire` as `fi + re`, returning unrelated results and driving 11-13 second
+  backend searches. Split recovery now runs only after exact/prefix results are
+  insufficient and requires at least three characters on both sides.
+- [x] `coding is dead` reduced 36,114 `coding` candidates to 356 with `dead`,
+  then scanned an estimated 2.57 million `is` postings. A guarded document-local
+  conjunction path now handles 129-512 survivors only when the remaining
+  posting work is at least 512 times larger; full-corpus p95 improved from
+  61.9 ms to 48.4 ms with byte-identical responses across the query matrix.
+- [x] Raw generation construction re-read and hashed about 1.445 GB of output
+  immediately after the builder had already checksummed it. Candidate activation
+  now reuses the trusted build proof while normal startup/recovery retains full
+  checksum validation.
+- [x] `Seek::stream_position` implicitly reached `ColdWriter::seek` once per
+  document block, turning offset reads into roughly 127,000 `sync_data` calls.
+  Seeks now flush only for cursor correctness; final file/tree fsync and atomic
+  activation remain the durability boundary.
 
 - [x] A scoped long query paid global-corpus posting and position costs, while
   an exact phrase outside the selected creator could suppress that creator's
