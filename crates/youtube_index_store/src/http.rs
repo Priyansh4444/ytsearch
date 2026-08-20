@@ -126,7 +126,7 @@ impl RawIndexAdminClient {
         &self,
         job_id: &str,
     ) -> Result<RawPublicationJob, IndexStoreError> {
-        validate_publication_component(job_id)?;
+        validate_publication_job_id(job_id)?;
         self.execute(
             self.client
                 .get(self.endpoint(&format!("/admin/publications/{job_id}"))),
@@ -139,7 +139,7 @@ impl RawIndexAdminClient {
         job: &RawPublicationJob,
         destination: &Path,
     ) -> Result<(), IndexStoreError> {
-        validate_publication_component(&job.job_id)?;
+        validate_publication_job_id(&job.job_id)?;
         let mut response = self
             .request(
                 self.client
@@ -229,7 +229,7 @@ impl RawIndexAdminClient {
         job: &RawPublicationJob,
         manifest: RawGenerationManifest,
     ) -> Result<RawPublicationJob, IndexStoreError> {
-        validate_publication_component(&job.job_id)?;
+        validate_publication_job_id(&job.job_id)?;
         self.execute(
             self.client
                 .put(self.endpoint(&format!("/admin/publications/{}/manifest", job.job_id)))
@@ -248,8 +248,8 @@ impl RawIndexAdminClient {
         file_name: &str,
         path: &Path,
     ) -> Result<RawPublicationJob, IndexStoreError> {
-        validate_publication_component(job_id)?;
-        validate_publication_component(file_name)?;
+        validate_publication_job_id(job_id)?;
+        validate_generation_file_name(file_name)?;
         let file = tokio::fs::File::open(path).await.map_err(map_io)?;
         let bytes = file.metadata().await.map_err(map_io)?.len();
         let response = self
@@ -265,7 +265,7 @@ impl RawIndexAdminClient {
         &self,
         job_id: &str,
     ) -> Result<RawPublicationJob, IndexStoreError> {
-        validate_publication_component(job_id)?;
+        validate_publication_job_id(job_id)?;
         self.execute(
             self.client
                 .post(self.endpoint(&format!("/admin/publications/{job_id}/activate"))),
@@ -274,14 +274,25 @@ impl RawIndexAdminClient {
     }
 }
 
-fn validate_publication_component(value: &str) -> Result<(), IndexStoreError> {
-    if value.is_empty()
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-    {
+fn validate_publication_job_id(value: &str) -> Result<(), IndexStoreError> {
+    let valid = value.len() == 37
+        && value.as_bytes()[..20].iter().all(u8::is_ascii_digit)
+        && value.as_bytes()[20] == b'-'
+        && value.as_bytes()[21..]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte));
+    if !valid {
         return Err(IndexStoreError::InvalidInput(
-            "raw publication URL component is invalid".to_string(),
+            "raw publication job id is invalid".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_generation_file_name(value: &str) -> Result<(), IndexStoreError> {
+    if !crate::RAW_GENERATION_FILES.contains(&value) {
+        return Err(IndexStoreError::InvalidInput(
+            "raw generation file name is not allowlisted".to_string(),
         ));
     }
     Ok(())

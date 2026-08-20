@@ -119,8 +119,26 @@ async fn publication_paths_reject_untrusted_components_before_network_io() {
         Err(IndexStoreError::InvalidInput(_))
     ));
     assert!(matches!(
+        client.publication_status("..").await,
+        Err(IndexStoreError::InvalidInput(_))
+    ));
+    assert!(matches!(
         client
-            .upload_publication_file("safe-job", "../escape", Path::new("missing"))
+            .upload_publication_file(
+                "00000000000000000001-0123456789abcdef",
+                "../escape",
+                Path::new("missing")
+            )
+            .await,
+        Err(IndexStoreError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        client
+            .upload_publication_file(
+                "00000000000000000001-0123456789abcdef",
+                "manifest.json",
+                Path::new("missing")
+            )
             .await,
         Err(IndexStoreError::InvalidInput(_))
     ));
