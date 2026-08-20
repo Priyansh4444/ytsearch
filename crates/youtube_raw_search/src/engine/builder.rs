@@ -445,12 +445,12 @@ pub fn slice_corpus(
 }
 
 fn flush_document_block(
-    output: &mut (impl Write + Seek),
+    output: &mut ColdWriter,
     uncompressed: &mut Vec<u8>,
     blocks: &mut Vec<BlockRecord>,
 ) -> Result<()> {
     let compressed = zstd::stream::encode_all(uncompressed.as_slice(), 3)?;
-    let offset = output.stream_position()?;
+    let offset = output.position();
     output.write_all(&compressed)?;
     blocks.push(BlockRecord {
         offset,

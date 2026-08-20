@@ -106,6 +106,10 @@ impl ColdWriter {
         self.reclaim()
     }
 
+    pub(crate) fn position(&self) -> u64 {
+        self.position
+    }
+
     fn reclaim(&mut self) -> io::Result<()> {
         let flush_started = Instant::now();
         self.output.flush()?;
@@ -348,9 +352,12 @@ mod tests {
         let mut output = ColdWriter::create_with_reclaim_bytes(&path, 1024).unwrap();
         output.write_all(b"abcd").unwrap();
         assert_eq!(output.bytes_since_reclaim, 4);
+        assert_eq!(output.position(), 4);
         output.seek(SeekFrom::Start(1)).unwrap();
         assert_eq!(output.bytes_since_reclaim, 4);
+        assert_eq!(output.position(), 1);
         output.write_all(b"Z").unwrap();
+        assert_eq!(output.position(), 2);
         output.finish().unwrap();
         assert_eq!(std::fs::read(path).unwrap(), b"aZcd");
     }
