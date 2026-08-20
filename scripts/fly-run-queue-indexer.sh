@@ -10,6 +10,7 @@ QUEUE_TARGET_BACKEND="${QUEUE_TARGET_BACKEND:-}"
 ON_DEMAND="${ON_DEMAND:-0}"
 VOLUME_SIZE_GB="${INDEXER_VOLUME_SIZE_GB:-10}"
 DAILY_UPDATE_LIST_SOURCE="${DAILY_UPDATE_LIST_SOURCE:-scripts/indexed-channels.txt}"
+INDEXER_DATA_DIRECTORY="${INDEXER_DATA_DIRECTORY:-/var/lib/ytsearch}"
 
 if [ -z "${FLY_ORG:-}" ]; then
   echo "Set FLY_ORG to the Fly.io organization that should own the indexer." >&2
@@ -161,7 +162,7 @@ exec flyctl machine run \
   --vm-memory "${INDEXER_MEMORY_MB:-2048}" \
   --rootfs-size "${INDEXER_ROOTFS_SIZE_GB:-10}" \
   --swap-size "${INDEXER_SWAP_MB:-512}" \
-  --volume "$VOLUME_NAME:/data" \
+  --volume "$VOLUME_NAME:$INDEXER_DATA_DIRECTORY" \
   --file-local "/usr/local/bin/cloud-index-queue=$(dirname "$0")/cloud-index-queue-entrypoint.sh" \
   $cookie_secret_args \
   $youtube_secret_args \
@@ -178,16 +179,17 @@ exec flyctl machine run \
   --env "MAX_VIDEOS_PER_PASS=${MAX_VIDEOS_PER_PASS:-0}" \
   --env "QUEUE_LOOP=${QUEUE_LOOP:-$QUEUE_DAEMON}" \
   --env "QUEUE_POLL_INTERVAL_SECONDS=${QUEUE_POLL_INTERVAL_SECONDS:-30}" \
-  --env "QUEUE_RETRY_STATE_FILE=/data/queue-retries.tsv" \
+  --env "TRANSCRIPT_CACHE_DIR=$INDEXER_DATA_DIRECTORY/transcript-cache" \
+  --env "QUEUE_RETRY_STATE_FILE=${QUEUE_RETRY_STATE_FILE:-$INDEXER_DATA_DIRECTORY/queue-retries.tsv}" \
   --env "QUEUE_ACK_RETRY_SECONDS=${QUEUE_ACK_RETRY_SECONDS:-300}" \
   --env "IDLE_EXIT_AFTER_SECONDS=$idle_exit_after_seconds" \
   --env "IDLE_GAP_FILL_ENABLED=${IDLE_GAP_FILL_ENABLED:-0}" \
-  --env "IDLE_GAP_FILL_STATE_FILE=${IDLE_GAP_FILL_STATE_FILE:-/data/idle-gap-fill.cursor}" \
+  --env "IDLE_GAP_FILL_STATE_FILE=${IDLE_GAP_FILL_STATE_FILE:-$INDEXER_DATA_DIRECTORY/idle-gap-fill.cursor}" \
   --env "IDLE_GAP_FILL_MAX_PASSES=${IDLE_GAP_FILL_MAX_PASSES:-1}" \
   --env "IDLE_GAP_FILL_MAX_NEW_VIDEOS=${IDLE_GAP_FILL_MAX_NEW_VIDEOS:-10}" \
   --env "ACK_FAILED_REQUESTS=${ACK_FAILED_REQUESTS:-0}" \
   --env "DAILY_UPDATE_ENABLED=$daily_update_enabled" \
-  --env "DAILY_UPDATE_STATE_FILE=${DAILY_UPDATE_STATE_FILE:-/data/daily-update.last-completed}" \
+  --env "DAILY_UPDATE_STATE_FILE=${DAILY_UPDATE_STATE_FILE:-$INDEXER_DATA_DIRECTORY/daily-update.last-completed}" \
   --env "DAILY_UPDATE_INTERVAL_SECONDS=$daily_update_interval_seconds" \
   --env "DAILY_UPDATE_INITIAL_DELAY_SECONDS=$daily_update_initial_delay_seconds" \
   --env "EXISTING_TAIL=${EXISTING_TAIL:-0}" \

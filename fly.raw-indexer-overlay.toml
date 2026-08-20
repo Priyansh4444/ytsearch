@@ -1,0 +1,5 @@
+app = "ytsearch-indexer-raw-production"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
