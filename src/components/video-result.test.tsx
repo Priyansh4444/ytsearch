@@ -75,6 +75,14 @@ describe("VideoResult", () => {
     expect(screen.queryByRole("button", { name: "Show all moments" })).not.toBeInTheDocument();
   });
 
+  test("offers to load moments when the backend count exceeds returned snippets", () => {
+    const partialVideo = { ...video, match_count: 4, hits: hits.slice(0, 2) };
+
+    render(() => <VideoResult video={partialVideo} query="moment" rank={1} />);
+
+    expect(screen.getByRole("button", { name: "Show all moments" })).toBeInTheDocument();
+  });
+
   test("renders every backend-provided whole-token highlight", () => {
     const highlightedHit = {
       ...hits[0],

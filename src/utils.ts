@@ -57,10 +57,13 @@ export async function copyToClipboard(value: string): Promise<void> {
 export function highlightedParts(
   text: string,
   highlight: string | undefined,
-  query: string,
+  _query: string,
 ): HighlightPart[] {
   if (highlight) return partsFromTaggedSnippet(highlight);
-  return partsFromQuery(text, query);
+  // Raw owns tokenization and match provenance. Inventing marks from the raw
+  // query here highlighted substrings the backend deliberately rejected, such
+  // as `fire` in `wildfire` and `react` in `Preact`.
+  return [{ text, highlighted: false }];
 }
 
 function partsFromTaggedSnippet(snippet: string): HighlightPart[] {
@@ -88,28 +91,6 @@ function partsFromTaggedSnippet(snippet: string): HighlightPart[] {
   }
 
   return parts.length > 0 ? parts : [{ text: decodeEntities(snippet), highlighted: false }];
-}
-
-function partsFromQuery(text: string, query: string): HighlightPart[] {
-  const terms = query
-    .toLowerCase()
-    .split(/\s+/)
-    .map((term) => term.replace(/[^a-z0-9']/gi, ""))
-    .filter((term) => term.length >= 2);
-  if (terms.length === 0) return [{ text, highlighted: false }];
-
-  const pattern = new RegExp(`(${terms.map(escapeRegex).join("|")})`, "gi");
-  return text
-    .split(pattern)
-    .filter(Boolean)
-    .map((part) => ({
-      text: part,
-      highlighted: terms.includes(part.toLowerCase()),
-    }));
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function decodeEntities(value: string): string {

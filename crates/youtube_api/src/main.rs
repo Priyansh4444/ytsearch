@@ -181,6 +181,8 @@ struct SearchHit {
     timestamp: Option<String>,
     youtube_url: String,
     embed_url: String,
+    #[serde(skip)]
+    group_match_count: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1186,7 +1188,7 @@ fn video_results_from_hits_with_policy(
                     .hits
                     .retain(|hit| hit.match_kind == MatchKind::Transcript);
             }
-            video.match_count = video.hits.len();
+            video.match_count = video.match_count.max(video.hits.len());
             match sort {
                 SearchSort::Relevance if preserve_backend_relevance_order => {}
                 SearchSort::Relevance | SearchSort::RelevanceEngagement => {
@@ -1374,7 +1376,7 @@ impl SearchVideoResult {
             like_count: hit.like_count,
             comment_count: hit.comment_count,
             content_kind: hit.content_kind,
-            match_count: 0,
+            match_count: hit.group_match_count.unwrap_or(0),
             youtube_url: hit.youtube_url.clone(),
             embed_url: hit.embed_url.clone(),
             best_timestamp: hit.timestamp.clone(),
@@ -1400,12 +1402,18 @@ fn parse_hits(raw: &Value) -> Result<Vec<SearchHit>, ApiError> {
             .sum();
         let mut parsed = Vec::with_capacity(hit_count);
         for group in grouped_hits {
+            let group_match_count = group
+                .get("found")
+                .and_then(Value::as_u64)
+                .and_then(|found| usize::try_from(found).ok());
             let Some(hits) = group.get("hits").and_then(Value::as_array) else {
                 continue;
             };
             for hit in hits {
                 let document = hit.get("document").unwrap_or(hit);
-                parsed.push(SearchHit::from_search_backend_hit(document, hit)?);
+                let mut parsed_hit = SearchHit::from_search_backend_hit(document, hit)?;
+                parsed_hit.group_match_count = group_match_count;
+                parsed.push(parsed_hit);
             }
         }
         return Ok(parsed);
@@ -1546,6 +1554,7 @@ mod tests {
             "grouped_hits": [
                 {
                     "group_key": ["video-a"],
+                    "found": 4,
                     "hits": [
                         {
                             "document": test_document("a-1", "video-a", "first"),
@@ -1573,6 +1582,35 @@ mod tests {
         assert_eq!(hits[0].view_count, 1_000_000);
         assert_eq!(hits[0].like_count, 100_000);
         assert_eq!(hits[0].comment_count, 10_000);
+        let videos =
+            video_results_from_hits_with_policy(&hits, SearchSort::Relevance, "first", true);
+        assert_eq!(videos[0].match_count, 4);
+    }
+
+    #[test]
+    fn grouped_match_count_survives_nearby_moment_coalescing() {
+        let raw = json!({
+            "grouped_hits": [{
+                "group_key": ["video-a"],
+                "found": 4,
+                "hits": [
+                    {"document": test_document("a-1", "video-a", "first")},
+                    {"document": test_document("a-2", "video-a", "second")},
+                    {"document": test_document("a-3", "video-a", "third")}
+                ]
+            }]
+        });
+        let mut hits = parse_hits(&raw).expect("grouped hits parse");
+        hits[0].t_start_ms = 0;
+        hits[1].t_start_ms = 10_000;
+        hits[2].t_start_ms = 40_000;
+
+        let merged = merge_nearby_transcript_hits(hits);
+        let videos =
+            video_results_from_hits_with_policy(&merged, SearchSort::Relevance, "first", true);
+
+        assert_eq!(videos[0].hits.len(), 2);
+        assert_eq!(videos[0].match_count, 4);
     }
 
     #[test]
@@ -2036,7 +2074,7 @@ mod tests {
     }
 
     #[test]
-    fn nearby_moment_coalescing_is_chronological_and_order_independent() {
+    fn nearby_moment_coalescing_preserves_the_best_backend_rank() {
         let hits = [20_000, 40_000, 0]
             .into_iter()
             .map(|start| {
@@ -2050,7 +2088,8 @@ mod tests {
         let merged = merge_nearby_transcript_hits(hits);
         let mut starts = merged.iter().map(|hit| hit.t_start_ms).collect::<Vec<_>>();
         starts.sort_unstable();
-        assert_eq!(starts, vec![0, 40_000]);
+        assert_eq!(starts, vec![20_000, 40_000]);
+        assert_eq!(merged[0].id, "moment-20000");
     }
 
     #[test]
@@ -2266,14 +2305,22 @@ fn merge_nearby_transcript_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
     for indices in by_video.values_mut() {
         indices.sort_unstable_by_key(|index| (hits[*index].t_start_ms, *index));
         let mut cluster_start = None;
+        let mut best_ranked_index = None;
         for index in indices.iter().copied() {
             let start = hits[index].t_start_ms;
             if cluster_start.is_none_or(|cluster| {
                 start.saturating_sub(cluster) > MERGE_TRANSCRIPT_HIT_WINDOW_MS
             }) {
                 cluster_start = Some(start);
+                best_ranked_index = Some(index);
             } else {
-                keep[index] = false;
+                let best = best_ranked_index.unwrap_or(index);
+                if index < best {
+                    keep[best] = false;
+                    best_ranked_index = Some(index);
+                } else {
+                    keep[index] = false;
+                }
             }
         }
     }
@@ -2356,6 +2403,7 @@ impl SearchHit {
             timestamp,
             youtube_url,
             embed_url,
+            group_match_count: None,
         })
     }
 }
