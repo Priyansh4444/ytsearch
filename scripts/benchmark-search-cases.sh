@@ -7,6 +7,9 @@ set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 CASES_FILE="${CASES_FILE:-$SCRIPT_DIR/benchmark-search-cases.tsv}"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/search-benchmark-cases.sh"
+validate_search_benchmark_cases "$CASES_FILE"
 RESULTS_FILE="${RESULTS_FILE:-/tmp/ytsearch-benchmark-cases.$$.log}"
 RUNS="${RUNS:-10}"
 
@@ -25,7 +28,7 @@ while IFS="$(printf '\t')" read -r label query youtuber; do
     exit 1
   fi
   echo "case=$label query=$query youtuber=$youtuber"
-  CASE_LABEL="$label" QUERY="$query" YOUTUBER="$youtuber" RUNS="$RUNS" SUMMARY=0 \
+  CASE_LABEL="$label" QUERY="$query" YOUTUBER="$youtuber" RUNS="$RUNS" \
     RESULTS_FILE="$RESULTS_FILE" "$SCRIPT_DIR/benchmark-search-backends.sh"
 done < "$CASES_FILE"
 

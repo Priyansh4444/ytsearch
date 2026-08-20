@@ -15,6 +15,7 @@ scripts/test-destroy-deprecated-typesense-fly.sh
 scripts/test-index-conference-playlists.sh
 scripts/test-compare-autoresearch-search.sh
 scripts/test-idle-gap-fill.sh
+scripts/test-benchmark-search-tools.sh
 
 for script in scripts/*.sh; do
   sh -n "$script"

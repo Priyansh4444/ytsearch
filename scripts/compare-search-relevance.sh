@@ -7,6 +7,10 @@ set -euo pipefail
 CANDIDATE_API_KEY="${CANDIDATE_API_KEY:-}"
 CANDIDATE_NAME="${CANDIDATE_NAME:-raw}"
 CASES_FILE="${CASES_FILE:-scripts/benchmark-search-cases.tsv}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/search-benchmark-cases.sh"
+validate_search_benchmark_cases "$CASES_FILE"
 OUTPUT="${OUTPUT:-.search-experiment/results/${CANDIDATE_NAME}-relevance.jsonl}"
 mkdir -p "$(dirname "$OUTPUT")"
 : > "$OUTPUT"
@@ -46,7 +50,11 @@ search_url() {
     )
   fi
   if [[ -n "$key" ]]; then
-    args+=(-H "X-TYPESENSE-API-KEY: $key")
+    if [[ "$backend" == typesense ]]; then
+      args+=(-H "X-TYPESENSE-API-KEY: $key")
+    else
+      args+=(-H "x-raw-search-key: $key")
+    fi
   fi
   curl "${args[@]}" --output "$response"
 }
@@ -56,14 +64,8 @@ while IFS=$'\t' read -r label query handle; do
   typesense_response="$(mktemp)"
   candidate_response="$(mktemp)"
   trap 'rm -f "$typesense_response" "$candidate_response"' EXIT
-  backend_query="$query"
-  sort_by=""
-  if [[ "$label" == low_signal ]]; then
-    backend_query="*"
-    sort_by="published_at_timestamp:desc"
-  fi
-  search_url typesense "$backend_query" "$handle" "$TYPESENSE_URL" "$TYPESENSE_API_KEY" "$typesense_response" "$sort_by"
-  search_url candidate "$backend_query" "$handle" "$CANDIDATE_URL" "$CANDIDATE_API_KEY" "$candidate_response" "$sort_by"
+  search_url typesense "$query" "$handle" "$TYPESENSE_URL" "$TYPESENSE_API_KEY" "$typesense_response" ""
+  search_url candidate "$query" "$handle" "$CANDIDATE_URL" "$CANDIDATE_API_KEY" "$candidate_response" ""
 
   jq -cn \
     --arg label "$label" \

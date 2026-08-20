@@ -40,6 +40,8 @@ awk '
     case_label = "default"
     total = ""
     http = ""
+    curl_exit = ""
+    valid_response = ""
     first_result = ""
     total_videos = ""
     total_moments = ""
@@ -54,6 +56,10 @@ awk '
         total = pair[2]
       } else if (pair[1] == "http") {
         http = pair[2]
+      } else if (pair[1] == "curl_exit") {
+        curl_exit = pair[2]
+      } else if (pair[1] == "valid_response") {
+        valid_response = pair[2]
       } else if (pair[1] == "first_result_ms") {
         first_result = pair[2]
       } else if (pair[1] == "total_videos") {
@@ -70,7 +76,9 @@ awk '
     }
     backend = case_label "/" backend
 
-    if (http != "200") {
+    if (http != "200" ||
+        (curl_exit != "" && curl_exit != "0") ||
+        (valid_response != "" && valid_response != "1")) {
       errors[backend]++
       seen[backend] = 1
       next

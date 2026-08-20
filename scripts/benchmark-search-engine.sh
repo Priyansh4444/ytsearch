@@ -10,33 +10,52 @@ RUNS="${RUNS:-50}"
 WARMUP_RUNS="${WARMUP_RUNS:-10}"
 OUTPUT="${OUTPUT:-.search-experiment/results/${BACKEND_KIND}-direct.jsonl}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-QUERIES_FILE="${QUERIES_FILE:-$SCRIPT_DIR/benchmark-search-queries.txt}"
+CASES_FILE="${CASES_FILE:-$SCRIPT_DIR/benchmark-search-cases.tsv}"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/search-benchmark-cases.sh"
+validate_search_benchmark_cases "$CASES_FILE"
 mkdir -p "$(dirname "$OUTPUT")"
 : > "$OUTPUT"
 
-mapfile -t queries < <(sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$QUERIES_FILE")
+declare -a labels=()
+declare -a queries=()
+declare -a creators=()
+while IFS=$'\t' read -r label query creator; do
+  [[ -z "$label" || "$label" == \#* ]] && continue
+  if [[ -z "$query" ]]; then
+    printf 'benchmark case %s has no query\n' "$label" >&2
+    exit 1
+  fi
+  labels+=("$label")
+  queries+=("$query")
+  creators+=("$creator")
+done < "$CASES_FILE"
 if (( ${#queries[@]} == 0 )); then
-  printf 'no benchmark queries found in %s\n' "$QUERIES_FILE" >&2
+  printf 'no benchmark queries found in %s\n' "$CASES_FILE" >&2
   exit 1
 fi
 
 request() {
   local query="$1"
-  local output="$2"
-  local write_out="${3:-}"
+  local creator="$2"
+  local output="$3"
+  local write_out="${4:-}"
   local args=(
     --fail --silent --show-error
     --get "${SEARCH_URL%/}/collections/youtube_transcript_chunks/documents/search"
     --data-urlencode "q=$query"
     --data-urlencode 'query_by=text,title'
     --data-urlencode 'group_by=video_id'
-    --data-urlencode 'group_limit=5'
+    --data-urlencode 'group_limit=3'
     --data-urlencode 'offset=0'
-    --data-urlencode 'limit=11'
+    --data-urlencode 'limit=10'
     --output "$output"
   )
   if [[ -n "$SEARCH_API_KEY" ]]; then
     args+=(-H "x-raw-search-key: $SEARCH_API_KEY")
+  fi
+  if [[ -n "$creator" ]]; then
+    args+=(--data-urlencode "filter_by=youtuber_handle:=$creator")
   fi
   args+=(
     --data-urlencode 'query_by_weights=4,6'
@@ -55,10 +74,10 @@ request() {
   curl "${args[@]}"
 }
 
-for query in "${queries[@]}"; do
+for index in "${!queries[@]}"; do
   warmup=1
   while (( warmup <= WARMUP_RUNS )); do
-    request "$query" /dev/null
+    request "${queries[$index]}" "${creators[$index]}" /dev/null
     ((warmup += 1))
   done
 done
@@ -66,12 +85,13 @@ done
 if [[ "$CAPTURE_RESOURCES" == 1 ]]; then
   metrics_before="$(curl --fail --silent --show-error "${SEARCH_URL%/}/metrics")"
 fi
-for query in "${queries[@]}"; do
+for index in "${!queries[@]}"; do
   run=1
   while (( run <= RUNS )); do
-    timing="$(request "$query" /dev/null '%{time_total}')"
-    jq -cn --arg query "$query" --argjson run "$run" --argjson seconds "$timing" \
-      '{query:$query,run:$run,seconds:$seconds}' >> "$OUTPUT"
+    timing="$(request "${queries[$index]}" "${creators[$index]}" /dev/null '%{time_total}')"
+    jq -cn --arg label "${labels[$index]}" --arg query "${queries[$index]}" \
+      --arg creator "${creators[$index]}" --argjson run "$run" --argjson seconds "$timing" \
+      '{label:$label,query:$query,creator:(if $creator == "" then null else $creator end),run:$run,seconds:$seconds}' >> "$OUTPUT"
     ((run += 1))
   done
 done
@@ -82,4 +102,4 @@ if [[ "$CAPTURE_RESOURCES" == 1 ]]; then
     > "${OUTPUT%.jsonl}-resources.json"
 fi
 
-jq -s 'group_by(.query) | map({query:.[0].query,runs:length,min_ms:(map(.seconds*1000)|min),median_ms:(map(.seconds*1000)|sort|.[length/2]),p95_ms:(map(.seconds*1000)|sort|.[(length*0.95|floor)]),max_ms:(map(.seconds*1000)|max)})' "$OUTPUT"
+jq -s 'group_by(.label) | map({label:.[0].label,query:.[0].query,creator:.[0].creator,runs:length,min_ms:(map(.seconds*1000)|min),median_ms:(map(.seconds*1000)|sort|.[length/2]),p95_ms:(map(.seconds*1000)|sort|.[(length*0.95|floor)]),max_ms:(map(.seconds*1000)|max)})' "$OUTPUT"
