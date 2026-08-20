@@ -7,7 +7,9 @@ primary_region = 'sjc'
 [env]
   YTSEARCH_API_ADDR = '0.0.0.0:8787'
   RAW_SEARCH_COLLECTION = 'youtube_transcript_chunks'
-  RAW_SEARCH_API_URL = 'https://ytsearch-raw-production.fly.dev'
+  # The API and Raw reader are colocated in SJC. Keep backend traffic on Fly's
+  # private 6PN to avoid a second public TLS/proxy hop on every search.
+  RAW_SEARCH_API_URL = 'http://ytsearch-raw-production.internal:8108'
   YTSEARCH_INDEX_QUEUE_PATH = '/data/index-requests.jsonl'
   YTSEARCH_INDEX_REQUEST_RATE_LIMIT_PER_MINUTE = '6'
   YTSEARCH_INDEX_QUEUE_MAX_ITEMS = '10000'

@@ -44,6 +44,7 @@ const DEFAULT_PER_PAGE: u8 = 20;
 const MAX_PER_PAGE: u8 = 100;
 const MERGE_TRANSCRIPT_HIT_WINDOW_MS: u32 = 20_000;
 const MAX_SEARCH_PAGE_FETCHES: u32 = 10;
+const INITIAL_GROUP_LIMIT: u8 = 3;
 const CACHE_YOUTUBERS: &str = "public, max-age=30, stale-while-revalidate=300";
 const CACHE_SEARCH: &str = "no-store";
 const CACHE_CHANNEL_IMAGE: &str = "public, max-age=86400, stale-while-revalidate=604800";
@@ -566,7 +567,12 @@ async fn search_handler(
         SearchSort::Relevance => search_query,
     };
     if use_backend_grouping {
-        search_query = search_query.group_by("video_id").group_limit(5);
+        // The card renders three moments initially and lazily loads the full
+        // video on demand. Fetching five inflated broad-query payloads without
+        // improving first paint; Raw's group `found` preserves the true count.
+        search_query = search_query
+            .group_by("video_id")
+            .group_limit(INITIAL_GROUP_LIMIT);
     } else {
         search_query = search_query.without_grouping();
     }
@@ -1592,7 +1598,7 @@ mod tests {
         let raw = json!({
             "grouped_hits": [{
                 "group_key": ["video-a"],
-                "found": 4,
+                "found": 3,
                 "hits": [
                     {"document": test_document("a-1", "video-a", "first")},
                     {"document": test_document("a-2", "video-a", "second")},
@@ -1603,14 +1609,14 @@ mod tests {
         let mut hits = parse_hits(&raw).expect("grouped hits parse");
         hits[0].t_start_ms = 0;
         hits[1].t_start_ms = 10_000;
-        hits[2].t_start_ms = 40_000;
+        hits[2].t_start_ms = 20_000;
 
         let merged = merge_nearby_transcript_hits(hits);
         let videos =
             video_results_from_hits_with_policy(&merged, SearchSort::Relevance, "first", true);
 
-        assert_eq!(videos[0].hits.len(), 2);
-        assert_eq!(videos[0].match_count, 4);
+        assert_eq!(videos[0].hits.len(), 1);
+        assert_eq!(videos[0].match_count, 3);
     }
 
     #[test]

@@ -83,6 +83,14 @@ describe("VideoResult", () => {
     expect(screen.getByRole("button", { name: "Show all moments" })).toBeInTheDocument();
   });
 
+  test("offers to load moments when nearby snippets collapse below the backend count", () => {
+    const coalescedVideo = { ...video, match_count: 3, hits: hits.slice(0, 1) };
+
+    render(() => <VideoResult video={coalescedVideo} query="moment" rank={1} />);
+
+    expect(screen.getByRole("button", { name: "Show all moments" })).toBeInTheDocument();
+  });
+
   test("renders every backend-provided whole-token highlight", () => {
     const highlightedHit = {
       ...hits[0],

@@ -18,7 +18,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
   const momentsController = new AbortController();
   onCleanup(() => momentsController.abort());
   const visibleHits = () => (showAllMoments() ? allHits() : allHits().slice(0, 3));
-  const hasHiddenMoments = () => Math.max(props.video.match_count, allHits().length) > 3;
+  const hasHiddenMoments = () => props.video.match_count > allHits().length || allHits().length > 3;
   const [selectedHitId, setSelectedHitId] = createSignal<string>();
   const [playerActive, setPlayerActive] = createSignal(false);
   const selectedHit = () =>
