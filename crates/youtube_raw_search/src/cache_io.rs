@@ -111,10 +111,9 @@ impl Write for ColdWriter {
 impl Seek for ColdWriter {
     fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
         // BufWriter must be flushed before changing the file cursor, but a
-        // seek is not a durability boundary. The builder seeks once per
-        // document block to patch metadata; syncing there turned an 8M-doc
-        // build into roughly 130k synchronous storage barriers. Publication
-        // still syncs completed files and the candidate tree before rename.
+        // seek is not a durability boundary. The builder only seeks while
+        // patching its position tables; publication still syncs completed
+        // files and the candidate tree before rename.
         self.output.flush()?;
         self.output.seek(position)
     }
