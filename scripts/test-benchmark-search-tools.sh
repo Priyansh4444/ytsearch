@@ -70,5 +70,24 @@ PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=rawvalid SEARCH_URL=https://fixture.invalid
   "$SCRIPT_DIR/benchmark-search-engine.sh" > "$tmp/raw-valid.summary"
 jq -se 'length > 0 and all(.[]; .ok == true)' "$tmp/raw-valid.jsonl" >/dev/null
 jq -e 'length > 0 and all(.[]; .errors == 0)' "$tmp/raw-valid.summary" >/dev/null
+initial_rows="$(wc -l < "$tmp/raw-valid.jsonl" | tr -d ' ')"
+PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=rawvalid SEARCH_URL=https://fixture.invalid \
+  RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 APPEND_OUTPUT=1 \
+  OUTPUT="$tmp/raw-valid.jsonl" \
+  "$SCRIPT_DIR/benchmark-search-engine.sh" > "$tmp/raw-append.summary"
+[ "$(wc -l < "$tmp/raw-valid.jsonl" | tr -d ' ')" -eq $(( initial_rows * 2 )) ] || {
+  echo "append mode replaced prior benchmark samples" >&2
+  exit 1
+}
+touch "$tmp/stop-load"
+rows_before_stop="$(wc -l < "$tmp/raw-valid.jsonl" | tr -d ' ')"
+PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=rawvalid SEARCH_URL=https://fixture.invalid \
+  RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 APPEND_OUTPUT=1 \
+  STOP_FILE="$tmp/stop-load" OUTPUT="$tmp/raw-valid.jsonl" \
+  "$SCRIPT_DIR/benchmark-search-engine.sh" > "$tmp/raw-stop.summary"
+[ "$(wc -l < "$tmp/raw-valid.jsonl" | tr -d ' ')" -eq "$rows_before_stop" ] || {
+  echo "stop file allowed additional benchmark requests" >&2
+  exit 1
+}
 
 printf 'benchmark search tooling tests passed\n'

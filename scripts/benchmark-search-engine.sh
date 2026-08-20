@@ -11,13 +11,17 @@ WARMUP_RUNS="${WARMUP_RUNS:-10}"
 CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-3}"
 CURL_MAX_TIME="${CURL_MAX_TIME:-5}"
 OUTPUT="${OUTPUT:-.search-experiment/results/${BACKEND_KIND}-direct.jsonl}"
+APPEND_OUTPUT="${APPEND_OUTPUT:-0}"
+STOP_FILE="${STOP_FILE:-}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CASES_FILE="${CASES_FILE:-$SCRIPT_DIR/benchmark-search-cases.tsv}"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/search-benchmark-cases.sh"
 validate_search_benchmark_cases "$CASES_FILE"
 mkdir -p "$(dirname "$OUTPUT")"
-: > "$OUTPUT"
+if [[ "$APPEND_OUTPUT" != 1 ]]; then
+  : > "$OUTPUT"
+fi
 BENCHMARK_TMP="$(mktemp -d)"
 trap 'rm -rf "$BENCHMARK_TMP"' EXIT INT TERM
 
@@ -94,7 +98,11 @@ fi
 for index in "${!queries[@]}"; do
   run=1
   while (( run <= RUNS )); do
+    if [[ -n "$STOP_FILE" && -e "$STOP_FILE" ]]; then
+      break 2
+    fi
     response_file="$BENCHMARK_TMP/response.json"
+    started_ms="$(date +%s%3N)"
     curl_exit=0
     timing="$(request "${queries[$index]}" "${creators[$index]}" "$response_file" \
       '%{http_code}\t%{time_total}\t%{size_download}')" || curl_exit=$?
@@ -110,11 +118,12 @@ for index in "${!queries[@]}"; do
     ' "$response_file" >/dev/null 2>&1; then
       valid=true
     fi
+    ended_ms="$(date +%s%3N)"
     jq -cn --arg label "${labels[$index]}" --arg query "${queries[$index]}" \
       --arg creator "${creators[$index]}" --argjson run "$run" --argjson seconds "$seconds" \
       --argjson curl_exit "$curl_exit" --argjson http "${http:-0}" --argjson bytes "$bytes" \
-      --argjson valid "$valid" \
-      '{label:$label,query:$query,creator:(if $creator == "" then null else $creator end),run:$run,seconds:$seconds,http:$http,curl_exit:$curl_exit,bytes:$bytes,valid:$valid,ok:($curl_exit == 0 and $http == 200 and $valid)}' >> "$OUTPUT"
+      --argjson valid "$valid" --argjson started_ms "$started_ms" --argjson ended_ms "$ended_ms" \
+      '{label:$label,query:$query,creator:(if $creator == "" then null else $creator end),run:$run,started_ms:$started_ms,ended_ms:$ended_ms,seconds:$seconds,http:$http,curl_exit:$curl_exit,bytes:$bytes,valid:$valid,ok:($curl_exit == 0 and $http == 200 and $valid)}' >> "$OUTPUT"
     ((run += 1))
   done
 done

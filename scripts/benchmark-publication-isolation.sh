@@ -20,20 +20,26 @@ BASELINE_RUNS="${BASELINE_RUNS:-3}"
 WARM_NEW_RUNS="${WARM_NEW_RUNS:-3}"
 PUBLICATION_TIMEOUT_SECONDS="${PUBLICATION_TIMEOUT_SECONDS:-2400}"
 MAX_ACCEPTABLE_MS="${MAX_ACCEPTABLE_MS:-200}"
-ROUND_PAUSE_SECONDS="${ROUND_PAUSE_SECONDS:-10}"
+PUBLISH_BIN="${PUBLISH_BIN:-$SCRIPT_DIR/../target/release/ytsearch}"
 
-for command in curl jq; do
+for command in curl jq timeout; do
   command -v "$command" >/dev/null 2>&1 || {
     printf 'missing required command: %s\n' "$command" >&2
     exit 1
   }
 done
 [[ "$CONCURRENCY" =~ ^[1-9][0-9]*$ ]]
+[[ -x "$PUBLISH_BIN" ]] || {
+  printf 'publication binary is not executable: %s\n' "$PUBLISH_BIN" >&2
+  exit 1
+}
 
 mkdir -p "$OUTPUT_DIR"
 : > "$OUTPUT_DIR/build.jsonl"
 : > "$OUTPUT_DIR/transition.jsonl"
 : > "$OUTPUT_DIR/rounds.jsonl"
+STOP_FILE="$OUTPUT_DIR/stop-load"
+rm -f "$STOP_FILE"
 active_pids=()
 
 interrupt_load() {
@@ -43,7 +49,7 @@ interrupt_load() {
   for pid in "${active_pids[@]}"; do
     wait "$pid" 2>/dev/null || true
   done
-  printf 'load stopped; the server-side publication continues independently\n' >&2
+  printf 'load stopped; publication state is durable and the command may be retried\n' >&2
   exit 130
 }
 trap interrupt_load INT TERM
@@ -68,6 +74,15 @@ run_engine() {
   SEARCH_URL="$SEARCH_URL" SEARCH_API_KEY="$SEARCH_API_KEY" CASES_FILE="$CASES_FILE" \
     OUTPUT="$output" RUNS="$runs" WARMUP_RUNS="$warmups" CAPTURE_RESOURCES=0 \
     "$SCRIPT_DIR/benchmark-search-engine.sh" >/dev/null
+}
+
+load_worker() {
+  while [[ ! -e "$STOP_FILE" ]]; do
+    SEARCH_URL="$SEARCH_URL" SEARCH_API_KEY="$SEARCH_API_KEY" CASES_FILE="$CASES_FILE" \
+      OUTPUT="$OUTPUT_DIR/build.jsonl" RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 \
+      APPEND_OUTPUT=1 STOP_FILE="$STOP_FILE" \
+      "$SCRIPT_DIR/benchmark-search-engine.sh" >/dev/null
+  done
 }
 
 summarize_phase() {
@@ -100,53 +115,34 @@ curl --fail --silent --show-error --max-time 5 "${SEARCH_URL%/}/metrics" \
   > "$OUTPUT_DIR/metrics-before.json"
 run_engine "$OUTPUT_DIR/baseline.jsonl" "$BASELINE_RUNS" 1
 
-publish_response="$(admin_request -X POST "${SEARCH_URL%/}/admin/publish")"
-printf '%s\n' "$publish_response" > "$OUTPUT_DIR/publish.json"
-target_sequence="$(printf '%s' "$publish_response" | jq -er '.last_sequence')"
-scheduled="$(printf '%s' "$publish_response" | jq -r '.scheduled')"
-if [[ "$scheduled" != true ]] || (( target_sequence <= initial_active )); then
-  printf 'publication did not start cleanly: %s\n' "$publish_response" >&2
-  exit 2
-fi
-
-deadline=$(( $(date +%s) + PUBLICATION_TIMEOUT_SECONDS ))
-round=0
-while (( $(date +%s) < deadline )); do
-  before="$(active_sequence)"
-  (( before >= target_sequence )) && break
-  round=$((round + 1))
-  started_ms="$(date +%s%3N)"
-  pids=()
-  outputs=()
-  for ((worker = 1; worker <= CONCURRENCY; worker += 1)); do
-    output="$OUTPUT_DIR/round-${round}-worker-${worker}.jsonl"
-    outputs+=("$output")
-    run_engine "$output" 1 0 &
-    pids+=("$!")
-  done
-  active_pids=("${pids[@]}")
-  for pid in "${pids[@]}"; do
-    wait "$pid"
-  done
-  active_pids=()
-  ended_ms="$(date +%s%3N)"
-  after="$(active_sequence)"
-  phase=build
-  if (( after >= target_sequence )); then
-    phase=transition
-  fi
-  for output in "${outputs[@]}"; do
-    cat "$output" >> "$OUTPUT_DIR/$phase.jsonl"
-    rm -f "$output"
-  done
-  jq -cn --argjson round "$round" --arg phase "$phase" \
-    --argjson started_ms "$started_ms" --argjson ended_ms "$ended_ms" \
-    --argjson before "$before" --argjson after "$after" \
-    '{round:$round,phase:$phase,started_ms:$started_ms,ended_ms:$ended_ms,generation_before:$before,generation_after:$after}' \
-    >> "$OUTPUT_DIR/rounds.jsonl"
-  (( after >= target_sequence )) && break
-  sleep "$ROUND_PAUSE_SECONDS"
+target_sequence="$initial_last"
+for ((worker = 1; worker <= CONCURRENCY; worker += 1)); do
+  load_worker &
+  active_pids+=("$!")
 done
+publication_started_ms="$(date +%s%3N)"
+set +e
+RAW_SEARCH_API_URL="$SEARCH_URL" RAW_SEARCH_ADMIN_API_KEY="$RAW_ADMIN_API_KEY" \
+  timeout "$PUBLICATION_TIMEOUT_SECONDS" "$PUBLISH_BIN" publish --backend raw \
+  > "$OUTPUT_DIR/publish.log" 2>&1
+publish_exit=$?
+set -e
+publication_ended_ms="$(date +%s%3N)"
+touch "$STOP_FILE"
+for pid in "${active_pids[@]}"; do
+  wait "$pid" || true
+done
+active_pids=()
+jq -cn --argjson started_ms "$publication_started_ms" \
+  --argjson ended_ms "$publication_ended_ms" --argjson exit "$publish_exit" \
+  --argjson target "$target_sequence" \
+  '{phase:"external_publication",started_ms:$started_ms,ended_ms:$ended_ms,exit:$exit,target_sequence:$target}' \
+  >> "$OUTPUT_DIR/rounds.jsonl"
+if (( publish_exit != 0 )); then
+  printf 'external publication failed with exit %s; see %s\n' \
+    "$publish_exit" "$OUTPUT_DIR/publish.log" >&2
+  exit 1
+fi
 
 final_active="$(active_sequence)"
 if (( final_active < target_sequence )); then
