@@ -120,14 +120,6 @@ fi
 
 queue_limit="${LIMIT:-10}"
 queue_one_request_per_pass="${QUEUE_ONE_REQUEST_PER_PASS:-0}"
-if [ "$QUEUE_DAEMON" = "1" ]; then
-  if [ "$queue_limit" = "10" ] && [ -z "${LIMIT+x}" ]; then
-    queue_limit="1"
-  fi
-  if [ -z "${QUEUE_ONE_REQUEST_PER_PASS+x}" ]; then
-    queue_one_request_per_pass="1"
-  fi
-fi
 
 echo "Starting queue indexer machine: app=$APP_NAME name=$MACHINE_NAME region=$FLY_REGION"
 if [ "$QUEUE_DAEMON" = "1" ]; then
@@ -172,6 +164,8 @@ exec flyctl machine run \
   --env "QUEUE_TARGET_BACKEND=$QUEUE_TARGET_BACKEND" \
   --env "RAW_SEARCH_API_URL=${RAW_SEARCH_API_URL:-http://ytsearch-raw-production.internal:8108}" \
   --env "RAW_PUBLICATION_TIMEOUT_SECONDS=${RAW_PUBLICATION_TIMEOUT_SECONDS:-3600}" \
+  --env "RAW_PUBLICATION_WORK_DIRECTORY=${RAW_PUBLICATION_WORK_DIRECTORY:-$INDEXER_DATA_DIRECTORY/raw-generation-work}" \
+  --env "RAW_PUBLICATION_MIN_FREE_BYTES=${RAW_PUBLICATION_MIN_FREE_BYTES:-8000000000}" \
   --env "JOBS=${JOBS:-1}" \
   --env "RAW_JOBS=${RAW_JOBS:-1}" \
   --env "LIMIT=$queue_limit" \

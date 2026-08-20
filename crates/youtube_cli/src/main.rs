@@ -412,6 +412,8 @@ async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> 
         .unwrap_or_else(|| PathBuf::from("/var/lib/ytsearch/raw-generation-work"));
     validate_publication_work_root(&work_root)?;
     fs::create_dir_all(&work_root)?;
+    let _work_lock = PublicationWorkLock::acquire(&work_root)?;
+    remove_stale_publication_jobs(&work_root)?;
     let minimum_free = publication_minimum_free_bytes(
         std::env::var(RAW_PUBLICATION_MIN_FREE_BYTES_ENV)
             .ok()
@@ -425,9 +427,6 @@ async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> 
     }
 
     let job_root = work_root.join(&job.job_id);
-    if job_root.exists() {
-        fs::remove_dir_all(&job_root)?;
-    }
     fs::create_dir(&job_root)?;
     let snapshot_path = job_root.join("mutations.sqlite3");
     println!(
@@ -509,6 +508,54 @@ fn validate_publication_work_root(path: &Path) -> Result<(), CliError> {
         )));
     }
     Ok(())
+}
+
+struct PublicationWorkLock {
+    _file: fs::File,
+}
+
+impl PublicationWorkLock {
+    fn acquire(root: &Path) -> Result<Self, CliError> {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.join("builder.lock"))?;
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+                return Err(CliError::Message(
+                    "another Raw generation builder already owns the publication workspace"
+                        .to_string(),
+                ));
+            }
+        }
+        Ok(Self { _file: file })
+    }
+}
+
+fn remove_stale_publication_jobs(root: &Path) -> Result<(), CliError> {
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir()
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(is_publication_job_id)
+        {
+            fs::remove_dir_all(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn is_publication_job_id(value: &str) -> bool {
+    value.len() == 37
+        && value.as_bytes()[..20].iter().all(u8::is_ascii_digit)
+        && value.as_bytes()[20] == b'-'
+        && value.as_bytes()[21..].iter().all(u8::is_ascii_hexdigit)
 }
 
 fn publication_minimum_free_bytes(value: Option<&str>) -> Result<u64, CliError> {
@@ -2309,6 +2356,12 @@ mod tests {
             9_000_000_000
         );
         assert!(publication_minimum_free_bytes(Some("8gb")).is_err());
+        assert!(is_publication_job_id(
+            "00000000000000000001-0123456789abcdef"
+        ));
+        assert!(!is_publication_job_id(
+            "../00000000000000000001-0123456789abcdef"
+        ));
     }
 
     #[test]
