@@ -17,6 +17,7 @@ require_line() {
 require_line "$ROOT/fly.raw-search.toml" "memory = '2048mb'" "Raw must remain at 2 GiB"
 require_line "$ROOT/fly.raw-search.toml" "cpu_kind = 'shared'" "Raw must use shared CPUs"
 require_line "$ROOT/fly.raw-search.toml" "cpus = 2" "Raw must remain at two shared vCPUs"
+require_line "$ROOT/fly.raw-search.toml" "RAW_SEARCH_BIND = '\[::\]:8108'" "Raw must listen on Fly private IPv6"
 require_line "$SCRIPT_DIR/fly-run-queue-indexer.sh" 'INDEXER_MEMORY_MB:-2048' "recreated indexer must remain at 2 GiB"
 require_line "$SCRIPT_DIR/fly-run-queue-indexer.sh" 'INDEXER_CPUS:-2' "recreated indexer must remain at two shared vCPUs"
 require_line "$SCRIPT_DIR/fly-run-queue-indexers.sh" 'DAILY_UPDATE_ENABLED:-0' "on-demand indexer must not become a daily always-running worker"
