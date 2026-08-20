@@ -262,6 +262,20 @@ mod tests {
         assert_eq!(name.as_deref(), Some("raw-publisher-test"));
     }
 
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn background_work_has_lower_linux_cpu_priority() {
+        let priority = run_background_work("raw-publisher-priority-test", || {
+            // SAFETY: getpriority only reads the calling thread's scheduler
+            // niceness and does not retain any memory.
+            unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) }
+        })
+        .await
+        .unwrap();
+
+        assert!(priority >= BACKGROUND_CPU_NICE);
+    }
+
     #[test]
     fn cold_writer_preserves_write_and_seek_contract() {
         let directory = tempfile::tempdir().unwrap();
