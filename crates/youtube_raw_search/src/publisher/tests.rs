@@ -367,6 +367,17 @@ fn corpus_identity_is_path_independent_and_rejects_source_or_format_mismatch() {
 }
 
 #[test]
+fn publisher_caches_corpus_compatibility_after_the_first_verified_read() {
+    let (_directory, publisher, _store) = fixture();
+    let expected = publisher.generation_compatibility().unwrap();
+
+    fs::remove_file(&publisher.paths.base_chunks_gzip).unwrap();
+    fs::remove_file(&publisher.paths.base_channels_gzip).unwrap();
+
+    assert_eq!(publisher.generation_compatibility().unwrap(), expected);
+}
+
+#[test]
 fn failed_publication_keeps_the_previous_manifest_and_durable_wal() {
     let (_directory, publisher, store) = fixture();
     store.delete_video("video-old", "delete-old").unwrap();

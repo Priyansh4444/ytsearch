@@ -294,6 +294,10 @@ impl RawSearchEngine {
         Self::open_with_validation(index_path, ManifestValidation::VerifiedByBuilder)
     }
 
+    pub(crate) fn open_verified_transfer(index_path: &Path) -> Result<Self> {
+        Self::open_with_validation(index_path, ManifestValidation::VerifiedByBuilder)
+    }
+
     fn open_with_validation(index_path: &Path, validation: ManifestValidation) -> Result<Self> {
         let manifest: Manifest =
             serde_json::from_reader(BufReader::new(File::open(index_path.join(MANIFEST_FILE))?))?;

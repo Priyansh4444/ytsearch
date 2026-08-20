@@ -44,6 +44,7 @@ pub(crate) struct RemotePublication {
     engine: Arc<ReloadableEngine>,
     store: Arc<MutationStore>,
     publisher: Arc<Publisher>,
+    compatibility: GenerationCompatibility,
     root: PathBuf,
     operation: Arc<tokio::sync::Mutex<()>>,
 }
@@ -128,10 +129,14 @@ impl RemotePublication {
     ) -> Result<Self, IndexStoreError> {
         let root = publisher.state_directory().join("work/remote-publication");
         fs::create_dir_all(root.join("jobs")).map_err(map_io)?;
+        // Resolve immutable corpus identity before the listener is bound so
+        // job preparation never scans the base archives on a serving reader.
+        let compatibility = publisher.generation_compatibility()?;
         let publication = Self {
             engine,
             store,
             publisher,
+            compatibility,
             root,
             operation: Arc::new(tokio::sync::Mutex::new(())),
         };
@@ -169,11 +174,10 @@ impl RemotePublication {
             fs::remove_file(&temporary_snapshot).map_err(map_io)?;
         }
         let store = Arc::clone(&self.store);
-        let publisher = Arc::clone(&self.publisher);
+        let compatibility = self.compatibility.clone();
         let snapshot_path = temporary_snapshot.clone();
         let prepared = run_background_work("raw-publication-prepare", move || {
             let _background_io = BackgroundIoGuard::enter();
-            let compatibility = publisher.generation_compatibility()?;
             let snapshot = store.export_snapshot(&snapshot_path)?;
             Ok::<_, IndexStoreError>((compatibility, snapshot))
         })

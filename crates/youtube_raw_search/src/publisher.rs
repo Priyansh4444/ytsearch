@@ -9,6 +9,7 @@ use std::{
     fs::{self, File},
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 use youtube_index_store::{ChannelDocument, IndexStoreError};
 
@@ -58,6 +59,7 @@ pub struct DetachedGeneration {
 
 pub struct Publisher {
     paths: PublisherPaths,
+    compatibility: OnceLock<GenerationCompatibility>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -224,7 +226,10 @@ impl GenerationBuilder {
 
 impl Publisher {
     pub fn new(paths: PublisherPaths) -> Self {
-        Self { paths }
+        Self {
+            paths,
+            compatibility: OnceLock::new(),
+        }
     }
 
     pub fn active_index_path(&self) -> Result<PathBuf, IndexStoreError> {
@@ -255,11 +260,16 @@ impl Publisher {
     }
 
     pub fn generation_compatibility(&self) -> Result<GenerationCompatibility, IndexStoreError> {
-        GenerationBuilder::new(
+        if let Some(compatibility) = self.compatibility.get() {
+            return Ok(compatibility.clone());
+        }
+        let compatibility = GenerationBuilder::new(
             self.paths.base_chunks_gzip.clone(),
             self.paths.base_channels_gzip.clone(),
         )
-        .compatibility()
+        .compatibility()?;
+        let _ = self.compatibility.set(compatibility.clone());
+        Ok(self.compatibility.get().cloned().unwrap_or(compatibility))
     }
 
     /// Installs a detached generation without acknowledging its mutation WAL.
@@ -307,10 +317,13 @@ impl Publisher {
                 "detached generation manifest does not match the accepted manifest".to_string(),
             ));
         }
-        let engine = RawSearchEngine::open(incoming_path).map_err(map_raw)?;
+        // The authenticated receiver already length-checks, BLAKE3-verifies,
+        // and fsyncs every streamed file. Avoid rereading the full generation
+        // while the old mmap is serving queries. Startup and recovery continue
+        // to use the full-checksum `RawSearchEngine::open` path.
+        let engine = RawSearchEngine::open_verified_transfer(incoming_path).map_err(map_raw)?;
         let report = report_for_existing(&engine);
 
-        sync_directory_tree(incoming_path)?;
         fs::rename(incoming_path, &final_path).map_err(map_io)?;
         sync_directory(&self.paths.state_directory.join("generations"))?;
         self.activate(sequence, &generation_name)?;
