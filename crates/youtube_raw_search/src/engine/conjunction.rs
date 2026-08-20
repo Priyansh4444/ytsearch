@@ -1,5 +1,13 @@
 use super::*;
 
+const ALWAYS_DOCUMENT_VALIDATE_TARGETS: usize = 128;
+// Above the established direct boundary, decompress/tokenize a bounded target
+// set only when it replaces a substantially larger posting scan. This protects
+// sparse conjunctions while avoiding multi-million-entry scans for common
+// terms after rare terms have already narrowed the candidate set.
+const MAX_ADAPTIVE_DOCUMENT_VALIDATE_TARGETS: usize = 512;
+const MIN_POSTING_TO_TARGET_RATIO: u64 = 512;
+
 struct TermAlternative {
     term: String,
     entry: TermEntry,
@@ -125,7 +133,7 @@ impl RawSearchEngine {
         self.retain_video_filter(&mut matches, filter)?;
         let remaining = plans.collect::<Vec<_>>();
         for (index, plan) in remaining.iter().enumerate() {
-            if matches.len() <= 128 {
+            if prefer_document_validation(matches.len(), &remaining[index..]) {
                 matches =
                     self.matches_for_plans_documents(&remaining[index..], &matches, block_cache)?;
                 break;
@@ -170,7 +178,7 @@ impl RawSearchEngine {
         block_cache: &mut BlockCache,
     ) -> Result<Vec<DocMatch>> {
         if let Some(targets) = targets
-            && targets.len() <= 128
+            && targets.len() <= ALWAYS_DOCUMENT_VALIDATE_TARGETS
         {
             return self.matches_for_plan_documents(plan, targets, block_cache);
         }
@@ -493,6 +501,23 @@ impl RawSearchEngine {
     }
 }
 
+fn prefer_document_validation(targets: usize, remaining: &[TermPlan]) -> bool {
+    if targets == 0 || remaining.is_empty() {
+        return false;
+    }
+    if targets <= ALWAYS_DOCUMENT_VALIDATE_TARGETS {
+        return true;
+    }
+    if targets > MAX_ADAPTIVE_DOCUMENT_VALIDATE_TARGETS {
+        return false;
+    }
+    let estimated_postings = remaining.iter().fold(0_u64, |total, plan| {
+        total.saturating_add(plan.estimated_documents)
+    });
+    let document_validation_cost = (targets as u64).saturating_mul(MIN_POSTING_TO_TARGET_RATIO);
+    estimated_postings >= document_validation_cost
+}
+
 fn token_stats(tokens: &[String], term: &str) -> Option<(u32, u32)> {
     let mut frequency = 0_u32;
     let mut first_position = 0_u32;
@@ -506,4 +531,45 @@ fn token_stats(tokens: &[String], term: &str) -> Option<(u32, u32)> {
         frequency = frequency.saturating_add(1);
     }
     (frequency > 0).then_some((frequency, first_position))
+}
+
+#[cfg(test)]
+mod strategy_tests {
+    use super::*;
+
+    fn plan(estimated_documents: u64) -> TermPlan {
+        TermPlan {
+            alternatives: Vec::new(),
+            estimated_documents,
+        }
+    }
+
+    #[test]
+    fn document_validation_strategy_is_bounded_and_scan_sensitive() {
+        assert!(!prefer_document_validation(0, &[plan(u64::MAX)]));
+        assert!(!prefer_document_validation(1, &[]));
+        assert!(prefer_document_validation(
+            ALWAYS_DOCUMENT_VALIDATE_TARGETS,
+            &[plan(1)]
+        ));
+
+        let adaptive_targets = ALWAYS_DOCUMENT_VALIDATE_TARGETS + 1;
+        let adaptive_boundary = adaptive_targets as u64 * MIN_POSTING_TO_TARGET_RATIO;
+        assert!(!prefer_document_validation(
+            adaptive_targets,
+            &[plan(adaptive_boundary - 1)]
+        ));
+        assert!(prefer_document_validation(
+            adaptive_targets,
+            &[plan(adaptive_boundary)]
+        ));
+        assert!(prefer_document_validation(
+            MAX_ADAPTIVE_DOCUMENT_VALIDATE_TARGETS,
+            &[plan(u64::MAX)]
+        ));
+        assert!(!prefer_document_validation(
+            MAX_ADAPTIVE_DOCUMENT_VALIDATE_TARGETS + 1,
+            &[plan(u64::MAX)]
+        ));
+    }
 }
