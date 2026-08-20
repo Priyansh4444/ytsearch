@@ -1157,7 +1157,11 @@ pub(super) fn build_manifest_files(index_path: &Path) -> Result<BTreeMap<String,
     Ok(files)
 }
 
-pub(super) fn validate_manifest_files(index_path: &Path, manifest: &Manifest) -> Result<()> {
+pub(super) fn validate_manifest_files(
+    index_path: &Path,
+    manifest: &Manifest,
+    validation: ManifestValidation,
+) -> Result<()> {
     if manifest.files.len() != GENERATION_FILES.len() {
         return Err(Error::Corrupt(format!(
             "manifest records {} generation files, expected {}",
@@ -1178,11 +1182,13 @@ pub(super) fn validate_manifest_files(index_path: &Path, manifest: &Manifest) ->
                 expected.bytes
             )));
         }
-        let actual_checksum = checksum_file(&path)?;
-        if actual_checksum != expected.blake3 {
-            return Err(Error::Corrupt(format!(
-                "generation file {name} failed its BLAKE3 checksum"
-            )));
+        if matches!(validation, ManifestValidation::Full) {
+            let actual_checksum = checksum_file(&path)?;
+            if actual_checksum != expected.blake3 {
+                return Err(Error::Corrupt(format!(
+                    "generation file {name} failed its BLAKE3 checksum"
+                )));
+            }
         }
     }
     Ok(())

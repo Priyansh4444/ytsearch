@@ -1,6 +1,6 @@
 use crate::{
     BuildReport, MutationSnapshot, MutationStore, RawSearchEngine, cache_io::ColdReader,
-    engine::build_index_from_lines,
+    engine::build_index_from_lines_and_open,
 };
 use flate2::read::MultiGzDecoder;
 use serde::{Deserialize, Serialize};
@@ -107,8 +107,7 @@ impl Publisher {
         let candidate_path = final_path.with_extension("candidate");
         reset_private_directory(&self.paths.state_directory, &candidate_path)?;
 
-        let report = self.build_generation(&snapshot, &candidate_path)?;
-        let engine = RawSearchEngine::open(&candidate_path).map_err(map_raw)?;
+        let (report, engine) = self.build_generation(&snapshot, &candidate_path)?;
         sync_directory_tree(&candidate_path)?;
         fs::rename(&candidate_path, &final_path).map_err(map_io)?;
         sync_directory(&self.paths.state_directory.join("generations"))?;
@@ -128,7 +127,7 @@ impl Publisher {
         &self,
         snapshot: &MutationSnapshot,
         candidate_path: &Path,
-    ) -> Result<BuildReport, IndexStoreError> {
+    ) -> Result<(BuildReport, RawSearchEngine), IndexStoreError> {
         let video_mutations = snapshot
             .videos
             .iter()
@@ -191,7 +190,7 @@ impl Publisher {
                 }
             }
         }
-        build_index_from_lines(
+        build_index_from_lines_and_open(
             base_documents.chain(replacement_documents),
             channels
                 .into_values()

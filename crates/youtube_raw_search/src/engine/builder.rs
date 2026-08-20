@@ -177,7 +177,25 @@ pub fn build_index(
     build_index_from_lines(chunk_lines, channels, index_path)
 }
 
-pub(crate) fn build_index_from_lines<I>(
+/// Builds and opens a private candidate without hashing its generation files a
+/// second time. Manifest construction at the end of `build_index_from_lines`
+/// has already read and hashed every immutable file, and this wrapper does not
+/// expose a point where another caller can modify the candidate between those
+/// checks and the structural open.
+pub(crate) fn build_index_from_lines_and_open<I>(
+    chunk_lines: I,
+    channels: Vec<Value>,
+    index_path: &Path,
+) -> Result<(BuildReport, RawSearchEngine)>
+where
+    I: Iterator<Item = Result<String>>,
+{
+    let report = build_index_from_lines(chunk_lines, channels, index_path)?;
+    let engine = RawSearchEngine::open_newly_built(index_path)?;
+    Ok((report, engine))
+}
+
+fn build_index_from_lines<I>(
     chunk_lines: I,
     channels: Vec<Value>,
     index_path: &Path,

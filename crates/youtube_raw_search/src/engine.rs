@@ -166,6 +166,12 @@ struct ManifestFile {
     blake3: String,
 }
 
+#[derive(Clone, Copy)]
+enum ManifestValidation {
+    Full,
+    VerifiedByBuilder,
+}
+
 mod builder;
 mod conjunction;
 mod query_support;
@@ -175,7 +181,7 @@ mod tests;
 
 #[cfg(test)]
 use builder::BuildPosting;
-pub(crate) use builder::build_index_from_lines;
+pub(crate) use builder::build_index_from_lines_and_open;
 pub use builder::{build_index, slice_corpus};
 use query_support::*;
 

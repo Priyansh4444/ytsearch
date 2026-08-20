@@ -287,6 +287,14 @@ impl DocumentTable {
 
 impl RawSearchEngine {
     pub fn open(index_path: &Path) -> Result<Self> {
+        Self::open_with_validation(index_path, ManifestValidation::Full)
+    }
+
+    pub(super) fn open_newly_built(index_path: &Path) -> Result<Self> {
+        Self::open_with_validation(index_path, ManifestValidation::VerifiedByBuilder)
+    }
+
+    fn open_with_validation(index_path: &Path, validation: ManifestValidation) -> Result<Self> {
         let manifest: Manifest =
             serde_json::from_reader(BufReader::new(File::open(index_path.join(MANIFEST_FILE))?))?;
         if !matches!(manifest.schema_version, 5 | 6) {
@@ -295,8 +303,18 @@ impl RawSearchEngine {
                 manifest.schema_version
             )));
         }
+        if matches!(validation, ManifestValidation::VerifiedByBuilder)
+            && manifest.schema_version != 6
+        {
+            return Err(Error::Corrupt(
+                "newly built index does not use schema version 6".to_string(),
+            ));
+        }
         if manifest.schema_version == 6 {
-            validate_manifest_files(index_path, &manifest)?;
+            // Builder-verified opens still check the complete file list and all
+            // byte lengths. Only the redundant content reads and BLAKE3 work
+            // are skipped.
+            validate_manifest_files(index_path, &manifest, validation)?;
         }
         let videos: Vec<VideoMeta> =
             serde_json::from_reader(BufReader::new(File::open(index_path.join(VIDEOS_FILE))?))?;
