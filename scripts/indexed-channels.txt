@@ -11,6 +11,7 @@
 @benjdicken | Ben Dicken
 @bettersoftwareconference | Better Software Conference
 @bmdavis419 | Ben Davis
+@BrodieRobertson | Brodie Robertson
 @brancheducation | Branch Education
 @bycloudai | bycloud
 @codebullet | Code Bullet
