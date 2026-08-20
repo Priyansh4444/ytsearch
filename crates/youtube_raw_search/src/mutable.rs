@@ -225,81 +225,14 @@ impl MutationStore {
     }
 
     pub fn snapshot(&self) -> Result<MutationSnapshot, IndexStoreError> {
-        let connection = self.connection()?;
-        let through_sequence_sql = connection
-            .query_row(
-                "SELECT COALESCE(MAX(sequence), 0) FROM operations",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(map_sqlite)?;
-        let through_sequence = u64::try_from(through_sequence_sql)
-            .map_err(|error| IndexStoreError::internal(BACKEND, error))?;
-        let mut video_statement = connection
-            .prepare(
-                "SELECT sequence, video_id, chunks_json
-                 FROM video_mutations WHERE sequence <= ?1 ORDER BY video_id",
-            )
-            .map_err(map_sqlite)?;
-        let videos = video_statement
-            .query_map([through_sequence_sql], |row| {
-                let chunks_json = row.get::<_, Option<Vec<u8>>>(2)?;
-                let chunks = chunks_json
-                    .map(|bytes| serde_json::from_slice::<Vec<TranscriptChunk>>(&bytes))
-                    .transpose()
-                    .map_err(|error| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            2,
-                            rusqlite::types::Type::Blob,
-                            Box::new(error),
-                        )
-                    })?;
-                Ok(StoredVideoMutation {
-                    sequence: row_u64(row, 0)?,
-                    video_id: row.get(1)?,
-                    chunks,
-                })
-            })
-            .map_err(map_sqlite)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(map_sqlite)?;
-        drop(video_statement);
-
-        let mut channel_statement = connection
-            .prepare(
-                "SELECT sequence, channel_id, document_json, cascade
-                 FROM channel_mutations WHERE sequence <= ?1 ORDER BY channel_id",
-            )
-            .map_err(map_sqlite)?;
-        let channels = channel_statement
-            .query_map([through_sequence_sql], |row| {
-                let document_json = row.get::<_, Option<Vec<u8>>>(2)?;
-                let document = document_json
-                    .map(|bytes| serde_json::from_slice::<ChannelDocument>(&bytes))
-                    .transpose()
-                    .map_err(|error| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            2,
-                            rusqlite::types::Type::Blob,
-                            Box::new(error),
-                        )
-                    })?;
-                Ok(StoredChannelMutation {
-                    sequence: row_u64(row, 0)?,
-                    channel_id: row.get(1)?,
-                    document,
-                    cascade: row.get(3)?,
-                })
-            })
-            .map_err(map_sqlite)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(map_sqlite)?;
-
-        Ok(MutationSnapshot {
-            through_sequence,
-            videos,
-            channels,
-        })
+        let through_sequence_sql = snapshot_sequence(&transaction)?;
+        let snapshot = snapshot_at_sequence(&transaction, through_sequence_sql)?;
+        transaction.commit().map_err(map_sqlite)?;
+        Ok(snapshot)
     }
 
     pub fn video_mutation_summary(
@@ -447,6 +380,89 @@ impl MutationStore {
             .lock()
             .map_err(|_| IndexStoreError::internal(BACKEND, "mutation store lock poisoned"))
     }
+}
+
+fn snapshot_sequence(transaction: &Transaction<'_>) -> Result<i64, IndexStoreError> {
+    transaction
+        .query_row(
+            "SELECT COALESCE(MAX(sequence), 0) FROM operations",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(map_sqlite)
+}
+
+fn snapshot_at_sequence(
+    transaction: &Transaction<'_>,
+    through_sequence_sql: i64,
+) -> Result<MutationSnapshot, IndexStoreError> {
+    let through_sequence = u64::try_from(through_sequence_sql)
+        .map_err(|error| IndexStoreError::internal(BACKEND, error))?;
+    let mut video_statement = transaction
+        .prepare(
+            "SELECT sequence, video_id, chunks_json
+                 FROM video_mutations WHERE sequence <= ?1 ORDER BY video_id",
+        )
+        .map_err(map_sqlite)?;
+    let videos = video_statement
+        .query_map([through_sequence_sql], |row| {
+            let chunks_json = row.get::<_, Option<Vec<u8>>>(2)?;
+            let chunks = chunks_json
+                .map(|bytes| serde_json::from_slice::<Vec<TranscriptChunk>>(&bytes))
+                .transpose()
+                .map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Blob,
+                        Box::new(error),
+                    )
+                })?;
+            Ok(StoredVideoMutation {
+                sequence: row_u64(row, 0)?,
+                video_id: row.get(1)?,
+                chunks,
+            })
+        })
+        .map_err(map_sqlite)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(map_sqlite)?;
+    drop(video_statement);
+
+    let mut channel_statement = transaction
+        .prepare(
+            "SELECT sequence, channel_id, document_json, cascade
+                 FROM channel_mutations WHERE sequence <= ?1 ORDER BY channel_id",
+        )
+        .map_err(map_sqlite)?;
+    let channels = channel_statement
+        .query_map([through_sequence_sql], |row| {
+            let document_json = row.get::<_, Option<Vec<u8>>>(2)?;
+            let document = document_json
+                .map(|bytes| serde_json::from_slice::<ChannelDocument>(&bytes))
+                .transpose()
+                .map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Blob,
+                        Box::new(error),
+                    )
+                })?;
+            Ok(StoredChannelMutation {
+                sequence: row_u64(row, 0)?,
+                channel_id: row.get(1)?,
+                document,
+                cascade: row.get(3)?,
+            })
+        })
+        .map_err(map_sqlite)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(map_sqlite)?;
+
+    Ok(MutationSnapshot {
+        through_sequence,
+        videos,
+        channels,
+    })
 }
 
 fn ensure_video_summary_columns(connection: &Connection) -> Result<(), IndexStoreError> {

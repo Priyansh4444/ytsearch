@@ -19,6 +19,20 @@ fn chunk(video_id: &str, text: &str) -> TranscriptChunk {
     .unwrap()
 }
 
+fn channel(indexed_videos: u32) -> ChannelDocument {
+    ChannelDocument {
+        id: "channel".to_string(),
+        handle: "@channel".to_string(),
+        name: "Channel".to_string(),
+        channel_id: "UC123".to_string(),
+        uploads_playlist: None,
+        public_video_count: indexed_videos,
+        indexed_video_count: indexed_videos,
+        indexed_chunk_count: indexed_videos,
+        avatar_url: None,
+    }
+}
+
 #[test]
 fn durable_replacement_survives_reopen_and_is_idempotent() {
     let directory = tempdir().unwrap();
@@ -115,4 +129,57 @@ fn publication_state_persists() {
         .unwrap();
     assert_eq!(published.state, IndexOperationState::Published);
     assert_eq!(published.acknowledged_readers, 1);
+}
+
+#[test]
+fn snapshot_pins_latest_rows_to_its_captured_sequence() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("mutations.sqlite3");
+    let first = MutationStore::open(&path).unwrap();
+    let second = MutationStore::open(&path).unwrap();
+    let old_chunks = [chunk("video-1", "old text")];
+    let new_chunks = [chunk("video-1", "new text")];
+    first
+        .replace_video(
+            VideoReplacement::new("video-1", &old_chunks).unwrap(),
+            "replace-video-old",
+        )
+        .unwrap();
+    first
+        .upsert_channel(&channel(1), "upsert-channel-old")
+        .unwrap();
+
+    let mut connection = first.connection().unwrap();
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .unwrap();
+    let captured_sequence = snapshot_sequence(&transaction).unwrap();
+
+    second
+        .replace_video(
+            VideoReplacement::new("video-1", &new_chunks).unwrap(),
+            "replace-video-new",
+        )
+        .unwrap();
+    second
+        .upsert_channel(&channel(2), "upsert-channel-new")
+        .unwrap();
+
+    let captured = snapshot_at_sequence(&transaction, captured_sequence).unwrap();
+    transaction.commit().unwrap();
+    drop(connection);
+    assert_eq!(captured.through_sequence, 2);
+    assert_eq!(
+        captured.videos[0].chunks.as_deref(),
+        Some(old_chunks.as_slice())
+    );
+    assert_eq!(captured.channels[0].document, Some(channel(1)));
+
+    let current = first.snapshot().unwrap();
+    assert_eq!(current.through_sequence, 4);
+    assert_eq!(
+        current.videos[0].chunks.as_deref(),
+        Some(new_chunks.as_slice())
+    );
+    assert_eq!(current.channels[0].document, Some(channel(2)));
 }
