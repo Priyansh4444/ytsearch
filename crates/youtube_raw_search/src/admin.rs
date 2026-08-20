@@ -163,10 +163,9 @@ impl AdminState {
                 }
             }
 
-            // Only chase a sequence explicitly requested through /admin/publish
-            // (or captured once at startup). Mutations arriving during a build
-            // remain durable but do not turn one request into an endless series
-            // of full-corpus rebuilds.
+            // Only chase a sequence explicitly requested through /admin/publish.
+            // Mutations arriving during a build remain durable but do not turn
+            // one request into an endless series of full-corpus rebuilds.
             if self.engine.sequence() >= self.publication_target.load(Ordering::Acquire) {
                 break;
             }

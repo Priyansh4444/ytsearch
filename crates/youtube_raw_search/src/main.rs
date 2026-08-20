@@ -112,7 +112,6 @@ async fn serve_mutable() -> Result<(), Box<dyn std::error::Error>> {
     let app = youtube_search_service::router(&search_config, search_backend)
         .merge(admin_router(admin.clone()));
     let listener = tokio::net::TcpListener::bind(bind).await?;
-    admin.trigger_publication();
     tracing::info!(%bind, active_sequence, "mutable raw search ready");
     youtube_search_service::serve_router(listener, app).await?;
     Ok(())
