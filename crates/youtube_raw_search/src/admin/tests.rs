@@ -1,7 +1,11 @@
 use super::*;
-use crate::{PublisherPaths, RawSearchEngine, build_index};
+use crate::remote_publication::{
+    GenerationManifest, GenerationUploadRequest, RAW_GENERATION_FILES,
+};
+use crate::{GenerationBuilder, PublisherPaths, RawSearchEngine, build_index};
 use axum::extract::{Path, State};
 use flate2::{Compression, write::GzEncoder};
+use serde::Serialize;
 use std::{fs::File, io::Write};
 use youtube_search_service::{SearchBackend, SearchParams};
 
@@ -52,7 +56,7 @@ fn gzip_json_lines<T: Serialize>(path: &std::path::Path, values: &[T]) {
     output.finish().unwrap();
 }
 
-fn setup() -> (tempfile::TempDir, AdminState) {
+fn setup() -> (tempfile::TempDir, AdminState, Arc<Publisher>) {
     let root = tempfile::tempdir().unwrap();
     let base_chunks_gzip = root.path().join("chunks.jsonl.gz");
     let base_channels_gzip = root.path().join("channels.jsonl.gz");
@@ -88,8 +92,8 @@ fn setup() -> (tempfile::TempDir, AdminState) {
         RawSearchEngine::open(&base_index).unwrap(),
         0,
     ));
-    let state = AdminState::new(engine, store, publisher, KEY.to_string()).unwrap();
-    (root, state)
+    let state = AdminState::new(engine, store, Arc::clone(&publisher), KEY.to_string()).unwrap();
+    (root, state, publisher)
 }
 
 fn headers() -> HeaderMap {
@@ -98,9 +102,62 @@ fn headers() -> HeaderMap {
     headers
 }
 
+async fn publish_remotely(root: &std::path::Path, state: &AdminState) {
+    let job = state.remote_publication.prepare().await.unwrap();
+    let mut download = state
+        .remote_publication
+        .open_snapshot(&job.job_id)
+        .await
+        .unwrap();
+    let snapshot_path = root.join("off-reader-snapshot.sqlite3");
+    let mut snapshot_output = tokio::fs::File::create(&snapshot_path).await.unwrap();
+    tokio::io::copy(&mut download.file, &mut snapshot_output)
+        .await
+        .unwrap();
+    snapshot_output.sync_all().await.unwrap();
+    drop(snapshot_output);
+    let snapshot_store = MutationStore::open_snapshot_read_only(&snapshot_path).unwrap();
+    let output = root.join("off-reader-generation");
+    GenerationBuilder::new(root.join("chunks.jsonl.gz"), root.join("channels.jsonl.gz"))
+        .build(&snapshot_store, &job.compatibility, &output)
+        .unwrap();
+    let manifest: GenerationManifest =
+        serde_json::from_slice(&std::fs::read(output.join("manifest.json")).unwrap()).unwrap();
+    state
+        .remote_publication
+        .accept_manifest(
+            &job.job_id,
+            GenerationUploadRequest {
+                target_sequence: job.target_sequence,
+                compatibility: job.compatibility,
+                manifest,
+            },
+        )
+        .await
+        .unwrap();
+    for name in RAW_GENERATION_FILES {
+        let bytes = std::fs::read(output.join(name)).unwrap();
+        state
+            .remote_publication
+            .upload_file(
+                &job.job_id,
+                name,
+                Some(bytes.len() as u64),
+                Body::from(bytes),
+            )
+            .await
+            .unwrap();
+    }
+    state
+        .remote_publication
+        .activate(&job.job_id)
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn video_mutation_is_durable_then_atomically_published() {
-    let (_root, state) = setup();
+    let (root, state, _publisher) = setup();
     let (_, Json(operation)) = replace_video(
         State(state.clone()),
         Path("new-video".to_string()),
@@ -131,7 +188,7 @@ async fn video_mutation_is_durable_then_atomically_published() {
     assert_eq!(stats.indexed_videos, 2);
     assert_eq!(stats.indexed_chunks, 2);
 
-    state.clone().publish_pending().await;
+    publish_remotely(root.path(), &state).await;
 
     assert_eq!(state.engine.sequence(), operation.sequence.unwrap());
     assert_eq!(
@@ -150,7 +207,7 @@ async fn video_mutation_is_durable_then_atomically_published() {
 
 #[tokio::test]
 async fn handle_form_mutations_keep_canonical_channel_counts_and_scope() {
-    let (_root, state) = setup();
+    let (root, state, _publisher) = setup();
     let _ = replace_video(
         State(state.clone()),
         Path("handle-video".to_string()),
@@ -169,7 +226,7 @@ async fn handle_form_mutations_keep_canonical_channel_counts_and_scope() {
     assert_eq!(pending.indexed_videos, 2);
     assert_eq!(pending.indexed_chunks, 2);
 
-    state.clone().publish_pending().await;
+    publish_remotely(root.path(), &state).await;
 
     let published = state.engine.active().unwrap().channel_stats("creator");
     assert_eq!(published.indexed_videos, 2);
@@ -178,14 +235,29 @@ async fn handle_form_mutations_keep_canonical_channel_counts_and_scope() {
 
 #[tokio::test]
 async fn admin_routes_reject_missing_keys_before_accessing_state() {
-    let (_root, state) = setup();
+    let (_root, state, _publisher) = setup();
     let error = readiness(State(state), HeaderMap::new()).await.unwrap_err();
     assert_eq!(error.into_response().status(), StatusCode::UNAUTHORIZED);
 }
 
+#[tokio::test]
+async fn remote_publication_and_legacy_publish_fail_closed_without_authority_or_worker() {
+    let (_root, state, _publisher) = setup();
+    let unauthorized = prepare_publication(State(state.clone()), HeaderMap::new())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        unauthorized.into_response().status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    let legacy = publish(State(state), headers()).await.unwrap_err();
+    assert_eq!(legacy.into_response().status(), StatusCode::CONFLICT);
+}
+
 #[test]
 fn admin_keys_have_a_minimum_strength_and_constant_time_comparison() {
-    let (_root, state) = setup();
+    let (_root, state, publisher) = setup();
     assert!(constant_time_eq(KEY, KEY));
     assert!(!constant_time_eq(KEY, "test-admin-key-24-bytes-lonf"));
     assert!(!constant_time_eq(KEY, "short"));
@@ -193,7 +265,7 @@ fn admin_keys_have_a_minimum_strength_and_constant_time_comparison() {
         AdminState::new(
             Arc::clone(&state.engine),
             Arc::clone(&state.store),
-            Arc::clone(&state.publisher),
+            publisher,
             "too-short".to_string()
         ),
         Err(IndexStoreError::InvalidInput(_))
