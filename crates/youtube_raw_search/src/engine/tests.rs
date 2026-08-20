@@ -214,6 +214,82 @@ fn compact_split_highlights_both_matched_components() {
 }
 
 #[test]
+fn common_single_tokens_do_not_expand_as_missing_separator_splits() {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    for index in 0..5 {
+        for term in ["react", "fire"] {
+            writeln!(
+                chunks,
+                "{}",
+                json!({
+                    "id": format!("{term}-{index}-1"),
+                    "video_id": format!("{term}-{index}"),
+                    "title": format!("{term} result {index}"),
+                    "text": format!("an exact {term} result"),
+                    "youtuber_handle": if index == 0 { "@narrow" } else { "@exact" },
+                    "youtuber_name": "Exact"
+                })
+            )
+            .expect("write exact chunk");
+        }
+    }
+    for (id, text) in [("react-split", "re act"), ("fire-split", "fi re")] {
+        writeln!(
+            chunks,
+            "{}",
+            json!({
+                "id": format!("{id}-1"),
+                "video_id": id,
+                "title": "unrelated split tokens",
+                "text": text,
+                "youtuber_handle": "@narrow",
+                "youtuber_name": "Noise"
+            })
+        )
+        .expect("write split distractor");
+    }
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+    let engine = RawSearchEngine::open(&index_path).expect("open raw index");
+
+    for term in ["react", "fire"] {
+        let response = engine
+            .search(&grouped_query(term))
+            .expect("single-token search");
+        assert_eq!(
+            response["found"], 5,
+            "{term} should remain exact/prefix-only"
+        );
+        assert!(
+            response["grouped_hits"]
+                .as_array()
+                .expect("groups")
+                .iter()
+                .all(|group| group["group_key"][0]
+                    .as_str()
+                    .is_some_and(|video| video.starts_with(term))),
+            "{term} admitted a missing-separator distractor: {response}"
+        );
+
+        let mut scoped = grouped_query(term);
+        scoped.filter_by = Some("youtuber_handle:=@narrow".to_string());
+        let scoped_response = engine.search(&scoped).expect("scoped single-token search");
+        assert_eq!(
+            scoped_response["found"], 1,
+            "{term} should not split merely because the filtered exact set is sparse"
+        );
+        assert_eq!(
+            scoped_response["grouped_hits"][0]["group_key"][0],
+            format!("{term}-0")
+        );
+    }
+}
+
+#[test]
 fn schema_six_reconstructs_complete_positions_from_aligned_sidecars() {
     let root = TempDir::new().expect("temp dir");
     let chunks_path = root.path().join("chunks.jsonl");

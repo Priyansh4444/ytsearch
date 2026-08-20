@@ -50,7 +50,11 @@ const MAX_FUZZY_TERMS_PER_DISTANCE: usize = 4;
 const MAX_FUZZY_SPLIT_TERMS: usize = 8;
 const MIN_ONE_TYPO_BYTES: usize = 4;
 const MIN_TWO_TYPO_BYTES: usize = 7;
-const MIN_SPLIT_TERM_CHARS: usize = 2;
+// Two-character components are overwhelmingly common abbreviations/particles
+// (`react` -> `re act`, `fire` -> `fi re`) rather than omitted separators.
+// Requiring three characters per side retains useful recoveries such as
+// `blackhole` -> `black hole` while bounding both noise and posting work.
+const MIN_SPLIT_TERM_CHARS: usize = 3;
 const MIN_FUZZY_SPLIT_COMPONENT_CHARS: usize = 3;
 const MAX_SPLIT_ALTERNATIVES: usize = 8;
 const SPLIT_SCORE_BONUS: f32 = 8.0;
@@ -882,13 +886,9 @@ impl RawSearchEngine {
     ) -> Result<Value> {
         let exact = self.matches_for_term(term, fields)?;
         let mut cache = BlockCache::default();
-        let (split, split_terms) = self.split_term_matches(term, fields)?;
-        let has_exact_split = !split.is_empty();
-        let mut matches = union_sorted(exact, split);
+        let mut matches = exact;
         retain_not_excluded(&mut matches, excluded_documents);
-        let mut highlight_group = Vec::with_capacity(1 + split_terms.len());
-        highlight_group.push(term.to_string());
-        highlight_group.extend(split_terms);
+        let mut highlight_group = vec![term.to_string()];
 
         // Prefix matching is part of Typesense's ordinary candidate set, not a
         // typo fallback. Always merge it before applying the typo threshold so
@@ -902,6 +902,24 @@ impl RawSearchEngine {
         {
             return self.format_matches(params, &[highlight_group], matches, &mut cache);
         }
+
+        // Missing-separator recovery is fallback behavior. Running it before
+        // the exact/prefix threshold makes ordinary words such as `react` and
+        // `fire` explode into `re + act` and `fi + re`, respectively. Besides
+        // admitting unrelated results, those common-token intersections can
+        // dominate the entire request. Sparse compact terms such as
+        // `blackhole` still reach this path and recover `black hole`.
+        let (split, split_terms) = self.split_term_matches(term, fields)?;
+        let has_exact_split = !split.is_empty();
+        matches = union_sorted(matches, split);
+        retain_not_excluded(&mut matches, excluded_documents);
+        highlight_group.extend(split_terms);
+        if has_exact_split
+            && self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)?
+        {
+            return self.format_matches(params, &[highlight_group], matches, &mut cache);
+        }
+
         // Treat a missing separator plus one corrected component as a more
         // specific hypothesis than an unrelated whole-token typo. The path is
         // still guarded by lexicon membership, one exact component, one
