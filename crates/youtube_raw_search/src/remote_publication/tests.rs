@@ -187,6 +187,10 @@ async fn corrupted_upload_is_removed_and_restart_preserves_n_plus_one() {
         "operation-n-plus-one",
     );
     let (generation, manifest) = detached_for_job(&fixture, &job);
+    assert_eq!(
+        required_upload_space(&manifest).unwrap(),
+        MIN_FREE_AFTER_UPLOAD_BYTES + manifest.files.values().map(|file| file.bytes).sum::<u64>()
+    );
     accept(&fixture.publication, &job, manifest).await;
 
     let first = RAW_GENERATION_FILES[0];

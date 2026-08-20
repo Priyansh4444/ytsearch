@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     sync::OnceLock,
 };
-use youtube_index_store::{ChannelDocument, IndexStoreError};
+use youtube_index_store::{ChannelDocument, IndexStoreError, RawGenerationCompatibility};
 
 const BACKEND: &str = "raw";
 const ACTIVE_MANIFEST: &str = "active-generation.json";
@@ -35,13 +35,7 @@ pub struct PublishedGeneration {
     pub report: BuildReport,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct GenerationCompatibility {
-    pub generation_format: String,
-    pub corpus_identity: String,
-    pub base_chunks_blake3: String,
-    pub base_channels_blake3: String,
-}
+pub type GenerationCompatibility = RawGenerationCompatibility;
 
 #[derive(Clone, Debug)]
 pub struct GenerationBuilder {

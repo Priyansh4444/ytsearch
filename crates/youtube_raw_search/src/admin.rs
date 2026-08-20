@@ -191,7 +191,10 @@ async fn publication_snapshot(
 ) -> Result<Response, AdminError> {
     authorize(&state, &headers)?;
     let snapshot = state.remote_publication.open_snapshot(&job_id).await?;
-    let mut response = Response::new(Body::from_stream(ReaderStream::new(snapshot.file)));
+    let mut response = Response::new(Body::from_stream(ReaderStream::with_capacity(
+        snapshot.file,
+        256 * 1024,
+    )));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/vnd.sqlite3"),

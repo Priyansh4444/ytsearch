@@ -4,7 +4,7 @@ use youtube_client::YouTubeClient;
 use youtube_index_store::{RawIndexAdminClient, RawIndexAdminConfig};
 use youtube_search_client::{DEFAULT_COLLECTION, SearchClient, SearchClientConfig};
 
-use super::{CliError, ContentKindFilter};
+use super::{CliError, ContentKindFilter, RAW_PUBLICATION_TIMEOUT_ENV, raw_publication_timeout};
 
 #[derive(Debug, Parser)]
 #[command(name = "ytsearch")]
@@ -38,6 +38,16 @@ pub(super) enum Command {
     IndexVideo(IndexVideoCommand),
     #[command(about = "Search transcript chunks using the selected search backend")]
     Search(SearchCommand),
+    #[command(about = "Build and activate pending Raw mutations on the external builder")]
+    Publish(PublishCommand),
+}
+
+#[derive(Clone, Debug, Args)]
+pub(super) struct PublishCommand {
+    #[command(flatten)]
+    pub(super) search: SearchAdminArgs,
+    #[command(flatten)]
+    pub(super) collection: TranscriptCollectionArg,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -407,10 +417,12 @@ impl SearchAdminArgs {
             .clone()
             .or_else(|| std::env::var("RAW_SEARCH_ADMIN_API_KEY").ok())
             .ok_or_else(|| CliError::Message("missing Raw admin key".to_string()))?;
-        Ok(RawIndexAdminClient::new(RawIndexAdminConfig::new(
-            api_url,
-            admin_api_key,
-        ))?)
+        let publication_timeout =
+            raw_publication_timeout(std::env::var(RAW_PUBLICATION_TIMEOUT_ENV).ok().as_deref())?;
+        Ok(RawIndexAdminClient::new(
+            RawIndexAdminConfig::new(api_url, admin_api_key)
+                .with_publication_timeout(publication_timeout),
+        )?)
     }
 }
 

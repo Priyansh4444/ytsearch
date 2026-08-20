@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::num::NonZeroU16;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroU16,
+};
 use thiserror::Error;
 use youtube_ingest::TranscriptChunk;
 
@@ -31,6 +34,77 @@ pub struct BackendReadiness {
     pub last_sequence: Option<u64>,
     pub acknowledged_readers: u8,
 }
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RawGenerationCompatibility {
+    pub generation_format: String,
+    pub corpus_identity: String,
+    pub base_chunks_blake3: String,
+    pub base_channels_blake3: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RawPublicationStatus {
+    Prepared,
+    ManifestAccepted,
+    Activated,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawGenerationFile {
+    pub bytes: u64,
+    pub blake3: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawGenerationManifest {
+    pub schema_version: u8,
+    pub documents: u32,
+    pub videos: u32,
+    pub channels: u32,
+    pub terms: u32,
+    pub blocks: u32,
+    pub average_document_tokens: f32,
+    pub max_view_count: u64,
+    pub max_like_count: u64,
+    pub max_comment_count: u64,
+    pub files: BTreeMap<String, RawGenerationFile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawPublicationJob {
+    pub job_id: String,
+    pub target_sequence: u64,
+    pub snapshot_bytes: u64,
+    pub snapshot_blake3: String,
+    pub compatibility: RawGenerationCompatibility,
+    pub status: RawPublicationStatus,
+    pub completed_files: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawGenerationUpload {
+    pub target_sequence: u64,
+    pub compatibility: RawGenerationCompatibility,
+    pub manifest: RawGenerationManifest,
+}
+
+pub const RAW_GENERATION_FILES: [&str; 9] = [
+    "channels.json",
+    "videos.json",
+    "lexicon.bin",
+    "postings.bin",
+    "positions.bin",
+    "positions.full.bin",
+    "documents.blocks",
+    "documents.meta",
+    "fuzzy.bin",
+];
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[repr(u8)]

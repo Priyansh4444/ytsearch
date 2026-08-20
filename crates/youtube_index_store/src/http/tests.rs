@@ -105,3 +105,23 @@ fn status_mapping_preserves_retry_and_conflict_semantics() {
     ));
     assert!(RawIndexAdminClient::new(RawIndexAdminConfig::new("file:///tmp", "key")).is_err());
 }
+
+#[tokio::test]
+async fn publication_paths_reject_untrusted_components_before_network_io() {
+    let client = RawIndexAdminClient::new(RawIndexAdminConfig::new(
+        "http://127.0.0.1:1",
+        "test-admin-key",
+    ))
+    .unwrap();
+
+    assert!(matches!(
+        client.publication_status("../escape").await,
+        Err(IndexStoreError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        client
+            .upload_publication_file("safe-job", "../escape", Path::new("missing"))
+            .await,
+        Err(IndexStoreError::InvalidInput(_))
+    ));
+}

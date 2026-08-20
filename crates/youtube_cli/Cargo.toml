@@ -12,6 +12,7 @@ path = "src/main.rs"
 blake3 = "1.8"
 clap = { version = "4.6", features = ["derive", "env"] }
 dotenvy = "0.15.7"
+libc = "0.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -21,6 +22,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 youtube_client = { path = "../youtube_client" }
 youtube_ingest = { path = "../youtube_ingest" }
 youtube_index_store = { path = "../youtube_index_store", features = ["http-client"] }
+youtube_raw_search = { path = "../youtube_raw_search" }
 youtube_sources = { path = "../youtube_sources" }
 youtube_transcribe = { path = "../youtube_transcribe" }
 youtube_search_client = { path = "../youtube_search_client" }

@@ -2,8 +2,9 @@ use clap::{Parser, ValueEnum};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashSet},
+    fs,
     num::NonZeroU16,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::ExitCode,
     sync::Arc,
     time::{Duration, Instant, SystemTime},
@@ -12,10 +13,12 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 use youtube_client::{ListResource, Page, Query, YouTubeClient};
 use youtube_index_store::{
-    ChannelDocument, ChunkStats, IndexOperation, IndexStoreError, RawIndexAdminClient,
-    SearchIndexAdmin, VideoReplacement,
+    ChannelDocument, ChunkStats, IndexOperation, IndexStoreError, RAW_GENERATION_FILES,
+    RawGenerationManifest, RawIndexAdminClient, RawPublicationStatus, SearchIndexAdmin,
+    VideoReplacement,
 };
 use youtube_ingest::{Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource};
+use youtube_raw_search::{GenerationBuilder, MutationStore};
 use youtube_search_client::{DEFAULT_COLLECTION, TextSearchQuery};
 use youtube_sources::{
     FallbackMetadataSource, YouTubeMetadataSource, stable_youtuber_id as youtuber_id_from_handle,
@@ -32,9 +35,14 @@ use failure_ledger::{FailureCategory, FailureLedger, FailureStage};
 const DEFAULT_RAW_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 const MAX_RAW_PUBLICATION_TIMEOUT_SECONDS: u64 = 2 * 60 * 60;
 const RAW_PUBLICATION_TIMEOUT_ENV: &str = "RAW_PUBLICATION_TIMEOUT_SECONDS";
+const RAW_PUBLICATION_WORK_DIRECTORY_ENV: &str = "RAW_PUBLICATION_WORK_DIRECTORY";
+const RAW_PUBLICATION_MIN_FREE_BYTES_ENV: &str = "RAW_PUBLICATION_MIN_FREE_BYTES";
+const DEFAULT_RAW_PUBLICATION_MIN_FREE_BYTES: u64 = 8_000_000_000;
 
 #[derive(Debug, Error)]
 enum CliError {
+    #[error("I/O failed: {0}")]
+    Io(#[from] std::io::Error),
     #[error("youtube api failed: {0}")]
     YouTube(#[from] youtube_client::YouTubeError),
     #[error("search query failed: {0}")]
@@ -124,6 +132,7 @@ async fn main() -> ExitCode {
         Command::RemoveYoutuber(command) => remove_youtuber_command(command).await,
         Command::IndexVideo(command) => index_video_command(command).await,
         Command::Search(command) => search_command(command).await,
+        Command::Publish(command) => publish_command(command).await,
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -380,29 +389,150 @@ fn unique_operation_key(kind: &str, target: &str) -> String {
 }
 
 async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> {
-    let readiness = search.publish().await?;
-    let target = readiness.last_sequence.unwrap_or_default();
-    let timeout =
-        raw_publication_timeout(std::env::var(RAW_PUBLICATION_TIMEOUT_ENV).ok().as_deref())?;
-    let deadline = Instant::now() + timeout;
-    loop {
-        let readiness = search.readiness().await?;
-        let active = readiness
-            .generation
-            .as_deref()
-            .and_then(|generation| generation.parse::<u64>().ok())
-            .unwrap_or_default();
-        if active >= target {
-            println!("Published Raw generation {active}");
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(CliError::Message(format!(
-                "timed out waiting for Raw generation {target}; active generation is {active}"
-            )));
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+    let job = search.prepare_publication().await?;
+    if job.status == RawPublicationStatus::Activated {
+        println!("Raw generation {} is already active", job.target_sequence);
+        return Ok(());
     }
+
+    let base_chunks = required_publication_path("RAW_SEARCH_BASE_CHUNKS_GZIP")?;
+    let base_channels = required_publication_path("RAW_SEARCH_BASE_CHANNELS_GZIP")?;
+    let work_root = std::env::var_os(RAW_PUBLICATION_WORK_DIRECTORY_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/var/lib/ytsearch/raw-generation-work"));
+    validate_publication_work_root(&work_root)?;
+    fs::create_dir_all(&work_root)?;
+    let minimum_free = publication_minimum_free_bytes(
+        std::env::var(RAW_PUBLICATION_MIN_FREE_BYTES_ENV)
+            .ok()
+            .as_deref(),
+    )?;
+    let available = available_space(&work_root)?;
+    if available < minimum_free {
+        return Err(CliError::Message(format!(
+            "Raw publication builder has {available} free bytes; at least {minimum_free} are required"
+        )));
+    }
+
+    let job_root = work_root.join(&job.job_id);
+    if job_root.exists() {
+        fs::remove_dir_all(&job_root)?;
+    }
+    fs::create_dir(&job_root)?;
+    let snapshot_path = job_root.join("mutations.sqlite3");
+    println!(
+        "Downloading Raw mutation snapshot through sequence {}",
+        job.target_sequence
+    );
+    search
+        .download_publication_snapshot(&job, &snapshot_path)
+        .await?;
+
+    let generation_path = job_root.join("generation");
+    let compatibility = job.compatibility.clone();
+    let target = job.target_sequence;
+    let detached = tokio::task::spawn_blocking(move || {
+        let snapshot = MutationStore::open_snapshot_read_only(&snapshot_path)?;
+        GenerationBuilder::new(base_chunks, base_channels).build(
+            &snapshot,
+            &compatibility,
+            &generation_path,
+        )
+    })
+    .await
+    .map_err(|error| {
+        CliError::Message(format!("Raw publication builder task failed: {error}"))
+    })??;
+    if detached.sequence != target {
+        return Err(CliError::Message(format!(
+            "Raw detached generation sequence {} does not match job {target}",
+            detached.sequence
+        )));
+    }
+
+    let manifest: RawGenerationManifest = serde_json::from_reader(fs::File::open(
+        detached.path.join("manifest.json"),
+    )?)
+    .map_err(|error| {
+        CliError::Message(format!(
+            "failed to decode detached generation manifest: {error}"
+        ))
+    })?;
+    let mut state = search.accept_publication_manifest(&job, manifest).await?;
+    for file_name in RAW_GENERATION_FILES {
+        if state.completed_files.contains(file_name) {
+            continue;
+        }
+        println!("Uploading Raw generation file {file_name}");
+        state = search
+            .upload_publication_file(&job.job_id, file_name, &detached.path.join(file_name))
+            .await?;
+    }
+    state = search.activate_publication(&job.job_id).await?;
+    if state.status != RawPublicationStatus::Activated || state.target_sequence != target {
+        return Err(CliError::Message(
+            "Raw publication activation returned an inconsistent job state".to_string(),
+        ));
+    }
+    fs::remove_dir_all(&job_root)?;
+    println!("Published Raw generation {target}");
+    Ok(())
+}
+
+async fn publish_command(command: PublishCommand) -> Result<(), CliError> {
+    let search = command.search.client(command.collection.collection)?;
+    publish_and_wait(&search).await
+}
+
+fn required_publication_path(name: &str) -> Result<PathBuf, CliError> {
+    std::env::var_os(name).map(PathBuf::from).ok_or_else(|| {
+        CliError::Message(format!(
+            "{name} is required for external Raw generation publication"
+        ))
+    })
+}
+
+fn validate_publication_work_root(path: &Path) -> Result<(), CliError> {
+    if !path.is_absolute() || path.parent().is_none() || path == Path::new("/") {
+        return Err(CliError::Message(format!(
+            "{RAW_PUBLICATION_WORK_DIRECTORY_ENV} must be an absolute, non-root directory"
+        )));
+    }
+    Ok(())
+}
+
+fn publication_minimum_free_bytes(value: Option<&str>) -> Result<u64, CliError> {
+    value
+        .map(|value| {
+            value.parse::<u64>().map_err(|_| {
+                CliError::Message(format!(
+                    "{RAW_PUBLICATION_MIN_FREE_BYTES_ENV} must be an integer number of bytes"
+                ))
+            })
+        })
+        .transpose()
+        .map(|value| value.unwrap_or(DEFAULT_RAW_PUBLICATION_MIN_FREE_BYTES))
+}
+
+#[cfg(unix)]
+fn available_space(path: &Path) -> Result<u64, CliError> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| CliError::Message("publication path contains a NUL byte".to_string()))?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `path` is NUL-terminated and `stats` points to writable storage.
+    if unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: successful `statvfs` initialized the structure.
+    let stats = unsafe { stats.assume_init() };
+    Ok(stats.f_bavail.saturating_mul(stats.f_frsize))
+}
+
+#[cfg(not(unix))]
+fn available_space(_path: &Path) -> Result<u64, CliError> {
+    Ok(u64::MAX)
 }
 
 fn raw_publication_timeout(value: Option<&str>) -> Result<Duration, CliError> {
@@ -2149,6 +2279,22 @@ mod tests {
         assert!(raw_publication_timeout(Some("59")).is_err());
         assert!(raw_publication_timeout(Some("7201")).is_err());
         assert!(raw_publication_timeout(Some("forever")).is_err());
+    }
+
+    #[test]
+    fn publication_workspace_and_free_space_inputs_fail_closed() {
+        assert!(validate_publication_work_root(Path::new("/")).is_err());
+        assert!(validate_publication_work_root(Path::new("relative")).is_err());
+        assert!(validate_publication_work_root(Path::new("/var/lib/ytsearch/work")).is_ok());
+        assert_eq!(
+            publication_minimum_free_bytes(None).unwrap(),
+            DEFAULT_RAW_PUBLICATION_MIN_FREE_BYTES
+        );
+        assert_eq!(
+            publication_minimum_free_bytes(Some("9000000000")).unwrap(),
+            9_000_000_000
+        );
+        assert!(publication_minimum_free_bytes(Some("8gb")).is_err());
     }
 
     #[test]

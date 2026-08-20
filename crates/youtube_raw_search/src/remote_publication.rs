@@ -6,14 +6,23 @@ use axum::body::Body;
 use http_body_util::BodyExt;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs::{self, File},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
 use tokio::io::AsyncWriteExt;
-use youtube_index_store::IndexStoreError;
+use youtube_index_store::{
+    IndexStoreError, RawGenerationFile, RawGenerationManifest, RawGenerationUpload,
+    RawPublicationJob, RawPublicationStatus as RemoteJobStatus,
+};
+
+pub(crate) use youtube_index_store::RAW_GENERATION_FILES;
+pub(crate) type GenerationFile = RawGenerationFile;
+pub(crate) type GenerationManifest = RawGenerationManifest;
+pub(crate) type GenerationUploadRequest = RawGenerationUpload;
+pub(crate) type RemoteJobResponse = RawPublicationJob;
 
 const BACKEND: &str = "raw";
 const STATE_VERSION: u8 = 1;
@@ -26,18 +35,9 @@ const PREPARE_SNAPSHOT: &str = ".prepare-snapshot.sqlite3";
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 const MAX_GENERATION_FILE_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 const MAX_GENERATION_BYTES: u64 = 64 * 1024 * 1024 * 1024;
-
-pub const RAW_GENERATION_FILES: [&str; 9] = [
-    "channels.json",
-    "videos.json",
-    "lexicon.bin",
-    "postings.bin",
-    "positions.bin",
-    "positions.full.bin",
-    "documents.blocks",
-    "documents.meta",
-    "fuzzy.bin",
-];
+const MIN_FREE_AFTER_UPLOAD_BYTES: u64 = 1024 * 1024 * 1024;
+const UPLOAD_BUFFER_BYTES: usize = 256 * 1024;
+const UPLOAD_RECLAIM_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct RemotePublication {
@@ -47,14 +47,6 @@ pub(crate) struct RemotePublication {
     compatibility: GenerationCompatibility,
     root: PathBuf,
     operation: Arc<tokio::sync::Mutex<()>>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum RemoteJobStatus {
-    Prepared,
-    ManifestAccepted,
-    Activated,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -71,48 +63,6 @@ struct PersistedJob {
     manifest: Option<GenerationManifest>,
     #[serde(default)]
     completed_files: BTreeSet<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct GenerationUploadRequest {
-    pub target_sequence: u64,
-    pub compatibility: GenerationCompatibility,
-    pub manifest: GenerationManifest,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct GenerationManifest {
-    schema_version: u8,
-    documents: u32,
-    videos: u32,
-    channels: u32,
-    terms: u32,
-    blocks: u32,
-    average_document_tokens: f32,
-    max_view_count: u64,
-    max_like_count: u64,
-    max_comment_count: u64,
-    files: BTreeMap<String, GenerationFile>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct GenerationFile {
-    bytes: u64,
-    blake3: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub(crate) struct RemoteJobResponse {
-    pub job_id: String,
-    pub target_sequence: u64,
-    pub snapshot_bytes: u64,
-    pub snapshot_blake3: String,
-    pub compatibility: GenerationCompatibility,
-    pub status: RemoteJobStatus,
-    pub completed_files: BTreeSet<String>,
 }
 
 pub(crate) struct SnapshotDownload {
@@ -272,6 +222,13 @@ impl RemotePublication {
 
         let manifest_bytes = manifest_bytes(&request.manifest)?;
         let generation = self.job_directory(job_id)?.join(GENERATION_DIRECTORY);
+        let required = required_upload_space(&request.manifest)?;
+        let available = available_space(&generation)?;
+        if available < required {
+            return Err(IndexStoreError::Conflict(format!(
+                "raw reader has {available} free bytes but generation upload requires {required}"
+            )));
+        }
         write_atomic(&generation.join(GENERATION_MANIFEST), &manifest_bytes)?;
         sync_directory(&generation)?;
         job.manifest = Some(request.manifest);
@@ -329,13 +286,15 @@ impl RemotePublication {
         if part_path.exists() {
             fs::remove_file(&part_path).map_err(map_io)?;
         }
-        let mut output = tokio::fs::OpenOptions::new()
+        let output = tokio::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&part_path)
             .await
             .map_err(map_io)?;
+        let mut output = tokio::io::BufWriter::with_capacity(UPLOAD_BUFFER_BYTES, output);
         let mut received = 0_u64;
+        let mut reclaimed_through = 0_u64;
         let mut hasher = blake3::Hasher::new();
         let result = async {
             while let Some(frame) = body.frame().await {
@@ -354,6 +313,16 @@ impl RemotePublication {
                 }
                 hasher.update(&chunk);
                 output.write_all(&chunk).await.map_err(map_io)?;
+                if received.saturating_sub(reclaimed_through) >= UPLOAD_RECLAIM_BYTES {
+                    output.flush().await.map_err(map_io)?;
+                    output.get_ref().sync_data().await.map_err(map_io)?;
+                    advise_uploaded_range(
+                        output.get_ref(),
+                        reclaimed_through,
+                        received - reclaimed_through,
+                    );
+                    reclaimed_through = received;
+                }
             }
             if received != expected.bytes {
                 return Err(invalid_file(
@@ -368,7 +337,12 @@ impl RemotePublication {
                 ));
             }
             output.flush().await.map_err(map_io)?;
-            output.sync_all().await.map_err(map_io)?;
+            output.get_ref().sync_all().await.map_err(map_io)?;
+            advise_uploaded_range(
+                output.get_ref(),
+                reclaimed_through,
+                received - reclaimed_through,
+            );
             Ok::<(), IndexStoreError>(())
         }
         .await;
@@ -497,6 +471,58 @@ impl RemotePublication {
     }
 }
 
+#[cfg(unix)]
+fn available_space(path: &Path) -> Result<u64, IndexStoreError> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
+    let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+        IndexStoreError::InvalidInput("publication path contains a NUL byte".to_string())
+    })?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `path` is NUL-terminated and `stats` points to writable storage.
+    if unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
+        return Err(map_io(std::io::Error::last_os_error()));
+    }
+    // SAFETY: a successful `statvfs` initialized the entire structure.
+    let stats = unsafe { stats.assume_init() };
+    Ok(stats.f_bavail.saturating_mul(stats.f_frsize))
+}
+
+#[cfg(not(unix))]
+fn available_space(_path: &Path) -> Result<u64, IndexStoreError> {
+    Ok(u64::MAX)
+}
+
+#[cfg(target_os = "linux")]
+fn advise_uploaded_range(file: &tokio::fs::File, offset: u64, length: u64) {
+    use std::os::fd::AsRawFd;
+
+    if length == 0 {
+        return;
+    }
+    // This is a cache-residency hint after durability, never a correctness
+    // boundary. Failure leaves the bytes cached and is safe.
+    let result = unsafe {
+        libc::posix_fadvise(
+            file.as_raw_fd(),
+            offset.min(i64::MAX as u64) as i64,
+            length.min(i64::MAX as u64) as i64,
+            libc::POSIX_FADV_DONTNEED,
+        )
+    };
+    if result != 0 {
+        tracing::warn!(
+            result,
+            offset,
+            length,
+            "raw publication cache advice failed"
+        );
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn advise_uploaded_range(_file: &tokio::fs::File, _offset: u64, _length: u64) {}
+
 fn validate_manifest(manifest: &GenerationManifest) -> Result<(), IndexStoreError> {
     if manifest.schema_version != GENERATION_SCHEMA_VERSION {
         return Err(IndexStoreError::InvalidInput(format!(
@@ -554,6 +580,18 @@ fn validate_manifest(manifest: &GenerationManifest) -> Result<(), IndexStoreErro
         ));
     }
     Ok(())
+}
+
+fn required_upload_space(manifest: &GenerationManifest) -> Result<u64, IndexStoreError> {
+    manifest
+        .files
+        .values()
+        .try_fold(MIN_FREE_AFTER_UPLOAD_BYTES, |total, file| {
+            total.checked_add(file.bytes)
+        })
+        .ok_or_else(|| {
+            IndexStoreError::InvalidInput("generation byte length overflows".to_string())
+        })
 }
 
 fn allowlisted_file(file_name: &str) -> Result<&'static str, IndexStoreError> {
