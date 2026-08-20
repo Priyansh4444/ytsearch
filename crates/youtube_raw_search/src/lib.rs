@@ -13,7 +13,10 @@ pub use mutable::{
     MutationSnapshot, MutationSnapshotExport, MutationStore, StoredChannelMutation,
     StoredVideoMutation, VideoMutationSummary,
 };
-pub use publisher::{PublishedGeneration, Publisher, PublisherPaths};
+pub use publisher::{
+    DetachedGeneration, GenerationBuilder, GenerationCompatibility, PublishedGeneration, Publisher,
+    PublisherPaths, RAW_GENERATION_FORMAT,
+};
 pub use reloadable::ReloadableEngine;
 pub use youtube_search_service::SearchParams;
 

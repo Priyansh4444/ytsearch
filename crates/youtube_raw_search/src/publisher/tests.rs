@@ -4,6 +4,7 @@ use flate2::{Compression, write::GzEncoder};
 use serde::Serialize;
 use serde_json::json;
 use std::{
+    collections::BTreeMap,
     fs::OpenOptions,
     io::{Read, Seek, SeekFrom},
 };
@@ -101,9 +102,7 @@ fn found(engine: &RawSearchEngine, query: &str) -> u64 {
         .unwrap()
 }
 
-#[test]
-fn publication_atomically_replaces_adds_and_deletes_videos() {
-    let (_directory, publisher, store) = fixture();
+fn replace_add_and_delete(store: &MutationStore) {
     let replacement_chunks = [chunk("video-old", "replacement blackhole phrase")];
     let added_chunks = [chunk("video-added", "brandnew searchable phrase")];
     store
@@ -120,6 +119,24 @@ fn publication_atomically_replaces_adds_and_deletes_videos() {
         .unwrap();
     store.delete_video("video-delete", "delete-video").unwrap();
     store.upsert_channel(&channel(2), "upsert-channel").unwrap();
+}
+
+fn generation_hashes(path: &Path) -> BTreeMap<String, String> {
+    fs::read_dir(path)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let name = entry.file_name().into_string().unwrap();
+            let bytes = fs::read(entry.path()).unwrap();
+            (name, blake3::hash(&bytes).to_hex().to_string())
+        })
+        .collect()
+}
+
+#[test]
+fn publication_atomically_replaces_adds_and_deletes_videos() {
+    let (_directory, publisher, store) = fixture();
+    replace_add_and_delete(&store);
 
     let published = publisher.publish(&store).unwrap().unwrap();
 
@@ -149,6 +166,115 @@ fn publication_atomically_replaces_adds_and_deletes_videos() {
         }),
         "completed generations must not retain builder spools"
     );
+}
+
+#[test]
+fn detached_generation_matches_publisher_without_activation_or_wal_changes() {
+    let (directory, publisher, store) = fixture();
+    replace_add_and_delete(&store);
+    let snapshot_path = directory.path().join("mutation-snapshot.sqlite3");
+    let export = store.export_snapshot(&snapshot_path).unwrap();
+    let snapshot_store = MutationStore::open_snapshot_read_only(&snapshot_path).unwrap();
+    let builder = GenerationBuilder::new(
+        publisher.paths.base_chunks_gzip.clone(),
+        publisher.paths.base_channels_gzip.clone(),
+    );
+    let compatibility = builder.compatibility().unwrap();
+    let detached_path = directory.path().join("detached-generation");
+
+    let detached = builder
+        .build(&snapshot_store, &compatibility, &detached_path)
+        .unwrap();
+
+    assert_eq!(detached.sequence, export.through_sequence);
+    assert_eq!(detached.path, detached_path);
+    assert_eq!(detached.compatibility, compatibility);
+    let detached_engine = RawSearchEngine::open(&detached.path).unwrap();
+    assert_eq!(found(&detached_engine, "legacyuniquetoken"), 0);
+    assert_eq!(found(&detached_engine, "replacement blackhole"), 1);
+    assert_eq!(found(&detached_engine, "brandnew searchable"), 1);
+    assert_eq!(found(&detached_engine, "deleteuniquetoken"), 0);
+    assert_eq!(publisher.active_sequence().unwrap(), 0);
+    assert!(
+        !publisher
+            .paths
+            .state_directory
+            .join(ACTIVE_MANIFEST)
+            .exists()
+    );
+    assert_eq!(
+        store.operation("add-video").unwrap().state,
+        youtube_index_store::IndexOperationState::Durable
+    );
+
+    let published = publisher.publish(&store).unwrap().unwrap();
+    assert_eq!(
+        generation_hashes(&detached.path),
+        generation_hashes(&published.path),
+        "detached and in-process builders must produce identical immutable bytes"
+    );
+}
+
+#[test]
+fn corpus_identity_is_path_independent_and_rejects_source_or_format_mismatch() {
+    let (directory, publisher, store) = fixture();
+    let expected_builder = GenerationBuilder::new(
+        publisher.paths.base_chunks_gzip.clone(),
+        publisher.paths.base_channels_gzip.clone(),
+    );
+    let expected = expected_builder.compatibility().unwrap();
+    assert_eq!(expected.generation_format, RAW_GENERATION_FORMAT);
+
+    let copied_chunks = directory.path().join("copied-chunks.jsonl.gz");
+    let copied_channels = directory.path().join("copied-channels.jsonl.gz");
+    fs::copy(&publisher.paths.base_chunks_gzip, &copied_chunks).unwrap();
+    fs::copy(&publisher.paths.base_channels_gzip, &copied_channels).unwrap();
+    let copied_builder = GenerationBuilder::new(copied_chunks.clone(), copied_channels.clone());
+    assert_eq!(copied_builder.compatibility().unwrap(), expected);
+
+    write_gzip_lines(&copied_channels, &[channel(3)]);
+    let channel_changed = copied_builder.compatibility().unwrap();
+    assert_eq!(
+        channel_changed.base_chunks_blake3,
+        expected.base_chunks_blake3
+    );
+    assert_ne!(
+        channel_changed.base_channels_blake3,
+        expected.base_channels_blake3
+    );
+    assert_ne!(channel_changed.corpus_identity, expected.corpus_identity);
+
+    fs::copy(&publisher.paths.base_channels_gzip, &copied_channels).unwrap();
+    write_gzip_lines(
+        &copied_chunks,
+        &[serde_json::to_value(chunk("different", "different corpus")).unwrap()],
+    );
+    let chunks_changed = copied_builder.compatibility().unwrap();
+    assert_ne!(
+        chunks_changed.base_chunks_blake3,
+        expected.base_chunks_blake3
+    );
+    assert_eq!(
+        chunks_changed.base_channels_blake3,
+        expected.base_channels_blake3
+    );
+    assert_ne!(chunks_changed.corpus_identity, expected.corpus_identity);
+
+    let source_mismatch_path = directory.path().join("source-mismatch");
+    assert!(matches!(
+        copied_builder.build(&store, &expected, &source_mismatch_path),
+        Err(IndexStoreError::InvalidInput(_))
+    ));
+    assert!(!source_mismatch_path.exists());
+
+    let mut wrong_format = expected.clone();
+    wrong_format.generation_format = "raw-index-schema-unknown".to_string();
+    let format_mismatch_path = directory.path().join("format-mismatch");
+    assert!(matches!(
+        expected_builder.build(&store, &wrong_format, &format_mismatch_path),
+        Err(IndexStoreError::InvalidInput(_))
+    ));
+    assert!(!format_mismatch_path.exists());
 }
 
 #[test]

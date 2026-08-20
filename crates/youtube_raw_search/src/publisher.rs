@@ -14,6 +14,8 @@ use youtube_index_store::{ChannelDocument, IndexStoreError};
 
 const BACKEND: &str = "raw";
 const ACTIVE_MANIFEST: &str = "active-generation.json";
+pub const RAW_GENERATION_FORMAT: &str = "raw-index-schema-6-v1";
+const CORPUS_IDENTITY_DOMAIN: &[u8] = b"ytsearch raw corpus identity v1\0";
 
 #[derive(Clone, Debug)]
 pub struct PublisherPaths {
@@ -30,6 +32,28 @@ pub struct PublishedGeneration {
     pub report: BuildReport,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct GenerationCompatibility {
+    pub generation_format: String,
+    pub corpus_identity: String,
+    pub base_chunks_blake3: String,
+    pub base_channels_blake3: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct GenerationBuilder {
+    base_chunks_gzip: PathBuf,
+    base_channels_gzip: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+pub struct DetachedGeneration {
+    pub sequence: u64,
+    pub path: PathBuf,
+    pub report: BuildReport,
+    pub compatibility: GenerationCompatibility,
+}
+
 pub struct Publisher {
     paths: PublisherPaths,
 }
@@ -44,6 +68,156 @@ struct ActiveGeneration {
 struct ChunkKey {
     video_id: String,
     youtuber_id: String,
+}
+
+impl GenerationBuilder {
+    pub fn new(base_chunks_gzip: PathBuf, base_channels_gzip: PathBuf) -> Self {
+        Self {
+            base_chunks_gzip,
+            base_channels_gzip,
+        }
+    }
+
+    pub fn compatibility(&self) -> Result<GenerationCompatibility, IndexStoreError> {
+        validate_source(&self.base_chunks_gzip)?;
+        validate_source(&self.base_channels_gzip)?;
+        let chunks = hash_source_archive(&self.base_chunks_gzip)?;
+        let channels = hash_source_archive(&self.base_channels_gzip)?;
+        let mut corpus = blake3::Hasher::new();
+        corpus.update(CORPUS_IDENTITY_DOMAIN);
+        update_identity_component(
+            &mut corpus,
+            b"generation-format",
+            RAW_GENERATION_FORMAT.as_bytes(),
+        );
+        update_identity_component(&mut corpus, b"base-chunks", chunks.as_bytes());
+        update_identity_component(&mut corpus, b"base-channels", channels.as_bytes());
+        Ok(GenerationCompatibility {
+            generation_format: RAW_GENERATION_FORMAT.to_string(),
+            corpus_identity: corpus.finalize().to_hex().to_string(),
+            base_chunks_blake3: chunks.to_hex().to_string(),
+            base_channels_blake3: channels.to_hex().to_string(),
+        })
+    }
+
+    /// Builds a verified immutable generation from a captured mutation store.
+    ///
+    /// The source archives must remain immutable from compatibility validation
+    /// through the end of the build. Production satisfies that contract by
+    /// shipping them in a read-only image layer. This method never activates
+    /// the output and never changes operation state in `snapshot_store`.
+    pub fn build(
+        &self,
+        snapshot_store: &MutationStore,
+        expected: &GenerationCompatibility,
+        output_path: &Path,
+    ) -> Result<DetachedGeneration, IndexStoreError> {
+        let compatibility = self.compatibility()?;
+        if &compatibility != expected {
+            return Err(IndexStoreError::InvalidInput(format!(
+                "raw generation compatibility mismatch: expected format={} corpus={}, got format={} corpus={}",
+                expected.generation_format,
+                expected.corpus_identity,
+                compatibility.generation_format,
+                compatibility.corpus_identity
+            )));
+        }
+        let snapshot = snapshot_store.snapshot()?;
+        let sequence = snapshot.through_sequence;
+        let (report, engine) = self.build_snapshot(&snapshot, output_path)?;
+        drop(engine);
+        sync_directory_tree(output_path)?;
+        // Detached output crosses a process and storage boundary. Unlike the
+        // publisher's private candidate, it must pass full manifest hashes.
+        drop(RawSearchEngine::open(output_path).map_err(map_raw)?);
+        Ok(DetachedGeneration {
+            sequence,
+            path: output_path.to_path_buf(),
+            report,
+            compatibility,
+        })
+    }
+
+    fn build_snapshot(
+        &self,
+        snapshot: &MutationSnapshot,
+        candidate_path: &Path,
+    ) -> Result<(BuildReport, RawSearchEngine), IndexStoreError> {
+        validate_source(&self.base_chunks_gzip)?;
+        validate_source(&self.base_channels_gzip)?;
+        let video_mutations = snapshot
+            .videos
+            .iter()
+            .map(|mutation| (mutation.video_id.as_str(), mutation))
+            .collect::<HashMap<_, _>>();
+        let cascaded_channels = snapshot
+            .channels
+            .iter()
+            .filter(|mutation| mutation.document.is_none() && mutation.cascade)
+            .map(|mutation| mutation.channel_id.as_str())
+            .collect::<HashSet<_>>();
+
+        let base_documents = gzip_lines(&self.base_chunks_gzip)?.filter_map(|line| {
+            let line = match line {
+                Ok(line) => line,
+                Err(error) => return Some(Err(crate::Error::Io(error))),
+            };
+            let key = match serde_json::from_str::<ChunkKey>(&line) {
+                Ok(key) => key,
+                Err(error) => return Some(Err(crate::Error::Json(error))),
+            };
+            if video_mutations.contains_key(key.video_id.as_str())
+                || cascaded_channels.contains(key.youtuber_id.as_str())
+            {
+                None
+            } else {
+                Some(Ok(line))
+            }
+        });
+        let replacement_documents = snapshot
+            .videos
+            .iter()
+            .flat_map(|mutation| {
+                mutation
+                    .chunks
+                    .as_deref()
+                    .filter(|chunks| {
+                        !chunks
+                            .first()
+                            .is_some_and(|chunk| cascaded_channels.contains(chunk.youtuber_id()))
+                    })
+                    .unwrap_or_default()
+                    .iter()
+            })
+            .map(|chunk| serde_json::to_string(chunk).map_err(crate::Error::Json));
+
+        let mut channels = BTreeMap::<String, ChannelDocument>::new();
+        for line in gzip_lines(&self.base_channels_gzip)? {
+            let channel: ChannelDocument =
+                serde_json::from_str(&line.map_err(map_io)?).map_err(map_json)?;
+            channels.insert(channel.id.clone(), channel);
+        }
+        for mutation in &snapshot.channels {
+            match &mutation.document {
+                Some(document) => {
+                    channels.insert(mutation.channel_id.clone(), document.clone());
+                }
+                None => {
+                    channels.remove(&mutation.channel_id);
+                }
+            }
+        }
+        build_index_from_lines_and_open(
+            base_documents.chain(replacement_documents),
+            channels
+                .into_values()
+                .map(serde_json::to_value)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(map_json)?,
+            candidate_path,
+        )
+        .map_err(map_raw)
+    }
 }
 
 impl Publisher {
@@ -128,78 +302,11 @@ impl Publisher {
         snapshot: &MutationSnapshot,
         candidate_path: &Path,
     ) -> Result<(BuildReport, RawSearchEngine), IndexStoreError> {
-        let video_mutations = snapshot
-            .videos
-            .iter()
-            .map(|mutation| (mutation.video_id.as_str(), mutation))
-            .collect::<HashMap<_, _>>();
-        let cascaded_channels = snapshot
-            .channels
-            .iter()
-            .filter(|mutation| mutation.document.is_none() && mutation.cascade)
-            .map(|mutation| mutation.channel_id.as_str())
-            .collect::<HashSet<_>>();
-
-        let base_documents = gzip_lines(&self.paths.base_chunks_gzip)?.filter_map(|line| {
-            let line = match line {
-                Ok(line) => line,
-                Err(error) => return Some(Err(crate::Error::Io(error))),
-            };
-            let key = match serde_json::from_str::<ChunkKey>(&line) {
-                Ok(key) => key,
-                Err(error) => return Some(Err(crate::Error::Json(error))),
-            };
-            if video_mutations.contains_key(key.video_id.as_str())
-                || cascaded_channels.contains(key.youtuber_id.as_str())
-            {
-                None
-            } else {
-                Some(Ok(line))
-            }
-        });
-        let replacement_documents = snapshot
-            .videos
-            .iter()
-            .flat_map(|mutation| {
-                mutation
-                    .chunks
-                    .as_deref()
-                    .filter(|chunks| {
-                        !chunks
-                            .first()
-                            .is_some_and(|chunk| cascaded_channels.contains(chunk.youtuber_id()))
-                    })
-                    .unwrap_or_default()
-                    .iter()
-            })
-            .map(|chunk| serde_json::to_string(chunk).map_err(crate::Error::Json));
-
-        let mut channels = BTreeMap::<String, ChannelDocument>::new();
-        for line in gzip_lines(&self.paths.base_channels_gzip)? {
-            let channel: ChannelDocument =
-                serde_json::from_str(&line.map_err(map_io)?).map_err(map_json)?;
-            channels.insert(channel.id.clone(), channel);
-        }
-        for mutation in &snapshot.channels {
-            match &mutation.document {
-                Some(document) => {
-                    channels.insert(mutation.channel_id.clone(), document.clone());
-                }
-                None => {
-                    channels.remove(&mutation.channel_id);
-                }
-            }
-        }
-        build_index_from_lines_and_open(
-            base_documents.chain(replacement_documents),
-            channels
-                .into_values()
-                .map(serde_json::to_value)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(map_json)?,
-            candidate_path,
+        GenerationBuilder::new(
+            self.paths.base_chunks_gzip.clone(),
+            self.paths.base_channels_gzip.clone(),
         )
-        .map_err(map_raw)
+        .build_snapshot(snapshot, candidate_path)
     }
 
     fn activate(&self, sequence: u64, directory: &str) -> Result<(), IndexStoreError> {
@@ -262,6 +369,20 @@ impl Publisher {
         }
         Ok(())
     }
+}
+
+fn hash_source_archive(path: &Path) -> Result<blake3::Hash, IndexStoreError> {
+    let mut input = ColdReader::open(path).map_err(map_io)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update_reader(&mut input).map_err(map_io)?;
+    Ok(hasher.finalize())
+}
+
+fn update_identity_component(hasher: &mut blake3::Hasher, name: &[u8], value: &[u8]) {
+    hasher.update(&(name.len() as u64).to_le_bytes());
+    hasher.update(name);
+    hasher.update(&(value.len() as u64).to_le_bytes());
+    hasher.update(value);
 }
 
 fn remove_scratch_entry(root: &Path, entry: fs::DirEntry) -> Result<(), IndexStoreError> {
