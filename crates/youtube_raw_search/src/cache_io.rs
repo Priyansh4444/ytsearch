@@ -110,7 +110,12 @@ impl Write for ColdWriter {
 
 impl Seek for ColdWriter {
     fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
-        self.reclaim()?;
+        // BufWriter must be flushed before changing the file cursor, but a
+        // seek is not a durability boundary. The builder seeks once per
+        // document block to patch metadata; syncing there turned an 8M-doc
+        // build into roughly 130k synchronous storage barriers. Publication
+        // still syncs completed files and the candidate tree before rename.
+        self.output.flush()?;
         self.output.seek(position)
     }
 }
@@ -280,9 +285,11 @@ mod tests {
     fn cold_writer_preserves_write_and_seek_contract() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("cold.bin");
-        let mut output = ColdWriter::create_with_reclaim_bytes(&path, 2).unwrap();
+        let mut output = ColdWriter::create_with_reclaim_bytes(&path, 1024).unwrap();
         output.write_all(b"abcd").unwrap();
+        assert_eq!(output.bytes_since_reclaim, 4);
         output.seek(SeekFrom::Start(1)).unwrap();
+        assert_eq!(output.bytes_since_reclaim, 4);
         output.write_all(b"Z").unwrap();
         output.finish().unwrap();
         assert_eq!(std::fs::read(path).unwrap(), b"aZcd");
