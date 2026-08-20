@@ -75,7 +75,8 @@ impl ColdWriter {
         Self::create_classified(path, DEFAULT_RECLAIM_BYTES, WriterClass::General)
     }
 
-    pub(crate) fn create_with_reclaim_bytes(path: &Path, reclaim_bytes: u64) -> io::Result<Self> {
+    #[cfg(test)]
+    fn create_with_reclaim_bytes(path: &Path, reclaim_bytes: u64) -> io::Result<Self> {
         Self::create_classified(path, reclaim_bytes, WriterClass::General)
     }
 

@@ -674,7 +674,7 @@ fn refine_posting_shard(
             *next_id = next_id
                 .checked_add(1)
                 .ok_or_else(|| Error::Corrupt("posting shard id overflows".to_string()))?;
-            outputs[key] = Some(ColdWriter::create_with_reclaim_bytes(&child, 1024 * 1024)?);
+            outputs[key] = Some(ColdWriter::create_posting_shard(&child)?);
             child_paths[key] = Some(child);
         }
         write_spool_posting(
