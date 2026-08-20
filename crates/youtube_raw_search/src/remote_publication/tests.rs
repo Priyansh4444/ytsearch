@@ -224,6 +224,11 @@ async fn corrupted_upload_is_removed_and_restart_preserves_n_plus_one() {
     for name in RAW_GENERATION_FILES.into_iter().skip(1).take(7) {
         upload(&fixture.publication, &job, &generation, name).await;
     }
+    fs::copy(
+        generation.join(RAW_GENERATION_FILES[8]),
+        incoming.join(RAW_GENERATION_FILES[8]),
+    )
+    .unwrap();
     assert!(matches!(
         fixture.publication.activate(&job.job_id).await,
         Err(IndexStoreError::Conflict(_))
@@ -237,6 +242,10 @@ async fn corrupted_upload_is_removed_and_restart_preserves_n_plus_one() {
     .unwrap();
     let persisted = restarted.status(&job.job_id).await.unwrap();
     assert_eq!(persisted.completed_files.len(), 8);
+    assert!(matches!(
+        restarted.activate(&job.job_id).await,
+        Err(IndexStoreError::Conflict(_))
+    ));
     upload(&restarted, &job, &generation, RAW_GENERATION_FILES[8]).await;
     let activated = restarted.activate(&job.job_id).await.unwrap();
     assert_eq!(activated.status, RemoteJobStatus::Activated);

@@ -106,6 +106,32 @@ fn status_mapping_preserves_retry_and_conflict_semantics() {
     assert!(RawIndexAdminClient::new(RawIndexAdminConfig::new("file:///tmp", "key")).is_err());
 }
 
+#[test]
+fn publication_job_responses_are_validated_before_filesystem_use() {
+    let digest = "0".repeat(64);
+    let mut job = RawPublicationJob {
+        job_id: "00000000000000000001-0123456789abcdef".to_string(),
+        target_sequence: 1,
+        snapshot_bytes: 4096,
+        snapshot_blake3: digest.clone(),
+        compatibility: crate::RawGenerationCompatibility {
+            generation_format: "raw-index-schema-6-v1".to_string(),
+            corpus_identity: digest.clone(),
+            base_chunks_blake3: digest.clone(),
+            base_channels_blake3: digest,
+        },
+        status: crate::RawPublicationStatus::Prepared,
+        completed_files: std::collections::BTreeSet::new(),
+    };
+    validate_publication_job_response(&job).unwrap();
+
+    job.job_id = "..".to_string();
+    assert!(validate_publication_job_response(&job).is_err());
+    job.job_id = "00000000000000000001-0123456789abcdef".to_string();
+    job.completed_files.insert("manifest.json".to_string());
+    assert!(validate_publication_job_response(&job).is_err());
+}
+
 #[tokio::test]
 async fn publication_paths_reject_untrusted_components_before_network_io() {
     let client = RawIndexAdminClient::new(RawIndexAdminConfig::new(

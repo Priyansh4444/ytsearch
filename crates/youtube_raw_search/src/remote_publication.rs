@@ -371,6 +371,16 @@ impl RemotePublication {
                 "generation manifest must be accepted before activation".to_string(),
             )
         })?;
+        let expected_completed = RAW_GENERATION_FILES
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+        if job.completed_files != expected_completed {
+            return Err(IndexStoreError::Conflict(
+                "every generation file must complete a verified upload before activation"
+                    .to_string(),
+            ));
+        }
         let generation = self.job_directory(job_id)?.join(GENERATION_DIRECTORY);
         for name in RAW_GENERATION_FILES {
             let expected = manifest
@@ -404,10 +414,7 @@ impl RemotePublication {
             .map_err(|error| IndexStoreError::internal(BACKEND, format!("{error:?}")))?;
         self.store.mark_published(sequence)?;
         job.status = RemoteJobStatus::Activated;
-        job.completed_files = RAW_GENERATION_FILES
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        job.completed_files = expected_completed;
         self.persist_job(&job)?;
         Ok(job_response(&job))
     }

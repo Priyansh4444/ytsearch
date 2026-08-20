@@ -115,11 +115,14 @@ impl RawIndexAdminClient {
     }
 
     pub async fn prepare_publication(&self) -> Result<RawPublicationJob, IndexStoreError> {
-        self.execute(
-            self.client
-                .post(self.endpoint("/admin/publications/prepare")),
-        )
-        .await
+        let job = self
+            .execute(
+                self.client
+                    .post(self.endpoint("/admin/publications/prepare")),
+            )
+            .await?;
+        validate_publication_job_response(&job)?;
+        Ok(job)
     }
 
     pub async fn publication_status(
@@ -127,11 +130,14 @@ impl RawIndexAdminClient {
         job_id: &str,
     ) -> Result<RawPublicationJob, IndexStoreError> {
         validate_publication_job_id(job_id)?;
-        self.execute(
-            self.client
-                .get(self.endpoint(&format!("/admin/publications/{job_id}"))),
-        )
-        .await
+        let job = self
+            .execute(
+                self.client
+                    .get(self.endpoint(&format!("/admin/publications/{job_id}"))),
+            )
+            .await?;
+        validate_publication_job_response(&job)?;
+        Ok(job)
     }
 
     pub async fn download_publication_snapshot(
@@ -230,16 +236,19 @@ impl RawIndexAdminClient {
         manifest: RawGenerationManifest,
     ) -> Result<RawPublicationJob, IndexStoreError> {
         validate_publication_job_id(&job.job_id)?;
-        self.execute(
-            self.client
-                .put(self.endpoint(&format!("/admin/publications/{}/manifest", job.job_id)))
-                .json(&RawGenerationUpload {
-                    target_sequence: job.target_sequence,
-                    compatibility: job.compatibility.clone(),
-                    manifest,
-                }),
-        )
-        .await
+        let job = self
+            .execute(
+                self.client
+                    .put(self.endpoint(&format!("/admin/publications/{}/manifest", job.job_id)))
+                    .json(&RawGenerationUpload {
+                        target_sequence: job.target_sequence,
+                        compatibility: job.compatibility.clone(),
+                        manifest,
+                    }),
+            )
+            .await?;
+        validate_publication_job_response(&job)?;
+        Ok(job)
     }
 
     pub async fn upload_publication_file(
@@ -258,7 +267,9 @@ impl RawIndexAdminClient {
             .header(header::CONTENT_LENGTH, bytes)
             .body(reqwest::Body::from(file))
             .timeout(self.publication_timeout);
-        self.execute(response).await
+        let job = self.execute(response).await?;
+        validate_publication_job_response(&job)?;
+        Ok(job)
     }
 
     pub async fn activate_publication(
@@ -266,11 +277,14 @@ impl RawIndexAdminClient {
         job_id: &str,
     ) -> Result<RawPublicationJob, IndexStoreError> {
         validate_publication_job_id(job_id)?;
-        self.execute(
-            self.client
-                .post(self.endpoint(&format!("/admin/publications/{job_id}/activate"))),
-        )
-        .await
+        let job = self
+            .execute(
+                self.client
+                    .post(self.endpoint(&format!("/admin/publications/{job_id}/activate"))),
+            )
+            .await?;
+        validate_publication_job_response(&job)?;
+        Ok(job)
     }
 }
 
@@ -294,6 +308,43 @@ fn validate_generation_file_name(value: &str) -> Result<(), IndexStoreError> {
         return Err(IndexStoreError::InvalidInput(
             "raw generation file name is not allowlisted".to_string(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_publication_job_response(job: &RawPublicationJob) -> Result<(), IndexStoreError> {
+    validate_publication_job_id(&job.job_id)?;
+    if job.target_sequence == 0 || job.snapshot_bytes == 0 {
+        return Err(IndexStoreError::InvalidInput(
+            "raw publication job has an invalid sequence or snapshot length".to_string(),
+        ));
+    }
+    validate_blake3("snapshot", &job.snapshot_blake3)?;
+    validate_blake3("corpus", &job.compatibility.corpus_identity)?;
+    validate_blake3("base chunks", &job.compatibility.base_chunks_blake3)?;
+    validate_blake3("base channels", &job.compatibility.base_channels_blake3)?;
+    if job.compatibility.generation_format.is_empty()
+        || !job
+            .completed_files
+            .iter()
+            .all(|name| crate::RAW_GENERATION_FILES.contains(&name.as_str()))
+    {
+        return Err(IndexStoreError::InvalidInput(
+            "raw publication job contains invalid compatibility or completed files".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_blake3(label: &str, value: &str) -> Result<(), IndexStoreError> {
+    let valid = value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if !valid {
+        return Err(IndexStoreError::InvalidInput(format!(
+            "raw publication {label} BLAKE3 digest is invalid"
+        )));
     }
     Ok(())
 }
