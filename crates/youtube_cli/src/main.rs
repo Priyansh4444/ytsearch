@@ -14,8 +14,8 @@ use tokio::task::JoinSet;
 use youtube_client::{ListResource, Page, Query, YouTubeClient};
 use youtube_index_store::{
     ChannelDocument, ChunkStats, IndexOperation, IndexStoreError, RAW_GENERATION_FILES,
-    RawGenerationManifest, RawIndexAdminClient, RawPublicationStatus, SearchIndexAdmin,
-    VideoReplacement,
+    RawGenerationManifest, RawIndexAdminClient, RawPublicationJob, RawPublicationStatus,
+    SearchIndexAdmin, VideoReplacement,
 };
 use youtube_ingest::{Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource};
 use youtube_raw_search::{GenerationBuilder, MutationStore};
@@ -390,18 +390,14 @@ fn unique_operation_key(kind: &str, target: &str) -> String {
 
 async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> {
     let readiness = search.readiness().await?;
-    let active = readiness
+    let mut active = readiness
         .generation
         .as_deref()
         .and_then(|generation| generation.parse::<u64>().ok())
         .unwrap_or_default();
-    if readiness.last_sequence.unwrap_or_default() <= active {
+    let required_sequence = readiness.last_sequence.unwrap_or_default();
+    if required_sequence <= active {
         println!("Raw has no pending mutations to publish");
-        return Ok(());
-    }
-    let job = search.prepare_publication().await?;
-    if job.status == RawPublicationStatus::Activated {
-        println!("Raw generation {} is already active", job.target_sequence);
         return Ok(());
     }
 
@@ -426,6 +422,33 @@ async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> 
         )));
     }
 
+    while active < required_sequence {
+        let job = search.prepare_publication().await?;
+        let published =
+            publish_generation(search, job, &base_chunks, &base_channels, &work_root).await?;
+        if published <= active {
+            return Err(CliError::Message(format!(
+                "Raw publication made no progress toward required sequence {required_sequence}; active={active}, returned={published}"
+            )));
+        }
+        active = published;
+    }
+    println!("Published required Raw sequence {required_sequence}");
+    Ok(())
+}
+
+async fn publish_generation(
+    search: &RawIndexAdminClient,
+    job: RawPublicationJob,
+    base_chunks: &Path,
+    base_channels: &Path,
+    work_root: &Path,
+) -> Result<u64, CliError> {
+    if job.status == RawPublicationStatus::Activated {
+        println!("Raw generation {} is already active", job.target_sequence);
+        return Ok(job.target_sequence);
+    }
+
     let job_root = work_root.join(&job.job_id);
     fs::create_dir(&job_root)?;
     let snapshot_path = job_root.join("mutations.sqlite3");
@@ -439,6 +462,8 @@ async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> 
 
     let generation_path = job_root.join("generation");
     let compatibility = job.compatibility.clone();
+    let base_chunks = base_chunks.to_path_buf();
+    let base_channels = base_channels.to_path_buf();
     let target = job.target_sequence;
     let detached = tokio::task::spawn_blocking(move || {
         let snapshot = MutationStore::open_snapshot_read_only(&snapshot_path)?;
@@ -485,7 +510,7 @@ async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> 
     }
     fs::remove_dir_all(&job_root)?;
     println!("Published Raw generation {target}");
-    Ok(())
+    Ok(target)
 }
 
 async fn publish_command(command: PublishCommand) -> Result<(), CliError> {
