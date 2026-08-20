@@ -2,8 +2,13 @@ use std::{
     fs::File,
     io::{self, BufWriter, Read, Seek, SeekFrom, Write},
     path::Path,
+    time::Instant,
 };
 use tokio::sync::oneshot;
+
+mod metrics;
+
+use metrics::{PublicationIoMeasurement, WriterClass, record_reader, record_writer};
 
 const DEFAULT_RECLAIM_BYTES: u64 = 8 * 1024 * 1024;
 const SEQUENTIAL_RECLAIM_BYTES: u64 = 8 * 1024 * 1024;
@@ -59,14 +64,26 @@ pub(crate) struct ColdWriter {
     output: BufWriter<File>,
     bytes_since_reclaim: u64,
     reclaim_bytes: u64,
+    position: u64,
+    high_watermark: u64,
+    advised_through: u64,
+    class: WriterClass,
 }
 
 impl ColdWriter {
     pub(crate) fn create(path: &Path) -> io::Result<Self> {
-        Self::create_with_reclaim_bytes(path, DEFAULT_RECLAIM_BYTES)
+        Self::create_classified(path, DEFAULT_RECLAIM_BYTES, WriterClass::General)
     }
 
     pub(crate) fn create_with_reclaim_bytes(path: &Path, reclaim_bytes: u64) -> io::Result<Self> {
+        Self::create_classified(path, reclaim_bytes, WriterClass::General)
+    }
+
+    pub(crate) fn create_posting_shard(path: &Path) -> io::Result<Self> {
+        Self::create_classified(path, 1024 * 1024, WriterClass::PostingShard)
+    }
+
+    fn create_classified(path: &Path, reclaim_bytes: u64, class: WriterClass) -> io::Result<Self> {
         if reclaim_bytes == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -77,6 +94,10 @@ impl ColdWriter {
             output: BufWriter::new(File::create(path)?),
             bytes_since_reclaim: 0,
             reclaim_bytes,
+            position: 0,
+            high_watermark: 0,
+            advised_through: 0,
+            class,
         })
     }
 
@@ -85,9 +106,26 @@ impl ColdWriter {
     }
 
     fn reclaim(&mut self) -> io::Result<()> {
+        let flush_started = Instant::now();
         self.output.flush()?;
+        let flush_elapsed = flush_started.elapsed();
+        let sync_started = Instant::now();
         self.output.get_ref().sync_data()?;
-        advise_dont_need(self.output.get_ref(), 0, 0);
+        let sync_elapsed = sync_started.elapsed();
+        let advise_bytes = self.high_watermark.saturating_sub(self.advised_through);
+        let advise_started = Instant::now();
+        if advise_bytes > 0 {
+            advise_dont_need(self.output.get_ref(), self.advised_through, advise_bytes);
+            self.advised_through = self.high_watermark;
+        }
+        let advise_elapsed = advise_started.elapsed();
+        record_writer(
+            self.class,
+            advise_bytes,
+            flush_elapsed,
+            sync_elapsed,
+            advise_elapsed,
+        );
         self.bytes_since_reclaim = 0;
         Ok(())
     }
@@ -96,6 +134,8 @@ impl ColdWriter {
 impl Write for ColdWriter {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         let written = self.output.write(buffer)?;
+        self.position = self.position.saturating_add(written as u64);
+        self.high_watermark = self.high_watermark.max(self.position);
         self.bytes_since_reclaim = self.bytes_since_reclaim.saturating_add(written as u64);
         if self.bytes_since_reclaim >= self.reclaim_bytes {
             self.reclaim()?;
@@ -111,11 +151,14 @@ impl Write for ColdWriter {
 impl Seek for ColdWriter {
     fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
         // BufWriter must be flushed before changing the file cursor, but a
-        // seek is not a durability boundary. The builder only seeks while
-        // patching its position tables; publication still syncs completed
+        // seek is not a durability boundary. Seek::stream_position reaches
+        // this path once per document block, so syncing here created roughly
+        // 127k barriers for the full corpus. Publication still syncs completed
         // files and the candidate tree before rename.
         self.output.flush()?;
-        self.output.seek(position)
+        let position = self.output.seek(position)?;
+        self.position = position;
+        Ok(position)
     }
 }
 
@@ -131,6 +174,7 @@ pub(crate) struct ColdReader {
 /// restores it before Tokio can reuse that blocking-pool thread. Search page
 /// faults then take precedence over generation scans and writeback.
 pub(crate) struct BackgroundIoGuard {
+    _measurement: PublicationIoMeasurement,
     #[cfg(target_os = "linux")]
     previous: Option<i32>,
 }
@@ -139,15 +183,21 @@ impl BackgroundIoGuard {
     pub(crate) fn enter() -> Self {
         #[cfg(target_os = "linux")]
         {
+            let measurement = PublicationIoMeasurement::start();
             let previous = linux_ioprio_get();
             if previous.is_some() {
                 linux_ioprio_set(3 << 13);
             }
-            Self { previous }
+            Self {
+                _measurement: measurement,
+                previous,
+            }
         }
         #[cfg(not(target_os = "linux"))]
         {
-            Self {}
+            Self {
+                _measurement: PublicationIoMeasurement::start(),
+            }
         }
     }
 }
@@ -175,7 +225,9 @@ impl ColdReader {
     fn reclaim_consumed(&mut self) {
         let length = self.position.saturating_sub(self.advised_through);
         if length >= SEQUENTIAL_RECLAIM_BYTES {
+            let started = Instant::now();
             advise_dont_need(&self.input, self.advised_through, length);
+            record_reader(length, started.elapsed());
             self.advised_through = self.position;
         }
     }
@@ -193,7 +245,11 @@ impl Read for ColdReader {
 impl Drop for ColdReader {
     fn drop(&mut self) {
         let length = self.position.saturating_sub(self.advised_through);
-        advise_dont_need(&self.input, self.advised_through, length);
+        if length > 0 {
+            let started = Instant::now();
+            advise_dont_need(&self.input, self.advised_through, length);
+            record_reader(length, started.elapsed());
+        }
     }
 }
 
@@ -292,6 +348,24 @@ mod tests {
         output.write_all(b"Z").unwrap();
         output.finish().unwrap();
         assert_eq!(std::fs::read(path).unwrap(), b"aZcd");
+    }
+
+    #[test]
+    fn cold_writer_advises_each_sequential_range_only_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ranges.bin");
+        let mut output = ColdWriter::create_with_reclaim_bytes(&path, 4).unwrap();
+        output.write_all(b"abcd").unwrap();
+        assert_eq!(output.advised_through, 4);
+        output.write_all(b"efgh").unwrap();
+        assert_eq!(output.advised_through, 8);
+
+        output.seek(SeekFrom::Start(1)).unwrap();
+        output.write_all(b"Z").unwrap();
+        output.reclaim().unwrap();
+        assert_eq!(output.high_watermark, 8);
+        assert_eq!(output.advised_through, 8);
+        assert_eq!(std::fs::read(path).unwrap(), b"aZcdefgh");
     }
 
     #[test]
