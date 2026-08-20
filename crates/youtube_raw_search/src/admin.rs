@@ -1,25 +1,19 @@
 use crate::{
-    MutationStore, Publisher, ReloadableEngine,
-    cache_io::{BackgroundIoGuard, run_background_work},
-    channel_ids_equal,
+    MutationStore, Publisher, ReloadableEngine, channel_ids_equal,
+    remote_publication::{GenerationUploadRequest, RemotePublication},
 };
 use axum::{
     Json, Router,
+    body::Body,
     extract::{DefaultBodyLimit, Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
-use std::{
-    collections::BTreeMap,
-    num::NonZeroU16,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-};
+use std::{collections::BTreeMap, num::NonZeroU16, sync::Arc};
+use tokio_util::io::ReaderStream;
 use youtube_index_store::{
     BackendReadiness, ChannelDocument, IndexStoreError, VideoIdPage, VideoReplacement,
 };
@@ -27,6 +21,7 @@ use youtube_ingest::TranscriptChunk;
 
 const ADMIN_KEY_HEADER: &str = "x-raw-admin-key";
 const MAX_MUTATION_BODY_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PUBLICATION_MANIFEST_BYTES: usize = 64 * 1024;
 const DEFAULT_PAGE_SIZE: u16 = 1_000;
 const MAX_PAGE_SIZE: u16 = 10_000;
 
@@ -34,10 +29,8 @@ const MAX_PAGE_SIZE: u16 = 10_000;
 pub struct AdminState {
     engine: Arc<ReloadableEngine>,
     store: Arc<MutationStore>,
-    publisher: Arc<Publisher>,
+    remote_publication: RemotePublication,
     api_key: Arc<str>,
-    publication_scheduled: Arc<AtomicBool>,
-    publication_target: Arc<AtomicU64>,
 }
 
 #[derive(Deserialize)]
@@ -75,13 +68,6 @@ struct PageQuery {
     limit: Option<u16>,
 }
 
-#[derive(Serialize)]
-struct PublishResponse {
-    scheduled: bool,
-    active_sequence: u64,
-    last_sequence: u64,
-}
-
 impl AdminState {
     pub fn new(
         engine: Arc<ReloadableEngine>,
@@ -94,109 +80,19 @@ impl AdminState {
                 "RAW_SEARCH_ADMIN_API_KEY must contain at least 24 bytes".to_string(),
             ));
         }
+        let remote_publication =
+            RemotePublication::new(Arc::clone(&engine), Arc::clone(&store), publisher)?;
         Ok(Self {
             engine,
             store,
-            publisher,
+            remote_publication,
             api_key: Arc::from(api_key),
-            publication_scheduled: Arc::new(AtomicBool::new(false)),
-            publication_target: Arc::new(AtomicU64::new(0)),
         })
     }
-
-    pub fn trigger_publication(&self) -> bool {
-        let target = self.store.last_sequence().unwrap_or_default();
-        self.publication_target.fetch_max(target, Ordering::AcqRel);
-        self.start_publication_worker()
-    }
-
-    fn start_publication_worker(&self) -> bool {
-        if self
-            .publication_scheduled
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return false;
-        }
-        let state = self.clone();
-        tokio::spawn(async move {
-            state.publish_pending().await;
-        });
-        true
-    }
-
-    async fn publish_pending(self) {
-        let mut completed = true;
-        loop {
-            let publisher = Arc::clone(&self.publisher);
-            let store = Arc::clone(&self.store);
-            let result = run_background_work("raw-index-publisher", move || {
-                let _background_io = BackgroundIoGuard::enter();
-                let result = publisher.publish(&store);
-                release_builder_heap();
-                result
-            })
-            .await;
-            match result {
-                Ok(Ok(Some(generation))) => {
-                    let sequence = generation.sequence;
-                    if let Err(error) = self.engine.replace(generation.engine, sequence) {
-                        tracing::error!(
-                            ?error,
-                            sequence,
-                            "failed to activate published raw reader"
-                        );
-                        break;
-                    }
-                    tracing::info!(sequence, path = %generation.path.display(), "activated raw generation");
-                }
-                Ok(Ok(None)) => {}
-                Ok(Err(error)) => {
-                    tracing::error!(%error, "raw publication failed; durable mutations remain pending");
-                    completed = false;
-                    break;
-                }
-                Err(error) => {
-                    tracing::error!(%error, "raw publication worker terminated");
-                    completed = false;
-                    break;
-                }
-            }
-
-            // Only chase a sequence explicitly requested through /admin/publish.
-            // Mutations arriving during a build remain durable but do not turn
-            // one request into an endless series of full-corpus rebuilds.
-            if self.engine.sequence() >= self.publication_target.load(Ordering::Acquire) {
-                break;
-            }
-        }
-        self.publication_scheduled.store(false, Ordering::Release);
-
-        let requested = self.publication_target.load(Ordering::Acquire);
-        if completed && requested > self.engine.sequence() {
-            self.start_publication_worker();
-        }
-    }
 }
-
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-fn release_builder_heap() {
-    unsafe extern "C" {
-        fn malloc_trim(pad: usize) -> std::ffi::c_int;
-    }
-    // SAFETY: glibc documents malloc_trim as process-wide and thread-safe. All
-    // builder-owned allocations have been dropped before this call; live query
-    // allocations are not invalidated, only unused allocator pages are returned.
-    unsafe {
-        malloc_trim(0);
-    }
-}
-
-#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
-fn release_builder_heap() {}
 
 pub fn router(state: AdminState) -> Router {
-    Router::new()
+    let mutations = Router::new()
         .route("/admin/readiness", get(readiness))
         .route("/admin/publish", post(publish))
         .route("/admin/operations/{operation_id}", get(operation))
@@ -217,7 +113,29 @@ pub fn router(state: AdminState) -> Router {
             get(indexed_video_ids),
         )
         .route("/admin/channels/{channel_id}/stats", get(channel_stats))
-        .layer(DefaultBodyLimit::max(MAX_MUTATION_BODY_BYTES))
+        .layer(DefaultBodyLimit::max(MAX_MUTATION_BODY_BYTES));
+    let remote_publication = Router::new()
+        .route("/admin/publications/prepare", post(prepare_publication))
+        .route("/admin/publications/{job_id}", get(publication_status))
+        .route(
+            "/admin/publications/{job_id}/snapshot",
+            get(publication_snapshot),
+        )
+        .route(
+            "/admin/publications/{job_id}/manifest",
+            put(publication_manifest).layer(DefaultBodyLimit::max(MAX_PUBLICATION_MANIFEST_BYTES)),
+        )
+        .route(
+            "/admin/publications/{job_id}/files/{file_name}",
+            put(publication_file).layer(DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/admin/publications/{job_id}/activate",
+            post(activate_publication),
+        );
+    Router::new()
+        .merge(mutations)
+        .merge(remote_publication)
         .with_state(state)
 }
 
@@ -232,18 +150,116 @@ async fn readiness(
 async fn publish(
     State(state): State<AdminState>,
     headers: HeaderMap,
-) -> Result<(StatusCode, Json<PublishResponse>), AdminError> {
+) -> Result<Response, AdminError> {
     authorize(&state, &headers)?;
-    let last_sequence = state.store.last_sequence()?;
-    let scheduled = last_sequence > state.engine.sequence() && state.trigger_publication();
+    Err(AdminError::Store(IndexStoreError::Conflict(
+        "local publication is disabled; use /admin/publications/prepare with the remote builder"
+            .to_string(),
+    )))
+}
+
+async fn prepare_publication(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+) -> Result<
+    (
+        StatusCode,
+        Json<crate::remote_publication::RemoteJobResponse>,
+    ),
+    AdminError,
+> {
+    authorize(&state, &headers)?;
     Ok((
-        StatusCode::ACCEPTED,
-        Json(PublishResponse {
-            scheduled,
-            active_sequence: state.engine.sequence(),
-            last_sequence,
-        }),
+        StatusCode::CREATED,
+        Json(state.remote_publication.prepare().await?),
     ))
+}
+
+async fn publication_status(
+    State(state): State<AdminState>,
+    Path(job_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<crate::remote_publication::RemoteJobResponse>, AdminError> {
+    authorize(&state, &headers)?;
+    Ok(Json(state.remote_publication.status(&job_id).await?))
+}
+
+async fn publication_snapshot(
+    State(state): State<AdminState>,
+    Path(job_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    authorize(&state, &headers)?;
+    let snapshot = state.remote_publication.open_snapshot(&job_id).await?;
+    let mut response = Response::new(Body::from_stream(ReaderStream::new(snapshot.file)));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/vnd.sqlite3"),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&snapshot.bytes.to_string())
+            .map_err(|error| AdminError::Store(IndexStoreError::internal("raw", error)))?,
+    );
+    response.headers_mut().insert(
+        header::ETAG,
+        HeaderValue::from_str(&format!("\"{}\"", snapshot.blake3))
+            .map_err(|error| AdminError::Store(IndexStoreError::internal("raw", error)))?,
+    );
+    Ok(response)
+}
+
+async fn publication_manifest(
+    State(state): State<AdminState>,
+    Path(job_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<GenerationUploadRequest>,
+) -> Result<Json<crate::remote_publication::RemoteJobResponse>, AdminError> {
+    authorize(&state, &headers)?;
+    Ok(Json(
+        state
+            .remote_publication
+            .accept_manifest(&job_id, request)
+            .await?,
+    ))
+}
+
+async fn publication_file(
+    State(state): State<AdminState>,
+    Path((job_id, file_name)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<Json<crate::remote_publication::RemoteJobResponse>, AdminError> {
+    authorize(&state, &headers)?;
+    let content_length = headers
+        .get(header::CONTENT_LENGTH)
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|_| {
+                    IndexStoreError::InvalidInput("invalid Content-Length header".to_string())
+                })?
+                .parse::<u64>()
+                .map_err(|_| {
+                    IndexStoreError::InvalidInput("invalid Content-Length header".to_string())
+                })
+        })
+        .transpose()?;
+    Ok(Json(
+        state
+            .remote_publication
+            .upload_file(&job_id, &file_name, content_length, body)
+            .await?,
+    ))
+}
+
+async fn activate_publication(
+    State(state): State<AdminState>,
+    Path(job_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<crate::remote_publication::RemoteJobResponse>, AdminError> {
+    authorize(&state, &headers)?;
+    Ok(Json(state.remote_publication.activate(&job_id).await?))
 }
 
 async fn operation(

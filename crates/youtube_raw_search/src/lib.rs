@@ -7,6 +7,7 @@ mod mutable;
 mod positions;
 mod publisher;
 mod reloadable;
+mod remote_publication;
 
 pub use engine::{BuildReport, RawSearchEngine, SliceReport, build_index, slice_corpus};
 pub use mutable::{
