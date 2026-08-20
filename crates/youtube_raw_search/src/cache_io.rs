@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 
 mod metrics;
 
-use metrics::{PublicationIoMeasurement, WriterClass, record_reader, record_writer};
+use metrics::{PublicationIoMeasurement, WriterClass, record_reader, record_seek, record_writer};
 
 const DEFAULT_RECLAIM_BYTES: u64 = 8 * 1024 * 1024;
 const SEQUENTIAL_RECLAIM_BYTES: u64 = 8 * 1024 * 1024;
@@ -155,8 +155,12 @@ impl Seek for ColdWriter {
         // this path once per document block, so syncing here created roughly
         // 127k barriers for the full corpus. Publication still syncs completed
         // files and the candidate tree before rename.
+        let flush_started = Instant::now();
         self.output.flush()?;
+        let flush_elapsed = flush_started.elapsed();
+        let seek_started = Instant::now();
         let position = self.output.seek(position)?;
+        record_seek(self.class, flush_elapsed, seek_started.elapsed());
         self.position = position;
         Ok(position)
     }

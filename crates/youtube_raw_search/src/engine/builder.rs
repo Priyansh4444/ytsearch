@@ -53,9 +53,8 @@ impl PostingShardWriter {
     fn append(&mut self, term: &str, posting: BuildPosting, title: bool) -> Result<()> {
         let shard = usize::from(term.as_bytes()[0]);
         if self.outputs[shard].is_none() {
-            self.outputs[shard] = Some(ColdWriter::create_with_reclaim_bytes(
+            self.outputs[shard] = Some(ColdWriter::create_posting_shard(
                 &self.directory.join(format!("{shard:03}.bin")),
-                1024 * 1024,
             )?);
         }
         write_spool_posting(
