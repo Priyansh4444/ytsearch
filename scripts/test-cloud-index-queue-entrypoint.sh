@@ -16,6 +16,10 @@ export CLOUD_INDEX_QUEUE_LIBRARY_ONLY INDEX_QUEUE_API_BASE_URL YTSEARCH_INDEX_QU
 
 log_queue_event() { :; }
 set_index_activity() { :; }
+publication_log="$test_dir/publications.log"
+publish_raw_generation() {
+  printf 'publish\n' >> "$publication_log"
+}
 
 queue_request() { return 1; }
 if pull_queue_tsv > "$test_dir/pull.tsv" 2> "$test_dir/pull.err"; then
@@ -131,5 +135,46 @@ if grep -F "acked request=" "$test_dir/ack.out" >/dev/null; then
   echo "an unacknowledged request must not be reported as complete" >&2
   exit 1
 fi
+
+: > "$status_log"
+: > "$publication_log"
+publish_raw_generation() {
+  printf 'failed\n' >> "$publication_log"
+  return 1
+}
+queue_request() {
+  echo "a request must not be acknowledged before publication" >&2
+  return 1
+}
+if process_queue_once > "$test_dir/publication-failure.out" 2> "$test_dir/publication-failure.err"; then
+  echo "a publication failure must fail the queue pass" >&2
+  exit 1
+fi
+grep -Fx "request-1 queued" "$status_log" >/dev/null
+if grep -F "acked request=" "$test_dir/publication-failure.out" >/dev/null; then
+  echo "a request was acknowledged before publication" >&2
+  exit 1
+fi
+
+: > "$status_log"
+: > "$publication_log"
+: > "$QUEUE_RETRY_STATE_FILE"
+pull_queue_tsv() {
+  printf 'request-1\t@example\tworker\traw\n'
+  printf 'request-2\t@example-two\tworker\traw\n'
+}
+publish_raw_generation() {
+  printf 'publish\n' >> "$publication_log"
+}
+queue_request() { return 0; }
+process_queue_once > "$test_dir/coalesced.out" 2> "$test_dir/coalesced.err"
+[ "$(wc -l < "$publication_log" | tr -d ' ')" -eq 1 ] || {
+  echo "two successful queue requests must share one publication" >&2
+  exit 1
+}
+[ "$(grep -c 'acked request=' "$test_dir/coalesced.out")" -eq 2 ] || {
+  echo "both coalesced requests must be acknowledged after publication" >&2
+  exit 1
+}
 
 echo "cloud queue transport and retry behavior passed"

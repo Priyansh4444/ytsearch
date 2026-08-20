@@ -517,9 +517,10 @@ index_youtuber_for_backends() {
 index_youtuber_for_queue_target() {
   handle="$1"
   target_backend="$2"
+  shift 2
 
   if [ -z "$target_backend" ]; then
-    index_youtuber_for_backends "$handle"
+    index_youtuber_for_backends "$handle" "$@"
     return $?
   fi
 
@@ -529,13 +530,18 @@ index_youtuber_for_queue_target() {
         echo "cloud-queue-indexer: raw unavailable; missing RAW_SEARCH_API_URL or RAW_SEARCH_ADMIN_API_KEY" >&2
         return 1
       fi
-      index_one_backend raw raw "${RAW_JOBS:-$JOBS}" "$handle"
+      index_one_backend raw raw "${RAW_JOBS:-$JOBS}" "$handle" "$@"
       ;;
     *)
       echo "cloud-queue-indexer: unsupported target_backend=$target_backend request skipped" >&2
       return 1
       ;;
   esac
+}
+
+publish_raw_generation() {
+  echo "cloud-queue-indexer: publishing one coalesced Raw generation"
+  ytsearch publish --backend raw --collection "$COLLECTION"
 }
 
 index_list_backend() {
@@ -550,7 +556,7 @@ index_list_backend() {
     case "$handle" in ''|'#'*) continue ;; esac
     set_index_activity "$handle" || true
     if ! index_one_backend "$label" "$backend" "$jobs" "$handle" \
-      --stop-after-existing "$EXISTING_TAIL" "$@"; then
+      --stop-after-existing "$EXISTING_TAIL" --defer-publish "$@"; then
       failed=1
     fi
     process_queue_once || true
@@ -572,10 +578,13 @@ index_daily_update_for_backends() {
       echo "cloud-queue-indexer: daily Raw update unavailable; missing RAW_SEARCH_API_URL or RAW_SEARCH_ADMIN_API_KEY" >&2
       failed=1
     else
-      if ! index_list_backend raw raw "$raw_jobs"; then
-        failed=1
-        log_queue_event error daily_update_backend_failed "" "" "" "raw" "failed"
-      fi
+    if ! index_list_backend raw raw "$raw_jobs"; then
+      failed=1
+      log_queue_event error daily_update_backend_failed "" "" "" "raw" "failed"
+    elif ! publish_raw_generation; then
+      failed=1
+      log_queue_event error daily_update_publication_failed "" "" "" "raw" "failed"
+    fi
     fi
   fi
 
@@ -619,6 +628,9 @@ process_queue_once() {
   failed_acked=0
   unresolved=0
   tmp_queue="/tmp/ytsearch-queue.tsv"
+  tmp_success="/tmp/ytsearch-queue-success.tsv"
+  : > "$tmp_success"
+  publication_needed=0
   if ! pull_queue_tsv > "$tmp_queue"; then
     echo "cloud-queue-indexer: queue pull failed" >&2
     log_queue_event error queue_pull_failed "" "" "" "$BACKENDS" "retrying"
@@ -653,20 +665,10 @@ process_queue_once() {
     fi
     log_queue_event info index_request_started "$request_id" "$handle" "$source_backend" "$active_backends" "running"
     index_status=0
-    index_youtuber_for_queue_target "$handle" "$target_backend" || index_status=$?
+    index_youtuber_for_queue_target "$handle" "$target_backend" --defer-publish || index_status=$?
+    publication_needed=1
     if [ "$index_status" -eq 0 ]; then
-      if queue_request DELETE "/api/index-requests/$request_id" >/dev/null; then
-        echo "cloud-queue-indexer: acked request=$request_id handle=$handle"
-        forget_queue_retry "$request_id"
-        log_queue_event info index_request_completed "$request_id" "$handle" "$source_backend" "$active_backends" "acked"
-        processed=$((processed + 1))
-      else
-        failed=$((failed + 1))
-        unresolved=$((unresolved + 1))
-        remember_queue_retry "$request_id" "$QUEUE_ACK_RETRY_SECONDS"
-        set_queue_status "$request_id" queued || true
-        log_queue_event error index_request_ack_failed "$request_id" "$handle" "$source_backend" "$active_backends" "queued"
-      fi
+      printf '%s\t%s\t%s\t%s\n' "$request_id" "$handle" "$source_backend" "$active_backends" >> "$tmp_success"
     else
       failed=$((failed + 1))
       log_queue_event error index_request_failed "$request_id" "$handle" "$source_backend" "$active_backends" "failed"
@@ -704,6 +706,35 @@ process_queue_once() {
       break
     fi
   done < "$tmp_queue"
+
+  if [ "$publication_needed" -eq 1 ]; then
+    if publish_raw_generation; then
+      while IFS="$(printf '\t')" read -r request_id handle source_backend active_backends; do
+        [ -n "$request_id" ] || continue
+        if queue_request DELETE "/api/index-requests/$request_id" >/dev/null; then
+          echo "cloud-queue-indexer: acked request=$request_id handle=$handle"
+          forget_queue_retry "$request_id"
+          log_queue_event info index_request_completed "$request_id" "$handle" "$source_backend" "$active_backends" "acked"
+          processed=$((processed + 1))
+        else
+          failed=$((failed + 1))
+          unresolved=$((unresolved + 1))
+          remember_queue_retry "$request_id" "$QUEUE_ACK_RETRY_SECONDS"
+          set_queue_status "$request_id" queued || true
+          log_queue_event error index_request_ack_failed "$request_id" "$handle" "$source_backend" "$active_backends" "queued"
+        fi
+      done < "$tmp_success"
+    else
+      failed=$((failed + 1))
+      unresolved=$((unresolved + 1))
+      while IFS="$(printf '\t')" read -r request_id handle source_backend active_backends; do
+        [ -n "$request_id" ] || continue
+        remember_queue_retry "$request_id" "$QUEUE_ACK_RETRY_SECONDS"
+        set_queue_status "$request_id" queued || true
+        log_queue_event error index_request_publication_failed "$request_id" "$handle" "$source_backend" "$active_backends" "queued"
+      done < "$tmp_success"
+    fi
+  fi
 
   set_index_activity "" || true
 

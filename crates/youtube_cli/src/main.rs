@@ -389,6 +389,16 @@ fn unique_operation_key(kind: &str, target: &str) -> String {
 }
 
 async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> {
+    let readiness = search.readiness().await?;
+    let active = readiness
+        .generation
+        .as_deref()
+        .and_then(|generation| generation.parse::<u64>().ok())
+        .unwrap_or_default();
+    if readiness.last_sequence.unwrap_or_default() <= active {
+        println!("Raw has no pending mutations to publish");
+        return Ok(());
+    }
     let job = search.prepare_publication().await?;
     if job.status == RawPublicationStatus::Activated {
         println!("Raw generation {} is already active", job.target_sequence);
@@ -603,7 +613,8 @@ fn validate_remove_safety(allow_destructive_remove: bool) -> Result<(), CliError
 }
 
 async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), CliError> {
-    index_youtuber(command, true).await
+    let publish_when_complete = !command.defer_publish;
+    index_youtuber(command, publish_when_complete).await
 }
 
 async fn index_youtuber(
@@ -995,6 +1006,7 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
                 content_kind: command.content_kind,
                 transcript: command.transcript.clone(),
                 transcript_failure_retry_seconds: command.transcript_failure_retry_seconds,
+                defer_publish: true,
             };
             tasks.spawn(async move { (failed_handle, index_youtuber(child, false).await) });
         }
@@ -1019,7 +1031,9 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
         }
     }
 
-    publish_and_wait(&publication_search).await?;
+    if !command.defer_publish {
+        publish_and_wait(&publication_search).await?;
+    }
     if failures.is_empty() {
         Ok(())
     } else {

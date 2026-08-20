@@ -180,6 +180,11 @@ pub(super) struct IndexYoutuberCommand {
         help = "Seconds before retrying a video whose transcript fetch previously failed"
     )]
     pub(super) transcript_failure_retry_seconds: u64,
+    #[arg(
+        long,
+        help = "Write durable mutations without building a generation; a later `ytsearch publish` makes them searchable"
+    )]
+    pub(super) defer_publish: bool,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -234,6 +239,11 @@ pub(super) struct IndexYoutubersCommand {
         help = "Seconds before retrying a video whose transcript fetch previously failed"
     )]
     pub(super) transcript_failure_retry_seconds: u64,
+    #[arg(
+        long,
+        help = "Write durable mutations without building a generation; a later `ytsearch publish` makes them searchable"
+    )]
+    pub(super) defer_publish: bool,
 }
 
 #[derive(Clone, Debug, Args)]
