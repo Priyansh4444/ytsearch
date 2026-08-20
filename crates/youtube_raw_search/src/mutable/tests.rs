@@ -183,3 +183,59 @@ fn snapshot_pins_latest_rows_to_its_captured_sequence() {
     );
     assert_eq!(current.channels[0].document, Some(channel(2)));
 }
+
+#[test]
+fn exported_snapshot_is_immutable_and_sequence_exact() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("mutations.sqlite3");
+    let export_path = directory.path().join("publication.sqlite3");
+    let store = MutationStore::open(&path).unwrap();
+    let old_chunks = [chunk("video-1", "old text")];
+    let new_chunks = [chunk("video-1", "new text")];
+    store
+        .replace_video(
+            VideoReplacement::new("video-1", &old_chunks).unwrap(),
+            "replace-video-old",
+        )
+        .unwrap();
+
+    let export = store.export_snapshot(&export_path).unwrap();
+    assert_eq!(export.through_sequence, 1);
+    assert_eq!(export.bytes, std::fs::metadata(&export_path).unwrap().len());
+    assert_eq!(export.blake3, hash_file(&export_path).unwrap());
+
+    store
+        .replace_video(
+            VideoReplacement::new("video-1", &new_chunks).unwrap(),
+            "replace-video-new",
+        )
+        .unwrap();
+    let snapshot_store = MutationStore::open_snapshot_read_only(&export_path).unwrap();
+    let snapshot = snapshot_store.snapshot().unwrap();
+    assert_eq!(snapshot.through_sequence, 1);
+    assert_eq!(
+        snapshot.videos[0].chunks.as_deref(),
+        Some(old_chunks.as_slice())
+    );
+    assert!(
+        snapshot_store
+            .delete_video("video-1", "readonly-delete")
+            .is_err()
+    );
+    assert!(matches!(
+        store.export_snapshot(&export_path),
+        Err(IndexStoreError::Conflict(_))
+    ));
+}
+
+#[test]
+fn read_only_snapshot_rejects_unknown_schema() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("unknown.sqlite3");
+    Connection::open(&path).unwrap();
+
+    assert!(matches!(
+        MutationStore::open_snapshot_read_only(&path),
+        Err(IndexStoreError::InvalidInput(_))
+    ));
+}

@@ -1,9 +1,14 @@
 use blake3::Hash;
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, backup::Backup,
+    params,
+};
 use std::{
-    fs,
-    path::Path,
+    fs::{self, File},
+    io,
+    path::{Path, PathBuf},
     sync::{Mutex, MutexGuard},
+    time::Duration,
 };
 use youtube_index_store::{
     ChannelDocument, IndexOperation, IndexOperationState, IndexStoreError, VideoReplacement,
@@ -11,9 +16,18 @@ use youtube_index_store::{
 use youtube_ingest::TranscriptChunk;
 
 const BACKEND: &str = "raw";
+const MUTATION_SCHEMA_VERSION: i64 = 1;
+const BACKUP_PAGES_PER_STEP: i32 = 256;
 
 pub struct MutationStore {
     connection: Mutex<Connection>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MutationSnapshotExport {
+    pub through_sequence: u64,
+    pub bytes: u64,
+    pub blake3: String,
 }
 
 #[derive(Clone, Debug)]
@@ -79,10 +93,33 @@ impl MutationStore {
                    sequence INTEGER NOT NULL REFERENCES operations(sequence),
                    document_json BLOB,
                    cascade INTEGER NOT NULL DEFAULT 0
-                 );",
+                 );
+                 PRAGMA user_version=1;",
             )
             .map_err(map_sqlite)?;
         ensure_video_summary_columns(&connection)?;
+        Ok(Self {
+            connection: Mutex::new(connection),
+        })
+    }
+
+    pub fn open_snapshot_read_only(path: &Path) -> Result<Self, IndexStoreError> {
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(map_sqlite)?;
+        connection
+            .execute_batch("PRAGMA foreign_keys=ON; PRAGMA query_only=ON;")
+            .map_err(map_sqlite)?;
+        let schema_version = connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .map_err(map_sqlite)?;
+        if schema_version != MUTATION_SCHEMA_VERSION {
+            return Err(IndexStoreError::InvalidInput(format!(
+                "unsupported mutation snapshot schema {schema_version}; expected {MUTATION_SCHEMA_VERSION}"
+            )));
+        }
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -233,6 +270,70 @@ impl MutationStore {
         let snapshot = snapshot_at_sequence(&transaction, through_sequence_sql)?;
         transaction.commit().map_err(map_sqlite)?;
         Ok(snapshot)
+    }
+
+    pub fn export_snapshot(
+        &self,
+        destination: &Path,
+    ) -> Result<MutationSnapshotExport, IndexStoreError> {
+        let parent = destination.parent().ok_or_else(|| {
+            IndexStoreError::InvalidInput("mutation snapshot path has no parent".to_string())
+        })?;
+        fs::create_dir_all(parent).map_err(map_io)?;
+        if destination.exists() {
+            return Err(IndexStoreError::Conflict(format!(
+                "mutation snapshot already exists: {}",
+                destination.display()
+            )));
+        }
+        let temporary = temporary_snapshot_path(destination);
+        if temporary.exists() {
+            fs::remove_file(&temporary).map_err(map_io)?;
+        }
+
+        let through_sequence = {
+            let mut connection = self.connection()?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .map_err(map_sqlite)?;
+            let through_sequence_sql = snapshot_sequence(&transaction)?;
+            let mut output = Connection::open(&temporary).map_err(map_sqlite)?;
+            {
+                let backup = Backup::new(&transaction, &mut output).map_err(map_sqlite)?;
+                backup
+                    .run_to_completion(BACKUP_PAGES_PER_STEP, Duration::from_millis(1), None)
+                    .map_err(map_sqlite)?;
+            }
+            drop(output);
+            transaction.commit().map_err(map_sqlite)?;
+            u64::try_from(through_sequence_sql)
+                .map_err(|error| IndexStoreError::internal(BACKEND, error))?
+        };
+
+        File::open(&temporary)
+            .and_then(|file| file.sync_all())
+            .map_err(map_io)?;
+        let exported = Self::open_snapshot_read_only(&temporary)?;
+        let exported_sequence = exported.last_sequence()?;
+        if exported_sequence != through_sequence {
+            return Err(IndexStoreError::internal(
+                BACKEND,
+                format!(
+                    "mutation snapshot sequence changed during backup: expected {through_sequence}, got {exported_sequence}"
+                ),
+            ));
+        }
+        drop(exported);
+        let bytes = fs::metadata(&temporary).map_err(map_io)?.len();
+        let blake3 = hash_file(&temporary)?;
+        fs::rename(&temporary, destination).map_err(map_io)?;
+        sync_directory(parent)?;
+
+        Ok(MutationSnapshotExport {
+            through_sequence,
+            bytes,
+            blake3,
+        })
     }
 
     pub fn video_mutation_summary(
@@ -465,6 +566,25 @@ fn snapshot_at_sequence(
     })
 }
 
+fn temporary_snapshot_path(destination: &Path) -> PathBuf {
+    let mut value = destination.as_os_str().to_os_string();
+    value.push(".new");
+    PathBuf::from(value)
+}
+
+fn hash_file(path: &Path) -> Result<String, IndexStoreError> {
+    let mut input = File::open(path).map_err(map_io)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update_reader(&mut input).map_err(map_io)?;
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn sync_directory(path: &Path) -> Result<(), IndexStoreError> {
+    File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(map_io)
+}
+
 fn ensure_video_summary_columns(connection: &Connection) -> Result<(), IndexStoreError> {
     let mut statement = connection
         .prepare("PRAGMA table_info(video_mutations)")
@@ -652,6 +772,10 @@ fn row_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
 }
 
 fn map_sqlite(error: rusqlite::Error) -> IndexStoreError {
+    IndexStoreError::internal(BACKEND, error)
+}
+
+fn map_io(error: io::Error) -> IndexStoreError {
     IndexStoreError::internal(BACKEND, error)
 }
 
