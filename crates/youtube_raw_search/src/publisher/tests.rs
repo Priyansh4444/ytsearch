@@ -216,6 +216,89 @@ fn detached_generation_matches_publisher_without_activation_or_wal_changes() {
 }
 
 #[test]
+fn detached_install_is_exact_monotonic_and_does_not_acknowledge_wal() {
+    let (_directory, publisher, store) = fixture();
+    replace_add_and_delete(&store);
+    let snapshot_path = publisher
+        .paths
+        .state_directory
+        .join("work/remote-publication/snapshot.sqlite3");
+    fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
+    store.export_snapshot(&snapshot_path).unwrap();
+    let snapshot_store = MutationStore::open_snapshot_read_only(&snapshot_path).unwrap();
+    let builder = GenerationBuilder::new(
+        publisher.paths.base_chunks_gzip.clone(),
+        publisher.paths.base_channels_gzip.clone(),
+    );
+    let compatibility = builder.compatibility().unwrap();
+    let incoming = publisher
+        .paths
+        .state_directory
+        .join("work/remote-publication/job/generation");
+    fs::create_dir_all(incoming.parent().unwrap()).unwrap();
+    let detached = builder
+        .build(&snapshot_store, &compatibility, &incoming)
+        .unwrap();
+    let manifest = fs::read(detached.path.join(GENERATION_MANIFEST)).unwrap();
+
+    let installed = publisher
+        .install_verified_generation(detached.sequence, &detached.path, &manifest)
+        .unwrap();
+
+    assert_eq!(publisher.active_sequence().unwrap(), detached.sequence);
+    assert_eq!(found(&installed.engine, "replacement blackhole"), 1);
+    assert_eq!(
+        store.operation("add-video").unwrap().state,
+        youtube_index_store::IndexOperationState::Durable,
+        "installation must not acknowledge the WAL before the reader swap"
+    );
+    assert!(
+        !detached.path.exists(),
+        "install must move the verified tree"
+    );
+
+    let retried = publisher
+        .install_verified_generation(detached.sequence, &detached.path, &manifest)
+        .unwrap();
+    assert_eq!(retried.path, installed.path);
+
+    let mut different_manifest = manifest.clone();
+    different_manifest.push(b'\n');
+    assert!(matches!(
+        publisher.install_verified_generation(
+            detached.sequence,
+            &detached.path,
+            &different_manifest
+        ),
+        Err(IndexStoreError::Conflict(_))
+    ));
+    assert!(matches!(
+        publisher.install_verified_generation(detached.sequence - 1, &detached.path, &manifest),
+        Err(IndexStoreError::Conflict(_))
+    ));
+}
+
+#[test]
+fn detached_install_rejects_a_verified_generation_outside_remote_work() {
+    let (directory, publisher, store) = fixture();
+    replace_add_and_delete(&store);
+    let builder = GenerationBuilder::new(
+        publisher.paths.base_chunks_gzip.clone(),
+        publisher.paths.base_channels_gzip.clone(),
+    );
+    let compatibility = builder.compatibility().unwrap();
+    let outside = directory.path().join("outside-generation");
+    let detached = builder.build(&store, &compatibility, &outside).unwrap();
+    let manifest = fs::read(detached.path.join(GENERATION_MANIFEST)).unwrap();
+
+    assert!(matches!(
+        publisher.install_verified_generation(detached.sequence, &detached.path, &manifest),
+        Err(IndexStoreError::InvalidInput(_))
+    ));
+    assert_eq!(publisher.active_sequence().unwrap(), 0);
+}
+
+#[test]
 fn corpus_identity_is_path_independent_and_rejects_source_or_format_mismatch() {
     let (directory, publisher, store) = fixture();
     let expected_builder = GenerationBuilder::new(

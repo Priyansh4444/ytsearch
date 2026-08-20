@@ -14,6 +14,8 @@ use youtube_index_store::{ChannelDocument, IndexStoreError};
 
 const BACKEND: &str = "raw";
 const ACTIVE_MANIFEST: &str = "active-generation.json";
+const GENERATION_MANIFEST: &str = "manifest.json";
+const REMOTE_PUBLICATION_WORK: &str = "work/remote-publication";
 pub const RAW_GENERATION_FORMAT: &str = "raw-index-schema-6-v1";
 const CORPUS_IDENTITY_DOMAIN: &[u8] = b"ytsearch raw corpus identity v1\0";
 
@@ -248,6 +250,80 @@ impl Publisher {
             .map_err(map_json)
     }
 
+    pub fn state_directory(&self) -> &Path {
+        &self.paths.state_directory
+    }
+
+    pub fn generation_compatibility(&self) -> Result<GenerationCompatibility, IndexStoreError> {
+        GenerationBuilder::new(
+            self.paths.base_chunks_gzip.clone(),
+            self.paths.base_channels_gzip.clone(),
+        )
+        .compatibility()
+    }
+
+    /// Installs a detached generation without acknowledging its mutation WAL.
+    ///
+    /// The caller must swap the returned engine into `ReloadableEngine` before
+    /// marking the corresponding mutations published. `expected_manifest`
+    /// makes an activation retry exact even when the first attempt already
+    /// moved the incoming directory into its durable generation path.
+    pub fn install_verified_generation(
+        &self,
+        sequence: u64,
+        incoming_path: &Path,
+        expected_manifest: &[u8],
+    ) -> Result<PublishedGeneration, IndexStoreError> {
+        if sequence == 0 {
+            return Err(IndexStoreError::InvalidInput(
+                "raw generation sequence must be positive".to_string(),
+            ));
+        }
+        let generation_name = format!("generations/{sequence:020}");
+        let final_path = self.paths.state_directory.join(&generation_name);
+        ensure_generation_path(&self.paths.state_directory, &final_path)?;
+        let active_sequence = self.active_sequence()?;
+        if sequence < active_sequence {
+            return Err(IndexStoreError::Conflict(format!(
+                "raw generation {sequence} is older than active generation {active_sequence}"
+            )));
+        }
+        if sequence == active_sequence {
+            return open_exact_generation(sequence, final_path, expected_manifest);
+        }
+
+        validate_remote_incoming_path(&self.paths.state_directory, incoming_path)?;
+        let actual_manifest = fs::read(incoming_path.join(GENERATION_MANIFEST)).map_err(map_io)?;
+        if actual_manifest != expected_manifest {
+            return Err(IndexStoreError::Conflict(
+                "detached generation manifest does not match the accepted manifest".to_string(),
+            ));
+        }
+        let engine = RawSearchEngine::open(incoming_path).map_err(map_raw)?;
+        let report = report_for_existing(&engine);
+
+        fs::create_dir_all(self.paths.state_directory.join("generations")).map_err(map_io)?;
+        if final_path.exists() {
+            drop(engine);
+            let existing = open_exact_generation(sequence, final_path.clone(), expected_manifest)?;
+            self.activate(sequence, &generation_name)?;
+            self.remove_old_generations(sequence)?;
+            return Ok(existing);
+        }
+
+        sync_directory_tree(incoming_path)?;
+        fs::rename(incoming_path, &final_path).map_err(map_io)?;
+        sync_directory(&self.paths.state_directory.join("generations"))?;
+        self.activate(sequence, &generation_name)?;
+        self.remove_old_generations(sequence)?;
+        Ok(PublishedGeneration {
+            sequence,
+            path: final_path,
+            engine,
+            report,
+        })
+    }
+
     pub fn publish(
         &self,
         store: &MutationStore,
@@ -369,6 +445,47 @@ impl Publisher {
         }
         Ok(())
     }
+}
+
+fn open_exact_generation(
+    sequence: u64,
+    path: PathBuf,
+    expected_manifest: &[u8],
+) -> Result<PublishedGeneration, IndexStoreError> {
+    let actual_manifest = fs::read(path.join(GENERATION_MANIFEST)).map_err(map_io)?;
+    if actual_manifest != expected_manifest {
+        return Err(IndexStoreError::Conflict(format!(
+            "generation {sequence} exists with a different manifest"
+        )));
+    }
+    let engine = RawSearchEngine::open(&path).map_err(map_raw)?;
+    let report = report_for_existing(&engine);
+    Ok(PublishedGeneration {
+        sequence,
+        path,
+        engine,
+        report,
+    })
+}
+
+fn validate_remote_incoming_path(root: &Path, path: &Path) -> Result<(), IndexStoreError> {
+    let remote_root = root.join(REMOTE_PUBLICATION_WORK);
+    ensure_generation_path(root, &remote_root)?;
+    if path == remote_root || !path.starts_with(&remote_root) {
+        return Err(IndexStoreError::InvalidInput(format!(
+            "detached generation is outside the remote publication work directory: {}",
+            path.display()
+        )));
+    }
+    let canonical_root = fs::canonicalize(&remote_root).map_err(map_io)?;
+    let canonical_path = fs::canonicalize(path).map_err(map_io)?;
+    if canonical_path == canonical_root || !canonical_path.starts_with(&canonical_root) {
+        return Err(IndexStoreError::InvalidInput(format!(
+            "detached generation is outside the remote publication work directory: {}",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 fn hash_source_archive(path: &Path) -> Result<blake3::Hash, IndexStoreError> {
