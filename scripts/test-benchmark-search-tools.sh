@@ -33,6 +33,10 @@ case "${MOCK_CURL_MODE:-valid}" in
     printf '{"videos":[],"total_videos":0,"total_moments":0}' > "$output"
     printf '200\t0.010\t49'
     ;;
+  rawvalid)
+    printf '{"found":0,"grouped_hits":[]}' > "$output"
+    printf '200\t0.010\t29'
+    ;;
 esac
 EOF
 chmod +x "$tmp/bin/curl"
@@ -54,5 +58,17 @@ grep -F 'malformed/raw' "$tmp/malformed.summary" | grep -F "$(printf '\t0\t1\t')
 
 run_fixture valid
 grep -F 'valid/raw' "$tmp/valid.summary" | grep -F "$(printf '\t1\t0\t')" >/dev/null
+
+PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=timeout SEARCH_URL=https://fixture.invalid \
+  RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 OUTPUT="$tmp/raw-timeout.jsonl" \
+  "$SCRIPT_DIR/benchmark-search-engine.sh" > "$tmp/raw-timeout.summary"
+jq -se 'length > 0 and all(.[]; .ok == false)' "$tmp/raw-timeout.jsonl" >/dev/null
+jq -e 'length > 0 and all(.[]; .errors == .runs)' "$tmp/raw-timeout.summary" >/dev/null
+
+PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=rawvalid SEARCH_URL=https://fixture.invalid \
+  RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 OUTPUT="$tmp/raw-valid.jsonl" \
+  "$SCRIPT_DIR/benchmark-search-engine.sh" > "$tmp/raw-valid.summary"
+jq -se 'length > 0 and all(.[]; .ok == true)' "$tmp/raw-valid.jsonl" >/dev/null
+jq -e 'length > 0 and all(.[]; .errors == 0)' "$tmp/raw-valid.summary" >/dev/null
 
 printf 'benchmark search tooling tests passed\n'

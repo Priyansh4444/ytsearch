@@ -8,6 +8,8 @@ USE_CACHE="${USE_CACHE:-0}"
 CAPTURE_RESOURCES="${CAPTURE_RESOURCES:-1}"
 RUNS="${RUNS:-50}"
 WARMUP_RUNS="${WARMUP_RUNS:-10}"
+CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-3}"
+CURL_MAX_TIME="${CURL_MAX_TIME:-5}"
 OUTPUT="${OUTPUT:-.search-experiment/results/${BACKEND_KIND}-direct.jsonl}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CASES_FILE="${CASES_FILE:-$SCRIPT_DIR/benchmark-search-cases.tsv}"
@@ -16,6 +18,8 @@ CASES_FILE="${CASES_FILE:-$SCRIPT_DIR/benchmark-search-cases.tsv}"
 validate_search_benchmark_cases "$CASES_FILE"
 mkdir -p "$(dirname "$OUTPUT")"
 : > "$OUTPUT"
+BENCHMARK_TMP="$(mktemp -d)"
+trap 'rm -rf "$BENCHMARK_TMP"' EXIT INT TERM
 
 declare -a labels=()
 declare -a queries=()
@@ -42,6 +46,8 @@ request() {
   local write_out="${4:-}"
   local args=(
     --fail --silent --show-error
+    --connect-timeout "$CURL_CONNECT_TIMEOUT"
+    --max-time "$CURL_MAX_TIME"
     --get "${SEARCH_URL%/}/collections/youtube_transcript_chunks/documents/search"
     --data-urlencode "q=$query"
     --data-urlencode 'query_by=text,title'
@@ -77,7 +83,7 @@ request() {
 for index in "${!queries[@]}"; do
   warmup=1
   while (( warmup <= WARMUP_RUNS )); do
-    request "${queries[$index]}" "${creators[$index]}" /dev/null
+    request "${queries[$index]}" "${creators[$index]}" /dev/null >/dev/null || true
     ((warmup += 1))
   done
 done
@@ -88,10 +94,27 @@ fi
 for index in "${!queries[@]}"; do
   run=1
   while (( run <= RUNS )); do
-    timing="$(request "${queries[$index]}" "${creators[$index]}" /dev/null '%{time_total}')"
+    response_file="$BENCHMARK_TMP/response.json"
+    curl_exit=0
+    timing="$(request "${queries[$index]}" "${creators[$index]}" "$response_file" \
+      '%{http_code}\t%{time_total}\t%{size_download}')" || curl_exit=$?
+    http="$(printf '%s' "$timing" | cut -f1)"
+    seconds="$(printf '%s' "$timing" | cut -f2)"
+    bytes="$(printf '%s' "$timing" | cut -f3)"
+    [[ -n "$seconds" ]] || seconds="$CURL_MAX_TIME"
+    [[ -n "$bytes" ]] || bytes=0
+    valid=false
+    if (( curl_exit == 0 )) && [[ "$http" == 200 ]] && jq -e '
+      (.found | type == "number") and
+      (.grouped_hits | type == "array")
+    ' "$response_file" >/dev/null 2>&1; then
+      valid=true
+    fi
     jq -cn --arg label "${labels[$index]}" --arg query "${queries[$index]}" \
-      --arg creator "${creators[$index]}" --argjson run "$run" --argjson seconds "$timing" \
-      '{label:$label,query:$query,creator:(if $creator == "" then null else $creator end),run:$run,seconds:$seconds}' >> "$OUTPUT"
+      --arg creator "${creators[$index]}" --argjson run "$run" --argjson seconds "$seconds" \
+      --argjson curl_exit "$curl_exit" --argjson http "${http:-0}" --argjson bytes "$bytes" \
+      --argjson valid "$valid" \
+      '{label:$label,query:$query,creator:(if $creator == "" then null else $creator end),run:$run,seconds:$seconds,http:$http,curl_exit:$curl_exit,bytes:$bytes,valid:$valid,ok:($curl_exit == 0 and $http == 200 and $valid)}' >> "$OUTPUT"
     ((run += 1))
   done
 done
@@ -102,4 +125,17 @@ if [[ "$CAPTURE_RESOURCES" == 1 ]]; then
     > "${OUTPUT%.jsonl}-resources.json"
 fi
 
-jq -s 'group_by(.label) | map({label:.[0].label,query:.[0].query,creator:.[0].creator,runs:length,min_ms:(map(.seconds*1000)|min),median_ms:(map(.seconds*1000)|sort|.[length/2]),p95_ms:(map(.seconds*1000)|sort|.[(length*0.95|floor)]),max_ms:(map(.seconds*1000)|max)})' "$OUTPUT"
+jq -s '
+  group_by(.label) |
+  map(. as $rows | [$rows[] | select(.ok)] as $ok | {
+    label:$rows[0].label,
+    query:$rows[0].query,
+    creator:$rows[0].creator,
+    runs:($rows | length),
+    errors:(($rows | length) - ($ok | length)),
+    min_ms:(if ($ok | length) == 0 then null else ($ok | map(.seconds*1000) | min) end),
+    median_ms:(if ($ok | length) == 0 then null else ($ok | map(.seconds*1000) | sort | .[length/2]) end),
+    p95_ms:(if ($ok | length) == 0 then null else ($ok | map(.seconds*1000) | sort | .[((length*0.95|ceil)-1)]) end),
+    max_ms:(if ($ok | length) == 0 then null else ($ok | map(.seconds*1000) | max) end)
+  })
+' "$OUTPUT"
