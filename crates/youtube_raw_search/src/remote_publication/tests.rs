@@ -213,6 +213,10 @@ async fn corrupted_upload_is_removed_and_restart_preserves_n_plus_one() {
     assert!(!incoming.join(format!(".{first}.part")).exists());
 
     upload(&fixture.publication, &job, &generation, first).await;
+    let mut corrupted_final = fs::read(incoming.join(first)).unwrap();
+    corrupted_final[0] ^= 0xff;
+    fs::write(incoming.join(first), corrupted_final).unwrap();
+    upload(&fixture.publication, &job, &generation, first).await;
     for name in RAW_GENERATION_FILES.into_iter().skip(1).take(7) {
         upload(&fixture.publication, &job, &generation, name).await;
     }

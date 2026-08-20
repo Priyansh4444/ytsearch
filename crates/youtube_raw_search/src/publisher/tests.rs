@@ -240,6 +240,12 @@ fn detached_install_is_exact_monotonic_and_does_not_acknowledge_wal() {
         .build(&snapshot_store, &compatibility, &incoming)
         .unwrap();
     let manifest = fs::read(detached.path.join(GENERATION_MANIFEST)).unwrap();
+    let recovered_final = publisher
+        .paths
+        .state_directory
+        .join(format!("generations/{:020}", detached.sequence));
+    fs::create_dir_all(recovered_final.parent().unwrap()).unwrap();
+    fs::rename(&detached.path, &recovered_final).unwrap();
 
     let installed = publisher
         .install_verified_generation(detached.sequence, &detached.path, &manifest)
@@ -254,7 +260,7 @@ fn detached_install_is_exact_monotonic_and_does_not_acknowledge_wal() {
     );
     assert!(
         !detached.path.exists(),
-        "install must move the verified tree"
+        "activation recovery must not require the already-renamed input"
     );
 
     let retried = publisher

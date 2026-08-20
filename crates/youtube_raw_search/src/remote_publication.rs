@@ -311,10 +311,14 @@ impl RemotePublication {
         let generation = self.job_directory(job_id)?.join(GENERATION_DIRECTORY);
         let final_path = generation.join(allowlisted_name);
         if final_path.exists() {
-            verify_file(&final_path, &expected)?;
-            job.completed_files.insert(allowlisted_name.to_string());
+            if verify_file(&final_path, &expected).is_ok() {
+                job.completed_files.insert(allowlisted_name.to_string());
+                self.persist_job(&job)?;
+                return Ok(job_response(&job));
+            }
+            fs::remove_file(&final_path).map_err(map_io)?;
+            job.completed_files.remove(allowlisted_name);
             self.persist_job(&job)?;
-            return Ok(job_response(&job));
         }
 
         let part_path = generation.join(format!(".{allowlisted_name}.part"));

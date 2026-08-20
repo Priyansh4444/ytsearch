@@ -292,6 +292,14 @@ impl Publisher {
             return open_exact_generation(sequence, final_path, expected_manifest);
         }
 
+        fs::create_dir_all(self.paths.state_directory.join("generations")).map_err(map_io)?;
+        if final_path.exists() {
+            let existing = open_exact_generation(sequence, final_path, expected_manifest)?;
+            self.activate(sequence, &generation_name)?;
+            self.remove_old_generations(sequence)?;
+            return Ok(existing);
+        }
+
         validate_remote_incoming_path(&self.paths.state_directory, incoming_path)?;
         let actual_manifest = fs::read(incoming_path.join(GENERATION_MANIFEST)).map_err(map_io)?;
         if actual_manifest != expected_manifest {
@@ -301,15 +309,6 @@ impl Publisher {
         }
         let engine = RawSearchEngine::open(incoming_path).map_err(map_raw)?;
         let report = report_for_existing(&engine);
-
-        fs::create_dir_all(self.paths.state_directory.join("generations")).map_err(map_io)?;
-        if final_path.exists() {
-            drop(engine);
-            let existing = open_exact_generation(sequence, final_path.clone(), expected_manifest)?;
-            self.activate(sequence, &generation_name)?;
-            self.remove_old_generations(sequence)?;
-            return Ok(existing);
-        }
 
         sync_directory_tree(incoming_path)?;
         fs::rename(incoming_path, &final_path).map_err(map_io)?;
