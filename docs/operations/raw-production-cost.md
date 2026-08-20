@@ -9,14 +9,14 @@ billing is prorated and egress remains usage-dependent.
 | Resource | Allocation | Estimated monthly cost |
 | --- | ---: | ---: |
 | Production Raw reader/writer | `shared-cpu-2x`, 2 GB, always started | $13.58 |
-| Temporary Raw publication canary | `shared-cpu-2x`, 2 GB, currently needed only for the bounded gate | $13.58 while started |
+| Temporary Raw publication canary | stopped after the failed same-reader gate; non-serving | $0 compute; up to $1.20 stopped rootfs |
 | Queue/profile API | `shared-cpu-1x`, 512 MB, always started | $3.81 |
 | All Raw, temporary, and retained Typesense volumes | 122 GB encrypted | $18.30 |
 | CLI-listed snapshot recovery sizes | about 168.48 GiB; first 10 GB free | about $12.68 before incremental-billing adjustment |
-| Stopped Machine rootfs ceiling | at most 54 GB | at most $8.10 |
-| **Temporary fixed allocation** | | **about $70.05/month before egress/indexer/Cloudflare** |
+| Stopped Machine rootfs ceiling | at most 62 GB | at most $9.30 |
+| **Temporary fixed allocation** | | **about $57.67/month before egress/indexer/Cloudflare** |
 
-The temporary canary is not a serving replica and cannot remain started. Its
+The temporary canary is not a serving replica and is now stopped. Its
 publication proved that a same-reader full build causes requests to exceed the
 five-second timeout, so adding permanent reader capacity is not the fix.
 

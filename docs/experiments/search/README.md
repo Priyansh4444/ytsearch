@@ -37,3 +37,6 @@ transcript, channel, filter, pagination, projection, and cache contract.
 [engagement-ranking.md](engagement-ranking.md)
 records the views/likes/comments data path, bounded score, deployed benchmarks,
 and isolated frontend topology.
+[raw-publication-isolation-2026-08-19.md](raw-publication-isolation-2026-08-19.md)
+records the production tail diagnosis, failed same-reader gate, storage trace,
+external-builder contract, and hard 200-ms release gate.

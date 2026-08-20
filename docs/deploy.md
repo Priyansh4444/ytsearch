@@ -101,8 +101,15 @@ ALLOW_PUBLISH_BENCHMARK=1 \
 SEARCH_URL="$RAW_SEARCH_URL" \
 SEARCH_API_KEY="$RAW_SEARCH_API_KEY" \
 RAW_ADMIN_API_KEY="$RAW_SEARCH_ADMIN_API_KEY" \
+RAW_SEARCH_BASE_CHUNKS_GZIP="$RAW_SEARCH_BASE_CHUNKS_GZIP" \
+RAW_SEARCH_BASE_CHANNELS_GZIP="$RAW_SEARCH_BASE_CHANNELS_GZIP" \
+RAW_PUBLICATION_WORK_DIRECTORY="$RAW_PUBLICATION_WORK_DIRECTORY" \
 scripts/benchmark-publication-isolation.sh
 ```
+
+The script invokes the single `ytsearch publish` workflow and continuously
+loads the canonical query matrix; it does not call the disabled legacy
+`/admin/publish` route. The builder workspace must have at least 8 GB free.
 
 Also verify in a clean browser:
 

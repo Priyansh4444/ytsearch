@@ -82,10 +82,12 @@ Raw can replace Typesense as the canonical search index.
     publication now requires an explicit authenticated request.
   - [x] Pin mutation snapshots in an explicit SQLite read transaction and export
     an immutable, checksummed, read-only backup through one captured sequence.
-  - [ ] Build and verify the generation on the existing on-demand SJC indexer,
-    then stream the nine allowlisted files back with corpus/schema/size/hash gates.
-  - [ ] Atomically activate the transferred generation, mark only the captured
+  - [x] Implement detached build/verification for the existing on-demand SJC
+    indexer and stream nine allowlisted files with corpus/schema/size/hash gates.
+  - [x] Atomically activate the transferred generation, mark only the captured
     sequence published, and leave later mutations durable for the next batch.
+  - [ ] Pass the full-corpus 2-GB indexer disk/RSS gate and the continuous
+    search-load gate before deploying the external builder.
   - [ ] Fail closed on local reader-side builds in production after the remote
     builder passes crash, disk-full, upload-resume, and live latency gates.
 - [ ] Upload checksummed versioned artifacts to private R2 once R2 is enabled.
@@ -185,7 +187,7 @@ Raw can replace Typesense as the canonical search index.
   cgroup and causes synchronized multi-second search stalls. A clean canary
   baseline passed the 200 ms ceiling, but requests timed out above five seconds
   immediately after publication began. Keep full builds off the serving reader;
-  the remaining work is the external builder transfer/activation path above.
+  the remaining work is the full-corpus external-builder gate and deployment.
 - [x] Single-token compact-split fallback treated `react` as `re + act` and
   `fire` as `fi + re`, returning unrelated results and driving 11-13 second
   backend searches. Split recovery now runs only after exact/prefix results are
