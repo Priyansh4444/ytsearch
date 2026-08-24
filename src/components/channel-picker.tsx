@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, onCleanup, onSettled } from "solid-js";
 import type { Component } from "solid-js";
 import type { IndexedChannel } from "../types";
 import { routeForHandle } from "../utils";
@@ -64,7 +64,7 @@ export const ChannelPicker: Component<{
     if (stage) stage.dataset.cursorActive = "false";
   };
 
-  onMount(() => {
+  onSettled(() => {
     if (
       !window.matchMedia("(pointer: fine)").matches ||
       window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -75,16 +75,22 @@ export const ChannelPicker: Component<{
     // while the swarm canvas itself stays pointer-transparent.
     window.addEventListener("pointermove", moveSwarm, { passive: true });
     window.addEventListener("blur", releaseSwarm);
+
+    return () => {
+      window.removeEventListener("pointermove", moveSwarm);
+      window.removeEventListener("blur", releaseSwarm);
+    };
   });
 
-  createEffect(() => {
-    if (!props.visible) releaseSwarm();
-  });
+  createEffect(
+    () => props.visible,
+    (visible) => {
+      if (!visible) releaseSwarm();
+    },
+  );
 
   onCleanup(() => {
     if (animationFrame) window.cancelAnimationFrame(animationFrame);
-    window.removeEventListener("pointermove", moveSwarm);
-    window.removeEventListener("blur", releaseSwarm);
   });
 
   return (
@@ -93,7 +99,7 @@ export const ChannelPicker: Component<{
         ref={(element) => (stage = element)}
         class={`channel-swarm ${props.visible ? "channel-swarm-visible" : "channel-swarm-hidden"}`}
         aria-label="Choose a YouTube channel"
-        aria-hidden={!props.visible}
+        aria-hidden={props.visible ? "false" : "true"}
       >
         <For each={swarm()}>
           {(item) => (

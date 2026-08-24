@@ -1,5 +1,6 @@
-import { For, Show, createMemo, createResource, onCleanup, onMount } from "solid-js";
-import type { Component, JSX } from "solid-js";
+import { For, Show, createMemo, createSignal, isPending, onSettled } from "solid-js";
+import type { Component } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { dashboardData } from "../api";
 import { calculateDashboardMetrics, channelCoverage } from "../dashboard-metrics";
 import type { IndexedChannel } from "../types";
@@ -10,7 +11,13 @@ const number = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
 const integer = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
 export const Dashboard: Component = () => {
-  const [snapshot, { refetch }] = createResource(() => dashboardData());
+  const [refreshVersion, setRefreshVersion] = createSignal(0);
+  const snapshot = createMemo(() => {
+    refreshVersion();
+    return dashboardData();
+  });
+  const snapshotPending = () => isPending(() => snapshot());
+  const refetch = () => setRefreshVersion((version) => version + 1);
   const metrics = createMemo(() => calculateDashboardMetrics(snapshot()?.channels ?? []));
   const channels = createMemo(() =>
     [...(snapshot()?.channels ?? [])].sort(
@@ -20,19 +27,19 @@ export const Dashboard: Component = () => {
     ),
   );
 
-  onMount(() => {
+  onSettled(() => {
     const previousTitle = document.title;
     document.title = "Dashboard · YouTube Search";
     const refreshVisiblePage = () => {
-      if (!document.hidden) void refetch();
+      if (!document.hidden) refetch();
     };
     const interval = window.setInterval(refreshVisiblePage, 60_000);
     document.addEventListener("visibilitychange", refreshVisiblePage);
-    onCleanup(() => {
+    return () => {
       document.title = previousTitle;
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", refreshVisiblePage);
-    });
+    };
   });
 
   return (
@@ -57,10 +64,10 @@ export const Dashboard: Component = () => {
           <button
             type="button"
             class="pressable min-h-11 border border-vesper-control bg-vesper-panel px-4 py-2 text-sm font-medium text-white hover:border-vesper-yellow disabled:cursor-wait disabled:opacity-60"
-            disabled={snapshot.loading}
-            onClick={() => void refetch()}
+            disabled={snapshotPending()}
+            onClick={refetch}
           >
-            {snapshot.loading ? "Refreshing…" : "Refresh metrics"}
+            {snapshotPending() ? "Refreshing…" : "Refresh metrics"}
           </button>
         </header>
 
@@ -159,7 +166,7 @@ export const Dashboard: Component = () => {
             detail={`${integer.format(channels().length)} searchable profiles`}
           />
           <Show
-            when={!snapshot.loading || channels().length > 0}
+            when={!snapshotPending() || channels().length > 0}
             fallback={<div class="border border-vesper-border bg-vesper-panel p-5">Loading…</div>}
           >
             <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">

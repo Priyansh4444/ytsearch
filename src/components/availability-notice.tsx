@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, type Component } from "solid-js";
+import { createEffect, createSignal, type Component } from "solid-js";
 import { nextPublicOpening } from "../../shared/service-schedule";
 import type { SearchAvailability } from "../types";
 
@@ -10,11 +10,14 @@ type Timer = {
 export const AvailabilityNotice: Component<{ availability: SearchAvailability }> = (props) => {
   const [now, setNow] = createSignal(Date.now());
 
-  createEffect(() => {
-    if (props.availability.schedule_policy !== "scheduled") return;
-    const interval = window.setInterval(() => setNow(Date.now()), 1_000);
-    onCleanup(() => window.clearInterval(interval));
-  });
+  createEffect(
+    () => props.availability.schedule_policy,
+    (schedulePolicy) => {
+      if (schedulePolicy !== "scheduled") return;
+      const interval = window.setInterval(() => setNow(Date.now()), 1_000);
+      return () => window.clearInterval(interval);
+    },
+  );
 
   const timer = (): Timer => {
     const availability = props.availability;

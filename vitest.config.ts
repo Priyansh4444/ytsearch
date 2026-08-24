@@ -1,8 +1,8 @@
 import { defineConfig } from "vitest/config";
-import solidPlugin from "vite-plugin-solid";
+import solidPlugin from "@solidjs/vite-plugin";
 
 export default defineConfig({
-  plugins: [solidPlugin()],
+  plugins: [solidPlugin({ hot: false })],
   test: {
     environment: "jsdom",
     exclude: ["tests/e2e/**", "worker/**", "node_modules/**", "dist/**"],
@@ -10,7 +10,10 @@ export default defineConfig({
     clearMocks: true,
     restoreMocks: true,
     coverage: {
-      provider: "v8",
+      // Solid 2's generated control-flow functions can exceed the recursive
+      // range merger in @bcoe/v8-coverage. Istanbul instruments only our
+      // included source files and avoids that unbounded merge path.
+      provider: "istanbul",
       reporter: ["text", "json-summary"],
       include: ["src/**/*.{ts,tsx}"],
       exclude: ["src/main.tsx", "src/test/**"],

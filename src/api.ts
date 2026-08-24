@@ -1,5 +1,10 @@
 import { ApiResponseError } from "./api-error";
-import { loadEffectRuntime } from "./effect-loader";
+import {
+  fetchBootstrapAvailability,
+  fetchBootstrapChannels,
+  fetchBootstrapIndexStatus,
+} from "./bootstrap-api";
+import { loadClientRuntime } from "./client-runtime-loader";
 import type {
   DashboardData,
   IndexQueueRequest,
@@ -27,7 +32,7 @@ let inflightChannels: Promise<IndexedChannel[]> | undefined;
 export { ApiResponseError };
 
 export function prepareSearchRuntime(): Promise<void> {
-  return loadEffectRuntime().then(() => undefined);
+  return loadClientRuntime().then(() => undefined);
 }
 
 export function searchTranscripts(
@@ -43,7 +48,7 @@ export function searchTranscripts(
     const entry: InflightSearch = {
       controller,
       subscribers: 0,
-      promise: loadEffectRuntime()
+      promise: loadClientRuntime()
         .then(({ runSearchTranscripts }) =>
           runSearchTranscripts(API_BASE_URL, request, controller.signal),
         )
@@ -96,9 +101,7 @@ export function searchTranscripts(
 }
 
 export function fetchSearchAvailability(signal?: AbortSignal): Promise<SearchAvailability> {
-  return loadEffectRuntime().then(({ runFetchSearchAvailability }) =>
-    runFetchSearchAvailability(API_BASE_URL, signal),
-  );
+  return fetchBootstrapAvailability(API_BASE_URL, signal);
 }
 
 export function searchVideoMoments(
@@ -106,34 +109,30 @@ export function searchVideoMoments(
   videoId: string,
   signal?: AbortSignal,
 ): Promise<SearchResponse> {
-  return loadEffectRuntime().then(({ runSearchVideoMoments }) =>
+  return loadClientRuntime().then(({ runSearchVideoMoments }) =>
     runSearchVideoMoments(API_BASE_URL, query, videoId, signal),
   );
 }
 
 export function indexedChannels(signal?: AbortSignal): Promise<IndexedChannel[]> {
   if (inflightChannels) return inflightChannels;
-  const pending = loadEffectRuntime()
-    .then(({ runIndexedChannels }) => runIndexedChannels(API_BASE_URL, signal))
-    .finally(() => {
-      if (inflightChannels === pending) inflightChannels = undefined;
-    });
+  const pending = fetchBootstrapChannels(API_BASE_URL, signal).finally(() => {
+    if (inflightChannels === pending) inflightChannels = undefined;
+  });
   inflightChannels = pending;
   return pending;
 }
 
 export function requestIndex(handle: string, signal?: AbortSignal): Promise<IndexQueueRequest> {
-  return loadEffectRuntime().then(({ runRequestIndex }) =>
+  return loadClientRuntime().then(({ runRequestIndex }) =>
     runRequestIndex(INDEX_QUEUE_API_BASE_URL, handle, signal),
   );
 }
 
 export function indexStatus(handle?: string, signal?: AbortSignal): Promise<IndexStatus> {
-  return loadEffectRuntime().then(({ runIndexStatus }) =>
-    runIndexStatus(INDEX_QUEUE_API_BASE_URL, handle, signal),
-  );
+  return fetchBootstrapIndexStatus(INDEX_QUEUE_API_BASE_URL, handle, signal);
 }
 
 export function dashboardData(signal?: AbortSignal): Promise<DashboardData> {
-  return loadEffectRuntime().then(({ runDashboardData }) => runDashboardData(API_BASE_URL, signal));
+  return loadClientRuntime().then(({ runDashboardData }) => runDashboardData(API_BASE_URL, signal));
 }

@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createSignal } from "solid-js";
+import { For, Show, createEffect, createSignal, flush } from "solid-js";
 import type { Component } from "solid-js";
 import type { IndexedChannel, SearchSort } from "../types";
 import { searchSortOptions } from "../search-sorts";
@@ -26,10 +26,13 @@ export const SearchForm: Component<{
     props.query.trim().startsWith("@") &&
     visibleSuggestions().length > 0;
 
-  createEffect(() => {
-    setActiveSuggestion(-1);
-    setSuggestionsDismissed(!props.query.trim().startsWith("@"));
-  });
+  createEffect(
+    () => props.query.trim().startsWith("@"),
+    (isChannelQuery) => {
+      setActiveSuggestion(-1);
+      setSuggestionsDismissed(!isChannelQuery);
+    },
+  );
 
   const handleSearchKeyDown = (event: KeyboardEvent) => {
     if (!suggestionsVisible()) return;
@@ -71,7 +74,12 @@ export const SearchForm: Component<{
             name="query"
             type="search"
             value={props.query}
-            onInput={(event) => props.onQueryInput(event.currentTarget.value)}
+            onInput={(event) => {
+              props.onQueryInput(event.currentTarget.value);
+              // A browser may dispatch submit in the same task as the final
+              // input event; runSearch must observe that last character.
+              flush();
+            }}
             onKeyDown={handleSearchKeyDown}
             placeholder={
               props.selectedChannelName
@@ -80,7 +88,7 @@ export const SearchForm: Component<{
             }
             role="combobox"
             aria-autocomplete="list"
-            aria-expanded={suggestionsVisible()}
+            aria-expanded={suggestionsVisible() ? "true" : "false"}
             aria-controls={suggestionsVisible() ? "channel-suggestions" : undefined}
             aria-activedescendant={
               activeSuggestion() >= 0 ? `channel-suggestion-${activeSuggestion()}` : undefined
@@ -109,7 +117,7 @@ export const SearchForm: Component<{
           <button
             type="submit"
             disabled={props.mode === "search" && (!props.searchAvailable || props.busy)}
-            aria-busy={props.busy}
+            aria-busy={props.busy === undefined ? undefined : props.busy ? "true" : "false"}
             class={`pressable search-submit min-w-28 border px-6 py-3 font-semibold text-vesper-bg ${
               props.mode === "request"
                 ? "border-vesper-green bg-vesper-green hover:bg-vesper-blue"
@@ -143,7 +151,7 @@ export const SearchForm: Component<{
                   id={`channel-suggestion-${index()}`}
                   type="button"
                   role="option"
-                  aria-selected={index() === activeSuggestion()}
+                  aria-selected={index() === activeSuggestion() ? "true" : "false"}
                   class={`pressable flex w-full items-center gap-3 px-3 py-2 text-left text-sm text-vesper-muted hover:bg-vesper-panel2 hover:text-white ${
                     index() === activeSuggestion() ? "bg-vesper-panel2 text-white" : ""
                   }`}

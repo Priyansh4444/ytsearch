@@ -3,12 +3,16 @@ import { describe, expect, test, vi } from "vitest";
 import type { SearchHit, SearchVideoResult } from "../types";
 import { VideoResult } from "./video-result";
 
-const { capture, searchVideoMoments } = vi.hoisted(() => ({
+const { capture, searchVideoMoments, runCopyToClipboard } = vi.hoisted(() => ({
   capture: vi.fn(),
   searchVideoMoments: vi.fn(),
+  runCopyToClipboard: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../analytics", () => ({ capture }));
 vi.mock("../api", () => ({ searchVideoMoments }));
+vi.mock("../client-runtime-loader", () => ({
+  loadClientRuntime: () => Promise.resolve({ runCopyToClipboard }),
+}));
 
 const hits: SearchHit[] = Array.from({ length: 7 }, (_, index) => ({
   id: `hit-${index}`,
@@ -39,7 +43,7 @@ const video: SearchVideoResult = {
 };
 
 describe("VideoResult", () => {
-  test("defers the YouTube player until the poster is activated", () => {
+  test("defers the YouTube player until the poster is activated", async () => {
     render(() => <VideoResult video={video} query="moment" rank={1} />);
 
     expect(screen.queryByTitle("YouTube player for Test video")).not.toBeInTheDocument();
@@ -48,7 +52,7 @@ describe("VideoResult", () => {
       "https://i.ytimg.com/vi/video-1/hqdefault.jpg",
     );
     fireEvent.click(screen.getByRole("button", { name: "Play Test video at 0:00" }));
-    expect(screen.getByTitle("YouTube player for Test video")).toHaveAttribute(
+    expect(await screen.findByTitle("YouTube player for Test video")).toHaveAttribute(
       "src",
       "https://youtube.test/embed/video-1?start=0&autoplay=1",
     );
@@ -126,6 +130,39 @@ describe("VideoResult", () => {
     expect(capture).toHaveBeenCalledWith(
       "result_moment_feedback",
       expect.objectContaining({ moment_id: "hit-0", rank: 2, value: "useful" }),
+    );
+  });
+
+  test("copies a permalink that points at the current search result", async () => {
+    window.history.replaceState({}, "", "/?q=moment&page=2");
+    render(() => <VideoResult video={video} query="moment" rank={1} />);
+
+    expect(document.getElementById("video-video-1")).toBeInstanceOf(HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: "Copy result link" }));
+    await waitFor(() =>
+      expect(runCopyToClipboard).toHaveBeenCalledWith(
+        `${window.location.origin}/?q=moment&page=2#video-video-1`,
+      ),
+    );
+    expect(window.location.hash).toBe("#video-video-1");
+    expect(capture).toHaveBeenCalledWith(
+      "result_link_copied",
+      expect.objectContaining({ video_id: "video-1", rank: 1 }),
+    );
+  });
+
+  test("still writes the result permalink when clipboard access is denied", async () => {
+    runCopyToClipboard.mockRejectedValueOnce(new Error("Clipboard copy was rejected"));
+    window.history.replaceState({}, "", "/?q=moment");
+    render(() => <VideoResult video={video} query="moment" rank={1} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy result link" }));
+    await waitFor(() => expect(window.location.hash).toBe("#video-video-1"));
+    await waitFor(() =>
+      expect(capture).toHaveBeenCalledWith(
+        "result_link_copied",
+        expect.objectContaining({ video_id: "video-1" }),
+      ),
     );
   });
 });

@@ -18,5 +18,8 @@ scripts/test-idle-gap-fill.sh
 scripts/test-benchmark-search-tools.sh
 
 for script in scripts/*.sh; do
-  sh -n "$script"
+  case "$(head -n 1 "$script")" in
+    *bash) bash -n "$script" ;;
+    *) sh -n "$script" ;;
+  esac
 done

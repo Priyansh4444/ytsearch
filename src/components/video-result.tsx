@@ -3,6 +3,7 @@ import type { Component } from "solid-js";
 import { searchVideoMoments } from "../api";
 import { capture } from "../analytics";
 import type { SearchHit, SearchVideoResult } from "../types";
+import { resultAnchorId, searchResultPermalink } from "../search-route";
 import { copyToClipboard, formatDate } from "../utils";
 import { HighlightedText } from "./highlighted-text";
 import { ChevronDownIcon, LoaderCircleIcon, PlayIcon, ThumbsDownIcon, ThumbsUpIcon } from "./icons";
@@ -63,15 +64,25 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
       setMomentsLoading(false);
     }
   };
-  const copyVideoLink = async () => {
-    await copyToClipboard(selectedHit()?.youtube_url ?? props.video.youtube_url);
+  const copyResultLink = async () => {
+    const url = searchResultPermalink(props.video.video_id);
+    window.history.replaceState({}, "", url);
+    try {
+      await copyToClipboard(url);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_500);
+    } catch {
+      // Clipboard permission can be denied; the permalink is already in the URL.
+    }
     capture("result_link_copied", resultProperties(props));
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1_500);
   };
 
   return (
-    <article class="search-result-card min-w-0 max-w-full overflow-hidden border border-vesper-border bg-vesper-panel transition-colors duration-150 hover:border-vesper-dim">
+    <article
+      id={resultAnchorId(props.video.video_id)}
+      tabindex="-1"
+      class="search-result-card min-w-0 max-w-full overflow-hidden border border-vesper-border bg-vesper-panel transition-colors duration-150 hover:border-vesper-dim"
+    >
       <div class="grid min-w-0 max-w-full gap-0 xl:grid-cols-[minmax(32rem,40rem)_1fr]">
         <div class="relative min-w-0 bg-vesper-bg">
           <Show
@@ -154,8 +165,8 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
             <div class="flex w-full shrink-0 items-center gap-2 sm:w-auto">
               <CopyLinkButton
                 copied={copied()}
-                onClick={() => void copyVideoLink()}
-                label="Copy video link"
+                onClick={() => void copyResultLink()}
+                label="Copy result link"
               />
               <a
                 href={selectedHit()?.youtube_url ?? props.video.youtube_url}
@@ -341,7 +352,7 @@ const MomentFeedbackButton: Component<{
     <button
       type="button"
       onClick={() => props.onSelect(props.value)}
-      aria-pressed={props.selected}
+      aria-pressed={props.selected ? "true" : "false"}
       class={`pressable grid min-h-10 flex-1 place-items-center ${
         props.selected
           ? useful()

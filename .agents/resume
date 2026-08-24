@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+
+required_commands=(bun cargo rustc yt-dlp ffmpeg)
+for command_name in "${required_commands[@]}"; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    printf 'Missing required command after orb resume: %s\n' "$command_name" >&2
+    printf 'Run .agents/setup to repair this orb.\n' >&2
+    exit 1
+  fi
+done
+
+printf 'ytsearch orb prerequisites are available.\n'

@@ -1,4 +1,4 @@
-import { onCleanup, onMount } from "solid-js";
+import { onSettled } from "solid-js";
 import { initializeAnalytics } from "./analytics";
 import { fetchSearchAvailability, indexStatus } from "./api";
 import { provisionalAvailability } from "./search-route";
@@ -14,7 +14,7 @@ type AppLifecycleOptions = {
 };
 
 export function useAppLifecycle(options: AppLifecycleOptions): void {
-  onMount(() => {
+  onSettled(() => {
     initializeAnalytics();
     window.addEventListener("popstate", options.syncRoute);
     let disposed = false;
@@ -78,7 +78,7 @@ export function useAppLifecycle(options: AppLifecycleOptions): void {
     const statusInterval = window.setInterval(checkStatus, 15_000);
     const availabilityInterval = window.setInterval(refreshAvailability, 60_000);
 
-    onCleanup(() => {
+    return () => {
       disposed = true;
       controller.abort();
       window.removeEventListener("popstate", options.syncRoute);
@@ -86,6 +86,6 @@ export function useAppLifecycle(options: AppLifecycleOptions): void {
       window.clearInterval(statusInterval);
       window.clearInterval(availabilityInterval);
       if (toastTimeout) window.clearTimeout(toastTimeout);
-    });
+    };
   });
 }

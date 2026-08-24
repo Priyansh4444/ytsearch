@@ -1,4 +1,5 @@
-import { loadEffectRuntime } from "./effect-loader";
+import { loadClientRuntime } from "./client-runtime-loader";
+import { flush } from "solid-js";
 
 export type HighlightPart = {
   text: string;
@@ -23,8 +24,14 @@ export function routeForHandle(handle: string): string {
 }
 
 export function withViewTransition(update: () => void): void {
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  const updateAndFlush = () => {
     update();
+    // A view transition snapshots immediately after its callback. Solid 2
+    // batches setters, so the new DOM must be made visible in this boundary.
+    flush();
+  };
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    updateAndFlush();
     return;
   }
 
@@ -32,10 +39,10 @@ export function withViewTransition(update: () => void): void {
     startViewTransition?: (callback: () => void) => unknown;
   };
   if (documentWithTransitions.startViewTransition) {
-    documentWithTransitions.startViewTransition(update);
+    documentWithTransitions.startViewTransition(updateAndFlush);
     return;
   }
-  update();
+  updateAndFlush();
 }
 
 export function formatDate(value: string | undefined): string {
@@ -50,7 +57,7 @@ export function formatDate(value: string | undefined): string {
 }
 
 export async function copyToClipboard(value: string): Promise<void> {
-  const { runCopyToClipboard } = await loadEffectRuntime();
+  const { runCopyToClipboard } = await loadClientRuntime();
   await runCopyToClipboard(value);
 }
 

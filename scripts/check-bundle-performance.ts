@@ -14,9 +14,10 @@ const css = assets.filter((file) => file.endsWith(".css"));
 const entryMatch = html.match(/<script[^>]+src="\/assets\/([^"]+\.js)"/);
 if (!entryMatch?.[1])
   throw new Error("Could not find the entry JavaScript asset in dist/index.html");
+const initialJavaScript = staticJavaScriptGraph(entryMatch[1]);
 
 const measurements = {
-  initialJavaScriptGzipBytes: gzipBytes([entryMatch[1]]),
+  initialJavaScriptGzipBytes: gzipBytes(initialJavaScript),
   totalJavaScriptGzipBytes: gzipBytes(javascript),
   cssGzipBytes: gzipBytes(css),
 };
@@ -36,4 +37,23 @@ function gzipBytes(files: string[]): number {
     (total, file) => total + gzipSync(readFileSync(`dist/assets/${file}`)).byteLength,
     0,
   );
+}
+
+function staticJavaScriptGraph(entry: string): string[] {
+  const visited = new Set<string>();
+  const pending = [entry];
+  const staticImport = /\b(?:import|export)(?:[^"'()]*?from)?["']\.\/([^"']+\.js)["']/g;
+
+  while (pending.length > 0) {
+    const file = pending.pop()!;
+    if (visited.has(file)) continue;
+    if (!javascript.includes(file)) throw new Error(`Missing static JavaScript asset: ${file}`);
+    visited.add(file);
+    const source = readFileSync(`dist/assets/${file}`, "utf8");
+    for (const match of source.matchAll(staticImport)) {
+      if (match[1]) pending.push(match[1]);
+    }
+  }
+
+  return [...visited];
 }

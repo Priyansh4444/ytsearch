@@ -1,56 +1,29 @@
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createResource,
-  createSignal,
-  onCleanup,
-} from "solid-js";
+import { Show, Loading, createEffect, createMemo, createSignal, lazy, onCleanup } from "solid-js";
 import type { Component } from "solid-js";
-import {
-  indexStatus,
-  indexedChannels,
-  prepareSearchRuntime,
-  requestIndex,
-  searchTranscripts,
-} from "./api";
+import { indexStatus, indexedChannels, prepareSearchRuntime, requestIndex } from "./api";
 import { capture, captureSearchLoaded, captureSearchSubmitted } from "./analytics";
 import { useAppLifecycle } from "./app-lifecycle";
-import { ChannelPicker } from "./components/channel-picker";
 import { AvailabilityNotice } from "./components/availability-notice";
-import { ChannelAvatar } from "./components/channel-profile";
+import { ChannelAvatar, ChannelIdentity } from "./components/channel-profile";
 import {
   channelMentionQuery,
   channelSuggestions as findChannelSuggestions,
   resolveChannelMention,
 } from "./channel-query";
-import { ChannelIdentity } from "./components/channel-profile";
-import { IndexRequestDialog } from "./components/index-request-dialog";
-import { PaginationControls } from "./components/pagination-controls";
-import { RecentSearches } from "./components/recent-searches";
 import { SearchForm } from "./components/search-form";
-import {
-  EmptyState,
-  ErrorState,
-  IndexRequestState,
-  LoadingState,
-  WelcomeState,
-} from "./components/states";
-import { VideoResult } from "./components/video-result";
+import { ErrorState, LoadingState, WelcomeState } from "./components/states";
 import { presentSearchError } from "./search-error";
-import { searchResultCountLabel } from "./result-counts";
+import { createSearchResource } from "./search-resource";
 import { BackButton, CopyLinkButton } from "./components/toolbar-actions";
-import type {
-  IndexedChannel,
-  RecentSearch,
-  SearchRequest,
-  SearchSort,
-  SearchVideoResult,
-} from "./types";
+import type { IndexedChannel, RecentSearch, SearchRequest, SearchSort } from "./types";
 import { cacheChannels, loadCachedChannels } from "./channel-cache";
 import { clearRecentSearches, loadRecentSearches, saveRecentSearch } from "./recent-searches";
-import { provisionalAvailability, searchStateFromLocation, writeSearchUrl } from "./search-route";
+import {
+  provisionalAvailability,
+  searchStateFromLocation,
+  scrollToSearchResult,
+  writeSearchUrl,
+} from "./search-route";
 import {
   copyToClipboard,
   creatorFromPath,
@@ -59,13 +32,36 @@ import {
   withViewTransition,
 } from "./utils";
 
-const sectionVideos = (videos: SearchVideoResult[], kind: "video" | "short") =>
-  videos.filter((video) => video.content_kind === kind);
-
-const unknownVideos = (videos: SearchVideoResult[]) =>
-  videos.filter((video) => video.content_kind === "unknown");
-
 const supportUrl = import.meta.env.VITE_KOFI_URL?.trim() || "https://ko-fi.com/pronsh";
+const SearchResults = lazy(() =>
+  import("./components/search-results").then(({ SearchResults: component }) => ({
+    default: component,
+  })),
+);
+const ChannelPicker = lazy(() =>
+  import("./components/channel-picker").then(({ ChannelPicker: component }) => ({
+    default: component,
+  })),
+);
+const IndexRequestDialog = lazy(() =>
+  import("./components/index-request-dialog").then(({ IndexRequestDialog: component }) => ({
+    default: component,
+  })),
+);
+const RecentSearches = lazy(() =>
+  import("./components/recent-searches").then(({ RecentSearches: component }) => ({
+    default: component,
+  })),
+);
+const IndexRequestState = lazy(() =>
+  import("./components/index-request-state").then(({ IndexRequestState: component }) => ({
+    default: component,
+  })),
+);
+
+const prepareResultsRuntime = () => SearchResults.preload();
+const prepareChannelPickerRuntime = () => ChannelPicker.preload();
+const prepareIndexDialogRuntime = () => IndexRequestDialog.preload();
 
 const App: Component = () => {
   const initialSearch = searchStateFromLocation();
@@ -74,7 +70,7 @@ const App: Component = () => {
   );
   const [channels, setChannels] = createSignal<IndexedChannel[] | undefined>(loadCachedChannels());
   const refreshChannels = async (signal?: AbortSignal) => {
-    const refreshed = await indexedChannels(signal);
+    const [refreshed] = await Promise.all([indexedChannels(signal), prepareChannelPickerRuntime()]);
     setChannels(refreshed);
     cacheChannels(refreshed);
     return refreshed;
@@ -98,13 +94,7 @@ const App: Component = () => {
   const executableSearch = createMemo(() =>
     availability().search_enabled ? submitted() : undefined,
   );
-  let searchController: AbortController | undefined;
-  const [result] = createResource(executableSearch, (request) => {
-    searchController?.abort();
-    searchController = new AbortController();
-    return searchTranscripts(request, searchController.signal);
-  });
-  onCleanup(() => searchController?.abort());
+  const search = createSearchResource(executableSearch);
 
   const selectedChannel = createMemo(() => {
     const selectedHandle = normalizeHandle(youtuber());
@@ -235,11 +225,16 @@ const App: Component = () => {
       return;
     }
     if (isIndexMode()) {
+      void prepareIndexDialogRuntime();
       setIndexRequestError(undefined);
       setPendingIndexHandle(normalizeHandle(normalizedQuery.split(/\s+/, 1)[0] ?? normalizedQuery));
       return;
     }
     if (!availability().search_enabled) return;
+    // Fetch result rendering code in parallel with the API request. Keeping it
+    // out of the initial route protects the browser budget without adding a
+    // serial step to first-result rendering.
+    void prepareResultsRuntime();
     const request = {
       query: normalizedQuery,
       youtuber: youtuber(),
@@ -300,37 +295,60 @@ const App: Component = () => {
     window.setTimeout(() => setCopiedSearchLink(false), 1_500);
   };
 
-  createEffect(() => {
-    const normalizedQuery = query().trim();
-    const searchQuery = mentionedChannel() ? mentionQuery() : normalizedQuery;
-    const currentFormMode =
-      normalizedQuery.startsWith("@") && !mentionedChannel() ? "index" : "search";
-    if (currentFormMode !== "search" || searchQuery.length < 2 || !availability().search_enabled)
-      return;
-
-    const timeout = window.setTimeout(() => {
-      // Warm only the lazy Effect runtime. Speculative network searches become
-      // duplicate origin work whenever a user pauses before submitting, and a
-      // completed speculative response cannot provide honest click-to-result timing.
-      void prepareSearchRuntime().catch(() => undefined);
-    }, 900);
-
-    onCleanup(() => window.clearTimeout(timeout));
-  });
+  createEffect(
+    () => {
+      const normalizedQuery = query().trim();
+      const searchQuery = mentionedChannel() ? mentionQuery() : normalizedQuery;
+      const currentFormMode =
+        normalizedQuery.startsWith("@") && !mentionedChannel() ? "index" : "search";
+      return {
+        shouldWarm:
+          currentFormMode === "search" && searchQuery.length >= 2 && availability().search_enabled,
+      };
+    },
+    ({ shouldWarm }) => {
+      if (!shouldWarm) return;
+      const timeout = window.setTimeout(() => {
+        // Warm only the lazy Effect runtime. Speculative network searches become
+        // duplicate origin work whenever a user pauses before submitting, and a
+        // completed speculative response cannot provide honest click-to-result timing.
+        void Promise.all([prepareSearchRuntime(), prepareResultsRuntime()]).catch(() => undefined);
+      }, 900);
+      return () => window.clearTimeout(timeout);
+    },
+  );
 
   let lastTrackedResponse = "";
-  createEffect(() => {
-    const request = submitted();
-    const response = result();
-    if (!request || !response) return;
-    const key = `${request.query}\u0000${request.youtuber}\u0000${request.sort}\u0000${request.page}`;
-    if (key === lastTrackedResponse) return;
-    lastTrackedResponse = key;
-    captureSearchLoaded(request, response);
-    if (request.page === 1) {
-      setRecentSearches((current) => saveRecentSearch(current, request));
-    }
-  });
+  createEffect(
+    () => ({ request: submitted(), state: search() }),
+    ({ request, state }) => {
+      if (!request || state.status !== "success") return;
+      const key = `${request.query}\u0000${request.youtuber}\u0000${request.sort}\u0000${request.page}`;
+      if (key === lastTrackedResponse) return;
+      lastTrackedResponse = key;
+      captureSearchLoaded(request, state.response);
+      if (request.page === 1) {
+        setRecentSearches((current) => saveRecentSearch(current, request));
+      }
+    },
+  );
+
+  const scrollToLinkedResult = () => {
+    if (search().status !== "success") return;
+    scrollToSearchResult();
+  };
+
+  createEffect(
+    () => search().status,
+    (status) => {
+      if (status !== "success") return;
+      const frame = window.requestAnimationFrame(scrollToLinkedResult);
+      return () => window.cancelAnimationFrame(frame);
+    },
+  );
+
+  window.addEventListener("hashchange", scrollToLinkedResult);
+  onCleanup(() => window.removeEventListener("hashchange", scrollToLinkedResult));
 
   const selectRecentSearch = (recent: RecentSearch) => {
     setQuery(recent.query);
@@ -378,7 +396,7 @@ const App: Component = () => {
             query={query()}
             sort={sort()}
             searchAvailable={availability().search_enabled}
-            busy={result.loading}
+            busy={search().status === "loading"}
             home={!hasSearchSurface()}
             selectedChannelName={selectedChannel()?.name}
             mode={formMode()}
@@ -389,7 +407,7 @@ const App: Component = () => {
             onChannelSelect={selectChannel}
           />
           <AvailabilityNotice availability={availability()} />
-          <Show when={!hasSearchSurface()}>
+          <Show when={!hasSearchSurface() && recentSearches().length > 0}>
             <RecentSearches
               searches={recentSearches()}
               onSelect={selectRecentSearch}
@@ -401,17 +419,34 @@ const App: Component = () => {
         <section class={hasSearchSurface() ? "pb-8" : "hidden"}>
           <Show when={queuedIndexRequest()}>
             {(request) => (
-              <IndexRequestState handle={request().handle} requestId={request().requestId} />
+              <Loading>
+                <IndexRequestState handle={request().handle} requestId={request().requestId} />
+              </Loading>
             )}
           </Show>
 
-          <Show when={!queuedIndexRequest() && availability().search_enabled && result.loading}>
+          <Show
+            when={
+              !queuedIndexRequest() &&
+              availability().search_enabled &&
+              search().status === "loading"
+            }
+          >
             <LoadingState />
           </Show>
 
-          <Show when={!queuedIndexRequest() && availability().search_enabled && result.error}>
-            {(error) => {
-              const presentation = presentSearchError(error());
+          <Show
+            when={
+              !queuedIndexRequest() &&
+              availability().search_enabled &&
+              search().status === "error" &&
+              search()
+            }
+          >
+            {(state) => {
+              const current = state();
+              if (current.status !== "error") return null;
+              const presentation = presentSearchError(current.error);
               return <ErrorState title={presentation.title} message={presentation.message} />;
             }}
           </Show>
@@ -421,62 +456,22 @@ const App: Component = () => {
               !queuedIndexRequest() &&
               availability().search_enabled &&
               submitted() &&
-              !result.loading &&
-              !result.error &&
-              result()
+              search().status === "success" &&
+              search()
             }
           >
-            {(response) => (
-              <div class="flex flex-col gap-5">
-                <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-white/10 pb-3 text-sm text-vesper-muted">
-                  <div class="flex flex-wrap items-center gap-2">
-                    <span class="font-medium text-white">{response().query}</span>
-                    <span class="border border-white/10 bg-vesper-panel px-2 py-0.5 text-xs uppercase tracking-[0.12em] text-vesper-dim">
-                      {submitted()?.youtuber
-                        ? `Channel: ${normalizeHandle(submitted()!.youtuber)}`
-                        : "All channels"}
-                    </span>
-                  </div>
-                  <span class="text-xs tabular-nums sm:text-sm">
-                    {searchResultCountLabel(response())} ·{" "}
-                    {response().request_duration_ms ?? response().time_to_first_result_ms} ms
-                    request
-                    {response().request_duration_ms === undefined
-                      ? ""
-                      : ` · ${response().time_to_first_result_ms} ms search`}
-                  </span>
-                </div>
-
-                <Show
-                  when={response().videos.length > 0}
-                  fallback={<EmptyState query={response().query} />}
-                >
-                  <div class="flex flex-col gap-7">
-                    <ResultSection
-                      title="Videos"
-                      videos={[
-                        ...sectionVideos(response().videos, "video"),
-                        ...unknownVideos(response().videos),
-                      ]}
-                      query={response().query}
-                      totalLabel="current page"
-                    />
-                    <ResultSection
-                      title="Shorts"
-                      videos={sectionVideos(response().videos, "short")}
-                      query={response().query}
-                      totalLabel="current page"
-                    />
-                  </div>
-
-                  <PaginationControls
-                    response={response()}
-                    currentPage={page()}
-                    onPageChange={goToPage}
-                  />
-                </Show>
-              </div>
-            )}
+            {(state) => {
+              const current = state();
+              if (current.status !== "success") return null;
+              return (
+                <SearchResults
+                  response={current.response}
+                  youtuber={submitted()?.youtuber ?? ""}
+                  page={page()}
+                  onPageChange={goToPage}
+                />
+              );
+            }}
           </Show>
 
           <Show
@@ -484,8 +479,7 @@ const App: Component = () => {
               hasSearchSurface() &&
               !queuedIndexRequest() &&
               !submitted() &&
-              !result.loading &&
-              !result.error
+              search().status === "idle"
             }
           >
             <WelcomeState />
@@ -494,16 +488,18 @@ const App: Component = () => {
       </div>
       <Show when={pendingIndexHandle()}>
         {(handle) => (
-          <IndexRequestDialog
-            handle={handle()}
-            busy={indexRequestBusy()}
-            error={indexRequestError()}
-            onCancel={() => {
-              setPendingIndexHandle(undefined);
-              setIndexRequestError(undefined);
-            }}
-            onConfirm={() => void confirmIndexRequest()}
-          />
+          <Loading>
+            <IndexRequestDialog
+              handle={handle()}
+              busy={indexRequestBusy()}
+              error={indexRequestError()}
+              onCancel={() => {
+                setPendingIndexHandle(undefined);
+                setIndexRequestError(undefined);
+              }}
+              onConfirm={() => void confirmIndexRequest()}
+            />
+          </Loading>
         )}
       </Show>
       <Show when={indexingToast()}>
@@ -537,23 +533,3 @@ const App: Component = () => {
 };
 
 export default App;
-
-const ResultSection: Component<{
-  title: string;
-  videos: SearchVideoResult[];
-  query: string;
-  totalLabel: string;
-}> = (props) => (
-  <Show when={props.videos.length > 0}>
-    <section class="flex flex-col gap-3">
-      <h2 class="border-b border-white/10 pb-2 text-sm font-medium uppercase tracking-[0.12em] text-vesper-dim">
-        {props.title} · {props.videos.length} on {props.totalLabel}
-      </h2>
-      <div class="grid gap-2">
-        <For each={props.videos}>
-          {(video, index) => <VideoResult video={video} query={props.query} rank={index() + 1} />}
-        </For>
-      </div>
-    </section>
-  </Show>
-);

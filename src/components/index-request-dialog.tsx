@@ -1,4 +1,4 @@
-import { onCleanup, onMount } from "solid-js";
+import { onCleanup, onSettled } from "solid-js";
 import type { Component } from "solid-js";
 
 export const IndexRequestDialog: Component<{
@@ -12,7 +12,7 @@ export const IndexRequestDialog: Component<{
   const previouslyFocused =
     document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
-  onMount(() => {
+  onSettled(() => {
     if (typeof dialog?.showModal === "function") dialog.showModal();
     else dialog?.setAttribute("open", "");
   });

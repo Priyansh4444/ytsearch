@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@solidjs/testing-library";
+import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { describe, expect, test, vi } from "vitest";
 import type { IndexedChannel } from "../types";
 import { SearchForm } from "./search-form";
@@ -76,7 +76,9 @@ describe("SearchForm", () => {
     const search = screen.getByRole("combobox", { name: "Search transcripts" });
     expect(search).toHaveAttribute("aria-expanded", "true");
     fireEvent.keyDown(search, { key: "ArrowDown" });
-    expect(search).toHaveAttribute("aria-activedescendant", "channel-suggestion-0");
+    await waitFor(() =>
+      expect(search).toHaveAttribute("aria-activedescendant", "channel-suggestion-0"),
+    );
     fireEvent.keyDown(search, { key: "Enter" });
     expect(onChannelSelect).toHaveBeenCalledWith("@marimo-team");
   });

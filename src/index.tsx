@@ -1,6 +1,6 @@
 /* @refresh reload */
-import { Suspense, lazy } from "solid-js";
-import { render } from "solid-js/web";
+import { Loading, lazy } from "solid-js";
+import { render } from "@solidjs/web";
 
 import App from "./app";
 import "./index.css";
@@ -21,7 +21,7 @@ if (window.location.pathname === "/dashboard") {
   );
   render(
     () => (
-      <Suspense
+      <Loading
         fallback={
           <main class="grid min-h-svh place-items-center bg-vesper-bg text-sm text-vesper-muted">
             Loading dashboard…
@@ -29,7 +29,7 @@ if (window.location.pathname === "/dashboard") {
         }
       >
         <Dashboard />
-      </Suspense>
+      </Loading>
     ),
     root!,
   );

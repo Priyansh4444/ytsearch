@@ -1,4 +1,3 @@
-import { loadEffectRuntime } from "./effect-loader";
 import type { SearchRequest, SearchResponse } from "./types";
 
 const apiKey = import.meta.env.VITE_POSTHOG_KEY?.trim();
@@ -8,6 +7,7 @@ let initialized = false;
 type Properties = Record<string, boolean | number | string | undefined>;
 const pendingEvents: Array<{ event: string; properties: Properties }> = [];
 const MAX_PENDING_EVENTS = 50;
+const ANALYTICS_ID_KEY = "ytsearch.analytics-id.v1";
 
 export function initializeAnalytics(): void {
   if (!apiKey || initialized) return;
@@ -40,11 +40,51 @@ export function captureSearchLoaded(request: SearchRequest, response: SearchResp
 }
 
 function send(event: string, properties: Properties): void {
-  void loadEffectRuntime()
-    .then(({ runCaptureAnalyticsEvent }) =>
-      runCaptureAnalyticsEvent({ apiKey: apiKey!, apiHost }, event, properties),
-    )
-    .catch(() => undefined);
+  const distinctId = analyticsDistinctId();
+  const timestamp = new Date().toISOString();
+  const payload = {
+    api_key: apiKey!,
+    batch: [
+      {
+        event,
+        distinct_id: distinctId,
+        timestamp,
+        uuid: crypto.randomUUID(),
+        properties: {
+          distinct_id: distinctId,
+          $device_id: distinctId,
+          $lib: "ytsearch",
+          $process_person_profile: false,
+          $is_identified: false,
+          $current_url: window.location.href,
+          $pathname: window.location.pathname,
+          $host: window.location.host,
+          ...Object.fromEntries(
+            Object.entries(properties).filter((entry) => entry[1] !== undefined),
+          ),
+        },
+      },
+    ],
+    sent_at: timestamp,
+  };
+  void fetch(`${apiHost.replace(/\/$/, "")}/batch/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    keepalive: true,
+  }).catch(() => undefined);
+}
+
+function analyticsDistinctId(): string {
+  try {
+    const stored = window.localStorage.getItem(ANALYTICS_ID_KEY);
+    if (stored) return stored;
+    const generated = crypto.randomUUID();
+    window.localStorage.setItem(ANALYTICS_ID_KEY, generated);
+    return generated;
+  } catch {
+    return crypto.randomUUID();
+  }
 }
 
 function searchProperties(request: SearchRequest): Properties {
