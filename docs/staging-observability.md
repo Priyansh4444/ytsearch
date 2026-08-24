@@ -63,8 +63,8 @@ Useful fields include:
 
 ```bash
 scripts/axiom-agent.sh report
-scripts/axiom-agent.sh refresh
 WINDOW=7d LIMIT=200 scripts/axiom-recent-searches.sh # sensitive query text; operator-only
+scripts/refresh-query-log # sensitive query text; operator-only workspace materialization
 ```
 
 The bounded recent-query report omits IP addresses, user agents, countries, and

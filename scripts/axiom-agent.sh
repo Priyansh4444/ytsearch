@@ -16,7 +16,6 @@ Commands:
   mcp-status  Show the Codex Axiom MCP configuration
   mcp-login   Start the official hosted Axiom OAuth flow
   report      Print the aggregate, privacy-safe search latency report
-  refresh     Append new timestamped queries to query-log.txt
 EOF
 }
 
@@ -85,9 +84,6 @@ case "${1:-}" in
   report)
     # Report script resolves AXIOM_API_QUERY itself; do not export query into AXIOM_TOKEN.
     exec "$SCRIPT_DIR/axiom-search-report.sh"
-    ;;
-  refresh)
-    exec "$SCRIPT_DIR/refresh-query-log"
     ;;
   -h|--help|help|"") usage ;;
   *) usage >&2; exit 2 ;;
