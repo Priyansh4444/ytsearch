@@ -44,6 +44,29 @@ queries. Inspected changes were directionally useful:
 This review is evidence for retaining the bounded candidate, not a substitute
 for the pending 300-query human-judged oracle.
 
+## Compact identifier follow-up
+
+Measured 2026-08-23 on the 8,142,650-document, 32,822-video production-shaped
+schema-v6 index. A compact identifier such as `createEffect` previously reached
+`create` plus `effect` only through split fallback. That fallback carried term
+frequency but no positional relationship, so a gapped Apple result could
+outrank Ryan Carniato saying the two words adjacently.
+
+When a compact query has one unambiguous exact two-token split, Raw now sends
+those terms through the existing bounded exact-proximity path after unioning
+the split results. It does not alter exact masks, generic parsing, fuzzy
+alternatives, ambiguous multi-boundary splits, or literal compound recall.
+This gives an adjacent occurrence a modest signal rather than turning it into
+a mandatory phrase, so broad results remain available.
+
+The full-index `createEffect` request retained all 433 compact-query videos and
+moved Ryan Carniato's “Designing Concurrent Transitions” to first. The spaced
+`create effect` query also ranks it first and returns 446 videos. Twelve warm
+compact requests over loopback measured 32.8 ms median, 37.6 ms p95, and
+37.7 ms maximum. The fixture also locks down a gapped title, reversed terms,
+literal compound recall, both-token highlighting, lowercase compact input, and
+`@ryansolid` scoping.
+
 ## Alternating release A/B
 
 Two 50-run rounds per query were run in candidate/control then control/candidate

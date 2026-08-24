@@ -58,11 +58,23 @@ are not workspace dependencies.
 
 - `src/app.tsx` composes route-level state.
 - `src/app-lifecycle.ts` owns availability and navigation lifecycles.
-- `src/api.ts`, `src/api-schema.ts`, and `src/api-error.ts` own the HTTP boundary.
-- `src/effect-runtime.ts` owns Effect v4 execution and typed failures. It is
-  loaded lazily so the initial route stays below 30 KB gzip.
+- `src/api.ts` owns request coalescing and the public Promise interface.
+- `src/bootstrap-api.ts` owns the small startup transport and runtime wire
+  decoders; `src/client-runtime.ts` owns search, queue, dashboard, and clipboard
+  operations behind one lazy boundary.
+- `src/api-error.ts` keeps transport, HTTP-response, and decoding failures
+  distinct without shipping a general effect runtime to the browser.
+- `src/search-resource.ts` represents idle, loading, success, and error as one
+  discriminated state, preventing contradictory UI flags.
 - `src/components/` owns presentation and local interaction.
-- `worker/` owns same-origin proxying, queue wakeups, and scheduled Fly control.
+- `worker/` owns same-origin proxying, queue wakeups, and scheduled Fly control;
+  this server-side boundary uses Effect v4 for typed asynchronous workflows.
+
+Solid 2 batches updates through the end of an event. The frontend uses
+`flush()` only where a submit or view transition must synchronously observe a
+just-written signal. Effects compute from explicit accessors and return cleanup
+for abortable work. Initial JavaScript is measured as the complete static import
+graph, not only the HTML entry asset.
 
 ## Operational invariants
 
@@ -73,6 +85,9 @@ are not workspace dependencies.
 4. The queue is authoritative; Cloudflare Queue messages are only wake signals.
 5. Unknown search filters and sorts fail closed.
 6. Raw engine and queue volumes are snapshotted and restored independently.
+7. Channel deletion scope, publication policy, existing-data policy, indexed
+   field, and API relevance ordering are enums internally. Legacy boolean HTTP
+   and SQLite representations are converted only at their boundaries.
 
 See [Mutable Raw migration](operations/raw-mutable-migration.md) for measured
 resource behavior and [Typesense retirement](operations/typesense-retirement.md)

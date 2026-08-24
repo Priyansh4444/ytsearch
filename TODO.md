@@ -52,6 +52,9 @@ Raw can replace Typesense as the canonical search index.
 - [x] Fail closed on every unknown filter, sort, facet, operator, and malformed value in the active application contract.
 - [ ] Add a versioned 300-query human-judged relevance oracle.
 - [x] Cover global and channel-specific `blackhole` searches for Veritasium and Vsauce.
+- [x] Carry an unambiguous two-token compact split into bounded positional
+  ranking. On the 8.14M-document index, `createEffect` now ranks Ryan
+  Carniato's adjacent phrase first while retaining all 433 compact-query videos.
 - [ ] Differential-test the complete application contract against Typesense.
   - [x] Run the first full-snapshot seven-case ordered top-10 differential;
     mean overlap is 7.71/10 and top-one agreement is 4/7.
@@ -93,6 +96,12 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Upload checksummed versioned artifacts to private R2 once R2 is enabled.
 - [x] Bootstrap Raw from the final matched snapshot and remove dual-writing from
   the repository. The deployed legacy queue remains a cutover task below.
+- [x] Replace ambiguous internal booleans for relevance ordering, channel
+  deletion scope, publication policy, existing-data policy, and stored-field
+  selection with enums while preserving HTTP, SQLite, spool, and index bytes.
+- [x] Reject `rewipe + skip-existing` before writing mutations; the previous
+  combination could queue a cascade deletion and then skip re-importing videos
+  reported by the still-active generation.
 
 ### P1: indexing reliability and throughput
 
@@ -171,6 +180,9 @@ Raw can replace Typesense as the canonical search index.
   bytes for the initial route after the full-corpus deployment).
 - [x] Production browser JavaScript remains below 30 KB gzip after cutover and
   the no-stale-search-cache fix (24,492 bytes for the initial route).
+- [x] The Solid 2 / Effect v4 candidate measures the complete static startup
+  graph instead of only the HTML entry: 29,108 B initial JS, 46,111 B total JS,
+  and 7,661 B CSS gzip.
 
 ### Documentation and evidence
 
@@ -182,6 +194,11 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Update this ledger in the same commit that completes each item.
 
 ## Regression Log
+
+- [x] Compact split fallback recovered `createEffect` as `create` plus `effect`
+  without carrying token positions, allowing a frequent gapped match to outrank
+  Ryan Carniato's adjacent phrase. Unique exact two-token splits now reuse the
+  bounded proximity scorer; the full-index warm p95 is 37.6 ms.
 
 - [ ] Full-corpus generation publication shares the reader's 2-vCPU/2-GB
   cgroup and causes synchronized multi-second search stalls. A clean canary
