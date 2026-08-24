@@ -61,7 +61,7 @@ struct AppState {
     search: SearchClient,
     backend_label: String,
     engagement_sorts_enabled: bool,
-    preserve_backend_relevance_order: bool,
+    relevance_ordering: RelevanceOrdering,
     axiom: Option<AxiomLogger>,
     rate_limiter: Arc<Mutex<RateLimiter>>,
     search_rate_limit_per_minute: usize,
@@ -69,6 +69,22 @@ struct AppState {
     index_queue: IndexQueue,
     image_http: reqwest::Client,
     channel_images: ChannelImageCache,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RelevanceOrdering {
+    Backend,
+    ApiHeuristic,
+}
+
+impl RelevanceOrdering {
+    fn from_preserve_backend_flag(preserve: bool) -> Self {
+        if preserve {
+            Self::Backend
+        } else {
+            Self::ApiHeuristic
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -306,10 +322,10 @@ async fn main() -> Result<(), ApiError> {
         search: search_client,
         backend_label: env::var("YTSEARCH_BACKEND_LABEL").unwrap_or_else(|_| "raw".to_string()),
         engagement_sorts_enabled: env_bool("YTSEARCH_ENGAGEMENT_SORTS", false),
-        preserve_backend_relevance_order: env_bool(
+        relevance_ordering: RelevanceOrdering::from_preserve_backend_flag(env_bool(
             "YTSEARCH_PRESERVE_BACKEND_RELEVANCE_ORDER",
             false,
-        ),
+        )),
         axiom,
         rate_limiter: Arc::new(Mutex::new(RateLimiter::default())),
         search_rate_limit_per_minute: env_usize(
@@ -634,7 +650,7 @@ async fn search_handler(
         search_page_size,
         sort,
         query,
-        state.preserve_backend_relevance_order,
+        state.relevance_ordering,
         1,
         first_backend_search_ms,
         if video_scope {
@@ -1020,7 +1036,7 @@ async fn collect_visible_videos(
     search_page_size: u8,
     sort: SearchSort,
     query: &str,
-    preserve_backend_relevance_order: bool,
+    relevance_ordering: RelevanceOrdering,
     initial_backend_search_calls: u32,
     initial_backend_search_ms: u64,
     max_page_fetches: u32,
@@ -1051,12 +1067,7 @@ async fn collect_visible_videos(
 
         if has_at_least_distinct_videos(&combined, required_videos) || is_empty {
             return Ok(page_result_from_videos(
-                video_results_from_hits_with_policy(
-                    &combined,
-                    sort,
-                    query,
-                    preserve_backend_relevance_order,
-                ),
+                video_results_from_hits_with_policy(&combined, sort, query, relevance_ordering),
                 local_offset,
                 per_page,
                 timings,
@@ -1087,12 +1098,7 @@ async fn collect_visible_videos(
     }
 
     Ok(page_result_from_videos(
-        video_results_from_hits_with_policy(
-            &combined,
-            sort,
-            query,
-            preserve_backend_relevance_order,
-        ),
+        video_results_from_hits_with_policy(&combined, sort, query, relevance_ordering),
         local_offset,
         per_page,
         timings,
@@ -1159,14 +1165,14 @@ fn video_results_from_hits(
     sort: SearchSort,
     query: &str,
 ) -> Vec<SearchVideoResult> {
-    video_results_from_hits_with_policy(hits, sort, query, false)
+    video_results_from_hits_with_policy(hits, sort, query, RelevanceOrdering::ApiHeuristic)
 }
 
 fn video_results_from_hits_with_policy(
     hits: &[SearchHit],
     sort: SearchSort,
     query: &str,
-    preserve_backend_relevance_order: bool,
+    relevance_ordering: RelevanceOrdering,
 ) -> Vec<SearchVideoResult> {
     let terms = searchable_terms(query);
     let joined_terms = terms.concat();
@@ -1196,7 +1202,7 @@ fn video_results_from_hits_with_policy(
             }
             video.match_count = video.match_count.max(video.hits.len());
             match sort {
-                SearchSort::Relevance if preserve_backend_relevance_order => {}
+                SearchSort::Relevance if relevance_ordering == RelevanceOrdering::Backend => {}
                 SearchSort::Relevance | SearchSort::RelevanceEngagement => {
                     video.hits.sort_by_cached_key(|hit| {
                         (Reverse(hit_relevance_score(hit, &terms)), hit.t_start_ms)
@@ -1225,7 +1231,7 @@ fn video_results_from_hits_with_policy(
         .collect::<Vec<_>>();
 
     match sort {
-        SearchSort::Relevance if !preserve_backend_relevance_order => {
+        SearchSort::Relevance if relevance_ordering == RelevanceOrdering::ApiHeuristic => {
             videos.sort_by_cached_key(|video| {
                 (
                     Reverse(video_relevance_score(video, &terms, &joined_terms)),
@@ -1588,8 +1594,12 @@ mod tests {
         assert_eq!(hits[0].view_count, 1_000_000);
         assert_eq!(hits[0].like_count, 100_000);
         assert_eq!(hits[0].comment_count, 10_000);
-        let videos =
-            video_results_from_hits_with_policy(&hits, SearchSort::Relevance, "first", true);
+        let videos = video_results_from_hits_with_policy(
+            &hits,
+            SearchSort::Relevance,
+            "first",
+            RelevanceOrdering::Backend,
+        );
         assert_eq!(videos[0].match_count, 4);
     }
 
@@ -1612,8 +1622,12 @@ mod tests {
         hits[2].t_start_ms = 20_000;
 
         let merged = merge_nearby_transcript_hits(hits);
-        let videos =
-            video_results_from_hits_with_policy(&merged, SearchSort::Relevance, "first", true);
+        let videos = video_results_from_hits_with_policy(
+            &merged,
+            SearchSort::Relevance,
+            "first",
+            RelevanceOrdering::Backend,
+        );
 
         assert_eq!(videos[0].hits.len(), 1);
         assert_eq!(videos[0].match_count, 3);
@@ -2041,13 +2055,13 @@ mod tests {
             &hits,
             SearchSort::Relevance,
             "linux exploit",
-            true,
+            RelevanceOrdering::Backend,
         );
         let legacy = video_results_from_hits_with_policy(
             &hits,
             SearchSort::Relevance,
             "linux exploit",
-            false,
+            RelevanceOrdering::ApiHeuristic,
         );
 
         assert_eq!(preserved[0].video_id, "backend-first");
