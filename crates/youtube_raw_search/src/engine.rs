@@ -166,6 +166,8 @@ enum ManifestValidation {
     VerifiedByBuilder,
 }
 
+#[cfg(test)]
+mod bigram;
 mod builder;
 mod conjunction;
 mod query_support;
