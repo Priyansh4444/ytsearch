@@ -1,6 +1,6 @@
 # Raw production cost and persistence decision
 
-Re-audited on 2026-08-19 in `sjc`. Prices are monthly estimates for a 30-day
+Re-audited from live Fly state on 2026-08-23 in `sjc`. Prices are monthly estimates for a 30-day
 month from [Fly.io resource pricing](https://fly.io/docs/about/pricing/); actual
 billing is prorated and egress remains usage-dependent.
 
@@ -12,11 +12,14 @@ billing is prorated and egress remains usage-dependent.
 | Temporary Raw publication canary | stopped after the failed same-reader gate; non-serving | $0 compute; up to $1.20 stopped rootfs |
 | Queue/profile API | `shared-cpu-1x`, 512 MB, always started | $3.81 |
 | All Raw, temporary, and retained Typesense volumes | 122 GB encrypted | $18.30 |
-| CLI-listed snapshot recovery sizes | about 168.48 GiB; first 10 GB free | about $12.68 before incremental-billing adjustment |
+| CLI-listed snapshot recovery sizes | current logical-byte estimate after the first 10 GB free | about $9.58 before incremental-billing adjustment |
 | Stopped Machine rootfs ceiling | at most 62 GB | at most $9.30 |
-| **Temporary fixed allocation** | | **about $57.67/month before egress/indexer/Cloudflare** |
+| **Current fixed allocation** | | **about $54.57/month before egress/indexer/Cloudflare** |
 
-The temporary canary is not a serving replica and is now stopped. Its
+The temporary canary `847314c22d52e8` is not a serving replica and was verified
+stopped on 2026-08-23. Its 20 GB volume remains provisioned. The retained
+on-demand SJC indexer `8e426df7e305e8` is also stopped and must not be confused
+with the obsolete ORD repair builder. The canary's
 publication proved that a same-reader full build causes requests to exceed the
 five-second timeout, so adding permanent reader capacity is not the fix.
 
@@ -32,19 +35,28 @@ projection is:
 | Reader plus API compute | $17.39 |
 | 92 GB encrypted volumes, including preserved Typesense evidence | $13.80 |
 | Retained stopped rootfs ceiling (44 GB) | $6.60 |
-| CLI-listed snapshot-size estimate | about $12.39 |
+| CLI-listed snapshot-size estimate after five-day expiry | about $8.60 |
 | Indexer, capped at 60 hours | at most $1.13 |
 | North American egress reserve | $8.00 |
 | Snapshot-growth reserve | $2.00 |
-| **Conservative Fly projection** | **about $61.31/month** |
+| Cloudflare Paid minimum | $5.00 |
+| **Conservative complete-system projection** | **about $62.52/month** |
 
-The snapshot number is a conservative logical-size estimate; Fly Cost Explorer
-must confirm incremental billed bytes before the budget is declared final. If a
-$5 Cloudflare Paid minimum belongs inside the same ceiling, this projection is
-about $66.31. Load-gating the API from 512 MB to 256 MB saves about $1.49, and a
-single $36/year shared-compute reservation is expected to save about $2/month
-net; using both projects roughly $62.82/month amortized. Do not buy a reservation
-or resize the API until its own load gate passes.
+The snapshot number is a conservative CLI logical-size estimate; Fly Cost
+Explorer must confirm incremental billed bytes before the budget is declared
+final. The approximately $62.52 target requires deleting only the obsolete Raw
+canary Machine plus its 20 GB volume and the superseded ORD repair builder plus
+its 10 GB volume. It preserves the active reader/API, the retained on-demand SJC
+indexer, and every Typesense rollback resource. Immediately after those
+deletions, retained snapshots make the conservative estimate about $63.50;
+their approximately $0.98 reduction arrives after the five-day retention
+window. Those deletions are irreversible and require explicit approval. Merely
+stopping the Machines leaves the projection at about $70.70 including
+Cloudflare, the indexer allowance, egress, and snapshot-growth reserves.
+
+Load-gating the API from 512 MB to 256 MB remains an optional further saving,
+but do not resize it until its own load gate passes. A compute reservation is
+also excluded from the proof until its scope and amortized billing are verified.
 
 The stopped 4 GB temporary repair Machine must not run again unless unique cache
 data is found during its deletion audit; continuous operation would add about
