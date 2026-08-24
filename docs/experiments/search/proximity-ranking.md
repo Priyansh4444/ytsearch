@@ -98,14 +98,31 @@ preserve text/title cross-field scoring, validate the complete streams, and only
 calculate BM25 for documents present in both plans. Broad sets above 50,000
 candidates retain exact coverage and BM25 but skip optional full-position
 refinement. Grouping uses a dense generation-local video table, and only the
-requested result window is fully sorted. Canonical response hashes matched the
-materialized reference for all four broad queries.
+requested result window is fully sorted.
 
 Thirty warm loopback runs per case produced `this that` at 165.3 ms median and
 171.3 ms p95, `you know` at 126.3/132.1 ms, `there are` at 69.2/86.3 ms, and
 `thank you` at 65.0/82.4 ms. The 30-query, 900-request matrix had zero errors;
 every p95 was below 200 ms. Process RSS settled at 409.2 MiB after the matrix,
 and the allocator retained less than 0.1 MiB during the measured 900 requests.
+
+That latency result is not a production acceptance result. The canonical hash
+comparison used a materialized reference with the same 50,000-candidate
+position cap. Comparison against the actual pre-cap scorer found changed JSON
+for all four broad queries: the top video often stayed stable, but the best
+moment and lower video order could change because `ordered_phrase` and
+proximity were no longer calculated. A top-128-video document-local refinement
+restored byte-for-byte responses for those four cases, but touched 7,522 to
+18,349 documents and regressed warm p95 to 136.8–350.9 ms.
+
+Repeated four-concurrent rounds also ranged from 188.8 to 261.5 ms p95 and
+settled near 753 MiB RSS, so the sequential 409.2 MiB measurement is not a
+concurrency memory result. An uncached production-browser probe exposed the
+missing stopword-heavy coverage: backend time ranged from 155 ms for `what
+happens` to 2,977 ms for `and the`; identical cached reruns were 4–5 ms. These
+ten cases now belong to the permanent matrix. The streaming candidate remains
+undeployed until a bounded exact positional representation restores ranking
+and repeated concurrency rounds pass with operational margin.
 
 ## Alternating release A/B
 
