@@ -52,15 +52,19 @@ is not copied into a process-owned hash map at startup.
 7. Keep every multi-token expansion conjunctive. If no result remains, drop
    suffix tokens one at a time, then prefix tokens, stopping at the longest
    filter-visible subset. Each ladder is capped at 20 candidates.
-8. Rank by retained-token count, a packed exact-token mask, BM25/title score,
+8. For broad two-plan conjunctions, merge mmap posting cursors directly instead
+   of materializing multi-million-entry intermediate vectors. Coverage, prefix
+   alternatives, title/text cross-field matches, and BM25 remain exact.
+9. Rank by retained-token count, a packed exact-token mask, BM25/title score,
    a candidate-targeted 10-token proximity window, and early position. The mask
    compares exact-token count first, then earlier retained query tokens second
    while sharing the existing 8-byte hot candidate rather than allocating
    per-hit provenance.
-9. Apply an explicit date, engagement, or bounded relevance-plus-engagement
+10. Apply an explicit date, engagement, or bounded relevance-plus-engagement
    order when requested.
-10. Group scored chunks by video and retain only the requested top moments.
-11. Decompress and parse document blocks only for returned hits.
+11. Group scored chunks through dense generation-local video slots and retain
+    only the requested top moments.
+12. Decompress and parse document blocks only for returned hits.
 
 BM25-style text length normalization and a title boost provide the initial
 rank. Engagement counters are stored once per video and use logarithmic corpus

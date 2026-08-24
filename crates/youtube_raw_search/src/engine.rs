@@ -74,6 +74,9 @@ const PROXIMITY_POSITION_BOOST: f32 = 0.05;
 const ORDERED_PHRASE_MULTIPLIER: f32 = 1.25;
 const MAX_PROXIMITY_TOKENS: usize = 10;
 const MAX_DIRECT_POSITION_TARGETS: usize = 128;
+// Relevance refinement must not turn a broad conjunction into several complete
+// positional posting scans. Coverage and BM25 remain exact above this ceiling.
+const MAX_EXACT_PROXIMITY_MATCHES: usize = 50_000;
 // Compact missing-separator recovery is optional ranking, not a recall gate.
 // Avoid a second full positional sweep when both split terms are common.
 const MAX_COMPACT_SPLIT_PROXIMITY_MATCHES: usize = 50_000;
@@ -388,14 +391,33 @@ impl MomentCounter {
 }
 
 struct SplitComponent {
-    matches: Vec<DocMatch>,
+    entry: TermEntry,
+    posting_work: u64,
     highlight: String,
     fuzzy: bool,
 }
 
-struct ExactSplitComponent {
-    entry: TermEntry,
-    highlight: String,
+struct SplitWorkBudget {
+    remaining: u64,
+    exceeded: bool,
+}
+
+impl SplitWorkBudget {
+    const fn new() -> Self {
+        Self {
+            remaining: MAX_COMPACT_SPLIT_POSTING_WORK,
+            exceeded: false,
+        }
+    }
+
+    fn charge(&mut self, work: u64) -> bool {
+        if work > self.remaining {
+            self.exceeded = true;
+            return false;
+        }
+        self.remaining -= work;
+        true
+    }
 }
 
 struct ExactSplitMatches {
@@ -748,7 +770,11 @@ impl RawSearchEngine {
         matches: &mut [DocMatch],
         cache: &mut BlockCache,
     ) -> Result<()> {
-        if terms.len() < 2 || matches.is_empty() || self.inner.full_positions.is_none() {
+        if terms.len() < 2
+            || matches.is_empty()
+            || !exact_proximity_is_bounded(matches.len())
+            || self.inner.full_positions.is_none()
+        {
             return Ok(());
         }
         if matches.len() <= MAX_DIRECT_POSITION_TARGETS {
@@ -959,7 +985,8 @@ impl RawSearchEngine {
         // admitting unrelated results, those common-token intersections can
         // dominate the entire request. Sparse compact terms such as
         // `blackhole` still reach this path and recover `black hole`.
-        let split = self.split_term_matches(term, fields)?;
+        let mut split_work = SplitWorkBudget::new();
+        let split = self.split_term_matches(term, fields, &mut split_work)?;
         let has_exact_split = !split.matches.is_empty();
         matches = union_sorted(matches, split.matches);
         retain_not_excluded(&mut matches, excluded_documents);
@@ -979,7 +1006,7 @@ impl RawSearchEngine {
         // distance-one component, and a same-document intersection.
         if !has_exact_split && !split.work_exceeded {
             let (fuzzy_split, fuzzy_split_terms) =
-                self.fuzzy_split_term_matches(term, fields, &mut cache)?;
+                self.fuzzy_split_term_matches(term, fields, &mut split_work, &mut cache)?;
             matches = union_sorted(matches, fuzzy_split);
             retain_not_excluded(&mut matches, excluded_documents);
             highlight_group.extend(fuzzy_split_terms);
@@ -1050,7 +1077,12 @@ impl RawSearchEngine {
         Ok(false)
     }
 
-    fn split_term_matches(&self, term: &str, fields: QueryFields) -> Result<ExactSplitMatches> {
+    fn split_term_matches(
+        &self,
+        term: &str,
+        fields: QueryFields,
+        work: &mut SplitWorkBudget,
+    ) -> Result<ExactSplitMatches> {
         let boundaries = term
             .char_indices()
             .map(|(index, _)| index)
@@ -1060,7 +1092,6 @@ impl RawSearchEngine {
         let mut highlight_terms = Vec::new();
         let mut proximity_terms = None;
         let mut proximity_ambiguous = false;
-        let mut work_exceeded = false;
 
         for (character_index, &byte_index) in boundaries.iter().enumerate().skip(1) {
             if character_index < MIN_SPLIT_TERM_CHARS
@@ -1070,14 +1101,14 @@ impl RawSearchEngine {
             }
             let left = &term[..byte_index];
             let right = &term[byte_index..];
-            let left_candidates = self.exact_split_component_entries(left)?;
-            let right_candidates = self.exact_split_component_entries(right)?;
+            let left_candidates = self.exact_split_components(left, fields)?;
+            let right_candidates = self.exact_split_components(right, fields)?;
             'pairs: for left_candidate in &left_candidates {
                 for right_candidate in &right_candidates {
-                    let left_work = split_component_posting_work(left_candidate.entry, fields);
-                    let right_work = split_component_posting_work(right_candidate.entry, fields);
-                    if !compact_split_posting_work_is_bounded(left_work, right_work) {
-                        work_exceeded = true;
+                    let pair_work = left_candidate
+                        .posting_work
+                        .saturating_add(right_candidate.posting_work);
+                    if !work.charge(pair_work) {
                         continue;
                     }
                     let mut matches = intersect_sorted(
@@ -1118,28 +1149,8 @@ impl RawSearchEngine {
             } else {
                 proximity_terms
             },
-            work_exceeded,
+            work_exceeded: work.exceeded,
         })
-    }
-
-    fn exact_split_component_entries(&self, term: &str) -> Result<Vec<ExactSplitComponent>> {
-        let mut alternatives = Vec::with_capacity(2);
-        if let Some(entry) = self.inner.lexicon.lookup(term)? {
-            alternatives.push(ExactSplitComponent {
-                entry,
-                highlight: term.to_string(),
-            });
-        }
-        if term.len() >= 3 && !term.ends_with('s') {
-            let plural = format!("{term}s");
-            if let Some(entry) = self.inner.lexicon.lookup(&plural)? {
-                alternatives.push(ExactSplitComponent {
-                    entry,
-                    highlight: plural,
-                });
-            }
-        }
-        Ok(alternatives)
     }
 
     fn exact_split_components(
@@ -1147,22 +1158,34 @@ impl RawSearchEngine {
         term: &str,
         fields: QueryFields,
     ) -> Result<Vec<SplitComponent>> {
-        self.exact_split_component_entries(term)?
-            .into_iter()
-            .map(|candidate| {
-                Ok(SplitComponent {
-                    matches: self.matches_for_entry(candidate.entry, fields)?,
-                    highlight: candidate.highlight,
+        let mut alternatives = Vec::with_capacity(2);
+        if let Some(entry) = self.inner.lexicon.lookup(term)? {
+            alternatives.push(SplitComponent {
+                entry,
+                posting_work: self.split_component_posting_work(entry, fields)?,
+                highlight: term.to_string(),
+                fuzzy: false,
+            });
+        }
+        if term.len() >= 3 && !term.ends_with('s') {
+            let plural = format!("{term}s");
+            if let Some(entry) = self.inner.lexicon.lookup(&plural)? {
+                alternatives.push(SplitComponent {
+                    entry,
+                    posting_work: self.split_component_posting_work(entry, fields)?,
+                    highlight: plural,
                     fuzzy: false,
-                })
-            })
-            .collect()
+                });
+            }
+        }
+        Ok(alternatives)
     }
 
     fn fuzzy_split_term_matches(
         &self,
         term: &str,
         fields: QueryFields,
+        work: &mut SplitWorkBudget,
         cache: &mut BlockCache,
     ) -> Result<(Vec<DocMatch>, Vec<String>)> {
         let boundaries = term
@@ -1188,9 +1211,15 @@ impl RawSearchEngine {
                     if left_candidate.fuzzy == right_candidate.fuzzy {
                         continue;
                     }
+                    let pair_work = left_candidate
+                        .posting_work
+                        .saturating_add(right_candidate.posting_work);
+                    if !work.charge(pair_work) {
+                        continue;
+                    }
                     let mut matches = intersect_sorted(
-                        left_candidate.matches.clone(),
-                        right_candidate.matches.clone(),
+                        self.matches_for_entry(left_candidate.entry, fields)?,
+                        self.matches_for_entry(right_candidate.entry, fields)?,
                     );
                     if matches.is_empty() {
                         continue;
@@ -1270,12 +1299,51 @@ impl RawSearchEngine {
                     ..fields
                 },
             )?;
-            output.extend(candidates.into_iter().map(|candidate| SplitComponent {
-                fuzzy: true,
-                ..candidate
+            output.extend(candidates.into_iter().map(|mut candidate| {
+                candidate.fuzzy = true;
+                candidate
             }));
         }
         Ok(output)
+    }
+
+    fn split_component_posting_work(&self, entry: TermEntry, fields: QueryFields) -> Result<u64> {
+        let text = if fields.text {
+            u64::from(entry.text_frequency)
+        } else {
+            0
+        };
+        let title = if fields.title {
+            self.title_expanded_document_work(entry)?
+        } else {
+            0
+        };
+        Ok(text.saturating_add(title))
+    }
+
+    fn title_expanded_document_work(&self, entry: TermEntry) -> Result<u64> {
+        let bytes = self.postings_range(entry.title_offset, entry.title_length)?;
+        let mut cursor = 0_usize;
+        let mut video = 0_u32;
+        let mut postings = 0_u32;
+        let mut documents = 0_u64;
+        while cursor < bytes.len() {
+            video = video
+                .checked_add(read_varint(bytes, &mut cursor, bytes.len())?)
+                .ok_or_else(|| Error::Corrupt("title posting video overflows u32".to_string()))?;
+            let _frequency = read_varint(bytes, &mut cursor, bytes.len())?;
+            let metadata = self.inner.videos.get(video as usize).ok_or_else(|| {
+                Error::Corrupt("title posting video is out of bounds".to_string())
+            })?;
+            documents = documents.saturating_add(metadata.documents.len() as u64);
+            postings = postings.saturating_add(1);
+        }
+        if postings != entry.title_frequency {
+            return Err(Error::Corrupt(
+                "title posting count does not match lexicon".to_string(),
+            ));
+        }
+        Ok(documents)
     }
 
     fn best_conjunctive_candidate(
@@ -1680,7 +1748,10 @@ impl RawSearchEngine {
 
         let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
         let filter = parse_filter(params.filter_by.as_deref())?;
-        let mut groups = HashMap::<u32, VideoMatches>::new();
+        // Video identifiers are dense generation-local integers. A direct slot
+        // table avoids hashing every matching transcript chunk on broad queries.
+        let mut groups = Vec::<Option<VideoMatches>>::new();
+        groups.resize_with(self.inner.videos.len(), || None);
         for candidate in matches {
             let record = self.inner.metadata.document(candidate.document())?;
             let Some(video) = self.inner.videos.get(record.video as usize) else {
@@ -1691,7 +1762,7 @@ impl RawSearchEngine {
             if !video_matches_filter(video, filter) {
                 continue;
             }
-            let group = groups.entry(record.video).or_insert_with(|| VideoMatches {
+            let group = groups[record.video as usize].get_or_insert_with(|| VideoMatches {
                 video: record.video,
                 score: candidate.score,
                 exact_tokens: candidate.exact_tokens(),
@@ -1734,11 +1805,19 @@ impl RawSearchEngine {
             retain_best_document(&mut group.documents, candidate, hits_per_group);
         }
 
-        let found = groups.len();
-        let total_moments = groups.values().map(visible_group_moments).sum::<usize>();
-        let mut groups = groups.into_values().collect::<Vec<_>>();
-        self.sort_groups(&mut groups, params.sort_by.as_deref());
+        let found = groups.iter().flatten().count();
+        let total_moments = groups
+            .iter()
+            .flatten()
+            .map(visible_group_moments)
+            .sum::<usize>();
+        let mut groups = groups.into_iter().flatten().collect::<Vec<_>>();
         let (offset, limit) = result_window(params);
+        self.sort_group_window(
+            &mut groups,
+            params.sort_by.as_deref(),
+            offset.saturating_add(limit),
+        );
         let mut grouped_hits = Vec::with_capacity(limit.min(groups.len()));
         for mut group in groups.into_iter().skip(offset).take(limit) {
             let group_found = visible_group_moments(&group);
@@ -1836,8 +1915,13 @@ impl RawSearchEngine {
         }))
     }
 
-    fn sort_groups(&self, groups: &mut [VideoMatches], sort_by: Option<&str>) {
-        groups.sort_unstable_by(|left, right| {
+    fn sort_group_window(
+        &self,
+        groups: &mut [VideoMatches],
+        sort_by: Option<&str>,
+        required: usize,
+    ) {
+        let compare = |left: &VideoMatches, right: &VideoMatches| {
             let left_video = &self.inner.videos[left.video as usize];
             let right_video = &self.inner.videos[right.video as usize];
             compare_video_sort(
@@ -1858,7 +1942,15 @@ impl RawSearchEngine {
                 sort_by,
                 &self.inner.manifest,
             )
-        });
+        };
+        let required = required.min(groups.len());
+        if required == 0 {
+            return;
+        }
+        if required < groups.len() {
+            groups.select_nth_unstable_by(required, &compare);
+        }
+        groups[..required].sort_unstable_by(compare);
     }
 
     fn search_all(&self, params: &SearchParams, excluded_documents: &[u32]) -> Result<Value> {
@@ -2101,22 +2193,8 @@ const fn compact_split_proximity_is_bounded(matches: usize) -> bool {
     matches <= MAX_COMPACT_SPLIT_PROXIMITY_MATCHES
 }
 
-const fn split_component_posting_work(entry: TermEntry, fields: QueryFields) -> u64 {
-    let text = if fields.text {
-        entry.text_frequency as u64
-    } else {
-        0
-    };
-    let title = if fields.title {
-        entry.title_frequency as u64
-    } else {
-        0
-    };
-    text + title
-}
-
-const fn compact_split_posting_work_is_bounded(left: u64, right: u64) -> bool {
-    left.saturating_add(right) <= MAX_COMPACT_SPLIT_POSTING_WORK
+const fn exact_proximity_is_bounded(matches: usize) -> bool {
+    matches <= MAX_EXACT_PROXIMITY_MATCHES
 }
 
 impl VideoMeta {

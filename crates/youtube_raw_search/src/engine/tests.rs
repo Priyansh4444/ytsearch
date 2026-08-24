@@ -1,3 +1,4 @@
+use super::conjunction::{TermAlternative, TermPlan};
 use super::*;
 
 const _: () = assert!(std::mem::size_of::<IndexedField>() == 1);
@@ -1062,6 +1063,65 @@ fn rarest_first_exact_prefix_conjunction_matches_the_materialized_contract() {
 }
 
 #[test]
+fn streaming_two_plan_conjunction_matches_materialized_scoring() {
+    let (_root, engine) = token_drop_engine();
+    let terms = ["relativity", "explained"];
+    let fields = query_fields(None, true).expect("query fields");
+    let plans = terms.map(|term| {
+        let entry = engine
+            .inner
+            .lexicon
+            .lookup(term)
+            .expect("lexicon lookup")
+            .expect("exact term");
+        let index = usize::from(term == "explained");
+        TermPlan {
+            alternatives: vec![TermAlternative {
+                term: term.to_string(),
+                entry,
+                fields: QueryFields {
+                    exact_mask: 1 << (3 - index),
+                    ..fields
+                },
+                score_multiplier: 1.0,
+            }],
+            estimated_documents: engine.estimated_entry_documents(entry),
+        }
+    });
+    let streamed = engine
+        .stream_two_plan_conjunction(&plans)
+        .expect("streamed conjunction");
+    let materialized = intersect_all_borrowed(
+        &engine
+            .exact_term_matches(&terms.map(ToString::to_string), fields)
+            .expect("materialized matches"),
+    );
+
+    assert_eq!(
+        streamed
+            .iter()
+            .map(|item| item.document())
+            .collect::<Vec<_>>(),
+        materialized
+            .iter()
+            .map(|item| item.document())
+            .collect::<Vec<_>>()
+    );
+    for (streamed, materialized) in streamed.iter().zip(materialized) {
+        assert_eq!(streamed.document(), materialized.document());
+        assert_eq!(streamed.exact_mask(), materialized.exact_mask());
+        assert_eq!(streamed.matches_text(), materialized.matches_text());
+        let tolerance = materialized.score.abs().max(1.0) * 1e-6;
+        assert!(
+            (streamed.score - materialized.score).abs() <= tolerance,
+            "streamed={} materialized={} tolerance={tolerance}",
+            streamed.score,
+            materialized.score
+        );
+    }
+}
+
+#[test]
 fn document_local_proximity_matches_postings_at_the_direct_path_boundary() {
     let root = TempDir::new().expect("temp dir");
     let chunks_path = root.path().join("chunks.jsonl");
@@ -1429,16 +1489,24 @@ fn compact_split_proximity_has_a_hard_candidate_budget() {
 }
 
 #[test]
+fn broad_exact_proximity_has_a_hard_candidate_budget() {
+    assert!(exact_proximity_is_bounded(MAX_EXACT_PROXIMITY_MATCHES - 1));
+    assert!(exact_proximity_is_bounded(MAX_EXACT_PROXIMITY_MATCHES));
+    assert!(!exact_proximity_is_bounded(MAX_EXACT_PROXIMITY_MATCHES + 1));
+}
+
+#[test]
 fn compact_split_intersection_has_a_hard_posting_budget() {
-    assert!(compact_split_posting_work_is_bounded(
-        MAX_COMPACT_SPLIT_POSTING_WORK - 1,
-        1
-    ));
-    assert!(!compact_split_posting_work_is_bounded(
-        MAX_COMPACT_SPLIT_POSTING_WORK,
-        1
-    ));
-    assert!(!compact_split_posting_work_is_bounded(u64::MAX, 1));
+    let mut budget = SplitWorkBudget::new();
+    assert!(budget.charge(MAX_COMPACT_SPLIT_POSTING_WORK - 1));
+    assert!(budget.charge(1));
+    assert_eq!(budget.remaining, 0);
+    assert!(!budget.charge(1));
+    assert!(budget.exceeded);
+
+    let mut overflow = SplitWorkBudget::new();
+    assert!(!overflow.charge(u64::MAX));
+    assert_eq!(overflow.remaining, MAX_COMPACT_SPLIT_POSTING_WORK);
 }
 
 #[test]

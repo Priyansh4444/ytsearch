@@ -14,6 +14,12 @@ this_that_compact	thisthat
 you_know_compact	youknow
 there_are_compact	thereare
 thank_you_compact	thankyou
+this_that_spaced	this that
+you_know_spaced	you know
+there_are_spaced	there are
+thank_you_spaced	thank you
+fuzzy_this_that_compact	thizthat
+fuzzy_you_know_compact	youknpw
 stopword_phrase	fable on high	@t3dotgg
 battery_gate	battery gate incident
 linux_exploit	linux exploit

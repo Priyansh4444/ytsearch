@@ -7,17 +7,38 @@ const ALWAYS_DOCUMENT_VALIDATE_TARGETS: usize = 128;
 // terms after rare terms have already narrowed the candidate set.
 const MAX_ADAPTIVE_DOCUMENT_VALIDATE_TARGETS: usize = 512;
 const MIN_POSTING_TO_TARGET_RATIO: u64 = 512;
+const STREAMING_CONJUNCTION_MIN_DOCUMENTS: u64 = 100_000;
 
-struct TermAlternative {
-    term: String,
-    entry: TermEntry,
-    fields: QueryFields,
-    score_multiplier: f32,
+pub(super) struct TermAlternative {
+    pub(super) term: String,
+    pub(super) entry: TermEntry,
+    pub(super) fields: QueryFields,
+    pub(super) score_multiplier: f32,
 }
 
-struct TermPlan {
-    alternatives: Vec<TermAlternative>,
-    estimated_documents: u64,
+pub(super) struct TermPlan {
+    pub(super) alternatives: Vec<TermAlternative>,
+    pub(super) estimated_documents: u64,
+}
+
+struct TextAlternativeCursor<'a> {
+    engine: &'a RawSearchEngine,
+    alternative: &'a TermAlternative,
+    postings: &'a [u8],
+    positions: Option<&'a [u8]>,
+    posting_cursor: usize,
+    position_cursor: usize,
+    previous_document: u32,
+    decoded: u32,
+    current: Option<(u32, u32, u32)>,
+    idf: f32,
+}
+
+struct StreamingTermPlan<'a> {
+    engine: &'a RawSearchEngine,
+    text: Vec<TextAlternativeCursor<'a>>,
+    title: Vec<DocMatch>,
+    title_index: usize,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -125,6 +146,15 @@ impl RawSearchEngine {
         }
 
         plans.sort_unstable_by_key(|plan| plan.estimated_documents);
+        if plans.len() == 2
+            && plans
+                .iter()
+                .all(|plan| plan.estimated_documents >= STREAMING_CONJUNCTION_MIN_DOCUMENTS)
+        {
+            let mut matches = self.stream_two_plan_conjunction(&plans)?;
+            self.retain_video_filter(&mut matches, filter)?;
+            return Ok((matches, highlights));
+        }
         let mut plans = plans.into_iter();
         let Some(first) = plans.next() else {
             return Ok((Vec::new(), highlights));
@@ -145,6 +175,42 @@ impl RawSearchEngine {
             }
         }
         Ok((matches, highlights))
+    }
+
+    pub(super) fn stream_two_plan_conjunction(&self, plans: &[TermPlan]) -> Result<Vec<DocMatch>> {
+        let [left_plan, right_plan] = plans else {
+            return Err(Error::Corrupt(
+                "streaming conjunction requires exactly two plans".to_string(),
+            ));
+        };
+        let mut left = StreamingTermPlan::new(self, left_plan)?;
+        let mut right = StreamingTermPlan::new(self, right_plan)?;
+        left.advance_to(0)?;
+        right.advance_to(0)?;
+        let mut matches = Vec::new();
+
+        while let (Some(left_document), Some(right_document)) =
+            (left.current_document(), right.current_document())
+        {
+            let target = left_document.max(right_document);
+            left.advance_to(target)?;
+            right.advance_to(target)?;
+            let (Some(left_document), Some(right_document)) =
+                (left.current_document(), right.current_document())
+            else {
+                break;
+            };
+            if left_document != right_document {
+                continue;
+            }
+            let left_match = left.take_current()?;
+            let right_match = right.take_current()?;
+            matches.push(combine_plan_matches(left_document, left_match, right_match));
+        }
+
+        left.finish()?;
+        right.finish()?;
+        Ok(matches)
     }
 
     fn retain_video_filter(
@@ -331,7 +397,7 @@ impl RawSearchEngine {
         contribution
     }
 
-    fn estimated_entry_documents(&self, entry: TermEntry) -> u64 {
+    pub(super) fn estimated_entry_documents(&self, entry: TermEntry) -> u64 {
         let average_documents_per_video = self
             .inner
             .manifest
@@ -499,6 +565,255 @@ impl RawSearchEngine {
         }
         Ok(())
     }
+}
+
+impl<'a> TextAlternativeCursor<'a> {
+    fn new(engine: &'a RawSearchEngine, alternative: &'a TermAlternative) -> Result<Self> {
+        let entry = alternative.entry;
+        let effective_frequency = engine
+            .estimated_entry_documents(entry)
+            .min(u64::from(engine.inner.manifest.documents));
+        Ok(Self {
+            engine,
+            alternative,
+            postings: engine.postings_range(entry.text_offset, entry.text_length)?,
+            positions: alternative
+                .fields
+                .prioritize_position
+                .then(|| engine.inner.positions.range(entry.term, IndexedField::Text))
+                .transpose()?,
+            posting_cursor: 0,
+            position_cursor: 0,
+            previous_document: 0,
+            decoded: 0,
+            current: None,
+            idf: inverse_document_frequency(
+                engine.inner.manifest.documents,
+                u32::try_from(effective_frequency)
+                    .unwrap_or(u32::MAX)
+                    .max(1),
+            ),
+        })
+    }
+
+    fn advance_to(&mut self, target: u32) -> Result<()> {
+        if self
+            .current
+            .is_some_and(|(document, _, _)| document >= target)
+        {
+            return Ok(());
+        }
+        self.current = None;
+        while self.posting_cursor < self.postings.len() {
+            let delta = read_varint(self.postings, &mut self.posting_cursor, self.postings.len())?;
+            if self.decoded > 0 && delta == 0 {
+                return Err(Error::Corrupt(
+                    "posting identifiers must be strictly increasing".to_string(),
+                ));
+            }
+            let document = self
+                .previous_document
+                .checked_add(delta)
+                .ok_or_else(|| Error::Corrupt("posting identifier overflows u32".to_string()))?;
+            let frequency =
+                read_varint(self.postings, &mut self.posting_cursor, self.postings.len())?;
+            let first_position = self
+                .positions
+                .map(|positions| read_varint(positions, &mut self.position_cursor, positions.len()))
+                .transpose()?
+                .unwrap_or_default();
+            self.previous_document = document;
+            self.decoded = self
+                .decoded
+                .checked_add(1)
+                .ok_or_else(|| Error::Corrupt("posting count overflows u32".to_string()))?;
+            if self.decoded > self.alternative.entry.text_frequency {
+                return Err(Error::Corrupt(
+                    "posting count exceeds the lexicon frequency".to_string(),
+                ));
+            }
+            if document >= target {
+                self.current = Some((document, frequency, first_position));
+                return Ok(());
+            }
+        }
+        self.validate_complete()
+    }
+
+    fn contribution(&self, record: DocumentRecord) -> Option<DocMatch> {
+        let (document, frequency, first_position) = self.current?;
+        let fields = self.alternative.fields;
+        let score = bm25(
+            frequency,
+            record.tokens,
+            self.engine.inner.manifest.average_document_tokens,
+        ) * self.idf
+            * TEXT_QUERY_WEIGHT
+            * token_position_multiplier(first_position, fields.prioritize_position)
+            * self.alternative.score_multiplier;
+        Some(DocMatch::with_exact_mask(
+            document,
+            score,
+            true,
+            fields.exact_mask,
+        ))
+    }
+
+    fn consume_current(&mut self) -> Result<()> {
+        let Some((document, _, _)) = self.current else {
+            return Ok(());
+        };
+        self.current = None;
+        if let Some(next) = document.checked_add(1) {
+            self.advance_to(next)
+        } else {
+            self.validate_complete()
+        }
+    }
+
+    fn finish(&mut self) -> Result<()> {
+        self.current = None;
+        while self.posting_cursor < self.postings.len() {
+            self.advance_to(self.previous_document.saturating_add(1))?;
+            self.current = None;
+        }
+        self.validate_complete()
+    }
+
+    fn validate_complete(&self) -> Result<()> {
+        if self.decoded != self.alternative.entry.text_frequency
+            || self
+                .positions
+                .is_some_and(|positions| self.position_cursor != positions.len())
+        {
+            return Err(Error::Corrupt(
+                "text posting/position count does not match lexicon".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl<'a> StreamingTermPlan<'a> {
+    fn new(engine: &'a RawSearchEngine, plan: &'a TermPlan) -> Result<Self> {
+        let mut text = Vec::with_capacity(plan.alternatives.len());
+        let mut title = Vec::new();
+        for alternative in &plan.alternatives {
+            if alternative.fields.text && alternative.entry.text_frequency > 0 {
+                text.push(TextAlternativeCursor::new(engine, alternative)?);
+            }
+            if alternative.fields.title && alternative.entry.title_frequency > 0 {
+                let effective_frequency = engine
+                    .estimated_entry_documents(alternative.entry)
+                    .min(u64::from(engine.inner.manifest.documents));
+                let mut matches = engine.decode_title_postings(
+                    alternative.entry,
+                    inverse_document_frequency(
+                        engine.inner.manifest.documents,
+                        u32::try_from(effective_frequency)
+                            .unwrap_or(u32::MAX)
+                            .max(1),
+                    ),
+                    alternative.fields.prioritize_position,
+                    alternative.fields.exact_mask,
+                )?;
+                for candidate in &mut matches {
+                    candidate.score *= alternative.score_multiplier;
+                }
+                title.push(matches);
+            }
+        }
+        Ok(Self {
+            engine,
+            text,
+            title: union_all(title),
+            title_index: 0,
+        })
+    }
+
+    fn current_document(&self) -> Option<u32> {
+        self.text
+            .iter()
+            .filter_map(|cursor| cursor.current.map(|(document, _, _)| document))
+            .chain(
+                self.title
+                    .get(self.title_index)
+                    .map(|candidate| candidate.document()),
+            )
+            .min()
+    }
+
+    fn advance_to(&mut self, target: u32) -> Result<()> {
+        for cursor in &mut self.text {
+            cursor.advance_to(target)?;
+        }
+        while self
+            .title
+            .get(self.title_index)
+            .is_some_and(|candidate| candidate.document() < target)
+        {
+            self.title_index += 1;
+        }
+        Ok(())
+    }
+
+    fn take_current(&mut self) -> Result<DocMatch> {
+        let document = self
+            .current_document()
+            .ok_or_else(|| Error::Corrupt("streaming plan has no current document".to_string()))?;
+        let record = self.engine.inner.metadata.document(document)?;
+        let mut combined: Option<DocMatch> = None;
+        for cursor in &mut self.text {
+            if cursor.current.map(|current| current.0) != Some(document) {
+                continue;
+            }
+            if let Some(contribution) = cursor.contribution(record) {
+                merge_plan_contribution(&mut combined, contribution);
+            }
+            cursor.consume_current()?;
+        }
+        if self
+            .title
+            .get(self.title_index)
+            .is_some_and(|candidate| candidate.document() == document)
+        {
+            let contribution = self.title[self.title_index];
+            merge_plan_contribution(&mut combined, contribution);
+            self.title_index += 1;
+        }
+        combined.ok_or_else(|| Error::Corrupt("streaming plan contribution is empty".to_string()))
+    }
+
+    fn finish(&mut self) -> Result<()> {
+        for cursor in &mut self.text {
+            cursor.finish()?;
+        }
+        self.title_index = self.title.len();
+        Ok(())
+    }
+}
+
+fn merge_plan_contribution(combined: &mut Option<DocMatch>, contribution: DocMatch) {
+    let Some(current) = combined else {
+        *combined = Some(contribution);
+        return;
+    };
+    current.score += contribution.score;
+    current.set_matches_text(current.matches_text() || contribution.matches_text());
+    current.set_exact_mask(current.exact_mask() | contribution.exact_mask());
+    current
+        .set_all_retained_exact(current.all_retained_exact() && contribution.all_retained_exact());
+}
+
+fn combine_plan_matches(document: u32, left: DocMatch, right: DocMatch) -> DocMatch {
+    let mut combined = DocMatch::new(
+        document,
+        left.score + right.score,
+        left.matches_text() || right.matches_text(),
+    );
+    combined.set_exact_mask(left.exact_mask() | right.exact_mask());
+    combined.set_all_retained_exact(left.all_retained_exact() && right.all_retained_exact());
+    combined
 }
 
 fn prefer_document_validation(targets: usize, remaining: &[TermPlan]) -> bool {

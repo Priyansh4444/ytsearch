@@ -55,9 +55,10 @@ Raw can replace Typesense as the canonical search index.
 - [x] Carry an unambiguous two-token compact split into bounded positional
   ranking. On the 8.14M-document index, `createEffect` now ranks Ryan
   Carniato's adjacent phrase first while retaining all 433 compact-query videos.
-  - [x] Preflight component posting counts before decoding, cap split work at
-    1M postings and positional refinement at 50k candidates. The 24-query
-    full-index suite has a 61.1 ms worst p95; common compact joins are 1.5–9.5 ms.
+  - [x] Preflight exact and fuzzy components before decoding, charge one
+    request-wide 1M-posting budget including actual title expansion, and cap
+    positional refinement at 50k candidates. The 30-query full-index suite has
+    a 181.7 ms worst p95; `createEffect` is 27.7 ms p95.
 - [ ] Differential-test the complete application contract against Typesense.
   - [x] Run the first full-snapshot seven-case ordered top-10 differential;
     mean overlap is 7.71/10 and top-one agreement is 4/7.
@@ -202,7 +203,13 @@ Raw can replace Typesense as the canonical search index.
   without carrying token positions, allowing a frequent gapped match to outrank
   Ryan Carniato's adjacent phrase. Unique exact two-token splits now reuse the
   bounded proximity scorer. Lexicon-level posting and positional candidate
-  guards keep that fallback bounded; full-index warm p95 is 24.8 ms.
+  guards keep that fallback bounded; full-index warm p95 is 27.7 ms.
+
+- [x] The compact-query benchmark omitted natural broad conjunctions. `this
+  that`, `you know`, and `there are` still took 0.3–0.7 seconds warm. A
+  response-identical document-at-a-time two-plan cursor, bounded positional
+  refinement, dense video grouping, and partial top-window sort bring the
+  30-run p95 values to 171.3, 132.1, and 86.3 ms respectively.
 
 - [ ] Full-corpus generation publication shares the reader's 2-vCPU/2-GB
   cgroup and causes synchronized multi-second search stalls. A clean canary

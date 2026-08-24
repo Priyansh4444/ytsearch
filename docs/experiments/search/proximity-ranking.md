@@ -76,13 +76,36 @@ alternatives and the original whole-token typo path, but does not repeat the
 same rejected split through fuzzy recovery. A separate 50,000-candidate cap
 protects the cold positional sidecar.
 
-On the same 8.14-million-document index, 12 warm loopback requests produced the
-following p95 values: `thisthat` 9.5 ms, `youknow` 3.8 ms, `thereare` 2.4 ms,
-and `thankyou` 1.5 ms. The full 24-query suite had zero errors and a worst p95
-of 61.1 ms (`coding is dead`). `createEffect` still returned 433 videos with
-five Ryan Carniato results at the top. This is a deliberate recall/latency
-boundary: missing-separator recovery is optional fallback, so an unbounded
-common-word split is less valuable than predictable service latency.
+On the same 8.14-million-document index, the final 30-run matrix measured
+`thisthat` at 12.9 ms p95 and `createEffect` at 27.7 ms p95. Adversarial
+one-edit joins remained bounded: `thizthat` was 18.2 ms p95 and `youknpw` was
+55.8 ms p95. `createEffect` still returned 433 videos with five Ryan Carniato
+results at the top. This is a deliberate recall/latency boundary:
+missing-separator recovery is optional fallback, so an unbounded common-word
+split is less valuable than predictable service latency.
+
+## Broad conjunction follow-up
+
+The compact-only matrix initially hid the equivalent natural queries. On the
+full corpus, `this that`, `you know`, and `there are` took roughly 0.3–0.7
+seconds warm. Raw materialized and scored the first multi-million-document
+posting list, allocated a contribution slot per candidate for the second, then
+decoded complete positions for every broad survivor.
+
+Broad two-plan searches now use document-at-a-time mmap cursors once both plans
+exceed 100,000 estimated documents. Cursors merge exact and prefix alternatives,
+preserve text/title cross-field scoring, validate the complete streams, and only
+calculate BM25 for documents present in both plans. Broad sets above 50,000
+candidates retain exact coverage and BM25 but skip optional full-position
+refinement. Grouping uses a dense generation-local video table, and only the
+requested result window is fully sorted. Canonical response hashes matched the
+materialized reference for all four broad queries.
+
+Thirty warm loopback runs per case produced `this that` at 165.3 ms median and
+171.3 ms p95, `you know` at 126.3/132.1 ms, `there are` at 69.2/86.3 ms, and
+`thank you` at 65.0/82.4 ms. The 30-query, 900-request matrix had zero errors;
+every p95 was below 200 ms. Process RSS settled at 409.2 MiB after the matrix,
+and the allocator retained less than 0.1 MiB during the measured 900 requests.
 
 ## Alternating release A/B
 
