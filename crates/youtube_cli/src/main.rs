@@ -102,6 +102,51 @@ enum PublicationPolicy {
     DeferVisibility,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExistingChannelPolicy {
+    Retain,
+    Rewipe,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExistingVideoPolicy {
+    Reindex,
+    Skip,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ExistingDataPolicy {
+    channel: ExistingChannelPolicy,
+    videos: ExistingVideoPolicy,
+}
+
+impl ExistingDataPolicy {
+    fn from_cli(mode: IndexMode, no_wipe: bool, skip_existing: bool) -> Self {
+        if mode == IndexMode::Update {
+            return Self {
+                channel: ExistingChannelPolicy::Retain,
+                videos: ExistingVideoPolicy::Skip,
+            };
+        }
+        Self {
+            channel: if no_wipe {
+                ExistingChannelPolicy::Retain
+            } else {
+                ExistingChannelPolicy::Rewipe
+            },
+            videos: if skip_existing {
+                ExistingVideoPolicy::Skip
+            } else {
+                ExistingVideoPolicy::Reindex
+            },
+        }
+    }
+
+    const fn skips_existing_videos(self) -> bool {
+        matches!(self.videos, ExistingVideoPolicy::Skip)
+    }
+}
+
 impl PublicationPolicy {
     const fn from_defer_flag(defer: bool) -> Self {
         if defer {
@@ -713,11 +758,9 @@ async fn index_youtuber(
     command: IndexYoutuberCommand,
     publication: PublicationPolicy,
 ) -> Result<(), CliError> {
-    validate_rewipe_safety(
-        command.mode,
-        command.no_wipe,
-        command.allow_destructive_rewipe,
-    )?;
+    let existing_data =
+        ExistingDataPolicy::from_cli(command.mode, command.no_wipe, command.skip_existing);
+    validate_existing_data_policy(existing_data, command.allow_destructive_rewipe)?;
     let collection = command.collection.collection.clone();
     let transcript_search = command.search.client(collection.clone())?;
     transcript_search.readiness().await?;
@@ -760,25 +803,27 @@ async fn index_youtuber(
         "Published in-progress YouTuber profile: {}",
         initial_youtuber_doc.id
     );
-    let no_wipe = command.no_wipe || command.mode == IndexMode::Update;
-    let skip_existing = command.skip_existing || command.mode == IndexMode::Update;
-    let refresh_after_first_completion = !no_wipe || initial_youtuber_doc.indexed_chunk_count == 0;
+    let refresh_after_first_completion = existing_data.channel == ExistingChannelPolicy::Rewipe
+        || initial_youtuber_doc.indexed_chunk_count == 0;
 
-    if no_wipe {
-        println!("Keeping existing transcript chunks for {}", youtuber.handle);
-    } else {
-        println!(
-            "Deleting existing transcript chunks for {} before reindex",
-            youtuber.handle
-        );
-        let operation = transcript_search
-            .delete_channel(
-                &youtuber_id,
-                ChannelDeletionScope::ChannelAndVideos,
-                &unique_operation_key("rewipe-channel", &youtuber_id),
-            )
-            .await?;
-        println!("Queued Raw rewipe operation: {}", operation.id);
+    match existing_data.channel {
+        ExistingChannelPolicy::Retain => {
+            println!("Keeping existing transcript chunks for {}", youtuber.handle);
+        }
+        ExistingChannelPolicy::Rewipe => {
+            println!(
+                "Deleting existing transcript chunks for {} before reindex",
+                youtuber.handle
+            );
+            let operation = transcript_search
+                .delete_channel(
+                    &youtuber_id,
+                    ChannelDeletionScope::ChannelAndVideos,
+                    &unique_operation_key("rewipe-channel", &youtuber_id),
+                )
+                .await?;
+            println!("Queued Raw rewipe operation: {}", operation.id);
+        }
     }
 
     let metadata_source = metadata_source(youtube.as_ref(), &caption_source);
@@ -792,7 +837,7 @@ async fn index_youtuber(
     let videos_to_index = prepare_videos_to_index(
         &public_videos,
         &transcript_search,
-        skip_existing,
+        existing_data.skips_existing_videos(),
         command.max_videos,
         stop_after_existing,
         &mut stats,
@@ -808,11 +853,12 @@ async fn index_youtuber(
     let jobs = command.jobs.clamp(1, 16);
     println!("Indexing with {jobs} concurrent job(s)");
     let use_worker_existing_checks = should_use_worker_existing_checks(
-        skip_existing,
+        existing_data.skips_existing_videos(),
         stop_after_existing,
         videos_to_index.len(),
     );
-    let existing_video_ids = if skip_existing && !use_worker_existing_checks {
+    let existing_video_ids = if existing_data.skips_existing_videos() && !use_worker_existing_checks
+    {
         if videos_to_index.is_empty() {
             HashSet::new()
         } else {
@@ -992,7 +1038,7 @@ async fn index_youtuber(
     print_index_summary(&stats);
 
     if stats.attempted_videos > 0 && (run_indexed_videos == 0 || run_indexed_chunks == 0) {
-        if skip_existing && stats.existing_videos > 0 {
+        if existing_data.skips_existing_videos() && stats.existing_videos > 0 {
             let youtuber_doc = upsert_youtuber_document_from_chunks(
                 &youtuber_search,
                 &youtuber,
@@ -1147,12 +1193,18 @@ fn effective_channel_jobs(requested: usize, video_jobs: usize) -> usize {
     requested.clamp(1, 4).min(16 / video_jobs).max(1)
 }
 
-fn validate_rewipe_safety(
-    mode: IndexMode,
-    no_wipe: bool,
+fn validate_existing_data_policy(
+    policy: ExistingDataPolicy,
     allow_destructive_rewipe: bool,
 ) -> Result<(), CliError> {
-    if mode == IndexMode::Rewipe && !no_wipe && !allow_destructive_rewipe {
+    if policy.channel == ExistingChannelPolicy::Rewipe && policy.videos == ExistingVideoPolicy::Skip
+    {
+        return Err(CliError::Message(
+            "cannot combine rewipe with skip-existing: the pending channel deletion would hide videos that the active generation still reports as indexed"
+                .to_string(),
+        ));
+    }
+    if policy.channel == ExistingChannelPolicy::Rewipe && !allow_destructive_rewipe {
         return Err(CliError::Message(
             "rewipe deletes existing chunks before replacement captions are confirmed; use update or backend copy when possible, or pass --allow-destructive-rewipe after verifying a recoverable source"
                 .to_string(),
@@ -2545,11 +2597,72 @@ mod tests {
     }
 
     #[test]
-    fn destructive_rewipe_requires_explicit_acknowledgement() {
-        assert!(validate_rewipe_safety(IndexMode::Update, false, false).is_ok());
-        assert!(validate_rewipe_safety(IndexMode::Rewipe, true, false).is_ok());
-        assert!(validate_rewipe_safety(IndexMode::Rewipe, false, true).is_ok());
-        assert!(validate_rewipe_safety(IndexMode::Rewipe, false, false).is_err());
+    fn existing_data_flags_resolve_to_an_explicit_policy() {
+        let update = ExistingDataPolicy {
+            channel: ExistingChannelPolicy::Retain,
+            videos: ExistingVideoPolicy::Skip,
+        };
+        let cases = [
+            (IndexMode::Update, false, false, update),
+            (IndexMode::Update, false, true, update),
+            (IndexMode::Update, true, false, update),
+            (IndexMode::Update, true, true, update),
+            (
+                IndexMode::Rewipe,
+                false,
+                false,
+                ExistingDataPolicy {
+                    channel: ExistingChannelPolicy::Rewipe,
+                    videos: ExistingVideoPolicy::Reindex,
+                },
+            ),
+            (
+                IndexMode::Rewipe,
+                false,
+                true,
+                ExistingDataPolicy {
+                    channel: ExistingChannelPolicy::Rewipe,
+                    videos: ExistingVideoPolicy::Skip,
+                },
+            ),
+            (
+                IndexMode::Rewipe,
+                true,
+                false,
+                ExistingDataPolicy {
+                    channel: ExistingChannelPolicy::Retain,
+                    videos: ExistingVideoPolicy::Reindex,
+                },
+            ),
+            (
+                IndexMode::Rewipe,
+                true,
+                true,
+                ExistingDataPolicy {
+                    channel: ExistingChannelPolicy::Retain,
+                    videos: ExistingVideoPolicy::Skip,
+                },
+            ),
+        ];
+        for (mode, no_wipe, skip_existing, expected) in cases {
+            assert_eq!(
+                ExistingDataPolicy::from_cli(mode, no_wipe, skip_existing),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn destructive_or_contradictory_existing_data_policy_fails_closed() {
+        let rewipe = ExistingDataPolicy::from_cli(IndexMode::Rewipe, false, false);
+        assert!(validate_existing_data_policy(rewipe, true).is_ok());
+        assert!(validate_existing_data_policy(rewipe, false).is_err());
+
+        let contradictory = ExistingDataPolicy::from_cli(IndexMode::Rewipe, false, true);
+        assert!(validate_existing_data_policy(contradictory, true).is_err());
+
+        let retain = ExistingDataPolicy::from_cli(IndexMode::Rewipe, true, false);
+        assert!(validate_existing_data_policy(retain, false).is_ok());
     }
 
     #[test]
