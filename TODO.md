@@ -205,11 +205,14 @@ Raw can replace Typesense as the canonical search index.
   bounded proximity scorer. Lexicon-level posting and positional candidate
   guards keep that fallback bounded; full-index warm p95 is 27.7 ms.
 
-- [x] The compact-query benchmark omitted natural broad conjunctions. `this
-  that`, `you know`, and `there are` still took 0.3–0.7 seconds warm. A
-  response-identical document-at-a-time two-plan cursor, bounded positional
-  refinement, dense video grouping, and partial top-window sort bring the
-  30-run p95 values to 171.3, 132.1, and 86.3 ms respectively.
+- [ ] The compact-query benchmark omitted natural broad conjunctions. The
+  document-at-a-time two-plan cursor, dense video grouping, and partial
+  top-window sort bring sequential `this that`, `you know`, and `there are`
+  p95 to 171.3, 132.1, and 86.3 ms, but the 50k positional-refinement cap
+  changes broad-query moment/order results and repeated four-way runs do not
+  hold the 200 ms ceiling with enough margin. Keep this path undeployed until
+  bounded exact ordered/proximity evidence restores relevance and the expanded
+  stopword-heavy matrix passes independent concurrency rounds.
 
 - [ ] Full-corpus generation publication shares the reader's 2-vCPU/2-GB
   cgroup and causes synchronized multi-second search stalls. A clean canary
