@@ -1,4 +1,8 @@
 use super::*;
+
+const _: () = assert!(std::mem::size_of::<IndexedField>() == 1);
+const _: () = assert!(IndexedField::Text as u8 == 0);
+const _: () = assert!(IndexedField::Title as u8 == 1);
 use std::{fs::OpenOptions, io::Write};
 use tempfile::TempDir;
 
@@ -351,7 +355,7 @@ fn schema_six_reconstructs_complete_positions_from_aligned_sidecars() {
     let first_bytes = engine
         .inner
         .positions
-        .range(entry.term, false)
+        .range(entry.term, IndexedField::Text)
         .expect("first positions");
     let mut first_cursor = 0;
     let first =
@@ -362,7 +366,7 @@ fn schema_six_reconstructs_complete_positions_from_aligned_sidecars() {
         .full_positions
         .as_ref()
         .expect("schema 6 positions")
-        .range(entry.term, false)
+        .range(entry.term, IndexedField::Text)
         .expect("remaining positions");
     let mut positions = Vec::new();
     let mut cursor = crate::positions::PositionCursor::new(remaining);

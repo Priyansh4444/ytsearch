@@ -50,7 +50,7 @@ impl PostingShardWriter {
         })
     }
 
-    fn append(&mut self, term: &str, posting: BuildPosting, title: bool) -> Result<()> {
+    fn append(&mut self, term: &str, posting: BuildPosting, field: IndexedField) -> Result<()> {
         let shard = usize::from(term.as_bytes()[0]);
         if self.outputs[shard].is_none() {
             self.outputs[shard] = Some(ColdWriter::create_posting_shard(
@@ -61,7 +61,7 @@ impl PostingShardWriter {
             self.outputs[shard].as_mut().expect("posting shard exists"),
             term,
             posting,
-            title,
+            field,
         )
     }
 
@@ -142,7 +142,7 @@ fn append_token_postings(
     postings: &mut PostingShardWriter,
     counts: TokenCounts,
     id: u32,
-    title: bool,
+    field: IndexedField,
     spool: &mut PositionSpoolWriter,
     position_scratch: &mut Vec<u32>,
 ) -> Result<()> {
@@ -159,7 +159,7 @@ fn append_token_postings(
             position_length,
             frequency,
         };
-        postings.append(&term, posting, title)?;
+        postings.append(&term, posting, field)?;
     }
     Ok(())
 }
@@ -256,7 +256,7 @@ where
                 &mut posting_spool,
                 title_counts,
                 video,
-                true,
+                IndexedField::Title,
                 &mut position_spool,
                 &mut position_scratch,
             )?;
@@ -291,7 +291,7 @@ where
             &mut posting_spool,
             text_counts,
             document,
-            false,
+            IndexedField::Text,
             &mut position_spool,
             &mut position_scratch,
         )?;
@@ -681,7 +681,7 @@ fn refine_posting_shard(
             outputs[key].as_mut().expect("refined shard exists"),
             &record.term,
             record.posting,
-            record.title,
+            record.field,
         )?;
     }
     for output in outputs.into_iter().flatten() {
@@ -703,21 +703,21 @@ fn refine_posting_shard(
 struct SpoolPosting {
     term: String,
     posting: BuildPosting,
-    title: bool,
+    field: IndexedField,
 }
 
 fn write_spool_posting(
     output: &mut impl Write,
     term: &str,
     posting: BuildPosting,
-    title: bool,
+    field: IndexedField,
 ) -> Result<()> {
     let term_bytes = term.as_bytes();
     let term_length = u16::try_from(term_bytes.len())
         .map_err(|_| Error::InvalidInput("term exceeds 65,535 bytes".to_string()))?;
     output.write_all(&term_length.to_le_bytes())?;
     output.write_all(term_bytes)?;
-    output.write_all(&[u8::from(title)])?;
+    output.write_all(&[field as u8])?;
     output.write_all(&posting.id.to_le_bytes())?;
     output.write_all(&posting.position_offset.to_le_bytes())?;
     output.write_all(&posting.position_length.to_le_bytes())?;
@@ -743,9 +743,9 @@ fn read_spool_posting(input: &mut impl Read) -> Result<Option<SpoolPosting>> {
         .map_err(|_| Error::Corrupt("posting shard term is not UTF-8".to_string()))?;
     let mut encoded = [0_u8; 13];
     input.read_exact(&mut encoded)?;
-    let title = match encoded[0] {
-        0 => false,
-        1 => true,
+    let field = match encoded[0] {
+        0 => IndexedField::Text,
+        1 => IndexedField::Title,
         _ => {
             return Err(Error::Corrupt(
                 "posting shard field discriminator is invalid".to_string(),
@@ -766,7 +766,7 @@ fn read_spool_posting(input: &mut impl Read) -> Result<Option<SpoolPosting>> {
                 encoded[11..13].try_into().expect("posting frequency bytes"),
             ),
         },
-        title,
+        field,
     }))
 }
 
@@ -775,10 +775,9 @@ fn read_posting_shard(path: &Path) -> Result<HashMap<String, TermBuild>> {
     let mut terms = HashMap::<String, TermBuild>::new();
     while let Some(record) = read_spool_posting(&mut input)? {
         let lists = terms.entry(record.term).or_default();
-        if record.title {
-            lists.title.push(record.posting);
-        } else {
-            lists.text.push(record.posting);
+        match record.field {
+            IndexedField::Text => lists.text.push(record.posting),
+            IndexedField::Title => lists.title.push(record.posting),
         }
     }
     Ok(terms)
@@ -924,4 +923,44 @@ fn record_token(counts: &mut TokenCounts, token: &mut String, position: &mut u32
         .checked_add(1)
         .ok_or_else(|| Error::InvalidInput("one field exceeds 4 billion tokens".to_string()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn posting() -> BuildPosting {
+        BuildPosting {
+            id: 7,
+            position_offset: 11,
+            position_length: 13,
+            frequency: 17,
+        }
+    }
+
+    #[test]
+    fn spool_field_discriminator_round_trips_and_rejects_unknown_values() {
+        for field in [IndexedField::Text, IndexedField::Title] {
+            let mut bytes = Vec::new();
+            write_spool_posting(&mut bytes, "term", posting(), field).unwrap();
+            let decoded = read_spool_posting(&mut Cursor::new(&bytes))
+                .unwrap()
+                .unwrap();
+            assert_eq!(decoded.term, "term");
+            assert_eq!(decoded.field, field);
+            assert_eq!(decoded.posting.id, 7);
+            assert_eq!(decoded.posting.position_offset, 11);
+            assert_eq!(decoded.posting.position_length, 13);
+            assert_eq!(decoded.posting.frequency, 17);
+        }
+
+        let mut invalid = Vec::new();
+        write_spool_posting(&mut invalid, "term", posting(), IndexedField::Text).unwrap();
+        invalid[2 + "term".len()] = 2;
+        assert!(matches!(
+            read_spool_posting(&mut Cursor::new(invalid)),
+            Err(Error::Corrupt(_))
+        ));
+    }
 }

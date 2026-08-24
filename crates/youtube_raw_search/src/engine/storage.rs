@@ -132,13 +132,13 @@ impl PositionIndex {
         })
     }
 
-    pub(super) fn range(&self, term: u32, title: bool) -> Result<&[u8]> {
+    pub(super) fn range(&self, term: u32, field: IndexedField) -> Result<&[u8]> {
         if term as usize >= self.terms {
             return Err(Error::Corrupt(
                 "position term is outside the lexicon".to_string(),
             ));
         }
-        let index = term as usize * 2 + usize::from(title);
+        let index = term as usize * 2 + field.archive_index();
         let start = read_u32(self.file.bytes(), HEADER_BYTES + index * 4)? as usize;
         let end = read_u32(self.file.bytes(), HEADER_BYTES + (index + 1) * 4)? as usize;
         self.file

@@ -399,7 +399,7 @@ impl RawSearchEngine {
         let bytes = self.postings_range(entry.text_offset, entry.text_length)?;
         let position_bytes = fields
             .prioritize_position
-            .then(|| self.inner.positions.range(entry.term, false))
+            .then(|| self.inner.positions.range(entry.term, IndexedField::Text))
             .transpose()?;
         let mut cursor = 0_usize;
         let mut position_cursor = 0_usize;
@@ -462,7 +462,7 @@ impl RawSearchEngine {
         let bytes = self.postings_range(entry.title_offset, entry.title_length)?;
         let position_bytes = fields
             .prioritize_position
-            .then(|| self.inner.positions.range(entry.term, true))
+            .then(|| self.inner.positions.range(entry.term, IndexedField::Title))
             .transpose()?;
         let mut cursor = 0_usize;
         let mut position_cursor = 0_usize;

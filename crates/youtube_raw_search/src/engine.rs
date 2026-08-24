@@ -392,6 +392,19 @@ struct ExactSplitMatches {
     proximity_terms: Option<[String; 2]>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub(super) enum IndexedField {
+    Text = 0,
+    Title = 1,
+}
+
+impl IndexedField {
+    const fn archive_index(self) -> usize {
+        self as usize
+    }
+}
+
 #[derive(Clone, Copy)]
 struct QueryFields {
     text: bool,
@@ -666,12 +679,12 @@ impl RawSearchEngine {
     ) -> Result<PhraseFieldMatches> {
         Ok(PhraseFieldMatches {
             documents: if fields.text {
-                self.phrase_ids_for_field(phrase, false, &targets.documents, slop)?
+                self.phrase_ids_for_field(phrase, IndexedField::Text, &targets.documents, slop)?
             } else {
                 Vec::new()
             },
             videos: if fields.title {
-                self.phrase_ids_for_field(phrase, true, &targets.videos, slop)?
+                self.phrase_ids_for_field(phrase, IndexedField::Title, &targets.videos, slop)?
             } else {
                 Vec::new()
             },
@@ -681,11 +694,11 @@ impl RawSearchEngine {
     fn phrase_ids_for_field(
         &self,
         phrase: &[String],
-        title: bool,
+        field: IndexedField,
         targets: &[u32],
         slop: u8,
     ) -> Result<Vec<u32>> {
-        self.evaluate_positions_for_field(phrase, title, targets, |target, cursors| {
+        self.evaluate_positions_for_field(phrase, field, targets, |target, cursors| {
             ordered_phrase_positions_match(cursors, slop).then_some(target)
         })
     }
@@ -693,10 +706,10 @@ impl RawSearchEngine {
     fn position_windows_for_field(
         &self,
         terms: &[String],
-        title: bool,
+        field: IndexedField,
         targets: &[u32],
     ) -> Result<Vec<(u32, PositionalWindow)>> {
-        self.evaluate_positions_for_field(terms, title, targets, |target, cursors| {
+        self.evaluate_positions_for_field(terms, field, targets, |target, cursors| {
             minimum_position_window(cursors).map(|window| (target, window))
         })
     }
@@ -740,12 +753,12 @@ impl RawSearchEngine {
         let terms = &terms[..terms.len().min(MAX_PROXIMITY_TOKENS)];
         let targets = self.position_targets(matches)?;
         let text_windows = if fields.text {
-            self.position_windows_for_field(terms, false, &targets.documents)?
+            self.position_windows_for_field(terms, IndexedField::Text, &targets.documents)?
         } else {
             Vec::new()
         };
         let title_windows = if fields.title {
-            self.position_windows_for_field(terms, true, &targets.videos)?
+            self.position_windows_for_field(terms, IndexedField::Title, &targets.videos)?
         } else {
             Vec::new()
         };
@@ -828,7 +841,7 @@ impl RawSearchEngine {
     fn evaluate_positions_for_field<T, F>(
         &self,
         terms: &[String],
-        title: bool,
+        field: IndexedField,
         targets: &[u32],
         mut evaluate: F,
     ) -> Result<Vec<T>>
@@ -846,14 +859,13 @@ impl RawSearchEngine {
             let Some(entry) = self.inner.lexicon.lookup(term)? else {
                 return Ok(Vec::new());
             };
-            let (offset, length, frequency) = if title {
-                (
+            let (offset, length, frequency) = match field {
+                IndexedField::Text => (entry.text_offset, entry.text_length, entry.text_frequency),
+                IndexedField::Title => (
                     entry.title_offset,
                     entry.title_length,
                     entry.title_frequency,
-                )
-            } else {
-                (entry.text_offset, entry.text_length, entry.text_frequency)
+                ),
             };
             if frequency == 0 {
                 return Ok(Vec::new());
@@ -861,8 +873,8 @@ impl RawSearchEngine {
             cursors.push(PhraseCursor {
                 postings: PositionedPostingCursor::new(
                     self.postings_range(offset, length)?,
-                    self.inner.positions.range(entry.term, title)?,
-                    full_positions.range(entry.term, title)?,
+                    self.inner.positions.range(entry.term, field)?,
+                    full_positions.range(entry.term, field)?,
                     frequency,
                 ),
                 id: None,
@@ -1428,7 +1440,7 @@ impl RawSearchEngine {
     ) -> Result<Vec<DocMatch>> {
         let bytes = self.postings_range(entry.text_offset, entry.text_length)?;
         let position_bytes = prioritize_position
-            .then(|| self.inner.positions.range(entry.term, false))
+            .then(|| self.inner.positions.range(entry.term, IndexedField::Text))
             .transpose()?;
         let mut matches = Vec::with_capacity(entry.text_frequency as usize);
         let mut cursor = 0_usize;
@@ -1470,7 +1482,7 @@ impl RawSearchEngine {
     ) -> Result<Vec<DocMatch>> {
         let bytes = self.postings_range(entry.title_offset, entry.title_length)?;
         let position_bytes = prioritize_position
-            .then(|| self.inner.positions.range(entry.term, true))
+            .then(|| self.inner.positions.range(entry.term, IndexedField::Title))
             .transpose()?;
         let average_docs = self
             .inner
