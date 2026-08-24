@@ -26,6 +26,26 @@ pub struct ChannelDocument {
     pub avatar_url: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChannelDeletionScope {
+    ChannelOnly,
+    ChannelAndVideos,
+}
+
+impl ChannelDeletionScope {
+    pub const fn from_cascade(cascade: bool) -> Self {
+        if cascade {
+            Self::ChannelAndVideos
+        } else {
+            Self::ChannelOnly
+        }
+    }
+
+    pub const fn cascades_videos(self) -> bool {
+        matches!(self, Self::ChannelAndVideos)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BackendReadiness {
     pub backend: String,
@@ -251,7 +271,7 @@ pub trait SearchIndexAdmin: Send + Sync {
     async fn delete_channel(
         &self,
         channel_id: &str,
-        cascade: bool,
+        scope: ChannelDeletionScope,
         idempotency_key: &str,
     ) -> Result<IndexOperation, IndexStoreError>;
 

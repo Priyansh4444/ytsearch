@@ -151,7 +151,9 @@ impl GenerationBuilder {
         let cascaded_channels = snapshot
             .channels
             .iter()
-            .filter(|mutation| mutation.document.is_none() && mutation.cascade)
+            .filter(|mutation| {
+                mutation.document.is_none() && mutation.deletion_scope.cascades_videos()
+            })
             .map(|mutation| mutation.channel_id.as_str())
             .collect::<HashSet<_>>();
 

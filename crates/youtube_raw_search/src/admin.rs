@@ -15,7 +15,8 @@ use serde_json::json;
 use std::{collections::BTreeMap, num::NonZeroU16, sync::Arc};
 use tokio_util::io::ReaderStream;
 use youtube_index_store::{
-    BackendReadiness, ChannelDocument, IndexStoreError, VideoIdPage, VideoReplacement,
+    BackendReadiness, ChannelDeletionScope, ChannelDocument, IndexStoreError, VideoIdPage,
+    VideoReplacement,
 };
 use youtube_ingest::TranscriptChunk;
 
@@ -337,7 +338,11 @@ async fn delete_channel(
     authorize(&state, &headers)?;
     let store = Arc::clone(&state.store);
     let operation = tokio::task::spawn_blocking(move || {
-        store.delete_channel(&channel_id, request.cascade, &request.idempotency_key)
+        store.delete_channel(
+            &channel_id,
+            ChannelDeletionScope::from_cascade(request.cascade),
+            &request.idempotency_key,
+        )
     })
     .await
     .map_err(AdminError::task)??;
@@ -417,7 +422,9 @@ fn merged_video_counts(
     let channel_deleted = state
         .store
         .channel_mutation(channel_id)?
-        .is_some_and(|mutation| mutation.document.is_none() && mutation.cascade);
+        .is_some_and(|mutation| {
+            mutation.document.is_none() && mutation.deletion_scope.cascades_videos()
+        });
     let mut counts = if channel_deleted {
         BTreeMap::new()
     } else {

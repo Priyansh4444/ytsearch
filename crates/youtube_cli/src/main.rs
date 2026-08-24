@@ -13,9 +13,9 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 use youtube_client::{ListResource, Page, Query, YouTubeClient};
 use youtube_index_store::{
-    ChannelDocument, ChunkStats, IndexOperation, IndexStoreError, RAW_GENERATION_FILES,
-    RawGenerationManifest, RawIndexAdminClient, RawPublicationJob, RawPublicationStatus,
-    SearchIndexAdmin, VideoReplacement,
+    ChannelDeletionScope, ChannelDocument, ChunkStats, IndexOperation, IndexStoreError,
+    RAW_GENERATION_FILES, RawGenerationManifest, RawIndexAdminClient, RawPublicationJob,
+    RawPublicationStatus, SearchIndexAdmin, VideoReplacement,
 };
 use youtube_ingest::{Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource};
 use youtube_raw_search::{GenerationBuilder, MutationStore};
@@ -661,7 +661,7 @@ async fn remove_youtuber_command(command: RemoveYoutuberCommand) -> Result<(), C
     let operation = transcript_search
         .delete_channel(
             &youtuber_id,
-            true,
+            ChannelDeletionScope::ChannelAndVideos,
             &unique_operation_key("delete-channel", &youtuber_id),
         )
         .await?;
@@ -754,7 +754,7 @@ async fn index_youtuber(
         let operation = transcript_search
             .delete_channel(
                 &youtuber_id,
-                true,
+                ChannelDeletionScope::ChannelAndVideos,
                 &unique_operation_key("rewipe-channel", &youtuber_id),
             )
             .await?;
@@ -993,7 +993,7 @@ async fn index_youtuber(
         if let Err(error) = youtuber_search
             .delete_channel(
                 &youtuber_id,
-                true,
+                ChannelDeletionScope::ChannelAndVideos,
                 &unique_operation_key("remove-empty-channel", &youtuber_id),
             )
             .await

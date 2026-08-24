@@ -11,7 +11,8 @@ use std::{
     time::Duration,
 };
 use youtube_index_store::{
-    ChannelDocument, IndexOperation, IndexOperationState, IndexStoreError, VideoReplacement,
+    ChannelDeletionScope, ChannelDocument, IndexOperation, IndexOperationState, IndexStoreError,
+    VideoReplacement,
 };
 use youtube_ingest::TranscriptChunk;
 
@@ -42,7 +43,7 @@ pub struct StoredChannelMutation {
     pub sequence: u64,
     pub channel_id: String,
     pub document: Option<ChannelDocument>,
-    pub cascade: bool,
+    pub deletion_scope: ChannelDeletionScope,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -224,11 +225,12 @@ impl MutationStore {
     pub fn delete_channel(
         &self,
         channel_id: &str,
-        cascade: bool,
+        scope: ChannelDeletionScope,
         idempotency_key: &str,
     ) -> Result<IndexOperation, IndexStoreError> {
         validate_identifier("channel id", channel_id)?;
         validate_idempotency_key(idempotency_key)?;
+        let cascade = scope.cascades_videos();
         let hash = payload_hash("delete_channel", channel_id, &[u8::from(cascade)]);
         self.write_operation(
             idempotency_key,
@@ -393,7 +395,7 @@ impl MutationStore {
                         sequence: row_u64(row, 0)?,
                         channel_id: row.get(1)?,
                         document,
-                        cascade: row.get(3)?,
+                        deletion_scope: ChannelDeletionScope::from_cascade(row.get(3)?),
                     })
                 },
             )
@@ -552,7 +554,7 @@ fn snapshot_at_sequence(
                 sequence: row_u64(row, 0)?,
                 channel_id: row.get(1)?,
                 document,
-                cascade: row.get(3)?,
+                deletion_scope: ChannelDeletionScope::from_cascade(row.get(3)?),
             })
         })
         .map_err(map_sqlite)?

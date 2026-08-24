@@ -1,7 +1,7 @@
 use crate::{
-    BackendReadiness, ChannelDocument, ChunkStats, IndexOperation, IndexStoreError,
-    RawGenerationManifest, RawGenerationUpload, RawPublicationJob, SearchIndexAdmin, VideoIdPage,
-    VideoReplacement,
+    BackendReadiness, ChannelDeletionScope, ChannelDocument, ChunkStats, IndexOperation,
+    IndexStoreError, RawGenerationManifest, RawGenerationUpload, RawPublicationJob,
+    SearchIndexAdmin, VideoIdPage, VideoReplacement,
 };
 use async_trait::async_trait;
 use reqwest::{Client, RequestBuilder, StatusCode, header};
@@ -423,7 +423,7 @@ impl SearchIndexAdmin for RawIndexAdminClient {
     async fn delete_channel(
         &self,
         channel_id: &str,
-        cascade: bool,
+        scope: ChannelDeletionScope,
         idempotency_key: &str,
     ) -> Result<IndexOperation, IndexStoreError> {
         self.execute(
@@ -431,7 +431,14 @@ impl SearchIndexAdmin for RawIndexAdminClient {
                 .delete(self.endpoint(&format!("/admin/channels/{channel_id}")))
                 .query(&[
                     ("idempotency_key", idempotency_key),
-                    ("cascade", if cascade { "true" } else { "false" }),
+                    (
+                        "cascade",
+                        if scope.cascades_videos() {
+                            "true"
+                        } else {
+                            "false"
+                        },
+                    ),
                 ]),
         )
         .await
