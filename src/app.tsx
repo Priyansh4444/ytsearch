@@ -65,9 +65,10 @@ const prepareIndexDialogRuntime = () => IndexRequestDialog.preload();
 
 const App: Component = () => {
   const initialSearch = searchStateFromLocation();
-  const [routeHandle, setRouteHandle] = createSignal(
-    initialSearch?.youtuber ? normalizeHandle(initialSearch.youtuber) : creatorFromPath(),
-  );
+  const initialRouteHandle = initialSearch?.youtuber
+    ? normalizeHandle(initialSearch.youtuber)
+    : creatorFromPath();
+  const [, setRouteHandle] = createSignal(initialRouteHandle);
   const [channels, setChannels] = createSignal<IndexedChannel[] | undefined>(loadCachedChannels());
   const refreshChannels = async (signal?: AbortSignal) => {
     const [refreshed] = await Promise.all([indexedChannels(signal), prepareChannelPickerRuntime()]);
@@ -78,7 +79,7 @@ const App: Component = () => {
   const [availability, setAvailability] = createSignal(provisionalAvailability());
   const [recentSearches, setRecentSearches] = createSignal(loadRecentSearches());
   const [query, setQuery] = createSignal(initialSearch?.query ?? "");
-  const [youtuber, setYoutuber] = createSignal(initialSearch?.youtuber ?? routeHandle() ?? "");
+  const [youtuber, setYoutuber] = createSignal(initialSearch?.youtuber ?? initialRouteHandle ?? "");
   const [page, setPage] = createSignal(initialSearch?.page ?? 1);
   const [sort, setSort] = createSignal<SearchSort>(initialSearch?.sort ?? "relevance");
   const [submitted, setSubmitted] = createSignal<SearchRequest | undefined>(initialSearch);
@@ -122,6 +123,30 @@ const App: Component = () => {
     if (mentionedChannel() && !mentionQuery()) return "channel";
     return isIndexMode() ? "request" : "search";
   };
+  const searchError = createMemo(() => {
+    if (queuedIndexRequest() || !availability().search_enabled) return undefined;
+    const state = search();
+    return state.status === "error" ? presentSearchError(state.error) : undefined;
+  });
+  const successfulSearch = createMemo(() => {
+    if (queuedIndexRequest() || !availability().search_enabled) return undefined;
+    const request = submitted();
+    const state = search();
+    if (!request || state.status !== "success") return undefined;
+    return {
+      response: state.response,
+      youtuber: request.youtuber,
+      page: page(),
+    };
+  });
+  const indexDialogState = createMemo(() => {
+    const handle = pendingIndexHandle();
+    return handle ? { handle, busy: indexRequestBusy(), error: indexRequestError() } : undefined;
+  });
+  const indexingNotice = createMemo(() => {
+    const handle = indexingToast();
+    return handle ? { handle, channel: indexingChannel() } : undefined;
+  });
 
   const syncRoute = () =>
     withViewTransition(() => {
@@ -342,8 +367,16 @@ const App: Component = () => {
     () => search().status,
     (status) => {
       if (status !== "success") return;
-      const frame = window.requestAnimationFrame(scrollToLinkedResult);
-      return () => window.cancelAnimationFrame(frame);
+      let frame: number | undefined;
+      let cancelled = false;
+      void prepareResultsRuntime().then(() => {
+        if (cancelled) return;
+        frame = window.requestAnimationFrame(scrollToLinkedResult);
+      });
+      return () => {
+        cancelled = true;
+        if (frame !== undefined) window.cancelAnimationFrame(frame);
+      };
     },
   );
 
@@ -385,11 +418,13 @@ const App: Component = () => {
           </Show>
 
           <Show when={!hasSearchSurface()}>
-            <ChannelPicker
-              channels={channels()}
-              visible={showIndexedChannels()}
-              onSelect={selectChannel}
-            />
+            <Loading>
+              <ChannelPicker
+                channels={channels()}
+                visible={showIndexedChannels()}
+                onSelect={selectChannel}
+              />
+            </Loading>
           </Show>
 
           <SearchForm
@@ -408,11 +443,13 @@ const App: Component = () => {
           />
           <AvailabilityNotice availability={availability()} />
           <Show when={!hasSearchSurface() && recentSearches().length > 0}>
-            <RecentSearches
-              searches={recentSearches()}
-              onSelect={selectRecentSearch}
-              onClear={() => setRecentSearches(clearRecentSearches())}
-            />
+            <Loading>
+              <RecentSearches
+                searches={recentSearches()}
+                onSelect={selectRecentSearch}
+                onClear={() => setRecentSearches(clearRecentSearches())}
+              />
+            </Loading>
           </Show>
         </section>
 
@@ -435,43 +472,23 @@ const App: Component = () => {
             <LoadingState />
           </Show>
 
-          <Show
-            when={
-              !queuedIndexRequest() &&
-              availability().search_enabled &&
-              search().status === "error" &&
-              search()
-            }
-          >
-            {(state) => {
-              const current = state();
-              if (current.status !== "error") return null;
-              const presentation = presentSearchError(current.error);
-              return <ErrorState title={presentation.title} message={presentation.message} />;
-            }}
+          <Show when={searchError()} keyed>
+            {(presentation) => (
+              <ErrorState title={presentation.title} message={presentation.message} />
+            )}
           </Show>
 
-          <Show
-            when={
-              !queuedIndexRequest() &&
-              availability().search_enabled &&
-              submitted() &&
-              search().status === "success" &&
-              search()
-            }
-          >
-            {(state) => {
-              const current = state();
-              if (current.status !== "success") return null;
-              return (
+          <Show when={successfulSearch()} keyed>
+            {(result) => (
+              <Loading fallback={<LoadingState />}>
                 <SearchResults
-                  response={current.response}
-                  youtuber={submitted()?.youtuber ?? ""}
-                  page={page()}
+                  response={result.response}
+                  youtuber={result.youtuber}
+                  page={result.page}
                   onPageChange={goToPage}
                 />
-              );
-            }}
+              </Loading>
+            )}
           </Show>
 
           <Show
@@ -486,13 +503,13 @@ const App: Component = () => {
           </Show>
         </section>
       </div>
-      <Show when={pendingIndexHandle()}>
-        {(handle) => (
+      <Show when={indexDialogState()} keyed>
+        {(dialog) => (
           <Loading>
             <IndexRequestDialog
-              handle={handle()}
-              busy={indexRequestBusy()}
-              error={indexRequestError()}
+              handle={dialog.handle}
+              busy={dialog.busy}
+              error={dialog.error}
               onCancel={() => {
                 setPendingIndexHandle(undefined);
                 setIndexRequestError(undefined);
@@ -502,18 +519,20 @@ const App: Component = () => {
           </Loading>
         )}
       </Show>
-      <Show when={indexingToast()}>
-        {(handle) => (
+      <Show when={indexingNotice()} keyed>
+        {(notice) => (
           <div
             class="fixed inset-x-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-50 flex items-center gap-3 border border-vesper-green bg-vesper-panel px-4 py-3 text-sm text-white shadow-xl sm:end-5 sm:inset-x-auto sm:max-w-[calc(100vw-2.5rem)]"
             role="status"
           >
-            <ChannelAvatar channel={indexingChannel()} size="compact" />
+            <ChannelAvatar channel={notice.channel} size="compact" />
             <span class="min-w-0">
               <span class="block text-xs uppercase tracking-[0.12em] text-vesper-green">
                 Currently indexing
               </span>
-              <span class="block truncate font-medium">{indexingChannel()?.name ?? handle()}</span>
+              <span class="block truncate font-medium">
+                {notice.channel?.name ?? notice.handle}
+              </span>
             </span>
           </div>
         )}

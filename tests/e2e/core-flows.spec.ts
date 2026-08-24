@@ -73,6 +73,8 @@ const readyAvailability: SearchAvailability = {
   next_transition_at: "2026-07-27T07:00:00.000Z",
 };
 
+const solidRuntimeWarnings = new WeakMap<Page, string[]>();
+
 async function mockApi(page: Page, availability = readyAvailability, channels = [channel]) {
   let searchRequests = 0;
   await page.route("**/api/**", async (route) => {
@@ -105,7 +107,50 @@ async function mockApi(page: Page, availability = readyAvailability, channels = 
 }
 
 test.beforeEach(async ({ page }) => {
+  const warnings: string[] = [];
+  solidRuntimeWarnings.set(page, warnings);
+  const recordSolidWarning = (message: string) => {
+    if (/STRICT_READ_UNTRACKED|ASYNC_OUTSIDE_LOADING_BOUNDARY/.test(message)) {
+      warnings.push(message);
+    }
+  };
+  page.on("console", (message) => recordSolidWarning(message.text()));
+  page.on("pageerror", (error) => recordSolidWarning(error.message));
   await mockApi(page);
+});
+
+test.afterEach(async ({ page }) => {
+  expect(solidRuntimeWarnings.get(page) ?? [], "Solid emitted an async-boundary warning").toEqual(
+    [],
+  );
+});
+
+test("renders the search shell while an initial lazy chunk is delayed", async ({ page }) => {
+  let chunkRequested = false;
+  let releaseChunk: () => void = () => {};
+  const chunkGate = new Promise<void>((resolve) => {
+    releaseChunk = resolve;
+  });
+  await page.route("**/src/components/channel-picker.tsx*", async (route) => {
+    chunkRequested = true;
+    await chunkGate;
+    await route.continue();
+  });
+
+  const navigation = page.goto("/");
+  await expect.poll(() => chunkRequested).toBe(true);
+  let shellFailure: unknown;
+  try {
+    await expect(page.getByRole("combobox", { name: "Search transcripts" })).toBeVisible({
+      timeout: 1_000,
+    });
+  } catch (error) {
+    shellFailure = error;
+  }
+  releaseChunk();
+  await navigation;
+  if (shellFailure) throw shellFailure;
+  await expect(page.getByText("Example Creator").first()).toBeVisible();
 });
 
 test("copies a result permalink that scrolls back to that video", async ({ page }) => {
