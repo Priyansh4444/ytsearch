@@ -615,6 +615,11 @@ impl<'a> TextAlternativeCursor<'a> {
                 .previous_document
                 .checked_add(delta)
                 .ok_or_else(|| Error::Corrupt("posting identifier overflows u32".to_string()))?;
+            if document >= self.engine.inner.manifest.documents {
+                return Err(Error::Corrupt(
+                    "text posting document is out of bounds".to_string(),
+                ));
+            }
             let frequency =
                 read_varint(self.postings, &mut self.posting_cursor, self.postings.len())?;
             let first_position = self
@@ -699,10 +704,10 @@ impl<'a> StreamingTermPlan<'a> {
         let mut text = Vec::with_capacity(plan.alternatives.len());
         let mut title = Vec::new();
         for alternative in &plan.alternatives {
-            if alternative.fields.text && alternative.entry.text_frequency > 0 {
+            if alternative.fields.text {
                 text.push(TextAlternativeCursor::new(engine, alternative)?);
             }
-            if alternative.fields.title && alternative.entry.title_frequency > 0 {
+            if alternative.fields.title {
                 let effective_frequency = engine
                     .estimated_entry_documents(alternative.entry)
                     .min(u64::from(engine.inner.manifest.documents));
@@ -801,8 +806,11 @@ fn merge_plan_contribution(combined: &mut Option<DocMatch>, contribution: DocMat
     current.score += contribution.score;
     current.set_matches_text(current.matches_text() || contribution.matches_text());
     current.set_exact_mask(current.exact_mask() | contribution.exact_mask());
+    // Alternatives within one query term are a union: one exact alternative is
+    // sufficient to preserve the term's exactness. Conjunction across distinct
+    // term plans remains an AND in `combine_plan_matches` below.
     current
-        .set_all_retained_exact(current.all_retained_exact() && contribution.all_retained_exact());
+        .set_all_retained_exact(current.all_retained_exact() || contribution.all_retained_exact());
 }
 
 fn combine_plan_matches(document: u32, left: DocMatch, right: DocMatch) -> DocMatch {

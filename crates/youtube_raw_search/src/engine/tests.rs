@@ -159,6 +159,65 @@ fn token_drop_engine() -> (TempDir, RawSearchEngine) {
     (root, engine)
 }
 
+fn streaming_edge_engine() -> (TempDir, RawSearchEngine) {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let repeated = std::iter::repeat_n("middle", 200)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    for document in [
+        json!({
+            "id":"both-1",
+            "video_id":"both",
+            "title":"Fixture",
+            "text":format!("search searching common {repeated} zeta anchor"),
+            "youtuber_handle":"@one",
+            "youtuber_name":"One"
+        }),
+        json!({
+            "id":"exact-1",
+            "video_id":"exact",
+            "title":"Fixture",
+            "text":"search common anchor",
+            "youtuber_handle":"@two",
+            "youtuber_name":"Two"
+        }),
+    ] {
+        writeln!(chunks, "{document}").expect("write chunk");
+    }
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+    let engine = RawSearchEngine::open(&index_path).expect("open raw index");
+    (root, engine)
+}
+
+fn streaming_text_alternative(
+    engine: &RawSearchEngine,
+    term: &str,
+    exact_mask: u8,
+    score_multiplier: f32,
+) -> TermAlternative {
+    TermAlternative {
+        term: term.to_string(),
+        entry: engine
+            .inner
+            .lexicon
+            .lookup(term)
+            .expect("lexicon lookup")
+            .expect("term entry"),
+        fields: QueryFields {
+            text: true,
+            title: false,
+            prioritize_position: exact_mask != 0,
+            exact_mask,
+        },
+        score_multiplier,
+    }
+}
+
 fn grouped_query(query: &str) -> SearchParams {
     SearchParams {
         q: query.to_string(),
@@ -1119,6 +1178,124 @@ fn streaming_two_plan_conjunction_matches_materialized_scoring() {
             materialized.score
         );
     }
+}
+
+#[test]
+fn streaming_plan_preserves_exactness_when_an_exact_and_prefix_alternative_match() {
+    let (_root, engine) = streaming_edge_engine();
+    let exact = streaming_text_alternative(&engine, "search", 1 << 3, 1.0);
+    let prefix = streaming_text_alternative(&engine, "searching", 0, 0.9);
+    let other = streaming_text_alternative(&engine, "common", 1 << 2, 1.0);
+    let plans = [
+        TermPlan {
+            estimated_documents: engine.estimated_entry_documents(exact.entry)
+                + engine.estimated_entry_documents(prefix.entry),
+            alternatives: vec![exact, prefix],
+        },
+        TermPlan {
+            estimated_documents: engine.estimated_entry_documents(other.entry),
+            alternatives: vec![other],
+        },
+    ];
+
+    let streamed = engine
+        .stream_two_plan_conjunction(&plans)
+        .expect("streamed conjunction");
+    let mut exact_matches = engine
+        .matches_for_entry(
+            plans[0].alternatives[0].entry,
+            plans[0].alternatives[0].fields,
+        )
+        .expect("exact matches");
+    let mut prefix_matches = engine
+        .matches_for_entry(
+            plans[0].alternatives[1].entry,
+            plans[0].alternatives[1].fields,
+        )
+        .expect("prefix matches");
+    for candidate in &mut exact_matches {
+        candidate.score *= plans[0].alternatives[0].score_multiplier;
+    }
+    for candidate in &mut prefix_matches {
+        candidate.score *= plans[0].alternatives[1].score_multiplier;
+    }
+    let materialized_plan = union_sorted(exact_matches, prefix_matches);
+    let materialized_other = engine
+        .matches_for_entry(
+            plans[1].alternatives[0].entry,
+            plans[1].alternatives[0].fields,
+        )
+        .expect("other matches");
+    let materialized = intersect_sorted(materialized_plan, materialized_other);
+
+    assert_eq!(streamed.len(), materialized.len());
+    for (streamed, materialized) in streamed.iter().zip(materialized) {
+        assert_eq!(streamed.document(), materialized.document());
+        assert_eq!(streamed.exact_mask(), materialized.exact_mask());
+        assert_eq!(
+            streamed.all_retained_exact(),
+            materialized.all_retained_exact()
+        );
+        let tolerance = materialized.score.abs().max(1.0) * 1e-6;
+        assert!((streamed.score - materialized.score).abs() <= tolerance);
+    }
+    assert!(streamed[0].all_retained_exact());
+}
+
+#[test]
+fn streaming_conjunction_rejects_a_non_intersecting_out_of_range_posting() {
+    let (_root, engine) = streaming_edge_engine();
+    let mut malformed = streaming_text_alternative(&engine, "middle", 1 << 3, 1.0);
+    // `middle` has one posting whose frequency is the two-byte varint for 200.
+    // Starting at that frequency and extending one byte into the next posting
+    // creates a well-formed record for document 200 without mutating the mmap.
+    assert_eq!(malformed.entry.text_length, 3);
+    malformed.entry.text_offset += 1;
+    let other = streaming_text_alternative(&engine, "anchor", 1 << 2, 1.0);
+    let result = engine.stream_two_plan_conjunction(&[
+        TermPlan {
+            alternatives: vec![malformed],
+            estimated_documents: 1,
+        },
+        TermPlan {
+            alternatives: vec![other],
+            estimated_documents: 2,
+        },
+    ]);
+    let error = match result {
+        Ok(_) => panic!("out-of-range posting must fail closed"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        Error::Corrupt(message) if message.contains("document is out of bounds")
+    ));
+}
+
+#[test]
+fn streaming_conjunction_validates_a_zero_frequency_nonempty_posting_range() {
+    let (_root, engine) = streaming_edge_engine();
+    let mut malformed = streaming_text_alternative(&engine, "middle", 1 << 3, 1.0);
+    malformed.entry.text_frequency = 0;
+    let other = streaming_text_alternative(&engine, "anchor", 1 << 2, 1.0);
+    let result = engine.stream_two_plan_conjunction(&[
+        TermPlan {
+            alternatives: vec![malformed],
+            estimated_documents: 0,
+        },
+        TermPlan {
+            alternatives: vec![other],
+            estimated_documents: 2,
+        },
+    ]);
+    let error = match result {
+        Ok(_) => panic!("zero-frequency malformed range must fail closed"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        Error::Corrupt(message) if message.contains("posting count exceeds")
+    ));
 }
 
 #[test]
