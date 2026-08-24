@@ -234,6 +234,44 @@ async fn handle_form_mutations_keep_canonical_channel_counts_and_scope() {
 }
 
 #[tokio::test]
+async fn channel_deletion_scope_controls_transcript_retention() {
+    for (cascade, expected_hits) in [(false, 1), (true, 0)] {
+        let (root, state, _publisher) = setup();
+        let _operation = delete_channel(
+            State(state.clone()),
+            Path("creator".to_string()),
+            headers(),
+            Query(DeleteChannelRequest {
+                idempotency_key: format!("delete-creator-{cascade}"),
+                cascade,
+            }),
+        )
+        .await
+        .unwrap();
+
+        publish_remotely(root.path(), &state).await;
+
+        assert!(
+            state
+                .engine
+                .active()
+                .unwrap()
+                .channel_document("creator")
+                .unwrap()
+                .is_none()
+        );
+        let result = state
+            .engine
+            .search(&SearchParams {
+                q: "legacytoken".to_string(),
+                ..SearchParams::default()
+            })
+            .unwrap();
+        assert_eq!(result["found"], expected_hits);
+    }
+}
+
+#[tokio::test]
 async fn admin_routes_reject_missing_keys_before_accessing_state() {
     let (_root, state, _publisher) = setup();
     let error = readiness(State(state), HeaderMap::new()).await.unwrap_err();

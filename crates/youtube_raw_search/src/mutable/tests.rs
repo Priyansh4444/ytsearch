@@ -88,6 +88,55 @@ fn reused_idempotency_key_with_different_payload_conflicts() {
 }
 
 #[test]
+fn channel_deletion_scope_is_durable_and_part_of_idempotency() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("mutations.sqlite3");
+    let store = MutationStore::open(&path).unwrap();
+    let first = store
+        .delete_channel(
+            "channel-only",
+            ChannelDeletionScope::ChannelOnly,
+            "delete-channel-only",
+        )
+        .unwrap();
+    let repeated = store
+        .delete_channel(
+            "channel-only",
+            ChannelDeletionScope::ChannelOnly,
+            "delete-channel-only",
+        )
+        .unwrap();
+    assert_eq!(repeated.sequence, first.sequence);
+    assert!(matches!(
+        store.delete_channel(
+            "channel-only",
+            ChannelDeletionScope::ChannelAndVideos,
+            "delete-channel-only",
+        ),
+        Err(IndexStoreError::Conflict(_))
+    ));
+    store
+        .delete_channel(
+            "channel-and-videos",
+            ChannelDeletionScope::ChannelAndVideos,
+            "delete-channel-and-videos",
+        )
+        .unwrap();
+    drop(store);
+
+    let snapshot = MutationStore::open(&path).unwrap().snapshot().unwrap();
+    assert_eq!(snapshot.channels.len(), 2);
+    assert_eq!(
+        snapshot.channels[0].deletion_scope,
+        ChannelDeletionScope::ChannelAndVideos
+    );
+    assert_eq!(
+        snapshot.channels[1].deletion_scope,
+        ChannelDeletionScope::ChannelOnly
+    );
+}
+
+#[test]
 fn latest_video_mutation_is_the_only_published_input() {
     let directory = tempdir().unwrap();
     let store = MutationStore::open(&directory.path().join("mutations.sqlite3")).unwrap();

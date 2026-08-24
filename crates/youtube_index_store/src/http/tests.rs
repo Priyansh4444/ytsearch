@@ -93,6 +93,42 @@ async fn replacement_uses_the_authenticated_raw_contract() {
     server.await.unwrap();
 }
 
+async fn assert_channel_deletion_query(scope: ChannelDeletionScope, expected: &str) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let expected = expected.to_string();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("DELETE /admin/channels/creator?"));
+        assert!(request.contains("idempotency_key=delete-creator"));
+        assert!(request.contains(&format!("cascade={expected}")));
+        respond(
+            &mut socket,
+            "202 Accepted",
+            r#"{"id":"delete-creator","sequence":1,"state":"Durable","acknowledged_readers":0,"error":null}"#,
+        )
+        .await;
+    });
+    let client = RawIndexAdminClient::new(RawIndexAdminConfig::new(
+        format!("http://{address}"),
+        "test-admin-key",
+    ))
+    .unwrap();
+
+    client
+        .delete_channel("creator", scope, "delete-creator")
+        .await
+        .unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn channel_deletion_scope_preserves_the_legacy_boolean_wire_contract() {
+    assert_channel_deletion_query(ChannelDeletionScope::ChannelOnly, "false").await;
+    assert_channel_deletion_query(ChannelDeletionScope::ChannelAndVideos, "true").await;
+}
+
 #[test]
 fn status_mapping_preserves_retry_and_conflict_semantics() {
     assert!(matches!(
