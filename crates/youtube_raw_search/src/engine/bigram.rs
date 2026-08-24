@@ -37,10 +37,12 @@ struct BigramEntry {
     count: u32,
 }
 
+const _: () = assert!(std::mem::size_of::<BigramEntry>() == BIGRAM_ENTRY_BYTES);
+
 pub(super) struct BigramIndex {
     file: MappedFile,
     count: usize,
-    postings_start: usize,
+    table_start: usize,
     universe: u32,
 }
 
@@ -60,18 +62,14 @@ impl BigramIndex {
             )));
         }
         let count = read_u32(bytes, 12)? as usize;
-        let expected_postings_start = BIGRAM_HEADER_BYTES
-            .checked_add(
-                count.checked_mul(BIGRAM_ENTRY_BYTES).ok_or_else(|| {
-                    Error::Corrupt("bigram entry table length overflows".to_string())
-                })?,
-            )
-            .ok_or_else(|| Error::Corrupt("bigram entry table boundary overflows".to_string()))?;
-        let postings_start = usize::try_from(read_u64(bytes, 16)?)
-            .map_err(|_| Error::Corrupt("bigram postings offset exceeds usize".to_string()))?;
-        if postings_start != expected_postings_start || postings_start > bytes.len() {
+        let table_bytes = count
+            .checked_mul(BIGRAM_ENTRY_BYTES)
+            .ok_or_else(|| Error::Corrupt("bigram entry table length overflows".to_string()))?;
+        let table_start = usize::try_from(read_u64(bytes, 16)?)
+            .map_err(|_| Error::Corrupt("bigram table offset exceeds usize".to_string()))?;
+        if table_start < BIGRAM_HEADER_BYTES {
             return Err(Error::Corrupt(
-                "bigram postings offset does not follow the entry table".to_string(),
+                "bigram entry table overlaps the header".to_string(),
             ));
         }
         let declared_length = usize::try_from(read_u64(bytes, 24)?)
@@ -79,6 +77,14 @@ impl BigramIndex {
         if declared_length != bytes.len() {
             return Err(Error::Corrupt(
                 "bigram file length does not match its header".to_string(),
+            ));
+        }
+        let expected_length = table_start
+            .checked_add(table_bytes)
+            .ok_or_else(|| Error::Corrupt("bigram entry table boundary overflows".to_string()))?;
+        if expected_length != declared_length {
+            return Err(Error::Corrupt(
+                "bigram entry table must occupy the end of the file".to_string(),
             ));
         }
         let universe = read_u64(bytes, 32)?;
@@ -92,7 +98,7 @@ impl BigramIndex {
         let mut previous_key = None;
         let mut expected_offset = 0_u64;
         for index in 0..count {
-            let entry = read_entry(bytes, index)?;
+            let entry = read_entry(bytes, table_start, index)?;
             if previous_key.is_some_and(|key| entry.key.encoded() <= key) {
                 return Err(Error::Corrupt(
                     "bigram keys must be strictly increasing".to_string(),
@@ -117,18 +123,18 @@ impl BigramIndex {
                 .offset
                 .checked_add(u64::from(entry.length))
                 .ok_or_else(|| Error::Corrupt("bigram posting range overflows".to_string()))?;
-            let absolute_end = u64::try_from(postings_start)
+            let absolute_end = u64::try_from(BIGRAM_HEADER_BYTES)
                 .unwrap_or(u64::MAX)
                 .checked_add(expected_offset)
                 .ok_or_else(|| Error::Corrupt("bigram posting boundary overflows".to_string()))?;
-            if absolute_end > bytes.len() as u64 {
+            if absolute_end > table_start as u64 {
                 return Err(Error::Corrupt(
-                    "bigram posting range extends beyond the file".to_string(),
+                    "bigram posting range extends into the entry table".to_string(),
                 ));
             }
             previous_key = Some(entry.key.encoded());
         }
-        if expected_offset != (bytes.len() - postings_start) as u64 {
+        if expected_offset != (table_start - BIGRAM_HEADER_BYTES) as u64 {
             return Err(Error::Corrupt(
                 "bigram posting data has an unreferenced tail".to_string(),
             ));
@@ -136,7 +142,7 @@ impl BigramIndex {
         Ok(Self {
             file,
             count,
-            postings_start,
+            table_start,
             universe,
         })
     }
@@ -165,13 +171,13 @@ impl BigramIndex {
             .checked_add(u64::from(entry.length))
             .ok_or_else(|| Error::Corrupt("bigram posting range overflows".to_string()))?;
         let start =
-            self.postings_start
+            BIGRAM_HEADER_BYTES
                 .checked_add(usize::try_from(entry.offset).map_err(|_| {
                     Error::Corrupt("bigram posting offset exceeds usize".to_string())
                 })?)
                 .ok_or_else(|| Error::Corrupt("bigram posting start overflows".to_string()))?;
         let end =
-            self.postings_start
+            BIGRAM_HEADER_BYTES
                 .checked_add(usize::try_from(relative_end).map_err(|_| {
                     Error::Corrupt("bigram posting boundary exceeds usize".to_string())
                 })?)
@@ -223,7 +229,7 @@ impl BigramIndex {
         let mut high = self.count;
         while low < high {
             let middle = low + (high - low) / 2;
-            let entry = read_entry(bytes, middle)?;
+            let entry = read_entry(bytes, self.table_start, middle)?;
             match entry.key.encoded().cmp(&key.encoded()) {
                 Ordering::Less => low = middle + 1,
                 Ordering::Greater => high = middle,
@@ -234,65 +240,70 @@ impl BigramIndex {
     }
 }
 
-pub(super) fn write_bigram_index(
-    path: &Path,
+pub(super) struct BigramIndexWriter {
+    output: ColdWriter,
     universe: u32,
-    entries: &[BigramWriteEntry<'_>],
-) -> Result<()> {
-    if universe == 0 {
-        return Err(Error::InvalidInput(
-            "bigram universe must be positive".to_string(),
-        ));
-    }
-    let count = u32::try_from(entries.len())
-        .map_err(|_| Error::InvalidInput("bigram pair count exceeds u32".to_string()))?;
-    let postings_start = BIGRAM_HEADER_BYTES
-        .checked_add(
-            entries
-                .len()
-                .checked_mul(BIGRAM_ENTRY_BYTES)
-                .ok_or_else(|| {
-                    Error::InvalidInput("bigram entry table length overflows".to_string())
-                })?,
-        )
-        .ok_or_else(|| Error::InvalidInput("bigram postings offset overflows".to_string()))?;
-    let mut output = ColdWriter::create(path)?;
-    output.write_all(BIGRAM_MAGIC)?;
-    output.write_all(&BIGRAM_VERSION.to_le_bytes())?;
-    output.write_all(&count.to_le_bytes())?;
-    output.write_all(&(postings_start as u64).to_le_bytes())?;
-    output.write_all(&0_u64.to_le_bytes())?;
-    output.write_all(&u64::from(universe).to_le_bytes())?;
-    output.seek(SeekFrom::Start(postings_start as u64))?;
+    metadata: Vec<BigramEntry>,
+    previous_key: Option<u64>,
+    encoded: Vec<u8>,
+}
 
-    let mut metadata = Vec::with_capacity(entries.len());
-    let mut previous_key = None;
-    let mut encoded = Vec::with_capacity(10);
-    for entry in entries {
-        if previous_key.is_some_and(|key| entry.key.encoded() <= key) {
+impl BigramIndexWriter {
+    pub(super) fn create(path: &Path, universe: u32) -> Result<Self> {
+        if universe == 0 {
+            return Err(Error::InvalidInput(
+                "bigram universe must be positive".to_string(),
+            ));
+        }
+        let mut output = ColdWriter::create(path)?;
+        output.write_all(BIGRAM_MAGIC)?;
+        output.write_all(&BIGRAM_VERSION.to_le_bytes())?;
+        output.write_all(&0_u32.to_le_bytes())?;
+        output.write_all(&0_u64.to_le_bytes())?;
+        output.write_all(&0_u64.to_le_bytes())?;
+        output.write_all(&u64::from(universe).to_le_bytes())?;
+        Ok(Self {
+            output,
+            universe,
+            metadata: Vec::new(),
+            previous_key: None,
+            encoded: Vec::with_capacity(10),
+        })
+    }
+
+    pub(super) fn append(&mut self, key: BigramKey, postings: &[BigramPosting]) -> Result<()> {
+        if self
+            .previous_key
+            .is_some_and(|previous| key.encoded() <= previous)
+        {
             return Err(Error::InvalidInput(
                 "bigram keys must be strictly increasing".to_string(),
             ));
         }
-        if entry.postings.is_empty() {
+        if postings.is_empty() {
             return Err(Error::InvalidInput(
                 "a bigram entry must contain at least one posting".to_string(),
             ));
         }
-        let offset = output
+        let count = u32::try_from(postings.len()).map_err(|_| {
+            Error::InvalidInput("one bigram has more than 4 billion documents".to_string())
+        })?;
+        let offset = self
+            .output
             .position()
-            .checked_sub(postings_start as u64)
+            .checked_sub(BIGRAM_HEADER_BYTES as u64)
             .ok_or_else(|| {
                 Error::Corrupt("bigram output position precedes its postings".to_string())
             })?;
         let mut previous_document = 0_u32;
-        for (index, posting) in entry.postings.iter().enumerate() {
+        for (index, posting) in postings.iter().enumerate() {
             if (index > 0 && posting.document <= previous_document)
-                || posting.document >= universe
+                || posting.document >= self.universe
                 || posting.earliest_end_offset == 0
             {
                 return Err(Error::InvalidInput(
-                    "bigram postings require increasing documents and positive offsets".to_string(),
+                    "bigram postings require in-universe increasing identifiers and positive offsets"
+                        .to_string(),
                 ));
             }
             let delta = if index == 0 {
@@ -300,45 +311,64 @@ pub(super) fn write_bigram_index(
             } else {
                 posting.document - previous_document
             };
-            encoded.clear();
-            write_varint(delta, &mut encoded);
-            write_varint(posting.earliest_end_offset, &mut encoded);
-            output.write_all(&encoded)?;
+            self.encoded.clear();
+            write_varint(delta, &mut self.encoded);
+            write_varint(posting.earliest_end_offset, &mut self.encoded);
+            self.output.write_all(&self.encoded)?;
             previous_document = posting.document;
         }
-        let length = output
+        let length = self
+            .output
             .position()
-            .checked_sub(postings_start as u64 + offset)
+            .checked_sub(BIGRAM_HEADER_BYTES as u64 + offset)
             .ok_or_else(|| Error::Corrupt("bigram output length underflows".to_string()))?;
-        metadata.push(BigramEntry {
-            key: entry.key,
+        self.metadata.push(BigramEntry {
+            key,
             offset,
             length: u32::try_from(length).map_err(|_| {
                 Error::InvalidInput("one bigram posting list exceeds 4 GiB".to_string())
             })?,
-            count: u32::try_from(entry.postings.len()).map_err(|_| {
-                Error::InvalidInput("one bigram has more than 4 billion documents".to_string())
-            })?,
+            count,
         });
-        previous_key = Some(entry.key.encoded());
+        self.previous_key = Some(key.encoded());
+        Ok(())
     }
 
-    let file_length = output.position();
-    output.seek(SeekFrom::Start(24))?;
-    output.write_all(&file_length.to_le_bytes())?;
-    output.seek(SeekFrom::Start(BIGRAM_HEADER_BYTES as u64))?;
-    for entry in metadata {
-        output.write_all(&entry.key.encoded().to_le_bytes())?;
-        output.write_all(&entry.offset.to_le_bytes())?;
-        output.write_all(&entry.length.to_le_bytes())?;
-        output.write_all(&entry.count.to_le_bytes())?;
+    pub(super) fn finish(mut self) -> Result<()> {
+        let count = u32::try_from(self.metadata.len())
+            .map_err(|_| Error::InvalidInput("bigram pair count exceeds u32".to_string()))?;
+        let table_start = self.output.position();
+        for entry in &self.metadata {
+            self.output.write_all(&entry.key.encoded().to_le_bytes())?;
+            self.output.write_all(&entry.offset.to_le_bytes())?;
+            self.output.write_all(&entry.length.to_le_bytes())?;
+            self.output.write_all(&entry.count.to_le_bytes())?;
+        }
+        let file_length = self.output.position();
+        self.output.seek(SeekFrom::Start(12))?;
+        self.output.write_all(&count.to_le_bytes())?;
+        self.output.write_all(&table_start.to_le_bytes())?;
+        self.output.write_all(&file_length.to_le_bytes())?;
+        self.output.finish()?;
+        Ok(())
     }
-    output.finish()?;
+}
+
+pub(super) fn write_bigram_index(
+    path: &Path,
+    universe: u32,
+    entries: &[BigramWriteEntry<'_>],
+) -> Result<()> {
+    let mut writer = BigramIndexWriter::create(path, universe)?;
+    for entry in entries {
+        writer.append(entry.key, entry.postings)?;
+    }
+    writer.finish()?;
     Ok(())
 }
 
-fn read_entry(bytes: &[u8], index: usize) -> Result<BigramEntry> {
-    let start = BIGRAM_HEADER_BYTES
+fn read_entry(bytes: &[u8], table_start: usize, index: usize) -> Result<BigramEntry> {
+    let start = table_start
         .checked_add(
             index
                 .checked_mul(BIGRAM_ENTRY_BYTES)
@@ -356,7 +386,7 @@ fn read_entry(bytes: &[u8], index: usize) -> Result<BigramEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs::OpenOptions, io::Write};
+    use std::{fs, fs::OpenOptions, io::Write};
     use tempfile::tempdir;
 
     const FIRST: [BigramPosting; 3] = [
@@ -381,27 +411,29 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, PathBuf) {
         let directory = tempdir().unwrap();
         let path = directory.path().join("bigrams.bin");
-        write_bigram_index(
-            &path,
-            1_000,
-            &[
-                BigramWriteEntry {
-                    key: BigramKey::new(1, 2),
-                    postings: &FIRST,
-                },
-                BigramWriteEntry {
-                    key: BigramKey::new(2, 3),
-                    postings: &SECOND,
-                },
-            ],
-        )
-        .unwrap();
+        let mut writer = BigramIndexWriter::create(&path, 1_000).unwrap();
+        assert_eq!(writer.output.position(), BIGRAM_HEADER_BYTES as u64);
+        writer.append(BigramKey::new(1, 2), &FIRST).unwrap();
+        writer.append(BigramKey::new(2, 3), &SECOND).unwrap();
+        assert_eq!(writer.output.position(), 50);
+        writer.finish().unwrap();
         (directory, path)
+    }
+
+    fn fixture_table_start(path: &Path) -> u64 {
+        read_u64(&fs::read(path).unwrap(), 16).unwrap()
     }
 
     #[test]
     fn sorted_pair_lookup_round_trips_delta_documents_and_offsets() {
         let (_directory, path) = fixture();
+        let encoded = fs::read(&path).unwrap();
+        assert_eq!(read_u32(&encoded, 12).unwrap(), 2);
+        assert_eq!(read_u64(&encoded, 16).unwrap(), 50);
+        assert_eq!(
+            read_u64(&encoded, 24).unwrap(),
+            50 + 2 * BIGRAM_ENTRY_BYTES as u64
+        );
         let index = BigramIndex::open(&path).unwrap();
         assert_eq!(index.lookup(BigramKey::new(1, 2)).unwrap(), FIRST);
         assert_eq!(index.lookup(BigramKey::new(2, 3)).unwrap(), SECOND);
@@ -458,27 +490,24 @@ mod tests {
 
     #[test]
     fn open_rejects_version_length_key_and_range_corruption() {
-        for (name, offset, bytes) in [
-            ("version", 8_u64, 2_u32.to_le_bytes().to_vec()),
-            ("length", 24, 1_u64.to_le_bytes().to_vec()),
-            (
-                "keys",
-                (BIGRAM_HEADER_BYTES + BIGRAM_ENTRY_BYTES) as u64,
-                0_u64.to_le_bytes().to_vec(),
-            ),
-            (
-                "range",
-                (BIGRAM_HEADER_BYTES + 8) as u64,
-                1_u64.to_le_bytes().to_vec(),
-            ),
-            (
-                "count",
-                (BIGRAM_HEADER_BYTES + 20) as u64,
-                u32::MAX.to_le_bytes().to_vec(),
-            ),
-            ("universe", 32, 0_u64.to_le_bytes().to_vec()),
+        for name in [
+            "version", "length", "table", "keys", "range", "count", "universe",
         ] {
             let (_directory, path) = fixture();
+            let table_start = fixture_table_start(&path);
+            let (offset, bytes) = match name {
+                "version" => (8, 2_u32.to_le_bytes().to_vec()),
+                "length" => (24, 1_u64.to_le_bytes().to_vec()),
+                "table" => (16, (BIGRAM_HEADER_BYTES as u64 - 1).to_le_bytes().to_vec()),
+                "keys" => (
+                    table_start + BIGRAM_ENTRY_BYTES as u64,
+                    0_u64.to_le_bytes().to_vec(),
+                ),
+                "range" => (table_start + 8, 1_u64.to_le_bytes().to_vec()),
+                "count" => (table_start + 20, u32::MAX.to_le_bytes().to_vec()),
+                "universe" => (32, 0_u64.to_le_bytes().to_vec()),
+                _ => unreachable!(),
+            };
             let mut file = OpenOptions::new().write(true).open(&path).unwrap();
             file.seek(SeekFrom::Start(offset)).unwrap();
             file.write_all(&bytes).unwrap();
@@ -514,10 +543,8 @@ mod tests {
         )
         .unwrap();
         let mut file = OpenOptions::new().write(true).open(&path).unwrap();
-        file.seek(SeekFrom::Start(
-            (BIGRAM_HEADER_BYTES + BIGRAM_ENTRY_BYTES + 2) as u64,
-        ))
-        .unwrap();
+        file.seek(SeekFrom::Start((BIGRAM_HEADER_BYTES + 2) as u64))
+            .unwrap();
         file.write_all(&[0]).unwrap();
         drop(file);
 
