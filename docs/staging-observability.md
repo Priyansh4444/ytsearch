@@ -62,8 +62,9 @@ Useful fields include:
 - `client_country` and `cf_ray`.
 
 ```bash
-scripts/axiom-search-report.sh
-WINDOW=7d LIMIT=200 scripts/axiom-recent-searches.sh
+scripts/axiom-agent.sh report
+WINDOW=7d LIMIT=200 scripts/axiom-agent.sh recent
+scripts/axiom-agent.sh refresh
 ```
 
 The bounded recent-query report omits IP addresses, user agents, countries, and
@@ -81,3 +82,11 @@ bun run perf:bundle
 Before and after publication, run the fixed relevance matrix and a concurrent
 load. Require zero response errors, exact totals, no stale “show more” control,
 and an initial browser bundle no larger than 30 KB gzip.
+
+For an alternating before/after API comparison over the shared case matrix:
+
+```bash
+BEFORE_API_BASE_URL=https://before.example \
+AFTER_API_BASE_URL=https://after.example \
+  scripts/benchmark-api-comparison.sh
+```

@@ -59,6 +59,18 @@ grep -F 'malformed/raw' "$tmp/malformed.summary" | grep -F "$(printf '\t0\t1\t')
 run_fixture valid
 grep -F 'valid/raw' "$tmp/valid.summary" | grep -F "$(printf '\t1\t0\t')" >/dev/null
 
+printf 'comparison\treact\t\n' > "$tmp/comparison-cases.tsv"
+PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=valid \
+  BEFORE_API_BASE_URL=https://before.invalid AFTER_API_BASE_URL=https://after.invalid \
+  CASES_FILE="$tmp/comparison-cases.tsv" RESULTS_FILE="$tmp/comparison.log" \
+  RUNS=1 WARMUP_RUNS=0 "$SCRIPT_DIR/benchmark-api-comparison.sh" > "$tmp/comparison.summary"
+[ "$(wc -l < "$tmp/comparison.log" | tr -d ' ')" -eq 6 ] || {
+  echo "API comparison did not record both variants for every contract case" >&2
+  exit 1
+}
+grep -F 'comparison/before' "$tmp/comparison.summary" >/dev/null
+grep -F 'comparison/after' "$tmp/comparison.summary" >/dev/null
+
 PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=timeout SEARCH_URL=https://fixture.invalid \
   RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 OUTPUT="$tmp/raw-timeout.jsonl" \
   "$SCRIPT_DIR/benchmark-search-engine.sh" > "$tmp/raw-timeout.summary"

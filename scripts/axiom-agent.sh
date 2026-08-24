@@ -16,6 +16,8 @@ Commands:
   mcp-status  Show the Codex Axiom MCP configuration
   mcp-login   Start the official hosted Axiom OAuth flow
   report      Print the aggregate, privacy-safe search latency report
+  recent      Print bounded recent query counts without client metadata
+  refresh     Append new timestamped queries to query-log.txt
 EOF
 }
 
@@ -39,9 +41,10 @@ check_token() {
     *) result="unexpected HTTP $list_status" ;;
   esac
 
-  if [ -n "${AXIOM_DATASET:-}" ] && [ "$list_status" -ge 200 ] && [ "$list_status" -lt 300 ]; then
-    apl="['${AXIOM_DATASET}'] | take 0"
-    body="$(jq -n --arg apl "$apl" '{apl:$apl}')"
+  if [ -n "${AXIOM_DATASET:-}" ]; then
+    # take 0 is invalid APL; limit 1 is enough for a permission probe.
+    apl="['${AXIOM_DATASET}'] | limit 1"
+    body="$(jq -n --arg apl "$apl" '{apl:$apl, startTime:"now-1h", endTime:"now"}')"
     query_status="$(curl -sS --max-time 20 -o "$response" -w '%{http_code}' \
       -H "Authorization: Bearer $token" \
       -H 'Content-Type: application/json' \
@@ -59,8 +62,9 @@ check_token() {
 
 case "${1:-}" in
   check)
-    check_token AXIOM_API_KEY "${AXIOM_API_KEY:-${AXIOM_TOKEN:-}}"
-    check_token AXIOM_PROD_API_KEY "${AXIOM_PROD_API_KEY:-}"
+    # Ingest role (API / indexer). Query role (operator scripts). Never mix.
+    check_token "AXIOM_API_KEY (ingest)" "${AXIOM_API_KEY:-${AXIOM_TOKEN:-}}"
+    check_token "AXIOM_API_QUERY (query)" "${AXIOM_API_QUERY:-${AXIOM_PROD_API_KEY:-}}"
     ;;
   mcp-status)
     if ! command -v codex >/dev/null 2>&1; then
@@ -80,11 +84,14 @@ case "${1:-}" in
     exec codex mcp login axiom
     ;;
   report)
-    if [ -n "${AXIOM_PROD_API_KEY:-}" ]; then
-      AXIOM_TOKEN="$AXIOM_PROD_API_KEY"
-      export AXIOM_TOKEN
-    fi
+    # Report script resolves AXIOM_API_QUERY itself; do not export query into AXIOM_TOKEN.
     exec "$SCRIPT_DIR/axiom-search-report.sh"
+    ;;
+  recent)
+    exec "$SCRIPT_DIR/axiom-recent-searches.sh"
+    ;;
+  refresh)
+    exec "$SCRIPT_DIR/refresh-query-log"
     ;;
   -h|--help|help|"") usage ;;
   *) usage >&2; exit 2 ;;

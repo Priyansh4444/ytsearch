@@ -5,7 +5,7 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ROOT="$(dirname "$SCRIPT_DIR")"
 OUT_DIR="${OUT_DIR:-$ROOT/autoresearch/runs/$(date -u +%Y%m%dT%H%M%SZ)}"
 RUNS="${RUNS:-10}"
-API_BASE_URL="${API_BASE_URL:-https://ytsearch-api-typesense-fly-staging.fly.dev}"
+API_BASE_URL="${API_BASE_URL:-https://ytsearch-api-raw-production.fly.dev}"
 
 mkdir -p "$OUT_DIR"
 git -C "$ROOT" rev-parse --short HEAD > "$OUT_DIR/commit.txt"

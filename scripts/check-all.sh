@@ -16,6 +16,7 @@ scripts/test-index-conference-playlists.sh
 scripts/test-compare-autoresearch-search.sh
 scripts/test-idle-gap-fill.sh
 scripts/test-benchmark-search-tools.sh
+scripts/test-refresh-query-log.sh
 
 for script in scripts/*.sh; do
   case "$(head -n 1 "$script")" in
