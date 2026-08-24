@@ -386,6 +386,12 @@ struct SplitComponent {
     fuzzy: bool,
 }
 
+struct ExactSplitMatches {
+    matches: Vec<DocMatch>,
+    highlights: Vec<String>,
+    proximity_terms: Option<[String; 2]>,
+}
+
 #[derive(Clone, Copy)]
 struct QueryFields {
     text: bool,
@@ -915,14 +921,17 @@ impl RawSearchEngine {
         // admitting unrelated results, those common-token intersections can
         // dominate the entire request. Sparse compact terms such as
         // `blackhole` still reach this path and recover `black hole`.
-        let (split, split_terms) = self.split_term_matches(term, fields)?;
-        let has_exact_split = !split.is_empty();
-        matches = union_sorted(matches, split);
+        let split = self.split_term_matches(term, fields)?;
+        let has_exact_split = !split.matches.is_empty();
+        matches = union_sorted(matches, split.matches);
         retain_not_excluded(&mut matches, excluded_documents);
-        highlight_group.extend(split_terms);
+        highlight_group.extend(split.highlights);
         if has_exact_split
             && self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)?
         {
+            if let Some(terms) = &split.proximity_terms {
+                self.apply_exact_proximity(terms, fields, &mut matches, &mut cache)?;
+            }
             return self.format_matches(params, &[highlight_group], matches, &mut cache);
         }
 
@@ -952,6 +961,9 @@ impl RawSearchEngine {
             {
                 break;
             }
+        }
+        if let Some(terms) = &split.proximity_terms {
+            self.apply_exact_proximity(terms, fields, &mut matches, &mut cache)?;
         }
         self.format_matches(params, &[highlight_group], matches, &mut cache)
     }
@@ -1000,11 +1012,7 @@ impl RawSearchEngine {
         Ok(false)
     }
 
-    fn split_term_matches(
-        &self,
-        term: &str,
-        fields: QueryFields,
-    ) -> Result<(Vec<DocMatch>, Vec<String>)> {
+    fn split_term_matches(&self, term: &str, fields: QueryFields) -> Result<ExactSplitMatches> {
         let boundaries = term
             .char_indices()
             .map(|(index, _)| index)
@@ -1012,6 +1020,8 @@ impl RawSearchEngine {
         let character_count = boundaries.len();
         let mut alternatives = Vec::new();
         let mut highlight_terms = Vec::new();
+        let mut proximity_terms = None;
+        let mut proximity_ambiguous = false;
 
         for (character_index, &byte_index) in boundaries.iter().enumerate().skip(1) {
             if character_index < MIN_SPLIT_TERM_CHARS
@@ -1032,6 +1042,13 @@ impl RawSearchEngine {
                     if matches.is_empty() {
                         continue;
                     }
+                    if left_candidate.highlight == left && right_candidate.highlight == right {
+                        if proximity_terms.is_some() {
+                            proximity_ambiguous = true;
+                        } else {
+                            proximity_terms = Some([left.to_string(), right.to_string()]);
+                        }
+                    }
                     for candidate in &mut matches {
                         candidate.score += SPLIT_SCORE_BONUS;
                     }
@@ -1048,7 +1065,15 @@ impl RawSearchEngine {
             }
         }
 
-        Ok((union_all(alternatives), highlight_terms))
+        Ok(ExactSplitMatches {
+            matches: union_all(alternatives),
+            highlights: highlight_terms,
+            proximity_terms: if proximity_ambiguous {
+                None
+            } else {
+                proximity_terms
+            },
+        })
     }
 
     fn exact_split_components(

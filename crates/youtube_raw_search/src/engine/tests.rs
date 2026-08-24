@@ -72,6 +72,26 @@ fn weighted_blackhole_engine() -> (TempDir, RawSearchEngine) {
     (root, engine)
 }
 
+fn compact_phrase_engine() -> (TempDir, RawSearchEngine) {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    for document in [
+        json!({"id":"ryan-1","video_id":"ryan","title":"Designing Concurrent Transitions","text":"when you create effect it does not tear","youtuber_handle":"@ryansolid","youtuber_name":"Ryan Carniato"}),
+        json!({"id":"apple-1","video_id":"apple","title":"Create custom visual effects","text":"build rich interfaces","youtuber_handle":"@apple","youtuber_name":"Apple"}),
+        json!({"id":"reversed-1","video_id":"reversed","title":"Effect systems","text":"effect helpers create values","youtuber_handle":"@reverse","youtuber_name":"Reverse"}),
+        json!({"id":"literal-1","video_id":"literal","title":"createeffect reference","text":"the literal createeffect token","youtuber_handle":"@literal","youtuber_name":"Literal"}),
+    ] {
+        writeln!(chunks, "{document}").expect("write chunk");
+    }
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+    let engine = RawSearchEngine::open(&index_path).expect("open raw index");
+    (root, engine)
+}
+
 fn engagement_engine() -> (TempDir, RawSearchEngine) {
     let root = TempDir::new().expect("temp dir");
     let chunks_path = root.path().join("chunks.jsonl");
@@ -1341,6 +1361,54 @@ fn blackhole_split_is_consistent_globally_and_per_creator() {
             .unwrap_or_else(|| panic!("split highlight response={response}"));
         assert!(snippet.contains("<mark>"), "response={response}");
     }
+}
+
+#[test]
+fn compact_split_uses_the_same_positional_intent_as_spaced_terms() {
+    let (_root, engine) = compact_phrase_engine();
+    let compact = engine
+        .search(&grouped_query("createeffect"))
+        .expect("compact search");
+    let camel = engine
+        .search(&grouped_query("createEffect"))
+        .expect("camel search");
+    let compact_ids = compact["grouped_hits"]
+        .as_array()
+        .expect("compact groups")
+        .iter()
+        .map(|group| group["group_key"][0].as_str().expect("video id"))
+        .collect::<Vec<_>>();
+    let camel_ids = camel["grouped_hits"]
+        .as_array()
+        .expect("camel groups")
+        .iter()
+        .map(|group| group["group_key"][0].as_str().expect("video id"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(compact["found"], 4);
+    assert_eq!(compact_ids, camel_ids);
+    assert_eq!(compact_ids[0], "ryan");
+    let spaced = engine
+        .search(&grouped_query("create effect"))
+        .expect("spaced search");
+    assert_eq!(spaced["grouped_hits"][0]["group_key"][0], "ryan");
+
+    let ryan = compact["grouped_hits"]
+        .as_array()
+        .expect("groups")
+        .iter()
+        .find(|group| group["group_key"][0] == "ryan")
+        .expect("Ryan result");
+    let snippet = ryan["hits"][0]["highlights"][0]["snippet"]
+        .as_str()
+        .expect("highlight snippet");
+    assert!(snippet.contains("<mark>create</mark> <mark>effect</mark>"));
+
+    let mut scoped = grouped_query("createEffect");
+    scoped.filter_by = Some("youtuber_handle:=@ryansolid".to_string());
+    let scoped = engine.search(&scoped).expect("scoped search");
+    assert_eq!(scoped["found"], 1);
+    assert_eq!(scoped["grouped_hits"][0]["group_key"][0], "ryan");
 }
 
 #[test]
