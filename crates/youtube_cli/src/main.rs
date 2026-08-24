@@ -96,6 +96,26 @@ enum ContentKind {
     Unknown,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PublicationPolicy {
+    PublishAfterRun,
+    DeferVisibility,
+}
+
+impl PublicationPolicy {
+    const fn from_defer_flag(defer: bool) -> Self {
+        if defer {
+            Self::DeferVisibility
+        } else {
+            Self::PublishAfterRun
+        }
+    }
+
+    const fn publishes_after_run(self) -> bool {
+        matches!(self, Self::PublishAfterRun)
+    }
+}
+
 #[derive(Debug, Default)]
 struct IndexStats {
     discovered_videos: usize,
@@ -685,13 +705,13 @@ fn validate_remove_safety(allow_destructive_remove: bool) -> Result<(), CliError
 }
 
 async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), CliError> {
-    let publish_when_complete = !command.defer_publish;
-    index_youtuber(command, publish_when_complete).await
+    let publication = PublicationPolicy::from_defer_flag(command.defer_publish);
+    index_youtuber(command, publication).await
 }
 
 async fn index_youtuber(
     command: IndexYoutuberCommand,
-    publish_when_complete: bool,
+    publication: PublicationPolicy,
 ) -> Result<(), CliError> {
     validate_rewipe_safety(
         command.mode,
@@ -984,7 +1004,7 @@ async fn index_youtuber(
                 "Update pass found no new searchable chunks for {}; kept existing indexed data ({} videos, {} chunks)",
                 youtuber.handle, youtuber_doc.indexed_video_count, youtuber_doc.indexed_chunk_count
             );
-            if publish_when_complete {
+            if publication.publishes_after_run() {
                 publish_and_wait(&transcript_search).await?;
             }
             return Ok(());
@@ -1002,7 +1022,7 @@ async fn index_youtuber(
         } else {
             println!("Removed unsearchable YouTuber document: {youtuber_id}");
         }
-        if publish_when_complete {
+        if publication.publishes_after_run() {
             publish_and_wait(&transcript_search).await?;
         }
         let message = format!(
@@ -1027,7 +1047,7 @@ async fn index_youtuber(
     )
     .await?;
     println!("Upserted YouTuber document: {}", youtuber_doc.id);
-    if publish_when_complete {
+    if publication.publishes_after_run() {
         publish_and_wait(&transcript_search).await?;
     }
 
@@ -1080,7 +1100,12 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
                 transcript_failure_retry_seconds: command.transcript_failure_retry_seconds,
                 defer_publish: true,
             };
-            tasks.spawn(async move { (failed_handle, index_youtuber(child, false).await) });
+            tasks.spawn(async move {
+                (
+                    failed_handle,
+                    index_youtuber(child, PublicationPolicy::DeferVisibility).await,
+                )
+            });
         }
 
         let Some(result) = tasks.join_next().await else {
@@ -1103,7 +1128,7 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
         }
     }
 
-    if !command.defer_publish {
+    if PublicationPolicy::from_defer_flag(command.defer_publish).publishes_after_run() {
         publish_and_wait(&publication_search).await?;
     }
     if failures.is_empty() {
@@ -2525,6 +2550,20 @@ mod tests {
         assert!(validate_rewipe_safety(IndexMode::Rewipe, true, false).is_ok());
         assert!(validate_rewipe_safety(IndexMode::Rewipe, false, true).is_ok());
         assert!(validate_rewipe_safety(IndexMode::Rewipe, false, false).is_err());
+    }
+
+    #[test]
+    fn deferred_visibility_maps_to_an_explicit_publication_policy() {
+        assert_eq!(
+            PublicationPolicy::from_defer_flag(false),
+            PublicationPolicy::PublishAfterRun
+        );
+        assert!(PublicationPolicy::PublishAfterRun.publishes_after_run());
+        assert_eq!(
+            PublicationPolicy::from_defer_flag(true),
+            PublicationPolicy::DeferVisibility
+        );
+        assert!(!PublicationPolicy::DeferVisibility.publishes_after_run());
     }
 
     #[test]
