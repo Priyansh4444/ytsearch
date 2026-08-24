@@ -55,6 +55,9 @@ Raw can replace Typesense as the canonical search index.
 - [x] Carry an unambiguous two-token compact split into bounded positional
   ranking. On the 8.14M-document index, `createEffect` now ranks Ryan
   Carniato's adjacent phrase first while retaining all 433 compact-query videos.
+  - [x] Preflight component posting counts before decoding, cap split work at
+    1M postings and positional refinement at 50k candidates. The 24-query
+    full-index suite has a 61.1 ms worst p95; common compact joins are 1.5–9.5 ms.
 - [ ] Differential-test the complete application contract against Typesense.
   - [x] Run the first full-snapshot seven-case ordered top-10 differential;
     mean overlap is 7.71/10 and top-one agreement is 4/7.
@@ -198,7 +201,8 @@ Raw can replace Typesense as the canonical search index.
 - [x] Compact split fallback recovered `createEffect` as `create` plus `effect`
   without carrying token positions, allowing a frequent gapped match to outrank
   Ryan Carniato's adjacent phrase. Unique exact two-token splits now reuse the
-  bounded proximity scorer; the full-index warm p95 is 37.6 ms.
+  bounded proximity scorer. Lexicon-level posting and positional candidate
+  guards keep that fallback bounded; full-index warm p95 is 24.8 ms.
 
 - [ ] Full-corpus generation publication shares the reader's 2-vCPU/2-GB
   cgroup and causes synchronized multi-second search stalls. A clean canary

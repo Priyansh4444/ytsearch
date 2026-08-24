@@ -62,10 +62,27 @@ a mandatory phrase, so broad results remain available.
 The full-index `createEffect` request retained all 433 compact-query videos and
 moved Ryan Carniato's “Designing Concurrent Transitions” to first. The spaced
 `create effect` query also ranks it first and returns 446 videos. Twelve warm
-compact requests over loopback measured 32.8 ms median, 37.6 ms p95, and
-37.7 ms maximum. The fixture also locks down a gapped title, reversed terms,
-literal compound recall, both-token highlighting, lowercase compact input, and
-`@ryansolid` scoping.
+compact requests over loopback measured 17.6 ms median and 24.8 ms p95 after
+the final work guard. The fixture also locks down a gapped title, reversed
+terms, literal compound recall, both-token highlighting, lowercase compact
+input, and `@ryansolid` scoping.
+
+The first candidate reused the bounded proximity reader but still decoded and
+intersected both component posting lists before that bound was visible. Common
+accidental joins such as `thisthat` therefore took 465–518 ms. Raw now inspects
+the mmap lexicon's posting counts first and declines a split pair whose combined
+field-specific work exceeds 1,000,000 postings. It still tries bounded plural
+alternatives and the original whole-token typo path, but does not repeat the
+same rejected split through fuzzy recovery. A separate 50,000-candidate cap
+protects the cold positional sidecar.
+
+On the same 8.14-million-document index, 12 warm loopback requests produced the
+following p95 values: `thisthat` 9.5 ms, `youknow` 3.8 ms, `thereare` 2.4 ms,
+and `thankyou` 1.5 ms. The full 24-query suite had zero errors and a worst p95
+of 61.1 ms (`coding is dead`). `createEffect` still returned 433 videos with
+five Ryan Carniato results at the top. This is a deliberate recall/latency
+boundary: missing-separator recovery is optional fallback, so an unbounded
+common-word split is less valuable than predictable service latency.
 
 ## Alternating release A/B
 

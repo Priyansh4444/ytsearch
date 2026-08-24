@@ -41,7 +41,9 @@ is not copied into a process-owned hash map at startup.
    typo threshold before doing prefix or fuzzy work.
 4. For a compact single token, try at most eight lexicon-proven splits. Each
    side must match the same chunk; a narrow plural alternative is allowed only
-   inside this guarded path.
+   inside this guarded path. Reject a pair from lexicon metadata before decoding
+   when its field-specific posting work exceeds one million records, and skip
+   positional refinement above 50,000 surviving candidates.
 5. Traverse the compact trie for frequency-ranked prefix candidates only when
    exact coverage remains low.
 6. Expand progressively to one and then two Damerau-Levenshtein edits using

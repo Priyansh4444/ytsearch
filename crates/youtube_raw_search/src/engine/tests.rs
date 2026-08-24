@@ -1416,6 +1416,32 @@ fn compact_split_uses_the_same_positional_intent_as_spaced_terms() {
 }
 
 #[test]
+fn compact_split_proximity_has_a_hard_candidate_budget() {
+    assert!(compact_split_proximity_is_bounded(
+        MAX_COMPACT_SPLIT_PROXIMITY_MATCHES - 1
+    ));
+    assert!(compact_split_proximity_is_bounded(
+        MAX_COMPACT_SPLIT_PROXIMITY_MATCHES
+    ));
+    assert!(!compact_split_proximity_is_bounded(
+        MAX_COMPACT_SPLIT_PROXIMITY_MATCHES + 1
+    ));
+}
+
+#[test]
+fn compact_split_intersection_has_a_hard_posting_budget() {
+    assert!(compact_split_posting_work_is_bounded(
+        MAX_COMPACT_SPLIT_POSTING_WORK - 1,
+        1
+    ));
+    assert!(!compact_split_posting_work_is_bounded(
+        MAX_COMPACT_SPLIT_POSTING_WORK,
+        1
+    ));
+    assert!(!compact_split_posting_work_is_bounded(u64::MAX, 1));
+}
+
+#[test]
 fn typo_corrected_compact_split_recovers_black_hole_results() {
     let (_root, engine) = blackhole_engine();
     for query in ["blackhloe", "blakhole", "blackhle"] {
