@@ -48,3 +48,41 @@ export const writeSearchUrl = (request: SearchRequest): void => {
   if (request.page > 1) params.set("page", String(request.page));
   window.history.pushState({}, "", `/?${params.toString()}`);
 };
+
+export const resultAnchorId = (videoId: string): string => `video-${encodeURIComponent(videoId)}`;
+
+export const resultAnchorFromHash = (hash: string): string | undefined => {
+  const value = hash.startsWith("#") ? hash.slice(1) : hash;
+  if (!value.startsWith("video-")) return undefined;
+  try {
+    const videoId = decodeURIComponent(value.slice("video-".length));
+    return videoId ? resultAnchorId(videoId) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+export const searchResultPermalink = (
+  videoId: string,
+  location: Pick<Location, "href"> = window.location,
+): string => {
+  const url = new URL(location.href);
+  url.hash = resultAnchorId(videoId);
+  return url.toString();
+};
+
+export const scrollToSearchResult = (
+  location: Pick<Location, "hash"> = window.location,
+): boolean => {
+  const id = resultAnchorFromHash(location.hash);
+  if (!id) return false;
+  const element = document.getElementById(id);
+  if (!(element instanceof HTMLElement)) return false;
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  element.scrollIntoView({
+    behavior: reduceMotion ? "auto" : "smooth",
+    block: "start",
+  });
+  element.focus({ preventScroll: true });
+  return true;
+};

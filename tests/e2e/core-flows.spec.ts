@@ -108,6 +108,72 @@ test.beforeEach(async ({ page }) => {
   await mockApi(page);
 });
 
+test("copies a result permalink that scrolls back to that video", async ({ page }) => {
+  const videos = Array.from({ length: 8 }, (_, index) => ({
+    ...searchResponse.videos[0],
+    video_id: `video${index}`,
+    title: `Reliable Rust testing ${index}`,
+    youtube_url: `https://www.youtube.com/watch?v=video${index}&t=12s`,
+    embed_url: "about:blank",
+    hits: [
+      {
+        ...searchMoment,
+        id: `moment${index}`,
+        video_id: `video${index}`,
+        title: `Reliable Rust testing ${index}`,
+        youtube_url: `https://www.youtube.com/watch?v=video${index}&t=12s`,
+      },
+    ],
+  }));
+  await page.unroute("**/api/**");
+  await page.route("**/api/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/availability") {
+      return route.fulfill({ json: readyAvailability });
+    }
+    if (url.pathname === "/api/youtubers") {
+      return route.fulfill({ json: { channels: [channel] } });
+    }
+    if (url.pathname === "/api/health") {
+      return route.fulfill({ json: { ok: true } });
+    }
+    if (url.pathname === "/api/index-status") {
+      return route.fulfill({ json: { handle: "", status: "idle" } });
+    }
+    if (url.pathname === "/api/search") {
+      return route.fulfill({
+        json: {
+          ...searchResponse,
+          query: url.searchParams.get("q"),
+          total_videos: videos.length,
+          total_moments: videos.length,
+          total_found: videos.length,
+          videos,
+        },
+      });
+    }
+    return route.fulfill({ status: 404, json: { error: "not mocked" } });
+  });
+
+  await page.setViewportSize({ width: 1_280, height: 700 });
+  await page.goto("/?q=rust+testing");
+  const lastResult = page.locator("article").last();
+  await expect(lastResult).toBeVisible();
+  await lastResult.getByRole("button", { name: "Copy result link" }).click();
+  await expect(page).toHaveURL(/q=rust\+testing#video-video7$/);
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.reload({ waitUntil: "networkidle" });
+  const linkedResult = page.locator("#video-video7");
+  await expect(linkedResult).toBeVisible();
+  await expect
+    .poll(async () => {
+      const box = await linkedResult.boundingBox();
+      return box ? box.y : Number.POSITIVE_INFINITY;
+    })
+    .toBeLessThan(160);
+});
+
 test("loads channels and completes a basic search", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("Example Creator").first()).toBeVisible();

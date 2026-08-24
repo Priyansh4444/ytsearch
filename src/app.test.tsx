@@ -186,6 +186,28 @@ describe("App", () => {
     await waitFor(() => expect(mocks.captureSearchLoaded).toHaveBeenCalled());
   });
 
+  test("opens a result permalink and scrolls to the matching video", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      writable: true,
+      value: scrollIntoView,
+    });
+    window.history.replaceState({}, "", "/?q=rust#video-video-1");
+
+    render(() => <App />);
+
+    try {
+      expect(
+        await screen.findByRole("link", { name: /Rust ownership explained/i }),
+      ).toBeInTheDocument();
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+      expect(document.getElementById("video-video-1")).toHaveFocus();
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+    }
+  });
+
   test("warms code without issuing a speculative search request", async () => {
     render(() => <App />);
 
