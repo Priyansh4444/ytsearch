@@ -153,7 +153,10 @@ impl BigramIndex {
     #[cfg(test)]
     pub(super) fn lookup(&self, key: BigramKey) -> Result<Vec<BigramPosting>> {
         let mut postings = Vec::new();
-        let _ = self.lookup_into(key, &mut postings)?;
+        let _ = self.decode(key, |posting| {
+            postings.push(posting);
+            Ok(())
+        })?;
         Ok(postings)
     }
 
@@ -161,19 +164,50 @@ impl BigramIndex {
         self.universe
     }
 
-    pub(super) fn lookup_into(
+    pub(super) fn lookup_targets_into(
         &self,
         key: BigramKey,
+        targets: &[u32],
         postings: &mut Vec<BigramPosting>,
     ) -> Result<bool> {
         postings.clear();
+        if targets.windows(2).any(|window| window[0] >= window[1])
+            || targets
+                .last()
+                .is_some_and(|target| *target >= self.universe)
+        {
+            return Err(Error::InvalidInput(
+                "bigram lookup targets must be increasing and in-universe".to_string(),
+            ));
+        }
+        postings.try_reserve(targets.len()).map_err(|_| {
+            Error::InvalidInput("bigram target count exceeds memory limits".to_string())
+        })?;
+        let mut target_index = 0_usize;
+        self.decode(key, |posting| {
+            while targets
+                .get(target_index)
+                .is_some_and(|target| *target < posting.document)
+            {
+                target_index += 1;
+            }
+            if targets.get(target_index).copied() == Some(posting.document) {
+                postings.push(posting);
+                target_index += 1;
+            }
+            Ok(())
+        })
+    }
+
+    fn decode(
+        &self,
+        key: BigramKey,
+        mut visit: impl FnMut(BigramPosting) -> Result<()>,
+    ) -> Result<bool> {
         let Some(entry) = self.find(key)? else {
             return Ok(false);
         };
         let count = entry.count as usize;
-        postings.try_reserve(count).map_err(|_| {
-            Error::Corrupt("bigram posting count exceeds memory limits".to_string())
-        })?;
         let relative_end = entry
             .offset
             .checked_add(u64::from(entry.length))
@@ -217,10 +251,10 @@ impl BigramIndex {
                     "bigram end offsets must be positive".to_string(),
                 ));
             }
-            postings.push(BigramPosting {
+            visit(BigramPosting {
                 document,
                 earliest_end_offset,
-            });
+            })?;
             previous_document = document;
         }
         if cursor != encoded.len() {
@@ -470,11 +504,47 @@ mod tests {
 
         let mut reused = Vec::with_capacity(8);
         let allocation = reused.as_ptr();
-        index
-            .lookup_into(BigramKey::new(1, 2), &mut reused)
-            .unwrap();
-        assert_eq!(reused, FIRST);
+        assert!(
+            index
+                .lookup_targets_into(BigramKey::new(1, 2), &[0, 4], &mut reused)
+                .unwrap()
+        );
+        assert_eq!(reused, [FIRST[0]]);
         assert_eq!(reused.as_ptr(), allocation);
+        assert!(
+            index
+                .lookup_targets_into(BigramKey::new(1, 2), &[], &mut reused)
+                .unwrap()
+        );
+        assert!(reused.is_empty());
+        assert!(
+            !index
+                .lookup_targets_into(BigramKey::new(9, 9), &[0], &mut reused)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn targeted_lookup_rejects_ambiguous_or_out_of_universe_targets() {
+        let (_directory, path) = fixture();
+        let index = BigramIndex::open(&path).unwrap();
+        let mut postings = Vec::new();
+
+        assert!(
+            index
+                .lookup_targets_into(BigramKey::new(1, 2), &[4, 4], &mut postings)
+                .is_err()
+        );
+        assert!(
+            index
+                .lookup_targets_into(BigramKey::new(1, 2), &[4, 3], &mut postings)
+                .is_err()
+        );
+        assert!(
+            index
+                .lookup_targets_into(BigramKey::new(1, 2), &[1_000], &mut postings)
+                .is_err()
+        );
     }
 
     #[test]

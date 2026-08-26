@@ -725,7 +725,7 @@ fn ordered_bigram_postings_promote_only_matching_documents_and_titles() {
 }
 
 #[test]
-fn schema_seven_query_uses_the_ordered_bigram_sidecar() {
+fn schema_seven_bigram_is_targeted_but_small_queries_remain_document_exact() {
     let (root, engine) = compact_phrase_engine();
     let create = engine
         .inner
@@ -743,7 +743,9 @@ fn schema_seven_query_uses_the_ordered_bigram_sidecar() {
 
     let index_path = root.path().join("index");
     let posting = [bigram::BigramPosting {
-        document: 0,
+        // Deliberately disagree with the source documents. Direct lookup below
+        // proves the fixture is active; the normal small-query path must ignore it.
+        document: 1,
         earliest_end_offset: 3,
     }];
     bigram::write_bigram_index(
@@ -781,6 +783,32 @@ fn schema_seven_query_uses_the_ordered_bigram_sidecar() {
         .expect("apply schema seven bigram");
 
     assert!(handled);
+    assert!(matches[1].ordered_phrase());
+    assert!(matches[1].score > 1.0);
+    assert!(
+        [matches[0], matches[2], matches[3]]
+            .iter()
+            .all(|candidate| !candidate.ordered_phrase())
+    );
+
+    let fields = QueryFields {
+        text: true,
+        title: true,
+        prioritize_position: true,
+        exact_mask: 1,
+    };
+    let mut matches = (0..4)
+        .map(|document| DocMatch::new(document, 1.0, true))
+        .collect::<Vec<_>>();
+    engine
+        .apply_exact_proximity(
+            &["create".to_string(), "effect".to_string()],
+            fields,
+            &mut matches,
+            &mut BlockCache::default(),
+        )
+        .expect("apply normal small-query proximity");
+
     assert!(matches[0].ordered_phrase());
     assert!(matches[0].score > 1.0);
     assert!(

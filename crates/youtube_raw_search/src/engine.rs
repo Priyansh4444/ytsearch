@@ -742,6 +742,8 @@ impl RawSearchEngine {
             }
             videos.push(self.inner.metadata.document(candidate.document())?.video);
         }
+        documents.sort_unstable();
+        documents.dedup();
         videos.sort_unstable();
         videos.dedup();
         Ok(PositionTargets { documents, videos })
@@ -761,11 +763,14 @@ impl RawSearchEngine {
         {
             return Ok(());
         }
-        if self.try_apply_exact_bigram(terms, fields, matches)? {
-            return Ok(());
-        }
         if matches.len() <= MAX_DIRECT_POSITION_TARGETS {
             return self.apply_exact_proximity_from_documents(terms, fields, matches, cache);
+        }
+        if self.try_apply_exact_bigram(terms, fields, matches)? {
+            // Schema 7 makes exact adjacency and its earliest offset authoritative for
+            // large two-token result sets. Non-adjacent candidates retain their BM25
+            // score instead of faulting the complete positional streams back into RAM.
+            return Ok(());
         }
         self.apply_exact_proximity_from_postings(terms, fields, matches)
     }
@@ -791,10 +796,13 @@ impl RawSearchEngine {
             return Ok(false);
         };
         let key = bigram::BigramKey::new(left.term, right.term);
+        let targets = self.position_targets(matches)?;
         let mut text = Vec::new();
         let mut title = Vec::new();
-        let text_present = fields.text && text_index.lookup_into(key, &mut text)?;
-        let title_present = fields.title && title_index.lookup_into(key, &mut title)?;
+        let text_present =
+            fields.text && text_index.lookup_targets_into(key, &targets.documents, &mut text)?;
+        let title_present =
+            fields.title && title_index.lookup_targets_into(key, &targets.videos, &mut title)?;
         if !text_present && !title_present {
             return Ok(false);
         }
