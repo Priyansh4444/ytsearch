@@ -755,49 +755,77 @@ fn refine_spool_shard<R: ShardRecord>(
     next_id: &mut u64,
     output_paths: &mut Vec<PathBuf>,
 ) -> Result<()> {
-    if fs::metadata(&path)?.len() <= maximum_bytes {
-        output_paths.push(path);
-        return Ok(());
-    }
-
-    let mut input = BufReader::new(ColdReader::open(&path)?);
-    let mut outputs = (0..257).map(|_| None).collect::<Vec<Option<ColdWriter>>>();
-    let mut child_paths = vec![None; 257];
-    let mut can_refine = false;
-    while let Some(record) = R::read(&mut input)? {
-        let key = record
-            .key()
-            .get(depth)
-            .map_or(0, |byte| usize::from(*byte) + 1);
-        can_refine |= record.key().len() > depth;
-        if outputs[key].is_none() {
-            let child = directory.join(format!("refined-{:08}.bin", *next_id));
-            *next_id = next_id
-                .checked_add(1)
-                .ok_or_else(|| Error::Corrupt("posting shard id overflows".to_string()))?;
-            outputs[key] = Some(ColdWriter::create_posting_shard(&child)?);
-            child_paths[key] = Some(child);
+    let mut pending = vec![(path, depth)];
+    while let Some((path, depth)) = pending.pop() {
+        if fs::metadata(&path)?.len() <= maximum_bytes {
+            output_paths.push(path);
+            continue;
         }
-        record.write(outputs[key].as_mut().expect("refined shard exists"))?;
-    }
-    for output in outputs.into_iter().flatten() {
-        output.finish()?;
-    }
-    fs::remove_file(path)?;
 
-    let populated = child_paths.iter().flatten().count();
-    for child in child_paths.into_iter().flatten() {
-        if populated == 1 && !can_refine {
-            output_paths.push(child);
-        } else {
-            refine_spool_shard::<R>(
-                directory,
-                child,
-                depth + 1,
-                maximum_bytes,
-                next_id,
-                output_paths,
-            )?;
+        let mut input = BufReader::new(ColdReader::open(&path)?);
+        let mut outputs = (0..257).map(|_| None).collect::<Vec<Option<ColdWriter>>>();
+        let mut child_paths = vec![None; 257];
+        let mut first_key = None::<Vec<u8>>;
+        let mut common_prefix_length = usize::MAX;
+        let mut all_same_key = true;
+        while let Some(record) = R::read(&mut input)? {
+            let record_key = record.key();
+            if let Some(first_key) = first_key.as_deref() {
+                let shared_prefix = depth.min(first_key.len()).min(record_key.len());
+                common_prefix_length = common_prefix_length.min(
+                    shared_prefix
+                        + first_key[shared_prefix..]
+                            .iter()
+                            .zip(&record_key[shared_prefix..])
+                            .take_while(|(left, right)| left == right)
+                            .count(),
+                );
+                all_same_key &= first_key == record_key;
+            } else {
+                first_key = Some(record_key.to_vec());
+            }
+            let key = record_key
+                .get(depth)
+                .map_or(0, |byte| usize::from(*byte) + 1);
+            if outputs[key].is_none() {
+                let child = directory.join(format!("refined-{:08}.bin", *next_id));
+                *next_id = next_id
+                    .checked_add(1)
+                    .ok_or_else(|| Error::Corrupt("posting shard id overflows".to_string()))?;
+                outputs[key] = Some(ColdWriter::create_posting_shard(&child)?);
+                child_paths[key] = Some(child);
+            }
+            record.write(outputs[key].as_mut().expect("refined shard exists"))?;
+        }
+        drop(input);
+        for output in outputs.into_iter().flatten() {
+            output.finish()?;
+        }
+        fs::remove_file(path)?;
+
+        let mut children = child_paths.into_iter().flatten().collect::<Vec<_>>();
+        if children.len() == 1 {
+            let child = children.pop().expect("one refined child");
+            if all_same_key {
+                // A complete key cannot be partitioned further. The caller
+                // streams this one oversized posting list without decoding it
+                // into a corpus-sized allocation.
+                output_paths.push(child);
+            } else {
+                if common_prefix_length <= depth {
+                    return Err(Error::Corrupt(
+                        "posting shard refinement did not advance".to_string(),
+                    ));
+                }
+                pending.push((child, common_prefix_length));
+            }
+            continue;
+        }
+
+        // The stack is LIFO. Push in reverse byte order so completed leaves
+        // retain the lexicographic ordering required by the index writers.
+        for child in children.into_iter().rev() {
+            pending.push((child, depth + 1));
         }
     }
     Ok(())
@@ -1640,6 +1668,41 @@ mod tests {
             title.lookup(bigram::BigramKey::new(0, 1)).unwrap().len(),
             20
         );
+    }
+
+    #[test]
+    fn oversized_long_pairs_skip_common_prefixes_without_recursive_rewrites() {
+        let root = tempdir().unwrap();
+        let spool = SpoolDirectory::create(root.path().join("spool")).unwrap();
+        let mut writer = ShardSpoolWriter::create(spool.path()).unwrap();
+        let common = "a".repeat(30_000);
+        let left = [format!("{common}x"), format!("{common}y")];
+        for id in 0..4_u32 {
+            for term in &left {
+                writer
+                    .append_bigram(term, "beta", id, 1, IndexedField::Text)
+                    .unwrap();
+            }
+        }
+        writer.finish().unwrap();
+
+        let paths = refine_spool_shards_with_limit::<SpoolBigram>(spool.path(), 128).unwrap();
+        assert_eq!(paths.len(), 2);
+        for (path, term) in paths.iter().zip(&left) {
+            assert!(fs::metadata(path).unwrap().len() > 128);
+            assert_eq!(
+                CoalescedBigramShardPostings::open(
+                    path,
+                    format!("{term}\0beta").into_bytes(),
+                    IndexedField::Text,
+                )
+                .unwrap()
+                .collect::<Result<Vec<_>>>()
+                .unwrap()
+                .len(),
+                4
+            );
+        }
     }
 
     #[test]
