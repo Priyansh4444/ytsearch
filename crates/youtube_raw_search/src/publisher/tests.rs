@@ -282,6 +282,15 @@ fn detached_install_is_exact_monotonic_and_does_not_acknowledge_wal() {
         publisher.install_verified_generation(detached.sequence - 1, &detached.path, &manifest),
         Err(IndexStoreError::Conflict(_))
     ));
+
+    let (recovered, recovered_sequence) = publisher.open_active_generation(&store).unwrap();
+    assert_eq!(recovered_sequence, detached.sequence);
+    assert_eq!(found(&recovered, "replacement blackhole"), 1);
+    assert_eq!(
+        store.operation("add-video").unwrap().state,
+        youtube_index_store::IndexOperationState::Published,
+        "startup must reconcile an active generation persisted before WAL acknowledgement"
+    );
 }
 
 #[test]

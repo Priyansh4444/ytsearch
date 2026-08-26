@@ -91,11 +91,8 @@ async fn serve_mutable() -> Result<(), Box<dyn std::error::Error>> {
             .map(PathBuf::from)
             .unwrap_or_else(|| state_directory.join("mutations.sqlite3")),
     )?);
-    let active_sequence = publisher.active_sequence()?;
-    let engine = Arc::new(ReloadableEngine::new(
-        RawSearchEngine::open(&publisher.active_index_path()?)?,
-        active_sequence,
-    ));
+    let (active_engine, active_sequence) = publisher.open_active_generation(&store)?;
+    let engine = Arc::new(ReloadableEngine::new(active_engine, active_sequence));
     let admin = AdminState::new(
         Arc::clone(&engine),
         store,

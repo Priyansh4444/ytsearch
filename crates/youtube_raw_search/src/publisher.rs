@@ -251,6 +251,20 @@ impl Publisher {
             .map_err(map_json)
     }
 
+    /// Opens the durable active generation and reconciles its sequence with
+    /// the mutation WAL. Activation persists the generation pointer before it
+    /// acknowledges operations, so this closes the crash window between those
+    /// two steps without rebuilding or replaying an already-active snapshot.
+    pub fn open_active_generation(
+        &self,
+        store: &MutationStore,
+    ) -> Result<(RawSearchEngine, u64), IndexStoreError> {
+        let sequence = self.active_sequence()?;
+        let engine = RawSearchEngine::open(&self.active_index_path()?).map_err(map_raw)?;
+        store.mark_published(sequence)?;
+        Ok((engine, sequence))
+    }
+
     pub fn state_directory(&self) -> &Path {
         &self.paths.state_directory
     }
