@@ -43,9 +43,9 @@ struct BigramEntry {
 const _: () = assert!(std::mem::size_of::<BigramEntry>() == BIGRAM_ENTRY_BYTES);
 
 pub(super) struct BigramIndex {
-    _file: MappedFile,
-    _count: usize,
-    _table_start: usize,
+    file: MappedFile,
+    count: usize,
+    table_start: usize,
     universe: u32,
 }
 
@@ -143,9 +143,9 @@ impl BigramIndex {
             ));
         }
         Ok(Self {
-            _file: file,
-            _count: count,
-            _table_start: table_start,
+            file,
+            count,
+            table_start,
             universe,
         })
     }
@@ -153,7 +153,7 @@ impl BigramIndex {
     #[cfg(test)]
     pub(super) fn lookup(&self, key: BigramKey) -> Result<Vec<BigramPosting>> {
         let mut postings = Vec::new();
-        self.lookup_into(key, &mut postings)?;
+        let _ = self.lookup_into(key, &mut postings)?;
         Ok(postings)
     }
 
@@ -161,15 +161,14 @@ impl BigramIndex {
         self.universe
     }
 
-    #[cfg(test)]
     pub(super) fn lookup_into(
         &self,
         key: BigramKey,
         postings: &mut Vec<BigramPosting>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         postings.clear();
         let Some(entry) = self.find(key)? else {
-            return Ok(());
+            return Ok(false);
         };
         let count = entry.count as usize;
         postings.try_reserve(count).map_err(|_| {
@@ -192,7 +191,7 @@ impl BigramIndex {
                 })?)
                 .ok_or_else(|| Error::Corrupt("bigram posting end overflows".to_string()))?;
         let encoded =
-            self._file.bytes().get(start..end).ok_or_else(|| {
+            self.file.bytes().get(start..end).ok_or_else(|| {
                 Error::Corrupt("bigram posting range is out of bounds".to_string())
             })?;
         let mut cursor = 0_usize;
@@ -229,17 +228,16 @@ impl BigramIndex {
                 "bigram posting count does not consume its byte range".to_string(),
             ));
         }
-        Ok(())
+        Ok(true)
     }
 
-    #[cfg(test)]
     fn find(&self, key: BigramKey) -> Result<Option<BigramEntry>> {
-        let bytes = self._file.bytes();
+        let bytes = self.file.bytes();
         let mut low = 0_usize;
-        let mut high = self._count;
+        let mut high = self.count;
         while low < high {
             let middle = low + (high - low) / 2;
-            let entry = read_entry(bytes, self._table_start, middle)?;
+            let entry = read_entry(bytes, self.table_start, middle)?;
             match entry.key.encoded().cmp(&key.encoded()) {
                 Ordering::Less => low = middle + 1,
                 Ordering::Greater => high = middle,

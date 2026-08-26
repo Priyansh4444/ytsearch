@@ -248,8 +248,8 @@ struct EngineInner {
     postings: MappedFile,
     positions: PositionIndex,
     full_positions: Option<PositionIndex>,
-    _text_bigrams: Option<bigram::BigramIndex>,
-    _title_bigrams: Option<bigram::BigramIndex>,
+    text_bigrams: Option<bigram::BigramIndex>,
+    title_bigrams: Option<bigram::BigramIndex>,
     documents: MappedFile,
     metadata: DocumentTable,
     index_bytes: u64,
@@ -761,10 +761,51 @@ impl RawSearchEngine {
         {
             return Ok(());
         }
+        if self.try_apply_exact_bigram(terms, fields, matches)? {
+            return Ok(());
+        }
         if matches.len() <= MAX_DIRECT_POSITION_TARGETS {
             return self.apply_exact_proximity_from_documents(terms, fields, matches, cache);
         }
         self.apply_exact_proximity_from_postings(terms, fields, matches)
+    }
+
+    fn try_apply_exact_bigram(
+        &self,
+        terms: &[String],
+        fields: QueryFields,
+        matches: &mut [DocMatch],
+    ) -> Result<bool> {
+        if terms.len() != 2 {
+            return Ok(false);
+        }
+        let (Some(text_index), Some(title_index)) =
+            (&self.inner.text_bigrams, &self.inner.title_bigrams)
+        else {
+            return Ok(false);
+        };
+        let Some(left) = self.inner.lexicon.lookup(&terms[0])? else {
+            return Ok(false);
+        };
+        let Some(right) = self.inner.lexicon.lookup(&terms[1])? else {
+            return Ok(false);
+        };
+        let key = bigram::BigramKey::new(left.term, right.term);
+        let mut text = Vec::new();
+        let mut title = Vec::new();
+        let text_present = fields.text && text_index.lookup_into(key, &mut text)?;
+        let title_present = fields.title && title_index.lookup_into(key, &mut title)?;
+        if !text_present && !title_present {
+            return Ok(false);
+        }
+        apply_bigram_proximity(
+            matches,
+            &self.inner.metadata,
+            &text,
+            &title,
+            fields.prioritize_position,
+        )?;
+        Ok(true)
     }
 
     fn apply_exact_proximity_from_postings(

@@ -695,6 +695,102 @@ fn long_exact_phrase_ranks_before_the_same_tokens_out_of_order() {
 }
 
 #[test]
+fn ordered_bigram_postings_promote_only_matching_documents_and_titles() {
+    let (_root, engine) = test_engine();
+    let mut matches = vec![
+        DocMatch::new(0, 1.0, true),
+        DocMatch::new(1, 1.0, true),
+        DocMatch::new(2, 1.0, false),
+    ];
+    apply_bigram_proximity(
+        &mut matches,
+        &engine.inner.metadata,
+        &[bigram::BigramPosting {
+            document: 1,
+            earliest_end_offset: 2,
+        }],
+        &[bigram::BigramPosting {
+            document: 1,
+            earliest_end_offset: 1,
+        }],
+        true,
+    )
+    .expect("apply bigram proximity");
+
+    assert!(!matches[0].ordered_phrase());
+    assert_eq!(matches[0].score, 1.0);
+    assert!(matches[1].ordered_phrase());
+    assert!(matches[2].ordered_phrase());
+    assert!(matches[2].score > matches[1].score);
+}
+
+#[test]
+fn schema_seven_query_uses_the_ordered_bigram_sidecar() {
+    let (root, engine) = compact_phrase_engine();
+    let create = engine
+        .inner
+        .lexicon
+        .lookup("create")
+        .unwrap()
+        .expect("create term");
+    let effect = engine
+        .inner
+        .lexicon
+        .lookup("effect")
+        .unwrap()
+        .expect("effect term");
+    drop(engine);
+
+    let index_path = root.path().join("index");
+    let posting = [bigram::BigramPosting {
+        document: 0,
+        earliest_end_offset: 3,
+    }];
+    bigram::write_bigram_index(
+        &index_path.join(bigram::TEXT_BIGRAM_FILE),
+        4,
+        &[bigram::BigramWriteEntry {
+            key: bigram::BigramKey::new(create.term, effect.term),
+            postings: &posting,
+        }],
+    )
+    .expect("write text bigram sidecar");
+    bigram::write_bigram_index(&index_path.join(bigram::TITLE_BIGRAM_FILE), 4, &[])
+        .expect("write title bigram sidecar");
+    let manifest_path = index_path.join(MANIFEST_FILE);
+    let mut manifest: Manifest =
+        serde_json::from_reader(File::open(&manifest_path).unwrap()).unwrap();
+    manifest.files = build_manifest_files(&index_path, 7).unwrap();
+    serde_json::to_writer_pretty(File::create(&manifest_path).unwrap(), &manifest).unwrap();
+
+    let engine = RawSearchEngine::open(&index_path).expect("reopen schema seven index");
+    let mut matches = (0..4)
+        .map(|document| DocMatch::new(document, 1.0, true))
+        .collect::<Vec<_>>();
+    let handled = engine
+        .try_apply_exact_bigram(
+            &["create".to_string(), "effect".to_string()],
+            QueryFields {
+                text: true,
+                title: true,
+                prioritize_position: true,
+                exact_mask: 1,
+            },
+            &mut matches,
+        )
+        .expect("apply schema seven bigram");
+
+    assert!(handled);
+    assert!(matches[0].ordered_phrase());
+    assert!(matches[0].score > 1.0);
+    assert!(
+        matches[1..]
+            .iter()
+            .all(|candidate| !candidate.ordered_phrase())
+    );
+}
+
+#[test]
 fn grouped_totals_include_all_moments_beyond_the_return_window() {
     let (_root, engine) = test_engine();
     let mut query = grouped_query("search");
@@ -2049,7 +2145,7 @@ fn schema_seven_manifest_checksums_and_opens_both_bigram_sidecars() {
     assert_eq!(
         engine
             .inner
-            ._text_bigrams
+            .text_bigrams
             .as_ref()
             .expect("text bigrams")
             .universe(),
@@ -2058,7 +2154,7 @@ fn schema_seven_manifest_checksums_and_opens_both_bigram_sidecars() {
     assert_eq!(
         engine
             .inner
-            ._title_bigrams
+            .title_bigrams
             .as_ref()
             .expect("title bigrams")
             .universe(),
@@ -2089,8 +2185,8 @@ fn schema_six_reader_remains_compatible_without_bigram_sidecars() {
     .expect("write schema 6 manifest");
 
     let rollback = RawSearchEngine::open(&index).expect("open schema 6 rollback");
-    assert!(rollback.inner._text_bigrams.is_none());
-    assert!(rollback.inner._title_bigrams.is_none());
+    assert!(rollback.inner.text_bigrams.is_none());
+    assert!(rollback.inner.title_bigrams.is_none());
     assert_eq!(
         rollback.search(&grouped_query("memory mapped")).unwrap(),
         expected

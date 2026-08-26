@@ -181,6 +181,62 @@ pub(super) fn descending_doc_score(left: &DocMatch, right: &DocMatch) -> Orderin
         .then_with(|| left.document().cmp(&right.document()))
 }
 
+pub(super) fn apply_bigram_proximity(
+    matches: &mut [DocMatch],
+    metadata: &DocumentTable,
+    text: &[bigram::BigramPosting],
+    title: &[bigram::BigramPosting],
+    prioritize_position: bool,
+) -> Result<()> {
+    let mut text_index = 0_usize;
+    for candidate in matches {
+        while text
+            .get(text_index)
+            .is_some_and(|posting| posting.document < candidate.document())
+        {
+            text_index += 1;
+        }
+        let text_posting = text
+            .get(text_index)
+            .filter(|posting| posting.document == candidate.document());
+        let video = metadata.document(candidate.document())?.video;
+        let title_posting = title
+            .binary_search_by_key(&video, |posting| posting.document)
+            .ok()
+            .and_then(|index| title.get(index));
+        let ordered = text_posting.is_some() || title_posting.is_some();
+        if ordered {
+            let text_multiplier = text_posting
+                .map(|posting| {
+                    proximity_multiplier(
+                        PositionalWindow {
+                            displacement: 0,
+                            max_offset: posting.earliest_end_offset,
+                        },
+                        2,
+                        prioritize_position,
+                    )
+                })
+                .unwrap_or(1.0);
+            let title_multiplier = title_posting
+                .map(|posting| {
+                    proximity_multiplier(
+                        PositionalWindow {
+                            displacement: 0,
+                            max_offset: posting.earliest_end_offset,
+                        },
+                        2,
+                        prioritize_position,
+                    )
+                })
+                .unwrap_or(1.0);
+            candidate.score *= text_multiplier.max(title_multiplier) * ORDERED_PHRASE_MULTIPLIER;
+        }
+        candidate.set_ordered_phrase(ordered);
+    }
+    Ok(())
+}
+
 pub(super) fn intersect_all_borrowed(lists: &[Vec<DocMatch>]) -> Vec<DocMatch> {
     let Some((smallest_index, smallest)) = lists
         .iter()
