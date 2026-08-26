@@ -9,6 +9,13 @@ const MAX_ADAPTIVE_DOCUMENT_VALIDATE_TARGETS: usize = 512;
 const MIN_POSTING_TO_TARGET_RATIO: u64 = 512;
 const STREAMING_CONJUNCTION_MIN_DOCUMENTS: u64 = 100_000;
 
+pub(super) fn is_broad_two_plan(plans: &[TermPlan]) -> bool {
+    plans.len() == 2
+        && plans
+            .iter()
+            .all(|plan| plan.estimated_documents >= STREAMING_CONJUNCTION_MIN_DOCUMENTS)
+}
+
 pub(super) struct TermAlternative {
     pub(super) term: String,
     pub(super) entry: TermEntry,
@@ -35,7 +42,6 @@ struct TextAlternativeCursor<'a> {
 }
 
 struct StreamingTermPlan<'a> {
-    engine: &'a RawSearchEngine,
     text: Vec<TextAlternativeCursor<'a>>,
     title: Vec<DocMatch>,
     title_index: usize,
@@ -50,6 +56,18 @@ struct TargetContribution {
 }
 
 impl RawSearchEngine {
+    pub(super) fn exact_terms_are_broad(&self, terms: &[String]) -> Result<bool> {
+        for term in terms {
+            let Some(entry) = self.inner.lexicon.lookup(term)? else {
+                return Ok(false);
+            };
+            if self.estimated_entry_documents(entry) < STREAMING_CONJUNCTION_MIN_DOCUMENTS {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub(super) fn exact_prefix_conjunction(
         &self,
         terms: &[String],
@@ -70,6 +88,43 @@ impl RawSearchEngine {
         filter: Option<(&str, &str)>,
         block_cache: &mut BlockCache,
     ) -> Result<(Vec<DocMatch>, HighlightGroups)> {
+        let (mut plans, highlights) =
+            self.conjunction_plans(terms, fields, prefix_last, maximum_distance)?;
+        plans.sort_unstable_by_key(|plan| plan.estimated_documents);
+        if is_broad_two_plan(&plans) {
+            let mut matches = self.stream_two_plan_conjunction(&plans)?;
+            self.retain_video_filter(&mut matches, filter)?;
+            return Ok((matches, highlights));
+        }
+        let mut plans = plans.into_iter();
+        let Some(first) = plans.next() else {
+            return Ok((Vec::new(), highlights));
+        };
+        let mut matches = self.matches_for_plan(&first, None, block_cache)?;
+        self.retain_video_filter(&mut matches, filter)?;
+        let remaining = plans.collect::<Vec<_>>();
+        for (index, plan) in remaining.iter().enumerate() {
+            if prefer_document_validation(matches.len(), &remaining[index..]) {
+                matches =
+                    self.matches_for_plans_documents(&remaining[index..], &matches, block_cache)?;
+                break;
+            }
+            let plan_matches = self.matches_for_plan(plan, Some(&matches), block_cache)?;
+            matches = intersect_sorted(matches, plan_matches);
+            if matches.is_empty() {
+                break;
+            }
+        }
+        Ok((matches, highlights))
+    }
+
+    pub(super) fn conjunction_plans(
+        &self,
+        terms: &[String],
+        fields: QueryFields,
+        prefix_last: bool,
+        maximum_distance: u8,
+    ) -> Result<(Vec<TermPlan>, HighlightGroups)> {
         let mut plans = Vec::with_capacity(terms.len());
         let mut highlights = terms
             .iter()
@@ -145,39 +200,26 @@ impl RawSearchEngine {
             });
         }
 
-        plans.sort_unstable_by_key(|plan| plan.estimated_documents);
-        if plans.len() == 2
-            && plans
-                .iter()
-                .all(|plan| plan.estimated_documents >= STREAMING_CONJUNCTION_MIN_DOCUMENTS)
-        {
-            let mut matches = self.stream_two_plan_conjunction(&plans)?;
-            self.retain_video_filter(&mut matches, filter)?;
-            return Ok((matches, highlights));
-        }
-        let mut plans = plans.into_iter();
-        let Some(first) = plans.next() else {
-            return Ok((Vec::new(), highlights));
-        };
-        let mut matches = self.matches_for_plan(&first, None, block_cache)?;
-        self.retain_video_filter(&mut matches, filter)?;
-        let remaining = plans.collect::<Vec<_>>();
-        for (index, plan) in remaining.iter().enumerate() {
-            if prefer_document_validation(matches.len(), &remaining[index..]) {
-                matches =
-                    self.matches_for_plans_documents(&remaining[index..], &matches, block_cache)?;
-                break;
-            }
-            let plan_matches = self.matches_for_plan(plan, Some(&matches), block_cache)?;
-            matches = intersect_sorted(matches, plan_matches);
-            if matches.is_empty() {
-                break;
-            }
-        }
-        Ok((matches, highlights))
+        Ok((plans, highlights))
     }
 
     pub(super) fn stream_two_plan_conjunction(&self, plans: &[TermPlan]) -> Result<Vec<DocMatch>> {
+        let mut matches = Vec::new();
+        self.visit_two_plan_conjunction(plans, |candidate, _| {
+            matches.push(candidate);
+            Ok(())
+        })?;
+        Ok(matches)
+    }
+
+    pub(super) fn visit_two_plan_conjunction<F>(
+        &self,
+        plans: &[TermPlan],
+        mut visit: F,
+    ) -> Result<()>
+    where
+        F: FnMut(DocMatch, DocumentRecord) -> Result<()>,
+    {
         let [left_plan, right_plan] = plans else {
             return Err(Error::Corrupt(
                 "streaming conjunction requires exactly two plans".to_string(),
@@ -187,8 +229,6 @@ impl RawSearchEngine {
         let mut right = StreamingTermPlan::new(self, right_plan)?;
         left.advance_to(0)?;
         right.advance_to(0)?;
-        let mut matches = Vec::new();
-
         while let (Some(left_document), Some(right_document)) =
             (left.current_document(), right.current_document())
         {
@@ -203,14 +243,18 @@ impl RawSearchEngine {
             if left_document != right_document {
                 continue;
             }
-            let left_match = left.take_current()?;
-            let right_match = right.take_current()?;
-            matches.push(combine_plan_matches(left_document, left_match, right_match));
+            let record = self.inner.metadata.document(left_document)?;
+            let left_match = left.take_current(record)?;
+            let right_match = right.take_current(record)?;
+            visit(
+                combine_plan_matches(left_document, left_match, right_match),
+                record,
+            )?;
         }
 
         left.finish()?;
         right.finish()?;
-        Ok(matches)
+        Ok(())
     }
 
     fn retain_video_filter(
@@ -729,7 +773,6 @@ impl<'a> StreamingTermPlan<'a> {
             }
         }
         Ok(Self {
-            engine,
             text,
             title: union_all(title),
             title_index: 0,
@@ -762,11 +805,10 @@ impl<'a> StreamingTermPlan<'a> {
         Ok(())
     }
 
-    fn take_current(&mut self) -> Result<DocMatch> {
+    fn take_current(&mut self, record: DocumentRecord) -> Result<DocMatch> {
         let document = self
             .current_document()
             .ok_or_else(|| Error::Corrupt("streaming plan has no current document".to_string()))?;
-        let record = self.engine.inner.metadata.document(document)?;
         let mut combined: Option<DocMatch> = None;
         for cursor in &mut self.text {
             if cursor.current.map(|current| current.0) != Some(document) {

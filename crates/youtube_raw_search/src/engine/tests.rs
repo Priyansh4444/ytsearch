@@ -1302,6 +1302,43 @@ fn streaming_conjunction_validates_a_zero_frequency_nonempty_posting_range() {
 }
 
 #[test]
+fn streaming_group_accumulation_matches_materialized_response() {
+    let (_root, engine) = token_drop_engine();
+    let terms = vec!["relativity".to_string(), "explained".to_string()];
+    let fields = query_fields(None, true).expect("query fields");
+    let (mut plans, highlights) = engine
+        .conjunction_plans(&terms, fields, true, 0)
+        .expect("conjunction plans");
+    plans.sort_unstable_by_key(|plan| plan.estimated_documents);
+    let params = grouped_query("relativity explained");
+
+    let materialized = engine
+        .stream_two_plan_conjunction(&plans)
+        .expect("materialized stream");
+    let expected = engine
+        .format_matches(
+            &params,
+            &highlights,
+            materialized,
+            &mut BlockCache::default(),
+        )
+        .expect("materialized response");
+
+    let hits_per_group = usize::from(params.group_limit.expect("group limit"));
+    let mut groups = engine.empty_group_slots();
+    engine
+        .visit_two_plan_conjunction(&plans, |candidate, record| {
+            engine.record_group_match(&mut groups, candidate, record, hits_per_group)
+        })
+        .expect("streamed groups");
+    let actual = engine
+        .format_group_slots(&params, &highlights, groups, &mut BlockCache::default())
+        .expect("streamed response");
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn document_local_proximity_matches_postings_at_the_direct_path_boundary() {
     let root = TempDir::new().expect("temp dir");
     let chunks_path = root.path().join("chunks.jsonl");

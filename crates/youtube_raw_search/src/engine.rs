@@ -565,6 +565,14 @@ impl RawSearchEngine {
         // posting list for a high-frequency token. Start with the rarest token
         // and decode later terms only for surviving document identifiers.
         let mut block_cache = BlockCache::default();
+        if filter.is_none()
+            && excluded_documents.is_empty()
+            && self.exact_terms_are_broad(&terms)?
+            && let Some(response) =
+                self.try_stream_broad_grouped(params, &terms, fields, &mut block_cache)?
+        {
+            return Ok(response);
+        }
         let (mut fast_matches, fast_highlights) =
             self.exact_prefix_conjunction(&terms, fields, true, filter, &mut block_cache)?;
         retain_not_excluded(&mut fast_matches, &excluded_documents);
@@ -1305,76 +1313,104 @@ impl RawSearchEngine {
         Ok(())
     }
 
-    fn format_matches(
+    fn try_stream_broad_grouped(
         &self,
         params: &SearchParams,
-        highlight_groups: &[Vec<String>],
-        matches: Vec<DocMatch>,
+        terms: &[String],
+        fields: QueryFields,
         cache: &mut BlockCache,
-    ) -> Result<Value> {
-        if params.group_by.as_deref() != Some("video_id") {
-            return self.format_ungrouped(params, highlight_groups, matches, cache);
+    ) -> Result<Option<Value>> {
+        if params.group_by.as_deref() != Some("video_id") || terms.len() != 2 {
+            return Ok(None);
+        }
+        let (mut plans, highlights) = self.conjunction_plans(terms, fields, true, 0)?;
+        plans.sort_unstable_by_key(|plan| plan.estimated_documents);
+        if !conjunction::is_broad_two_plan(&plans) {
+            return Ok(None);
         }
 
         let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
-        let filter = parse_filter(params.filter_by.as_deref())?;
-        // Video identifiers are dense generation-local integers. A direct slot
-        // table avoids hashing every matching transcript chunk on broad queries.
-        let mut groups = Vec::<Option<VideoMatches>>::new();
-        groups.resize_with(self.inner.videos.len(), || None);
-        for candidate in matches {
-            let record = self.inner.metadata.document(candidate.document())?;
-            let Some(video) = self.inner.videos.get(record.video as usize) else {
-                return Err(Error::Corrupt(
-                    "document video is out of bounds".to_string(),
-                ));
-            };
-            if !video_matches_filter(video, filter) {
-                continue;
-            }
-            let group = groups[record.video as usize].get_or_insert_with(|| VideoMatches {
-                video: record.video,
-                score: candidate.score,
-                exact_tokens: candidate.exact_tokens(),
-                exact_mask: candidate.exact_mask(),
-                ordered_phrase: candidate.ordered_phrase(),
-                moments: MomentCounter::default(),
-                documents: Vec::with_capacity(hits_per_group),
-            });
-            let candidate_rank = (
-                candidate.exact_tokens(),
-                candidate.exact_mask(),
-                candidate.ordered_phrase(),
-                candidate.score,
-            );
-            let group_rank = (
-                group.exact_tokens,
-                group.exact_mask,
-                group.ordered_phrase,
-                group.score,
-            );
-            if candidate_rank.0 > group_rank.0
-                || (candidate_rank.0 == group_rank.0 && candidate_rank.1 > group_rank.1)
-                || (candidate_rank.0 == group_rank.0
-                    && candidate_rank.1 == group_rank.1
-                    && candidate_rank.2
-                    && !group_rank.2)
-                || (candidate_rank.0 == group_rank.0
-                    && candidate_rank.1 == group_rank.1
-                    && candidate_rank.2 == group_rank.2
-                    && candidate_rank.3 > group_rank.3)
-            {
-                group.exact_tokens = candidate_rank.0;
-                group.exact_mask = candidate_rank.1;
-                group.ordered_phrase = candidate_rank.2;
-                group.score = candidate_rank.3;
-            }
-            if candidate.matches_text() {
-                group.moments.record(record.t_start_ms);
-            }
-            retain_best_document(&mut group.documents, candidate, hits_per_group);
+        let mut groups = self.empty_group_slots();
+        let mut documents = 0_usize;
+        self.visit_two_plan_conjunction(&plans, |candidate, record| {
+            documents = documents.saturating_add(1);
+            self.record_group_match(&mut groups, candidate, record, hits_per_group)
+        })?;
+        let found = groups.iter().flatten().count();
+        if documents <= MAX_EXACT_PROXIMITY_MATCHES || found < TYPO_RESULT_THRESHOLD {
+            return Ok(None);
         }
+        self.format_group_slots(params, &highlights, groups, cache)
+            .map(Some)
+    }
 
+    fn empty_group_slots(&self) -> Vec<Option<VideoMatches>> {
+        let mut groups = Vec::new();
+        groups.resize_with(self.inner.videos.len(), || None);
+        groups
+    }
+
+    fn record_group_match(
+        &self,
+        groups: &mut [Option<VideoMatches>],
+        candidate: DocMatch,
+        record: DocumentRecord,
+        hits_per_group: usize,
+    ) -> Result<()> {
+        let slot = groups
+            .get_mut(record.video as usize)
+            .ok_or_else(|| Error::Corrupt("document video is out of bounds".to_string()))?;
+        let group = slot.get_or_insert_with(|| VideoMatches {
+            video: record.video,
+            score: candidate.score,
+            exact_tokens: candidate.exact_tokens(),
+            exact_mask: candidate.exact_mask(),
+            ordered_phrase: candidate.ordered_phrase(),
+            moments: MomentCounter::default(),
+            documents: Vec::with_capacity(hits_per_group),
+        });
+        let candidate_rank = (
+            candidate.exact_tokens(),
+            candidate.exact_mask(),
+            candidate.ordered_phrase(),
+            candidate.score,
+        );
+        let group_rank = (
+            group.exact_tokens,
+            group.exact_mask,
+            group.ordered_phrase,
+            group.score,
+        );
+        if candidate_rank.0 > group_rank.0
+            || (candidate_rank.0 == group_rank.0 && candidate_rank.1 > group_rank.1)
+            || (candidate_rank.0 == group_rank.0
+                && candidate_rank.1 == group_rank.1
+                && candidate_rank.2
+                && !group_rank.2)
+            || (candidate_rank.0 == group_rank.0
+                && candidate_rank.1 == group_rank.1
+                && candidate_rank.2 == group_rank.2
+                && candidate_rank.3 > group_rank.3)
+        {
+            group.exact_tokens = candidate_rank.0;
+            group.exact_mask = candidate_rank.1;
+            group.ordered_phrase = candidate_rank.2;
+            group.score = candidate_rank.3;
+        }
+        if candidate.matches_text() {
+            group.moments.record(record.t_start_ms);
+        }
+        retain_best_document(&mut group.documents, candidate, hits_per_group);
+        Ok(())
+    }
+
+    fn format_group_slots(
+        &self,
+        params: &SearchParams,
+        highlight_groups: &[Vec<String>],
+        groups: Vec<Option<VideoMatches>>,
+        cache: &mut BlockCache,
+    ) -> Result<Value> {
         let found = groups.iter().flatten().count();
         let total_moments = groups
             .iter()
@@ -1409,6 +1445,37 @@ impl RawSearchEngine {
             "out_of": self.inner.manifest.documents,
             "grouped_hits": grouped_hits,
         }))
+    }
+
+    fn format_matches(
+        &self,
+        params: &SearchParams,
+        highlight_groups: &[Vec<String>],
+        matches: Vec<DocMatch>,
+        cache: &mut BlockCache,
+    ) -> Result<Value> {
+        if params.group_by.as_deref() != Some("video_id") {
+            return self.format_ungrouped(params, highlight_groups, matches, cache);
+        }
+
+        let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
+        let filter = parse_filter(params.filter_by.as_deref())?;
+        // Video identifiers are dense generation-local integers. A direct slot
+        // table avoids hashing every matching transcript chunk on broad queries.
+        let mut groups = self.empty_group_slots();
+        for candidate in matches {
+            let record = self.inner.metadata.document(candidate.document())?;
+            let Some(video) = self.inner.videos.get(record.video as usize) else {
+                return Err(Error::Corrupt(
+                    "document video is out of bounds".to_string(),
+                ));
+            };
+            if !video_matches_filter(video, filter) {
+                continue;
+            }
+            self.record_group_match(&mut groups, candidate, record, hits_per_group)?;
+        }
+        self.format_group_slots(params, highlight_groups, groups, cache)
     }
 
     fn format_ungrouped(
