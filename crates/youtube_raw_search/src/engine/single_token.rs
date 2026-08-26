@@ -229,6 +229,11 @@ impl RawSearchEngine {
                         }
                     }
                     for candidate in &mut matches {
+                        // The components are exact terms, but they are not an
+                        // exact match for the user's original token. Preserve
+                        // their recall without allowing `con + vex` to outrank
+                        // the literal `convex` token on the exactness tier.
+                        candidate.set_exact_mask(0);
                         candidate.score += SPLIT_SCORE_BONUS;
                     }
                     alternatives.push(matches);

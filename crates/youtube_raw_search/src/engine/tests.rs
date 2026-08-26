@@ -298,14 +298,14 @@ fn compact_split_highlights_both_matched_components() {
 }
 
 #[test]
-fn common_single_tokens_do_not_expand_as_missing_separator_splits() {
+fn sufficient_single_token_results_do_not_expand_as_missing_separator_splits() {
     let root = TempDir::new().expect("temp dir");
     let chunks_path = root.path().join("chunks.jsonl");
     let channels_path = root.path().join("channels.jsonl");
     let index_path = root.path().join("index");
     let mut chunks = File::create(&chunks_path).expect("chunks");
     for index in 0..5 {
-        for term in ["react", "fire"] {
+        for term in ["react", "fire", "convex"] {
             writeln!(
                 chunks,
                 "{}",
@@ -321,7 +321,11 @@ fn common_single_tokens_do_not_expand_as_missing_separator_splits() {
             .expect("write exact chunk");
         }
     }
-    for (id, text) in [("react-split", "re act"), ("fire-split", "fi re")] {
+    for (id, text) in [
+        ("react-split", "re act"),
+        ("fire-split", "fi re"),
+        ("convex-split", "con vex"),
+    ] {
         writeln!(
             chunks,
             "{}",
@@ -340,7 +344,7 @@ fn common_single_tokens_do_not_expand_as_missing_separator_splits() {
     build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
     let engine = RawSearchEngine::open(&index_path).expect("open raw index");
 
-    for term in ["react", "fire"] {
+    for term in ["react", "fire", "convex"] {
         let response = engine
             .search(&grouped_query(term))
             .expect("single-token search");
@@ -362,13 +366,12 @@ fn common_single_tokens_do_not_expand_as_missing_separator_splits() {
         let mut scoped = grouped_query(term);
         scoped.filter_by = Some("youtuber_handle:=@narrow".to_string());
         let scoped_response = engine.search(&scoped).expect("scoped single-token search");
-        assert_eq!(
-            scoped_response["found"], 1,
-            "{term} should not split merely because the filtered exact set is sparse"
-        );
+        let expected_found = if term == "convex" { 2 } else { 1 };
+        assert_eq!(scoped_response["found"], expected_found);
         assert_eq!(
             scoped_response["grouped_hits"][0]["group_key"][0],
-            format!("{term}-0")
+            format!("{term}-0"),
+            "a literal token must rank before a missing-separator recovery"
         );
     }
 }

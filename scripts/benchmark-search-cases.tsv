@@ -10,6 +10,7 @@ blackhole_global	blackhole
 blackhole_veritasium	blackhole	@veritasium
 blackhole_vsauce	blackhole	@vsauce
 create_effect_global	createEffect
+convex_global	convex
 this_that_compact	thisthat
 you_know_compact	youknow
 there_are_compact	thereare
