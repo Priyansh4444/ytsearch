@@ -1993,6 +1993,71 @@ fn newly_built_and_fully_verified_opens_have_response_parity() {
 }
 
 #[test]
+fn schema_seven_manifest_checksums_and_opens_both_bigram_sidecars() {
+    let (root, engine) = test_engine();
+    let index = root.path().join("index");
+    let manifest: Manifest =
+        serde_json::from_reader(File::open(index.join(MANIFEST_FILE)).expect("manifest"))
+            .expect("manifest JSON");
+    assert_eq!(manifest.schema_version, 7);
+    assert_eq!(manifest.files.len(), GENERATION_FILES_SCHEMA_7.len());
+    for name in [bigram::TEXT_BIGRAM_FILE, bigram::TITLE_BIGRAM_FILE] {
+        let file = manifest.files.get(name).expect("bigram manifest entry");
+        assert_eq!(file.bytes, fs::metadata(index.join(name)).unwrap().len());
+        assert_eq!(file.blake3, checksum_file(&index.join(name)).unwrap());
+    }
+    assert_eq!(
+        engine
+            .inner
+            ._text_bigrams
+            .as_ref()
+            .expect("text bigrams")
+            .universe(),
+        manifest.documents.max(1)
+    );
+    assert_eq!(
+        engine
+            .inner
+            ._title_bigrams
+            .as_ref()
+            .expect("title bigrams")
+            .universe(),
+        manifest.videos.max(1)
+    );
+}
+
+#[test]
+fn schema_six_reader_remains_compatible_without_bigram_sidecars() {
+    let (root, engine) = test_engine();
+    let expected = engine.search(&grouped_query("memory mapped")).unwrap();
+    drop(engine);
+    let index = root.path().join("index");
+    let manifest_path = index.join(MANIFEST_FILE);
+    let mut manifest: Value =
+        serde_json::from_reader(File::open(&manifest_path).expect("manifest"))
+            .expect("manifest JSON");
+    manifest["schema_version"] = json!(6);
+    let files = manifest["files"].as_object_mut().expect("manifest files");
+    for name in [bigram::TEXT_BIGRAM_FILE, bigram::TITLE_BIGRAM_FILE] {
+        files.remove(name);
+        fs::remove_file(index.join(name)).unwrap();
+    }
+    serde_json::to_writer_pretty(
+        File::create(&manifest_path).expect("rewrite manifest"),
+        &manifest,
+    )
+    .expect("write schema 6 manifest");
+
+    let rollback = RawSearchEngine::open(&index).expect("open schema 6 rollback");
+    assert!(rollback.inner._text_bigrams.is_none());
+    assert!(rollback.inner._title_bigrams.is_none());
+    assert_eq!(
+        rollback.search(&grouped_query("memory mapped")).unwrap(),
+        expected
+    );
+}
+
+#[test]
 fn newly_built_open_only_accepts_the_checksumming_builder_schema() {
     let (root, engine) = test_engine();
     drop(engine);

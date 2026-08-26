@@ -114,7 +114,7 @@ pub struct RawGenerationUpload {
     pub manifest: RawGenerationManifest,
 }
 
-pub const RAW_GENERATION_FILES: [&str; 9] = [
+pub const RAW_GENERATION_FILES: [&str; 11] = [
     "channels.json",
     "videos.json",
     "lexicon.bin",
@@ -124,6 +124,8 @@ pub const RAW_GENERATION_FILES: [&str; 9] = [
     "documents.blocks",
     "documents.meta",
     "fuzzy.bin",
+    "bigrams.text.bin",
+    "bigrams.title.bin",
 ];
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

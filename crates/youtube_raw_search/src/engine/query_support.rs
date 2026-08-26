@@ -1141,9 +1141,22 @@ pub(super) fn directory_size(path: &Path) -> Result<u64> {
     Ok(bytes)
 }
 
-pub(super) fn build_manifest_files(index_path: &Path) -> Result<BTreeMap<String, ManifestFile>> {
+pub(super) fn generation_files(schema_version: u8) -> Result<&'static [&'static str]> {
+    match schema_version {
+        5 | 6 => Ok(&GENERATION_FILES_SCHEMA_6),
+        7 => Ok(&GENERATION_FILES_SCHEMA_7),
+        _ => Err(Error::Corrupt(format!(
+            "unsupported schema version {schema_version}"
+        ))),
+    }
+}
+
+pub(super) fn build_manifest_files(
+    index_path: &Path,
+    schema_version: u8,
+) -> Result<BTreeMap<String, ManifestFile>> {
     let mut files = BTreeMap::new();
-    for name in GENERATION_FILES {
+    for &name in generation_files(schema_version)? {
         let path = index_path.join(name);
         let bytes = fs::metadata(&path)?.len();
         files.insert(
@@ -1162,14 +1175,15 @@ pub(super) fn validate_manifest_files(
     manifest: &Manifest,
     validation: ManifestValidation,
 ) -> Result<()> {
-    if manifest.files.len() != GENERATION_FILES.len() {
+    let generation_files = generation_files(manifest.schema_version)?;
+    if manifest.files.len() != generation_files.len() {
         return Err(Error::Corrupt(format!(
             "manifest records {} generation files, expected {}",
             manifest.files.len(),
-            GENERATION_FILES.len()
+            generation_files.len()
         )));
     }
-    for name in GENERATION_FILES {
+    for &name in generation_files {
         let expected = manifest
             .files
             .get(name)

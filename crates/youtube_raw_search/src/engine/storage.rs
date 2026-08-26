@@ -301,20 +301,20 @@ impl RawSearchEngine {
     fn open_with_validation(index_path: &Path, validation: ManifestValidation) -> Result<Self> {
         let manifest: Manifest =
             serde_json::from_reader(BufReader::new(File::open(index_path.join(MANIFEST_FILE))?))?;
-        if !matches!(manifest.schema_version, 5 | 6) {
+        if !matches!(manifest.schema_version, 5..=7) {
             return Err(Error::Corrupt(format!(
                 "unsupported schema version {}",
                 manifest.schema_version
             )));
         }
         if matches!(validation, ManifestValidation::VerifiedByBuilder)
-            && manifest.schema_version != 6
+            && manifest.schema_version != 7
         {
             return Err(Error::Corrupt(
-                "newly built index does not use schema version 6".to_string(),
+                "newly built index does not use schema version 7".to_string(),
             ));
         }
-        if manifest.schema_version == 6 {
+        if manifest.schema_version >= 6 {
             // Builder-verified opens still check the complete file list and all
             // byte lengths. Only the redundant content reads and BLAKE3 work
             // are skipped.
@@ -343,6 +343,20 @@ impl RawSearchEngine {
             .transpose()?;
         let documents = MappedFile::open(&index_path.join(DOCUMENTS_FILE), DOCUMENTS_MAGIC)?;
         let metadata = DocumentTable::open(&index_path.join(METADATA_FILE))?;
+        let (text_bigrams, title_bigrams) = if manifest.schema_version == 7 {
+            let text = bigram::BigramIndex::open(&index_path.join(bigram::TEXT_BIGRAM_FILE))?;
+            let title = bigram::BigramIndex::open(&index_path.join(bigram::TITLE_BIGRAM_FILE))?;
+            if text.universe() != manifest.documents.max(1)
+                || title.universe() != manifest.videos.max(1)
+            {
+                return Err(Error::Corrupt(
+                    "ordered-bigram universes do not match the manifest".to_string(),
+                ));
+            }
+            (Some(text), Some(title))
+        } else {
+            (None, None)
+        };
         let counts_match = manifest.documents as usize == metadata.documents
             && manifest.blocks as usize == metadata.blocks
             && manifest.videos as usize == videos.len()
@@ -363,6 +377,8 @@ impl RawSearchEngine {
                 postings,
                 positions,
                 full_positions,
+                _text_bigrams: text_bigrams,
+                _title_bigrams: title_bigrams,
                 documents,
                 metadata,
                 index_bytes: directory_size(index_path)?,

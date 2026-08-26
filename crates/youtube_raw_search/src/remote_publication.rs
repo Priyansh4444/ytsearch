@@ -26,7 +26,7 @@ pub(crate) type RemoteJobResponse = RawPublicationJob;
 
 const BACKEND: &str = "raw";
 const STATE_VERSION: u8 = 1;
-const GENERATION_SCHEMA_VERSION: u8 = 6;
+const GENERATION_SCHEMA_VERSION: u8 = 7;
 const STATE_FILE: &str = "job.json";
 const SNAPSHOT_FILE: &str = "mutations.sqlite3";
 const GENERATION_DIRECTORY: &str = "generation";
@@ -91,11 +91,23 @@ impl RemotePublication {
             operation: Arc::new(tokio::sync::Mutex::new(())),
         };
         if publication.state_path().exists() {
-            let job = publication.load_job()?;
-            verify_snapshot(
-                &publication.job_directory(&job.job_id)?.join(SNAPSHOT_FILE),
-                &job,
-            )?;
+            let job = publication.read_job_state()?;
+            if job.compatibility != publication.compatibility {
+                // A prepared generation is derived state: the mutation WAL is
+                // still authoritative. Retire jobs from an older index format
+                // at startup so prepare cannot return an unbuildable job and a
+                // legacy accepted manifest cannot prevent the reader starting.
+                publication.remove_job_directory(&job)?;
+                fs::remove_file(publication.state_path()).map_err(map_io)?;
+                sync_directory(&publication.root.join("jobs"))?;
+                sync_directory(&publication.root)?;
+            } else {
+                let job = publication.load_job()?;
+                verify_snapshot(
+                    &publication.job_directory(&job.job_id)?.join(SNAPSHOT_FILE),
+                    &job,
+                )?;
+            }
         }
         Ok(publication)
     }
@@ -440,6 +452,21 @@ impl RemotePublication {
     }
 
     fn load_job(&self) -> Result<PersistedJob, IndexStoreError> {
+        let job = self.read_job_state()?;
+        let snapshot = self.job_directory(&job.job_id)?.join(SNAPSHOT_FILE);
+        let metadata = fs::metadata(snapshot).map_err(map_io)?;
+        if !metadata.is_file() || metadata.len() != job.snapshot_bytes {
+            return Err(IndexStoreError::InvalidInput(
+                "remote publication snapshot is missing or has the wrong length".to_string(),
+            ));
+        }
+        if let Some(manifest) = &job.manifest {
+            validate_manifest(manifest)?;
+        }
+        Ok(job)
+    }
+
+    fn read_job_state(&self) -> Result<PersistedJob, IndexStoreError> {
         let job: PersistedJob =
             serde_json::from_reader(File::open(self.state_path()).map_err(map_io)?)
                 .map_err(map_json)?;
@@ -450,15 +477,15 @@ impl RemotePublication {
             )));
         }
         validate_job_id(&job.job_id)?;
-        let snapshot = self.job_directory(&job.job_id)?.join(SNAPSHOT_FILE);
-        let metadata = fs::metadata(snapshot).map_err(map_io)?;
-        if !metadata.is_file() || metadata.len() != job.snapshot_bytes {
+        let expected_id = job_id(
+            job.target_sequence,
+            &job.snapshot_blake3,
+            &job.compatibility,
+        );
+        if job.job_id != expected_id {
             return Err(IndexStoreError::InvalidInput(
-                "remote publication snapshot is missing or has the wrong length".to_string(),
+                "remote publication job id does not match its persisted identity".to_string(),
             ));
-        }
-        if let Some(manifest) = &job.manifest {
-            validate_manifest(manifest)?;
         }
         Ok(job)
     }
@@ -552,7 +579,7 @@ fn validate_manifest(manifest: &GenerationManifest) -> Result<(), IndexStoreErro
         .collect::<BTreeSet<_>>();
     if actual != expected {
         return Err(IndexStoreError::InvalidInput(
-            "generation manifest must contain exactly the nine allowlisted files".to_string(),
+            "generation manifest must contain exactly the eleven allowlisted files".to_string(),
         ));
     }
     let mut total = 0_u64;

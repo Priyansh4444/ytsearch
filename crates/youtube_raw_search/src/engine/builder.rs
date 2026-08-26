@@ -36,21 +36,55 @@ struct PositionSpoolWriter {
     scratch: Vec<u8>,
 }
 
-struct PostingShardWriter {
-    directory: PathBuf,
-    outputs: Vec<Option<ColdWriter>>,
+struct SpoolDirectory {
+    path: PathBuf,
 }
 
-impl PostingShardWriter {
-    fn create(directory: PathBuf) -> Result<Self> {
-        fs::create_dir_all(&directory)?;
+struct ShardSpoolWriter {
+    directory: PathBuf,
+    outputs: Vec<Option<ColdWriter>>,
+    key_scratch: Vec<u8>,
+}
+
+impl SpoolDirectory {
+    fn create(path: PathBuf) -> Result<Self> {
+        if path.exists() {
+            fs::remove_dir_all(&path)?;
+        }
+        fs::create_dir_all(&path)?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for SpoolDirectory {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_dir_all(&self.path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %self.path.display(), %error, "failed to clean build spool");
+        }
+    }
+}
+
+impl ShardSpoolWriter {
+    fn create(directory: &Path) -> Result<Self> {
         Ok(Self {
-            directory,
+            directory: directory.to_path_buf(),
             outputs: (0..POSTING_SHARDS).map(|_| None).collect(),
+            key_scratch: Vec::new(),
         })
     }
 
-    fn append(&mut self, term: &str, posting: BuildPosting, field: IndexedField) -> Result<()> {
+    fn append_posting(
+        &mut self,
+        term: &str,
+        posting: BuildPosting,
+        field: IndexedField,
+    ) -> Result<()> {
         let shard = usize::from(term.as_bytes()[0]);
         if self.outputs[shard].is_none() {
             self.outputs[shard] = Some(ColdWriter::create_posting_shard(
@@ -61,6 +95,33 @@ impl PostingShardWriter {
             self.outputs[shard].as_mut().expect("posting shard exists"),
             term,
             posting,
+            field,
+        )
+    }
+
+    fn append_bigram(
+        &mut self,
+        left: &str,
+        right: &str,
+        id: u32,
+        earliest_end_offset: u32,
+        field: IndexedField,
+    ) -> Result<()> {
+        self.key_scratch.clear();
+        self.key_scratch.extend_from_slice(left.as_bytes());
+        self.key_scratch.push(0);
+        self.key_scratch.extend_from_slice(right.as_bytes());
+        let shard = usize::from(self.key_scratch[0]);
+        if self.outputs[shard].is_none() {
+            self.outputs[shard] = Some(ColdWriter::create_posting_shard(
+                &self.directory.join(format!("{shard:03}.bin")),
+            )?);
+        }
+        write_spool_bigram(
+            self.outputs[shard].as_mut().expect("bigram shard exists"),
+            &self.key_scratch,
+            id,
+            earliest_end_offset,
             field,
         )
     }
@@ -139,7 +200,7 @@ impl TokenBuild {
 }
 
 fn append_token_postings(
-    postings: &mut PostingShardWriter,
+    postings: &mut ShardSpoolWriter,
     counts: TokenCounts,
     id: u32,
     field: IndexedField,
@@ -159,7 +220,7 @@ fn append_token_postings(
             position_length,
             frequency,
         };
-        postings.append(&term, posting, field)?;
+        postings.append_posting(&term, posting, field)?;
     }
     Ok(())
 }
@@ -217,8 +278,10 @@ where
     let mut position_spool = PositionSpoolWriter::create(&position_spool_path)?;
     let mut position_scratch = Vec::new();
 
-    let posting_spool_path = index_path.join(POSTING_SPOOL_DIRECTORY);
-    let mut posting_spool = PostingShardWriter::create(posting_spool_path.clone())?;
+    let posting_spool = SpoolDirectory::create(index_path.join(POSTING_SPOOL_DIRECTORY))?;
+    let bigram_spool = SpoolDirectory::create(index_path.join(BIGRAM_SPOOL_DIRECTORY))?;
+    let mut posting_spool_writer = ShardSpoolWriter::create(posting_spool.path())?;
+    let mut bigram_spool_writer = ShardSpoolWriter::create(bigram_spool.path())?;
     let mut videos = Vec::<VideoMeta>::new();
     let mut video_ids = HashMap::<String, u32>::new();
     let document_record_spool_path = index_path.join(DOCUMENT_RECORD_SPOOL_FILE);
@@ -251,9 +314,14 @@ where
             video
         } else {
             let video = videos.len() as u32;
-            let title_counts = token_counts(&source.title)?;
+            let title_counts = token_counts(
+                &source.title,
+                video,
+                IndexedField::Title,
+                &mut bigram_spool_writer,
+            )?;
             append_token_postings(
-                &mut posting_spool,
+                &mut posting_spool_writer,
                 title_counts,
                 video,
                 IndexedField::Title,
@@ -280,7 +348,12 @@ where
         document_count = document_count.checked_add(1).ok_or_else(|| {
             Error::InvalidInput("corpus contains more than 4 billion documents".to_string())
         })?;
-        let text_counts = token_counts(&source.text)?;
+        let text_counts = token_counts(
+            &source.text,
+            document,
+            IndexedField::Text,
+            &mut bigram_spool_writer,
+        )?;
         let document_tokens = text_counts
             .terms
             .values()
@@ -288,7 +361,7 @@ where
             .sum::<u32>();
         total_tokens = total_tokens.saturating_add(u64::from(document_tokens));
         append_token_postings(
-            &mut posting_spool,
+            &mut posting_spool_writer,
             text_counts,
             document,
             IndexedField::Text,
@@ -331,7 +404,8 @@ where
     document_output.finish()?;
     document_record_spool.finish()?;
     position_spool.finish()?;
-    posting_spool.finish()?;
+    posting_spool_writer.finish()?;
+    bigram_spool_writer.finish()?;
 
     let mut channel_output = ColdWriter::create(&index_path.join(CHANNELS_FILE))?;
     serde_json::to_writer(&mut channel_output, &channels)?;
@@ -347,10 +421,17 @@ where
     )?;
     fs::remove_file(&document_record_spool_path)?;
     let position_spool = MappedFile::open(&position_spool_path, POSITION_SPOOL_MAGIC)?;
-    let term_count = write_postings(index_path, &posting_spool_path, &videos, &position_spool)?;
+    let lexicon = write_postings(index_path, posting_spool.path(), &videos, &position_spool)?;
     drop(position_spool);
     fs::remove_file(&position_spool_path)?;
-    fs::remove_dir_all(&posting_spool_path)?;
+    write_bigram_indexes(
+        index_path,
+        bigram_spool.path(),
+        &lexicon,
+        document_count,
+        videos.len() as u32,
+    )?;
+    let term_count = lexicon.len();
 
     let average_document_tokens = if document_count == 0 {
         0.0
@@ -358,7 +439,7 @@ where
         total_tokens as f32 / document_count as f32
     };
     let manifest = Manifest {
-        schema_version: 6,
+        schema_version: 7,
         documents: document_count,
         videos: videos.len() as u32,
         channels: channels.len() as u32,
@@ -380,7 +461,7 @@ where
             .map(|video| video.comment_count)
             .max()
             .unwrap_or(0),
-        files: build_manifest_files(index_path)?,
+        files: build_manifest_files(index_path, 7)?,
     };
     let mut manifest_output = ColdWriter::create(&index_path.join(MANIFEST_FILE))?;
     serde_json::to_writer_pretty(&mut manifest_output, &manifest)?;
@@ -498,7 +579,7 @@ fn write_postings(
     posting_spool_directory: &Path,
     videos: &[VideoMeta],
     position_spool: &MappedFile,
-) -> Result<usize> {
+) -> Result<Vec<LexiconBuildEntry>> {
     let shard_paths = refine_posting_shards(posting_spool_directory)?;
     let mut term_count = 0_usize;
     for path in &shard_paths {
@@ -631,29 +712,50 @@ fn write_postings(
         }),
     )?;
     write_lexicon(index_path, &lexicon)?;
-    Ok(lexicon.len())
+    Ok(lexicon)
 }
 
 fn refine_posting_shards(directory: &Path) -> Result<Vec<PathBuf>> {
+    refine_spool_shards::<SpoolPosting>(directory)
+}
+
+fn refine_bigram_shards(directory: &Path, maximum_bytes: u64) -> Result<Vec<PathBuf>> {
+    refine_spool_shards_with_limit::<SpoolBigram>(directory, maximum_bytes)
+}
+
+fn refine_spool_shards<R: ShardRecord>(directory: &Path) -> Result<Vec<PathBuf>> {
+    refine_spool_shards_with_limit::<R>(directory, MAX_POSTING_SHARD_BYTES)
+}
+
+fn refine_spool_shards_with_limit<R: ShardRecord>(
+    directory: &Path,
+    maximum_bytes: u64,
+) -> Result<Vec<PathBuf>> {
+    if maximum_bytes == 0 {
+        return Err(Error::InvalidInput(
+            "spool shard limit must be positive".to_string(),
+        ));
+    }
     let mut paths = Vec::new();
     let mut next_id = 0_u64;
     for shard in 0..POSTING_SHARDS {
         let path = directory.join(format!("{shard:03}.bin"));
         if path.exists() {
-            refine_posting_shard(directory, path, 1, &mut next_id, &mut paths)?;
+            refine_spool_shard::<R>(directory, path, 1, maximum_bytes, &mut next_id, &mut paths)?;
         }
     }
     Ok(paths)
 }
 
-fn refine_posting_shard(
+fn refine_spool_shard<R: ShardRecord>(
     directory: &Path,
     path: PathBuf,
     depth: usize,
+    maximum_bytes: u64,
     next_id: &mut u64,
     output_paths: &mut Vec<PathBuf>,
 ) -> Result<()> {
-    if fs::metadata(&path)?.len() <= MAX_POSTING_SHARD_BYTES {
+    if fs::metadata(&path)?.len() <= maximum_bytes {
         output_paths.push(path);
         return Ok(());
     }
@@ -662,13 +764,12 @@ fn refine_posting_shard(
     let mut outputs = (0..257).map(|_| None).collect::<Vec<Option<ColdWriter>>>();
     let mut child_paths = vec![None; 257];
     let mut can_refine = false;
-    while let Some(record) = read_spool_posting(&mut input)? {
+    while let Some(record) = R::read(&mut input)? {
         let key = record
-            .term
-            .as_bytes()
+            .key()
             .get(depth)
             .map_or(0, |byte| usize::from(*byte) + 1);
-        can_refine |= record.term.len() > depth;
+        can_refine |= record.key().len() > depth;
         if outputs[key].is_none() {
             let child = directory.join(format!("refined-{:08}.bin", *next_id));
             *next_id = next_id
@@ -677,12 +778,7 @@ fn refine_posting_shard(
             outputs[key] = Some(ColdWriter::create_posting_shard(&child)?);
             child_paths[key] = Some(child);
         }
-        write_spool_posting(
-            outputs[key].as_mut().expect("refined shard exists"),
-            &record.term,
-            record.posting,
-            record.field,
-        )?;
+        record.write(outputs[key].as_mut().expect("refined shard exists"))?;
     }
     for output in outputs.into_iter().flatten() {
         output.finish()?;
@@ -694,7 +790,14 @@ fn refine_posting_shard(
         if populated == 1 && !can_refine {
             output_paths.push(child);
         } else {
-            refine_posting_shard(directory, child, depth + 1, next_id, output_paths)?;
+            refine_spool_shard::<R>(
+                directory,
+                child,
+                depth + 1,
+                maximum_bytes,
+                next_id,
+                output_paths,
+            )?;
         }
     }
     Ok(())
@@ -706,8 +809,55 @@ struct SpoolPosting {
     field: IndexedField,
 }
 
+struct SpoolBigram {
+    key: Vec<u8>,
+    id: u32,
+    earliest_end_offset: u32,
+    field: IndexedField,
+}
+
+trait ShardRecord: Sized {
+    fn key(&self) -> &[u8];
+    fn read(input: &mut dyn Read) -> Result<Option<Self>>;
+    fn write(&self, output: &mut dyn Write) -> Result<()>;
+}
+
+impl ShardRecord for SpoolPosting {
+    fn key(&self) -> &[u8] {
+        self.term.as_bytes()
+    }
+
+    fn read(input: &mut dyn Read) -> Result<Option<Self>> {
+        read_spool_posting(input)
+    }
+
+    fn write(&self, output: &mut dyn Write) -> Result<()> {
+        write_spool_posting(output, &self.term, self.posting, self.field)
+    }
+}
+
+impl ShardRecord for SpoolBigram {
+    fn key(&self) -> &[u8] {
+        &self.key
+    }
+
+    fn read(input: &mut dyn Read) -> Result<Option<Self>> {
+        read_spool_bigram(input)
+    }
+
+    fn write(&self, output: &mut dyn Write) -> Result<()> {
+        write_spool_bigram(
+            output,
+            &self.key,
+            self.id,
+            self.earliest_end_offset,
+            self.field,
+        )
+    }
+}
+
 fn write_spool_posting(
-    output: &mut impl Write,
+    output: &mut (impl Write + ?Sized),
     term: &str,
     posting: BuildPosting,
     field: IndexedField,
@@ -725,7 +875,7 @@ fn write_spool_posting(
     Ok(())
 }
 
-fn read_spool_posting(input: &mut impl Read) -> Result<Option<SpoolPosting>> {
+fn read_spool_posting(input: &mut (impl Read + ?Sized)) -> Result<Option<SpoolPosting>> {
     let mut length_bytes = [0_u8; 2];
     if input.read(&mut length_bytes[..1])? == 0 {
         return Ok(None);
@@ -770,6 +920,81 @@ fn read_spool_posting(input: &mut impl Read) -> Result<Option<SpoolPosting>> {
     }))
 }
 
+fn write_spool_bigram(
+    output: &mut (impl Write + ?Sized),
+    key: &[u8],
+    id: u32,
+    earliest_end_offset: u32,
+    field: IndexedField,
+) -> Result<()> {
+    let key_length = u16::try_from(key.len())
+        .map_err(|_| Error::InvalidInput("bigram key exceeds 65,535 bytes".to_string()))?;
+    if earliest_end_offset == 0 {
+        return Err(Error::InvalidInput(
+            "bigram end offsets must be positive".to_string(),
+        ));
+    }
+    output.write_all(&key_length.to_le_bytes())?;
+    output.write_all(key)?;
+    output.write_all(&[field as u8])?;
+    output.write_all(&id.to_le_bytes())?;
+    output.write_all(&earliest_end_offset.to_le_bytes())?;
+    Ok(())
+}
+
+fn read_spool_bigram(input: &mut (impl Read + ?Sized)) -> Result<Option<SpoolBigram>> {
+    let mut length_bytes = [0_u8; 2];
+    if input.read(&mut length_bytes[..1])? == 0 {
+        return Ok(None);
+    }
+    input.read_exact(&mut length_bytes[1..])?;
+    let length = usize::from(u16::from_le_bytes(length_bytes));
+    if length < 3 {
+        return Err(Error::Corrupt(
+            "bigram shard contains an invalid key".to_string(),
+        ));
+    }
+    let mut key = vec![0_u8; length];
+    input.read_exact(&mut key)?;
+    let Some(separator) = key.iter().position(|byte| *byte == 0) else {
+        return Err(Error::Corrupt(
+            "bigram shard key is missing its separator".to_string(),
+        ));
+    };
+    if separator == 0
+        || separator + 1 == key.len()
+        || key[separator + 1..].contains(&0)
+        || std::str::from_utf8(&key[..separator]).is_err()
+        || std::str::from_utf8(&key[separator + 1..]).is_err()
+    {
+        return Err(Error::Corrupt("bigram shard key is malformed".to_string()));
+    }
+    let mut encoded = [0_u8; 9];
+    input.read_exact(&mut encoded)?;
+    let field = match encoded[0] {
+        0 => IndexedField::Text,
+        1 => IndexedField::Title,
+        _ => {
+            return Err(Error::Corrupt(
+                "bigram shard field discriminator is invalid".to_string(),
+            ));
+        }
+    };
+    let earliest_end_offset =
+        u32::from_le_bytes(encoded[5..9].try_into().expect("bigram end offset bytes"));
+    if earliest_end_offset == 0 {
+        return Err(Error::Corrupt(
+            "bigram shard end offset is zero".to_string(),
+        ));
+    }
+    Ok(Some(SpoolBigram {
+        key,
+        id: u32::from_le_bytes(encoded[1..5].try_into().expect("bigram id bytes")),
+        earliest_end_offset,
+        field,
+    }))
+}
+
 fn read_posting_shard(path: &Path) -> Result<HashMap<String, TermBuild>> {
     let mut input = BufReader::new(ColdReader::open(path)?);
     let mut terms = HashMap::<String, TermBuild>::new();
@@ -781,6 +1006,281 @@ fn read_posting_shard(path: &Path) -> Result<HashMap<String, TermBuild>> {
         }
     }
     Ok(terms)
+}
+
+#[derive(Default)]
+struct BigramBuild {
+    text: Vec<bigram::BigramPosting>,
+    title: Vec<bigram::BigramPosting>,
+}
+
+struct ResolvedBigramKey<'a> {
+    encoded: bigram::BigramKey,
+    left: (u32, &'a LexiconBuildEntry),
+    right: (u32, &'a LexiconBuildEntry),
+}
+
+fn write_bigram_indexes(
+    index_path: &Path,
+    spool_directory: &Path,
+    lexicon: &[LexiconBuildEntry],
+    documents: u32,
+    videos: u32,
+) -> Result<()> {
+    write_bigram_indexes_with_threshold(
+        index_path,
+        spool_directory,
+        lexicon,
+        documents,
+        videos,
+        MIN_BIGRAM_TERM_DOCUMENTS,
+        MAX_BIGRAM_SHARD_BYTES,
+    )
+}
+
+fn write_bigram_indexes_with_threshold(
+    index_path: &Path,
+    spool_directory: &Path,
+    lexicon: &[LexiconBuildEntry],
+    documents: u32,
+    videos: u32,
+    minimum_term_documents: u32,
+    maximum_shard_bytes: u64,
+) -> Result<()> {
+    let shard_paths = refine_bigram_shards(spool_directory, maximum_shard_bytes)?;
+    let mut text = bigram::BigramIndexWriter::create(
+        &index_path.join(bigram::TEXT_BIGRAM_FILE),
+        documents.max(1),
+    )?;
+    let mut title = bigram::BigramIndexWriter::create(
+        &index_path.join(bigram::TITLE_BIGRAM_FILE),
+        videos.max(1),
+    )?;
+    for path in shard_paths {
+        if fs::metadata(&path)?.len() > maximum_shard_bytes {
+            write_oversized_bigram_shard(
+                &path,
+                lexicon,
+                minimum_term_documents,
+                &mut text,
+                &mut title,
+            )?;
+            continue;
+        }
+        let mut pairs = read_bigram_shard(&path)?.into_iter().collect::<Vec<_>>();
+        pairs.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        for (key, mut postings) in pairs {
+            let pair = resolve_bigram_key(lexicon, &key)?;
+            if safe_document_frequency(pair.left) <= minimum_term_documents
+                || safe_document_frequency(pair.right) <= minimum_term_documents
+            {
+                continue;
+            }
+            coalesce_bigram_postings(&mut postings.text)?;
+            if !postings.text.is_empty() {
+                text.append(pair.encoded, &postings.text)?;
+            }
+            coalesce_bigram_postings(&mut postings.title)?;
+            if !postings.title.is_empty() {
+                title.append(pair.encoded, &postings.title)?;
+            }
+        }
+    }
+    text.finish()?;
+    title.finish()?;
+    Ok(())
+}
+
+fn write_oversized_bigram_shard(
+    path: &Path,
+    lexicon: &[LexiconBuildEntry],
+    minimum_term_documents: u32,
+    text: &mut bigram::BigramIndexWriter,
+    title: &mut bigram::BigramIndexWriter,
+) -> Result<()> {
+    let mut input = BufReader::new(ColdReader::open(path)?);
+    let first = read_spool_bigram(&mut input)?
+        .ok_or_else(|| Error::Corrupt("oversized bigram shard contains no records".to_string()))?;
+    let expected_key = first.key;
+    let pair = resolve_bigram_key(lexicon, &expected_key)?;
+    let retained = safe_document_frequency(pair.left) > minimum_term_documents
+        && safe_document_frequency(pair.right) > minimum_term_documents;
+
+    // Refinement can no longer split an oversized leaf only when all records
+    // have the same complete key. Read the leaf once per field so each posting
+    // list is coalesced and encoded in document order without materializing a
+    // corpus-sized Vec. The iterator also validates the exact-key invariant.
+    let text_postings =
+        CoalescedBigramShardPostings::open(path, expected_key.clone(), IndexedField::Text)?;
+    if retained {
+        text.append_iter(pair.encoded, text_postings)?;
+    } else {
+        for posting in text_postings {
+            posting?;
+        }
+    }
+
+    let title_postings =
+        CoalescedBigramShardPostings::open(path, expected_key, IndexedField::Title)?;
+    if retained {
+        title.append_iter(pair.encoded, title_postings)?;
+    } else {
+        for posting in title_postings {
+            posting?;
+        }
+    }
+    Ok(())
+}
+
+struct CoalescedBigramShardPostings {
+    input: BufReader<ColdReader>,
+    expected_key: Vec<u8>,
+    field: IndexedField,
+    pending: Option<bigram::BigramPosting>,
+    finished: bool,
+}
+
+impl CoalescedBigramShardPostings {
+    fn open(path: &Path, expected_key: Vec<u8>, field: IndexedField) -> Result<Self> {
+        Ok(Self {
+            input: BufReader::new(ColdReader::open(path)?),
+            expected_key,
+            field,
+            pending: None,
+            finished: false,
+        })
+    }
+
+    fn fail(&mut self, message: &str) -> Option<Result<bigram::BigramPosting>> {
+        self.finished = true;
+        Some(Err(Error::Corrupt(message.to_string())))
+    }
+}
+
+impl Iterator for CoalescedBigramShardPostings {
+    type Item = Result<bigram::BigramPosting>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+        loop {
+            let record = match read_spool_bigram(&mut self.input) {
+                Ok(Some(record)) => record,
+                Ok(None) => {
+                    self.finished = true;
+                    return self.pending.take().map(Ok);
+                }
+                Err(error) => {
+                    self.finished = true;
+                    return Some(Err(error));
+                }
+            };
+            if record.key != self.expected_key {
+                return self.fail("oversized bigram shard contains more than one key");
+            }
+            if record.field != self.field {
+                continue;
+            }
+            let candidate = bigram::BigramPosting {
+                document: record.id,
+                earliest_end_offset: record.earliest_end_offset,
+            };
+            let Some(previous) = self.pending.as_mut() else {
+                self.pending = Some(candidate);
+                continue;
+            };
+            if candidate.document < previous.document {
+                return self.fail("bigram spool identifiers are not monotonic");
+            }
+            if candidate.document == previous.document {
+                previous.earliest_end_offset = previous
+                    .earliest_end_offset
+                    .min(candidate.earliest_end_offset);
+                continue;
+            }
+            return Some(Ok(self
+                .pending
+                .replace(candidate)
+                .expect("pending posting")));
+        }
+    }
+}
+
+fn read_bigram_shard(path: &Path) -> Result<HashMap<Vec<u8>, BigramBuild>> {
+    let mut input = BufReader::new(ColdReader::open(path)?);
+    let mut pairs = HashMap::<Vec<u8>, BigramBuild>::new();
+    while let Some(record) = read_spool_bigram(&mut input)? {
+        let postings = pairs.entry(record.key).or_default();
+        let posting = bigram::BigramPosting {
+            document: record.id,
+            earliest_end_offset: record.earliest_end_offset,
+        };
+        match record.field {
+            IndexedField::Text => postings.text.push(posting),
+            IndexedField::Title => postings.title.push(posting),
+        }
+    }
+    Ok(pairs)
+}
+
+fn resolve_bigram_key<'a>(
+    lexicon: &'a [LexiconBuildEntry],
+    key: &[u8],
+) -> Result<ResolvedBigramKey<'a>> {
+    let separator = key
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(|| Error::Corrupt("bigram key has no separator".to_string()))?;
+    let left = resolve_bigram_term(lexicon, &key[..separator])?;
+    let right = resolve_bigram_term(lexicon, &key[separator + 1..])?;
+    Ok(ResolvedBigramKey {
+        encoded: bigram::BigramKey::new(left.0, right.0),
+        left,
+        right,
+    })
+}
+
+fn resolve_bigram_term<'a>(
+    lexicon: &'a [LexiconBuildEntry],
+    term: &[u8],
+) -> Result<(u32, &'a LexiconBuildEntry)> {
+    let index = lexicon
+        .binary_search_by(|entry| entry.term.as_bytes().cmp(term))
+        .map_err(|_| Error::Corrupt("bigram term is missing from the lexicon".to_string()))?;
+    Ok((index as u32, &lexicon[index]))
+}
+
+fn safe_document_frequency(term: (u32, &LexiconBuildEntry)) -> u32 {
+    term.1
+        .text_frequency
+        .saturating_add(term.1.fuzzy_title_frequency)
+}
+
+fn coalesce_bigram_postings(postings: &mut Vec<bigram::BigramPosting>) -> Result<()> {
+    if postings.is_empty() {
+        return Ok(());
+    }
+    let mut output = 1_usize;
+    for input in 1..postings.len() {
+        let previous = postings[output - 1];
+        let candidate = postings[input];
+        if candidate.document < previous.document {
+            return Err(Error::Corrupt(
+                "bigram spool identifiers are not monotonic".to_string(),
+            ));
+        }
+        if candidate.document == previous.document {
+            postings[output - 1].earliest_end_offset = previous
+                .earliest_end_offset
+                .min(candidate.earliest_end_offset);
+            continue;
+        }
+        postings[output] = candidate;
+        output += 1;
+    }
+    postings.truncate(output);
+    Ok(())
 }
 
 fn write_position_lists(
@@ -873,29 +1373,64 @@ fn write_lexicon(index_path: &Path, entries: &[LexiconBuildEntry]) -> Result<()>
     Ok(())
 }
 
-fn token_counts(value: &str) -> Result<TokenCounts> {
+fn token_counts(
+    value: &str,
+    id: u32,
+    field: IndexedField,
+    bigrams: &mut ShardSpoolWriter,
+) -> Result<TokenCounts> {
     let mut counts = TokenCounts {
         terms: HashMap::new(),
         tails: Vec::new(),
     };
     let mut token = String::new();
+    let mut previous_token = None;
     let mut position = 0_u32;
     for character in value.chars() {
         if character.is_alphanumeric() {
             token.extend(character.to_lowercase());
             continue;
         }
-        record_token(&mut counts, &mut token, &mut position)?;
+        record_token(
+            &mut counts,
+            &mut token,
+            &mut previous_token,
+            &mut position,
+            id,
+            field,
+            bigrams,
+        )?;
     }
-    record_token(&mut counts, &mut token, &mut position)?;
+    record_token(
+        &mut counts,
+        &mut token,
+        &mut previous_token,
+        &mut position,
+        id,
+        field,
+        bigrams,
+    )?;
     Ok(counts)
 }
 
-fn record_token(counts: &mut TokenCounts, token: &mut String, position: &mut u32) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+fn record_token(
+    counts: &mut TokenCounts,
+    token: &mut String,
+    previous_token: &mut Option<String>,
+    position: &mut u32,
+    id: u32,
+    field: IndexedField,
+    bigrams: &mut ShardSpoolWriter,
+) -> Result<()> {
     if token.is_empty() {
         return Ok(());
     }
     let owned = std::mem::take(token);
+    if let Some(previous) = previous_token.as_deref() {
+        bigrams.append_bigram(previous, &owned, id, *position, field)?;
+    }
+    *previous_token = Some(owned.clone());
     match counts.terms.entry(owned) {
         std::collections::hash_map::Entry::Vacant(entry) => {
             entry.insert(TokenBuild {
@@ -929,6 +1464,7 @@ fn record_token(counts: &mut TokenCounts, token: &mut String, position: &mut u32
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use tempfile::tempdir;
 
     fn posting() -> BuildPosting {
         BuildPosting {
@@ -962,5 +1498,161 @@ mod tests {
             read_spool_posting(&mut Cursor::new(invalid)),
             Err(Error::Corrupt(_))
         ));
+    }
+
+    fn lexicon_entry(term: &str, frequency: u32) -> LexiconBuildEntry {
+        LexiconBuildEntry {
+            term: term.to_string(),
+            text_offset: 0,
+            text_length: 0,
+            text_frequency: frequency,
+            title_offset: 0,
+            title_length: 0,
+            title_frequency: 0,
+            fuzzy_title_frequency: 0,
+        }
+    }
+
+    #[test]
+    fn selective_bigram_merge_keeps_earliest_offsets_for_text_and_titles() {
+        let root = tempdir().unwrap();
+        let spool = SpoolDirectory::create(root.path().join("spool")).unwrap();
+        let mut writer = ShardSpoolWriter::create(spool.path()).unwrap();
+        for (id, offset, field) in [
+            (3, 5, IndexedField::Text),
+            (3, 2, IndexedField::Text),
+            (8, 4, IndexedField::Text),
+            (1, 3, IndexedField::Title),
+        ] {
+            writer
+                .append_bigram("alpha", "beta", id, offset, field)
+                .unwrap();
+        }
+        writer.finish().unwrap();
+        let output = root.path().join("index");
+        fs::create_dir(&output).unwrap();
+        let lexicon = [lexicon_entry("alpha", 1), lexicon_entry("beta", 1)];
+        write_bigram_indexes_with_threshold(
+            &output,
+            spool.path(),
+            &lexicon,
+            16,
+            4,
+            0,
+            MAX_BIGRAM_SHARD_BYTES,
+        )
+        .unwrap();
+
+        let text = bigram::BigramIndex::open(&output.join(bigram::TEXT_BIGRAM_FILE)).unwrap();
+        assert_eq!(
+            text.lookup(bigram::BigramKey::new(0, 1)).unwrap(),
+            [
+                bigram::BigramPosting {
+                    document: 3,
+                    earliest_end_offset: 2,
+                },
+                bigram::BigramPosting {
+                    document: 8,
+                    earliest_end_offset: 4,
+                },
+            ]
+        );
+        let title = bigram::BigramIndex::open(&output.join(bigram::TITLE_BIGRAM_FILE)).unwrap();
+        assert_eq!(
+            title.lookup(bigram::BigramKey::new(0, 1)).unwrap(),
+            [bigram::BigramPosting {
+                document: 1,
+                earliest_end_offset: 3,
+            }]
+        );
+    }
+
+    #[test]
+    fn recursive_pair_runs_respect_the_configured_memory_bound() {
+        let root = tempdir().unwrap();
+        let spool = SpoolDirectory::create(root.path().join("spool")).unwrap();
+        let mut writer = ShardSpoolWriter::create(spool.path()).unwrap();
+        for index in 0..100_u32 {
+            writer
+                .append_bigram(
+                    &format!("left{index:03}"),
+                    "right",
+                    index,
+                    1,
+                    IndexedField::Text,
+                )
+                .unwrap();
+        }
+        writer.finish().unwrap();
+        let limit = 128_u64;
+        let paths = refine_spool_shards_with_limit::<SpoolBigram>(spool.path(), limit).unwrap();
+        assert!(paths.len() > 1);
+        assert!(
+            paths
+                .iter()
+                .all(|path| fs::metadata(path).unwrap().len() <= limit)
+        );
+    }
+
+    #[test]
+    fn oversized_single_pair_streams_and_coalesces_without_a_decoded_run() {
+        let root = tempdir().unwrap();
+        let spool = SpoolDirectory::create(root.path().join("spool")).unwrap();
+        let mut writer = ShardSpoolWriter::create(spool.path()).unwrap();
+        for id in 0..100_u32 {
+            writer
+                .append_bigram("alpha", "beta", id, 9, IndexedField::Text)
+                .unwrap();
+            if id < 20 {
+                writer
+                    .append_bigram("alpha", "beta", id, 7, IndexedField::Title)
+                    .unwrap();
+            }
+            if id == 42 {
+                writer
+                    .append_bigram("alpha", "beta", id, 2, IndexedField::Text)
+                    .unwrap();
+            }
+        }
+        writer.finish().unwrap();
+
+        let output = root.path().join("index");
+        fs::create_dir(&output).unwrap();
+        let lexicon = [lexicon_entry("alpha", 100), lexicon_entry("beta", 100)];
+        let shard_limit = 128;
+        write_bigram_indexes_with_threshold(
+            &output,
+            spool.path(),
+            &lexicon,
+            100,
+            20,
+            0,
+            shard_limit,
+        )
+        .unwrap();
+
+        let text = bigram::BigramIndex::open(&output.join(bigram::TEXT_BIGRAM_FILE)).unwrap();
+        let postings = text.lookup(bigram::BigramKey::new(0, 1)).unwrap();
+        assert_eq!(postings.len(), 100);
+        assert_eq!(postings[42].earliest_end_offset, 2);
+        let title = bigram::BigramIndex::open(&output.join(bigram::TITLE_BIGRAM_FILE)).unwrap();
+        assert_eq!(
+            title.lookup(bigram::BigramKey::new(0, 1)).unwrap().len(),
+            20
+        );
+    }
+
+    #[test]
+    fn spool_directories_clean_stale_and_failed_build_state() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("spool");
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("stale"), b"old").unwrap();
+        {
+            let spool = SpoolDirectory::create(path.clone()).unwrap();
+            assert!(!spool.path().join("stale").exists());
+            fs::write(spool.path().join("partial"), b"new").unwrap();
+        }
+        assert!(!path.exists());
     }
 }

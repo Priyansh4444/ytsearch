@@ -4,6 +4,8 @@ const BIGRAM_MAGIC: &[u8; 8] = b"RAWBIG01";
 const BIGRAM_VERSION: u32 = 1;
 const BIGRAM_HEADER_BYTES: usize = 40;
 const BIGRAM_ENTRY_BYTES: usize = 24;
+pub(super) const TEXT_BIGRAM_FILE: &str = "bigrams.text.bin";
+pub(super) const TITLE_BIGRAM_FILE: &str = "bigrams.title.bin";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct BigramKey(u64);
@@ -24,6 +26,7 @@ pub(super) struct BigramPosting {
     pub(super) earliest_end_offset: u32,
 }
 
+#[cfg(test)]
 pub(super) struct BigramWriteEntry<'a> {
     pub(super) key: BigramKey,
     pub(super) postings: &'a [BigramPosting],
@@ -40,9 +43,9 @@ struct BigramEntry {
 const _: () = assert!(std::mem::size_of::<BigramEntry>() == BIGRAM_ENTRY_BYTES);
 
 pub(super) struct BigramIndex {
-    file: MappedFile,
-    count: usize,
-    table_start: usize,
+    _file: MappedFile,
+    _count: usize,
+    _table_start: usize,
     universe: u32,
 }
 
@@ -140,19 +143,25 @@ impl BigramIndex {
             ));
         }
         Ok(Self {
-            file,
-            count,
-            table_start,
+            _file: file,
+            _count: count,
+            _table_start: table_start,
             universe,
         })
     }
 
+    #[cfg(test)]
     pub(super) fn lookup(&self, key: BigramKey) -> Result<Vec<BigramPosting>> {
         let mut postings = Vec::new();
         self.lookup_into(key, &mut postings)?;
         Ok(postings)
     }
 
+    pub(super) const fn universe(&self) -> u32 {
+        self.universe
+    }
+
+    #[cfg(test)]
     pub(super) fn lookup_into(
         &self,
         key: BigramKey,
@@ -183,7 +192,7 @@ impl BigramIndex {
                 })?)
                 .ok_or_else(|| Error::Corrupt("bigram posting end overflows".to_string()))?;
         let encoded =
-            self.file.bytes().get(start..end).ok_or_else(|| {
+            self._file.bytes().get(start..end).ok_or_else(|| {
                 Error::Corrupt("bigram posting range is out of bounds".to_string())
             })?;
         let mut cursor = 0_usize;
@@ -223,13 +232,14 @@ impl BigramIndex {
         Ok(())
     }
 
+    #[cfg(test)]
     fn find(&self, key: BigramKey) -> Result<Option<BigramEntry>> {
-        let bytes = self.file.bytes();
+        let bytes = self._file.bytes();
         let mut low = 0_usize;
-        let mut high = self.count;
+        let mut high = self._count;
         while low < high {
             let middle = low + (high - low) / 2;
-            let entry = read_entry(bytes, self.table_start, middle)?;
+            let entry = read_entry(bytes, self._table_start, middle)?;
             match entry.key.encoded().cmp(&key.encoded()) {
                 Ordering::Less => low = middle + 1,
                 Ordering::Greater => high = middle,
@@ -272,6 +282,28 @@ impl BigramIndexWriter {
     }
 
     pub(super) fn append(&mut self, key: BigramKey, postings: &[BigramPosting]) -> Result<()> {
+        if !self.append_iter(key, postings.iter().copied().map(Ok))? {
+            return Err(Error::InvalidInput(
+                "a bigram entry must contain at least one posting".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Appends one posting list without requiring it to be materialized.
+    ///
+    /// Empty iterators are ignored so a caller can make one bounded pass per
+    /// field over an interleaved spool shard. Non-empty iterators retain the
+    /// same ordering and universe contract as [`Self::append`].
+    pub(super) fn append_iter(
+        &mut self,
+        key: BigramKey,
+        postings: impl IntoIterator<Item = Result<BigramPosting>>,
+    ) -> Result<bool> {
+        let mut postings = postings.into_iter();
+        let Some(first) = postings.next().transpose()? else {
+            return Ok(false);
+        };
         if self
             .previous_key
             .is_some_and(|previous| key.encoded() <= previous)
@@ -280,14 +312,6 @@ impl BigramIndexWriter {
                 "bigram keys must be strictly increasing".to_string(),
             ));
         }
-        if postings.is_empty() {
-            return Err(Error::InvalidInput(
-                "a bigram entry must contain at least one posting".to_string(),
-            ));
-        }
-        let count = u32::try_from(postings.len()).map_err(|_| {
-            Error::InvalidInput("one bigram has more than 4 billion documents".to_string())
-        })?;
         let offset = self
             .output
             .position()
@@ -296,14 +320,17 @@ impl BigramIndexWriter {
                 Error::Corrupt("bigram output position precedes its postings".to_string())
             })?;
         let mut previous_document = 0_u32;
-        for (index, posting) in postings.iter().enumerate() {
+        let mut count = 0_u32;
+        for posting in std::iter::once(Ok(first)).chain(postings) {
+            let posting = posting?;
+            let index = count;
             if (index > 0 && posting.document <= previous_document)
                 || posting.document >= self.universe
                 || posting.earliest_end_offset == 0
             {
                 return Err(Error::InvalidInput(
                     "bigram postings require in-universe increasing identifiers and positive offsets"
-                        .to_string(),
+                    .to_string(),
                 ));
             }
             let delta = if index == 0 {
@@ -316,6 +343,9 @@ impl BigramIndexWriter {
             write_varint(posting.earliest_end_offset, &mut self.encoded);
             self.output.write_all(&self.encoded)?;
             previous_document = posting.document;
+            count = count.checked_add(1).ok_or_else(|| {
+                Error::InvalidInput("one bigram has more than 4 billion documents".to_string())
+            })?;
         }
         let length = self
             .output
@@ -331,7 +361,7 @@ impl BigramIndexWriter {
             count,
         });
         self.previous_key = Some(key.encoded());
-        Ok(())
+        Ok(true)
     }
 
     pub(super) fn finish(mut self) -> Result<()> {
@@ -354,6 +384,7 @@ impl BigramIndexWriter {
     }
 }
 
+#[cfg(test)]
 pub(super) fn write_bigram_index(
     path: &Path,
     universe: u32,

@@ -35,8 +35,15 @@ const POSITIONS_FILE: &str = "positions.bin";
 const FULL_POSITIONS_FILE: &str = "positions.full.bin";
 const POSITION_SPOOL_FILE: &str = ".positions.spool";
 const POSTING_SPOOL_DIRECTORY: &str = ".postings.spool";
+const BIGRAM_SPOOL_DIRECTORY: &str = ".bigrams.spool";
 const POSTING_SHARDS: usize = 256;
 const MAX_POSTING_SHARD_BYTES: u64 = 32 * 1024 * 1024;
+// Pair records have substantially more decoded map overhead than unigram
+// records. Multi-key leaves are capped at 3 MiB so their decoded maps fit the
+// 32 MiB run budget. A single pair can be larger than that at corpus scale;
+// those leaves are coalesced and encoded through a constant-memory stream.
+const MAX_BIGRAM_SHARD_BYTES: u64 = 3 * 1024 * 1024;
+const MIN_BIGRAM_TERM_DOCUMENTS: u32 = 50_000;
 const DOCUMENT_RECORD_SPOOL_FILE: &str = ".documents.meta.spool";
 const DOCUMENTS_FILE: &str = "documents.blocks";
 const METADATA_FILE: &str = "documents.meta";
@@ -70,7 +77,7 @@ const MAX_DIRECT_POSITION_TARGETS: usize = 128;
 const MAX_EXACT_PROXIMITY_MATCHES: usize = 50_000;
 const MAX_PHRASE_TOKENS: usize = 32;
 const MAX_PHRASE_SLOP: u8 = 8;
-const GENERATION_FILES: [&str; 9] = [
+const GENERATION_FILES_SCHEMA_6: [&str; 9] = [
     CHANNELS_FILE,
     VIDEOS_FILE,
     LEXICON_FILE,
@@ -80,6 +87,19 @@ const GENERATION_FILES: [&str; 9] = [
     DOCUMENTS_FILE,
     METADATA_FILE,
     FUZZY_FILE,
+];
+const GENERATION_FILES_SCHEMA_7: [&str; 11] = [
+    CHANNELS_FILE,
+    VIDEOS_FILE,
+    LEXICON_FILE,
+    POSTINGS_FILE,
+    POSITIONS_FILE,
+    FULL_POSITIONS_FILE,
+    DOCUMENTS_FILE,
+    METADATA_FILE,
+    FUZZY_FILE,
+    bigram::TEXT_BIGRAM_FILE,
+    bigram::TITLE_BIGRAM_FILE,
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -166,7 +186,6 @@ enum ManifestValidation {
     VerifiedByBuilder,
 }
 
-#[cfg(test)]
 mod bigram;
 mod builder;
 mod conjunction;
@@ -229,6 +248,8 @@ struct EngineInner {
     postings: MappedFile,
     positions: PositionIndex,
     full_positions: Option<PositionIndex>,
+    _text_bigrams: Option<bigram::BigramIndex>,
+    _title_bigrams: Option<bigram::BigramIndex>,
     documents: MappedFile,
     metadata: DocumentTable,
     index_bytes: u64,

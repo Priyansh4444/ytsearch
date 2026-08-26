@@ -221,12 +221,17 @@ async fn corrupted_upload_is_removed_and_restart_preserves_n_plus_one() {
     corrupted_final[0] ^= 0xff;
     fs::write(incoming.join(first), corrupted_final).unwrap();
     upload(&fixture.publication, &job, &generation, first).await;
-    for name in RAW_GENERATION_FILES.into_iter().skip(1).take(7) {
+    for name in RAW_GENERATION_FILES
+        .into_iter()
+        .skip(1)
+        .take(RAW_GENERATION_FILES.len() - 2)
+    {
         upload(&fixture.publication, &job, &generation, name).await;
     }
+    let last = RAW_GENERATION_FILES.len() - 1;
     fs::copy(
-        generation.join(RAW_GENERATION_FILES[8]),
-        incoming.join(RAW_GENERATION_FILES[8]),
+        generation.join(RAW_GENERATION_FILES[last]),
+        incoming.join(RAW_GENERATION_FILES[last]),
     )
     .unwrap();
     assert!(matches!(
@@ -241,12 +246,15 @@ async fn corrupted_upload_is_removed_and_restart_preserves_n_plus_one() {
     )
     .unwrap();
     let persisted = restarted.status(&job.job_id).await.unwrap();
-    assert_eq!(persisted.completed_files.len(), 8);
+    assert_eq!(
+        persisted.completed_files.len(),
+        RAW_GENERATION_FILES.len() - 1
+    );
     assert!(matches!(
         restarted.activate(&job.job_id).await,
         Err(IndexStoreError::Conflict(_))
     ));
-    upload(&restarted, &job, &generation, RAW_GENERATION_FILES[8]).await;
+    upload(&restarted, &job, &generation, RAW_GENERATION_FILES[last]).await;
     let activated = restarted.activate(&job.job_id).await.unwrap();
     assert_eq!(activated.status, RemoteJobStatus::Activated);
     assert_eq!(fixture.engine.sequence(), sequence_n);
@@ -266,6 +274,101 @@ async fn corrupted_upload_is_removed_and_restart_preserves_n_plus_one() {
     let active = fixture.engine.active().unwrap();
     assert_eq!(found(&active, "snapshotonly"), 1);
     assert_eq!(found(&active, "nextsnapshot"), 0);
+}
+
+#[tokio::test]
+async fn restart_retires_an_incompatible_prepared_job_and_prepares_schema_seven() {
+    let fixture = fixture();
+    let sequence = replace(
+        &fixture.store,
+        "video-migration",
+        "migrationtoken",
+        "operation-migration",
+    );
+    fixture.publication.prepare().await.unwrap();
+    let state_path = fixture.publication.state_path();
+    let mut legacy: PersistedJob =
+        serde_json::from_reader(File::open(&state_path).unwrap()).unwrap();
+    let old_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
+    legacy.compatibility.generation_format = "raw-index-schema-6-v1".to_string();
+    legacy.job_id = job_id(
+        legacy.target_sequence,
+        &legacy.snapshot_blake3,
+        &legacy.compatibility,
+    );
+    let legacy_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
+    fs::rename(&old_directory, &legacy_directory).unwrap();
+    serde_json::to_writer_pretty(File::create(&state_path).unwrap(), &legacy).unwrap();
+
+    let restarted = RemotePublication::new(
+        Arc::clone(&fixture.engine),
+        Arc::clone(&fixture.store),
+        Arc::clone(&fixture.publisher),
+    )
+    .unwrap();
+    assert!(!legacy_directory.exists());
+    assert!(!state_path.exists());
+    assert_eq!(
+        fixture
+            .store
+            .operation("operation-migration")
+            .unwrap()
+            .state,
+        IndexOperationState::Durable
+    );
+
+    let fresh = restarted.prepare().await.unwrap();
+    assert_eq!(fresh.target_sequence, sequence);
+    assert_eq!(
+        fresh.compatibility.generation_format,
+        crate::RAW_GENERATION_FORMAT
+    );
+    assert_ne!(fresh.job_id, legacy.job_id);
+    assert!(
+        restarted
+            .job_directory(&fresh.job_id)
+            .unwrap()
+            .join(SNAPSHOT_FILE)
+            .is_file()
+    );
+}
+
+#[tokio::test]
+async fn restart_fails_closed_before_retiring_malformed_incompatible_state() {
+    let fixture = fixture();
+    replace(
+        &fixture.store,
+        "video-malformed",
+        "malformedtoken",
+        "operation-malformed",
+    );
+    fixture.publication.prepare().await.unwrap();
+    let state_path = fixture.publication.state_path();
+    let mut legacy: PersistedJob =
+        serde_json::from_reader(File::open(&state_path).unwrap()).unwrap();
+    let original_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
+    legacy.compatibility.generation_format = "raw-index-schema-6-v1".to_string();
+    legacy.job_id = "../escape".to_string();
+    serde_json::to_writer_pretty(File::create(&state_path).unwrap(), &legacy).unwrap();
+
+    assert!(matches!(
+        RemotePublication::new(
+            Arc::clone(&fixture.engine),
+            Arc::clone(&fixture.store),
+            Arc::clone(&fixture.publisher),
+        ),
+        Err(IndexStoreError::InvalidInput(_))
+    ));
+    assert!(state_path.is_file());
+    assert!(original_directory.is_dir());
+    assert_eq!(
+        fixture
+            .store
+            .operation("operation-malformed")
+            .unwrap()
+            .state,
+        IndexOperationState::Durable
+    );
 }
 
 #[tokio::test]
