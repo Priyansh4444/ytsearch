@@ -321,10 +321,10 @@ fn sufficient_single_token_results_do_not_expand_as_missing_separator_splits() {
             .expect("write exact chunk");
         }
     }
-    for (id, text) in [
-        ("react-split", "re act"),
-        ("fire-split", "fi re"),
-        ("convex-split", "con vex"),
+    for (id, title, text) in [
+        ("react-split", "unrelated split tokens", "re act"),
+        ("fire-split", "unrelated split tokens", "fi re"),
+        ("convex-split", "DEF CON", "called VEX"),
     ] {
         writeln!(
             chunks,
@@ -332,7 +332,7 @@ fn sufficient_single_token_results_do_not_expand_as_missing_separator_splits() {
             json!({
                 "id": format!("{id}-1"),
                 "video_id": id,
-                "title": "unrelated split tokens",
+                "title": title,
                 "text": text,
                 "youtuber_handle": "@narrow",
                 "youtuber_name": "Noise"

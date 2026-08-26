@@ -463,6 +463,16 @@ impl RawSearchEngine {
     ) -> Result<()> {
         if compact_split_proximity_is_bounded(matches.len()) {
             self.apply_exact_proximity(terms, fields, matches, cache)?;
+            for candidate in matches {
+                if candidate.ordered_phrase() && candidate.exact_mask() == 0 {
+                    // An ordered `create effect` recovery carries the same
+                    // intent as `createeffect`. Loose or cross-field pairs
+                    // such as title `CON` plus transcript `VEX` stay below a
+                    // literal `convex` match on the exactness tier.
+                    candidate.set_exact_mask(fields.exact_mask);
+                    candidate.set_all_retained_exact(true);
+                }
+            }
         }
         Ok(())
     }
