@@ -334,6 +334,56 @@ async fn restart_retires_an_incompatible_prepared_job_and_prepares_schema_seven(
 }
 
 #[tokio::test]
+async fn restart_retires_a_valid_incompatible_manifest_accepted_job() {
+    let fixture = fixture();
+    replace(
+        &fixture.store,
+        "video-accepted-migration",
+        "acceptedmigrationtoken",
+        "operation-accepted-migration",
+    );
+    let prepared = fixture.publication.prepare().await.unwrap();
+    let (_generation, mut manifest) = detached_for_job(&fixture, &prepared);
+    manifest.schema_version = 6;
+    manifest.files.remove("bigrams.text.bin");
+    manifest.files.remove("bigrams.title.bin");
+
+    let state_path = fixture.publication.state_path();
+    let mut legacy: PersistedJob =
+        serde_json::from_reader(File::open(&state_path).unwrap()).unwrap();
+    let old_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
+    legacy.compatibility.generation_format = "raw-index-schema-6-v1".to_string();
+    legacy.job_id = job_id(
+        legacy.target_sequence,
+        &legacy.snapshot_blake3,
+        &legacy.compatibility,
+    );
+    legacy.status = RemoteJobStatus::ManifestAccepted;
+    legacy.manifest = Some(manifest);
+    legacy.completed_files.insert("channels.json".to_string());
+    let legacy_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
+    fs::rename(&old_directory, &legacy_directory).unwrap();
+    serde_json::to_writer_pretty(File::create(&state_path).unwrap(), &legacy).unwrap();
+
+    RemotePublication::new(
+        Arc::clone(&fixture.engine),
+        Arc::clone(&fixture.store),
+        Arc::clone(&fixture.publisher),
+    )
+    .unwrap();
+    assert!(!legacy_directory.exists());
+    assert!(!state_path.exists());
+    assert_eq!(
+        fixture
+            .store
+            .operation("operation-accepted-migration")
+            .unwrap()
+            .state,
+        IndexOperationState::Durable
+    );
+}
+
+#[tokio::test]
 async fn restart_fails_closed_before_retiring_malformed_incompatible_state() {
     let fixture = fixture();
     replace(
@@ -365,6 +415,55 @@ async fn restart_fails_closed_before_retiring_malformed_incompatible_state() {
         fixture
             .store
             .operation("operation-malformed")
+            .unwrap()
+            .state,
+        IndexOperationState::Durable
+    );
+}
+
+#[tokio::test]
+async fn restart_preserves_an_incompatible_job_with_a_malformed_manifest() {
+    let fixture = fixture();
+    replace(
+        &fixture.store,
+        "video-malformed-manifest",
+        "malformedmanifesttoken",
+        "operation-malformed-manifest",
+    );
+    let prepared = fixture.publication.prepare().await.unwrap();
+    let (_generation, manifest) = detached_for_job(&fixture, &prepared);
+    let state_path = fixture.publication.state_path();
+    let mut legacy: PersistedJob =
+        serde_json::from_reader(File::open(&state_path).unwrap()).unwrap();
+    let old_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
+    legacy.compatibility.generation_format = "raw-index-schema-6-v1".to_string();
+    legacy.job_id = job_id(
+        legacy.target_sequence,
+        &legacy.snapshot_blake3,
+        &legacy.compatibility,
+    );
+    legacy.status = RemoteJobStatus::ManifestAccepted;
+    // A schema-seven manifest is not structurally valid for the persisted
+    // schema-six compatibility and must not authorize derived-state deletion.
+    legacy.manifest = Some(manifest);
+    let legacy_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
+    fs::rename(&old_directory, &legacy_directory).unwrap();
+    serde_json::to_writer_pretty(File::create(&state_path).unwrap(), &legacy).unwrap();
+
+    assert!(matches!(
+        RemotePublication::new(
+            Arc::clone(&fixture.engine),
+            Arc::clone(&fixture.store),
+            Arc::clone(&fixture.publisher),
+        ),
+        Err(IndexStoreError::InvalidInput(_))
+    ));
+    assert!(state_path.is_file());
+    assert!(legacy_directory.is_dir());
+    assert_eq!(
+        fixture
+            .store
+            .operation("operation-malformed-manifest")
             .unwrap()
             .state,
         IndexOperationState::Durable

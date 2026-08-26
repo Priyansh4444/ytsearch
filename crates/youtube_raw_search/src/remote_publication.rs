@@ -38,6 +38,17 @@ const MAX_GENERATION_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 const MIN_FREE_AFTER_UPLOAD_BYTES: u64 = 1024 * 1024 * 1024;
 const UPLOAD_BUFFER_BYTES: usize = 256 * 1024;
 const UPLOAD_RECLAIM_BYTES: u64 = 64 * 1024 * 1024;
+const LEGACY_SCHEMA_SIX_FILES: [&str; 9] = [
+    "channels.json",
+    "videos.json",
+    "lexicon.bin",
+    "postings.bin",
+    "positions.bin",
+    "positions.full.bin",
+    "documents.blocks",
+    "documents.meta",
+    "fuzzy.bin",
+];
 
 #[derive(Clone)]
 pub(crate) struct RemotePublication {
@@ -91,7 +102,11 @@ impl RemotePublication {
             operation: Arc::new(tokio::sync::Mutex::new(())),
         };
         if publication.state_path().exists() {
-            let job = publication.read_job_state()?;
+            let job = publication.load_job()?;
+            verify_snapshot(
+                &publication.job_directory(&job.job_id)?.join(SNAPSHOT_FILE),
+                &job,
+            )?;
             if job.compatibility != publication.compatibility {
                 // A prepared generation is derived state: the mutation WAL is
                 // still authoritative. Retire jobs from an older index format
@@ -101,12 +116,6 @@ impl RemotePublication {
                 fs::remove_file(publication.state_path()).map_err(map_io)?;
                 sync_directory(&publication.root.join("jobs"))?;
                 sync_directory(&publication.root)?;
-            } else {
-                let job = publication.load_job()?;
-                verify_snapshot(
-                    &publication.job_directory(&job.job_id)?.join(SNAPSHOT_FILE),
-                    &job,
-                )?;
             }
         }
         Ok(publication)
@@ -460,9 +469,6 @@ impl RemotePublication {
                 "remote publication snapshot is missing or has the wrong length".to_string(),
             ));
         }
-        if let Some(manifest) = &job.manifest {
-            validate_manifest(manifest)?;
-        }
         Ok(job)
     }
 
@@ -487,6 +493,7 @@ impl RemotePublication {
                 "remote publication job id does not match its persisted identity".to_string(),
             ));
         }
+        validate_persisted_job(&job)?;
         Ok(job)
     }
 
@@ -558,9 +565,17 @@ fn advise_uploaded_range(file: &tokio::fs::File, offset: u64, length: u64) {
 fn advise_uploaded_range(_file: &tokio::fs::File, _offset: u64, _length: u64) {}
 
 fn validate_manifest(manifest: &GenerationManifest) -> Result<(), IndexStoreError> {
-    if manifest.schema_version != GENERATION_SCHEMA_VERSION {
+    validate_manifest_contract(manifest, GENERATION_SCHEMA_VERSION, &RAW_GENERATION_FILES)
+}
+
+fn validate_manifest_contract(
+    manifest: &GenerationManifest,
+    schema_version: u8,
+    generation_files: &[&str],
+) -> Result<(), IndexStoreError> {
+    if manifest.schema_version != schema_version {
         return Err(IndexStoreError::InvalidInput(format!(
-            "unsupported raw generation schema {}; expected {GENERATION_SCHEMA_VERSION}",
+            "unsupported raw generation schema {}; expected {schema_version}",
             manifest.schema_version
         )));
     }
@@ -571,16 +586,17 @@ fn validate_manifest(manifest: &GenerationManifest) -> Result<(), IndexStoreErro
             "average_document_tokens must be finite and non-negative".to_string(),
         ));
     }
-    let expected = RAW_GENERATION_FILES.into_iter().collect::<BTreeSet<_>>();
+    let expected = generation_files.iter().copied().collect::<BTreeSet<_>>();
     let actual = manifest
         .files
         .keys()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
     if actual != expected {
-        return Err(IndexStoreError::InvalidInput(
-            "generation manifest must contain exactly the eleven allowlisted files".to_string(),
-        ));
+        return Err(IndexStoreError::InvalidInput(format!(
+            "generation manifest must contain exactly the {} allowlisted files",
+            generation_files.len()
+        )));
     }
     let mut total = 0_u64;
     for (name, file) in &manifest.files {
@@ -612,6 +628,77 @@ fn validate_manifest(manifest: &GenerationManifest) -> Result<(), IndexStoreErro
         return Err(IndexStoreError::InvalidInput(
             "generation manifest exceeds the maximum accepted length".to_string(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_persisted_job(job: &PersistedJob) -> Result<(), IndexStoreError> {
+    if job.target_sequence == 0 || job.snapshot_bytes == 0 {
+        return Err(IndexStoreError::InvalidInput(
+            "remote publication job has an invalid snapshot identity".to_string(),
+        ));
+    }
+    validate_canonical_blake3(&job.snapshot_blake3, "snapshot")?;
+    validate_canonical_blake3(&job.compatibility.corpus_identity, "corpus identity")?;
+    validate_canonical_blake3(
+        &job.compatibility.base_chunks_blake3,
+        "base chunks identity",
+    )?;
+    validate_canonical_blake3(
+        &job.compatibility.base_channels_blake3,
+        "base channels identity",
+    )?;
+
+    let (schema_version, generation_files): (u8, &[&str]) =
+        match job.compatibility.generation_format.as_str() {
+            crate::RAW_GENERATION_FORMAT => (GENERATION_SCHEMA_VERSION, &RAW_GENERATION_FILES),
+            "raw-index-schema-6-v1" => (6, &LEGACY_SCHEMA_SIX_FILES),
+            _ => {
+                return Err(IndexStoreError::InvalidInput(
+                    "unsupported persisted raw generation format".to_string(),
+                ));
+            }
+        };
+    let allowlisted = generation_files.iter().copied().collect::<BTreeSet<_>>();
+    if !job
+        .completed_files
+        .iter()
+        .all(|name| allowlisted.contains(name.as_str()))
+    {
+        return Err(IndexStoreError::InvalidInput(
+            "remote publication state contains an unknown completed file".to_string(),
+        ));
+    }
+    if let Some(manifest) = &job.manifest {
+        validate_manifest_contract(manifest, schema_version, generation_files)?;
+    }
+    match job.status {
+        RemoteJobStatus::Prepared if job.manifest.is_none() && job.completed_files.is_empty() => {}
+        RemoteJobStatus::ManifestAccepted if job.manifest.is_some() => {}
+        RemoteJobStatus::Activated
+            if job.manifest.is_some()
+                && job.completed_files
+                    == allowlisted
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect::<BTreeSet<_>>() => {}
+        _ => {
+            return Err(IndexStoreError::InvalidInput(
+                "remote publication status does not match its persisted artifacts".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_canonical_blake3(value: &str, label: &str) -> Result<(), IndexStoreError> {
+    let parsed = blake3::Hash::from_hex(value).map_err(|_| {
+        IndexStoreError::InvalidInput(format!("remote publication {label} is not a BLAKE3 digest"))
+    })?;
+    if parsed.to_hex().as_str() != value {
+        return Err(IndexStoreError::InvalidInput(format!(
+            "remote publication {label} is not canonical lowercase hex"
+        )));
     }
     Ok(())
 }
