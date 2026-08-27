@@ -1,6 +1,8 @@
 use super::*;
 
 const BIGRAM_MAGIC: &[u8; 8] = b"RAWBIG01";
+const LEGACY_BIGRAM_VERSION: u32 = 1;
+const LEGACY_BIGRAM_HEADER_BYTES: usize = 40;
 const BIGRAM_VERSION: u32 = 2;
 const BIGRAM_HEADER_BYTES: usize = 48;
 const BIGRAM_ENTRY_BYTES: usize = 24;
@@ -53,9 +55,11 @@ const _: () = assert!(std::mem::size_of::<BigramEntry>() == BIGRAM_ENTRY_BYTES);
 pub(super) struct BigramIndex {
     file: MappedFile,
     count: usize,
+    postings_start: usize,
     table_start: usize,
     coverage_start: usize,
     coverage_count: usize,
+    coverage_authoritative: bool,
     universe: u32,
 }
 
@@ -63,23 +67,36 @@ impl BigramIndex {
     pub(super) fn open(path: &Path) -> Result<Self> {
         let file = MappedFile::open(path, BIGRAM_MAGIC)?;
         let bytes = file.bytes();
-        if bytes.len() < BIGRAM_HEADER_BYTES {
+        if bytes.len() < LEGACY_BIGRAM_HEADER_BYTES {
             return Err(Error::Corrupt(
                 "bigram index is shorter than its header".to_string(),
             ));
         }
         let version = read_u32(bytes, 8)?;
-        if version != BIGRAM_VERSION {
-            return Err(Error::Corrupt(format!(
-                "unsupported bigram index version {version}"
-            )));
+        let postings_start = match version {
+            LEGACY_BIGRAM_VERSION => LEGACY_BIGRAM_HEADER_BYTES,
+            BIGRAM_VERSION => BIGRAM_HEADER_BYTES,
+            _ => {
+                return Err(Error::Corrupt(format!(
+                    "unsupported bigram index version {version}"
+                )));
+            }
+        };
+        if bytes.len() < postings_start {
+            return Err(Error::Corrupt(
+                "bigram index is shorter than its versioned header".to_string(),
+            ));
         }
         let count = read_u32(bytes, 12)? as usize;
         let table_bytes = count
             .checked_mul(BIGRAM_ENTRY_BYTES)
             .ok_or_else(|| Error::Corrupt("bigram entry table length overflows".to_string()))?;
-        let coverage_count = read_u32(bytes, 40)? as usize;
-        if read_u32(bytes, 44)? != 0 {
+        let coverage_count = if version == BIGRAM_VERSION {
+            read_u32(bytes, 40)? as usize
+        } else {
+            0
+        };
+        if version == BIGRAM_VERSION && read_u32(bytes, 44)? != 0 {
             return Err(Error::Corrupt(
                 "bigram reserved header bytes must be zero".to_string(),
             ));
@@ -89,7 +106,7 @@ impl BigramIndex {
             .ok_or_else(|| Error::Corrupt("bigram coverage length overflows".to_string()))?;
         let table_start = usize::try_from(read_u64(bytes, 16)?)
             .map_err(|_| Error::Corrupt("bigram table offset exceeds usize".to_string()))?;
-        if table_start < BIGRAM_HEADER_BYTES {
+        if table_start < postings_start {
             return Err(Error::Corrupt(
                 "bigram entry table overlaps the header".to_string(),
             ));
@@ -148,7 +165,7 @@ impl BigramIndex {
                 .offset
                 .checked_add(u64::from(entry.length))
                 .ok_or_else(|| Error::Corrupt("bigram posting range overflows".to_string()))?;
-            let absolute_end = u64::try_from(BIGRAM_HEADER_BYTES)
+            let absolute_end = u64::try_from(postings_start)
                 .unwrap_or(u64::MAX)
                 .checked_add(expected_offset)
                 .ok_or_else(|| Error::Corrupt("bigram posting boundary overflows".to_string()))?;
@@ -159,7 +176,7 @@ impl BigramIndex {
             }
             previous_key = Some(entry.key.encoded());
         }
-        if expected_offset != (table_start - BIGRAM_HEADER_BYTES) as u64 {
+        if expected_offset != (table_start - postings_start) as u64 {
             return Err(Error::Corrupt(
                 "bigram posting data has an unreferenced tail".to_string(),
             ));
@@ -177,9 +194,11 @@ impl BigramIndex {
         Ok(Self {
             file,
             count,
+            postings_start,
             table_start,
             coverage_start,
             coverage_count,
+            coverage_authoritative: version == BIGRAM_VERSION,
             universe,
         })
     }
@@ -203,10 +222,53 @@ impl BigramIndex {
     }
 
     pub(super) fn has_same_coverage(&self, other: &Self) -> bool {
-        self.coverage_count == other.coverage_count
+        self.coverage_authoritative == other.coverage_authoritative
+            && self.coverage_count == other.coverage_count
             && self.file.bytes()[self.coverage_start..self.coverage_start + self.coverage_count * 4]
                 == other.file.bytes()
                     [other.coverage_start..other.coverage_start + other.coverage_count * 4]
+    }
+
+    pub(super) fn validate_term_universe(&self, terms: usize) -> Result<()> {
+        if terms > u32::MAX as usize {
+            return Err(Error::Corrupt(
+                "bigram term universe exceeds u32".to_string(),
+            ));
+        }
+        if terms == 0 {
+            return if self.count == 0 && self.coverage_count == 0 {
+                Ok(())
+            } else {
+                Err(Error::Corrupt(
+                    "empty lexicon has nonempty bigram metadata".to_string(),
+                ))
+            };
+        }
+        if self.coverage_count > 0 {
+            let last = read_u32(
+                self.file.bytes(),
+                self.coverage_start + (self.coverage_count - 1) * 4,
+            )?;
+            if last as usize >= terms {
+                return Err(Error::Corrupt(
+                    "bigram covered term is outside the lexicon".to_string(),
+                ));
+            }
+        }
+        for index in 0..self.count {
+            let entry = read_entry(self.file.bytes(), self.table_start, index)?;
+            if entry.key.left() as usize >= terms || entry.key.right() as usize >= terms {
+                return Err(Error::Corrupt(
+                    "bigram key term is outside the lexicon".to_string(),
+                ));
+            }
+            if self.coverage_authoritative && !self.covers(entry.key)? {
+                return Err(Error::Corrupt(
+                    "bigram key uses a term outside authoritative coverage".to_string(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn covered_term(&self, target: u32) -> Result<bool> {
@@ -273,13 +335,13 @@ impl BigramIndex {
             .checked_add(u64::from(entry.length))
             .ok_or_else(|| Error::Corrupt("bigram posting range overflows".to_string()))?;
         let start =
-            BIGRAM_HEADER_BYTES
+            self.postings_start
                 .checked_add(usize::try_from(entry.offset).map_err(|_| {
                     Error::Corrupt("bigram posting offset exceeds usize".to_string())
                 })?)
                 .ok_or_else(|| Error::Corrupt("bigram posting start overflows".to_string()))?;
         let end =
-            BIGRAM_HEADER_BYTES
+            self.postings_start
                 .checked_add(usize::try_from(relative_end).map_err(|_| {
                     Error::Corrupt("bigram posting boundary exceeds usize".to_string())
                 })?)
@@ -605,6 +667,68 @@ mod tests {
                 .lookup_targets_into(BigramKey::new(9, 9), &[0], &mut reused)
                 .unwrap()
         );
+        assert!(index.validate_term_universe(4).is_ok());
+        assert!(index.validate_term_universe(3).is_err());
+    }
+
+    #[test]
+    fn legacy_v1_remains_readable_without_authoritative_coverage() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("legacy-v1.bin");
+        let mut encoded = Vec::new();
+        let mut previous = 0_u32;
+        for (index, posting) in FIRST.iter().enumerate() {
+            write_varint(
+                if index == 0 {
+                    posting.document
+                } else {
+                    posting.document - previous
+                },
+                &mut encoded,
+            );
+            write_varint(posting.earliest_end_offset, &mut encoded);
+            previous = posting.document;
+        }
+        let table_start = LEGACY_BIGRAM_HEADER_BYTES as u64 + encoded.len() as u64;
+        let file_length = table_start + BIGRAM_ENTRY_BYTES as u64;
+        let mut output = File::create(&path).unwrap();
+        output.write_all(BIGRAM_MAGIC).unwrap();
+        output
+            .write_all(&LEGACY_BIGRAM_VERSION.to_le_bytes())
+            .unwrap();
+        output.write_all(&1_u32.to_le_bytes()).unwrap();
+        output.write_all(&table_start.to_le_bytes()).unwrap();
+        output.write_all(&file_length.to_le_bytes()).unwrap();
+        output.write_all(&1_000_u64.to_le_bytes()).unwrap();
+        output.write_all(&encoded).unwrap();
+        output
+            .write_all(&BigramKey::new(1, 2).encoded().to_le_bytes())
+            .unwrap();
+        output.write_all(&0_u64.to_le_bytes()).unwrap();
+        output
+            .write_all(&(encoded.len() as u32).to_le_bytes())
+            .unwrap();
+        output
+            .write_all(&(FIRST.len() as u32).to_le_bytes())
+            .unwrap();
+        drop(output);
+
+        let index = BigramIndex::open(&path).unwrap();
+        assert_eq!(index.lookup(BigramKey::new(1, 2)).unwrap(), FIRST);
+        assert!(!index.covers(BigramKey::new(1, 2)).unwrap());
+        assert!(index.validate_term_universe(3).is_ok());
+    }
+
+    #[test]
+    fn authoritative_entries_must_use_covered_lexicon_terms() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("uncovered-key.bin");
+        let mut writer = BigramIndexWriter::create(&path, 1_000, &[1]).unwrap();
+        writer.append(BigramKey::new(1, 2), &FIRST).unwrap();
+        writer.finish().unwrap();
+
+        let index = BigramIndex::open(&path).unwrap();
+        assert!(index.validate_term_universe(3).is_err());
     }
 
     #[test]

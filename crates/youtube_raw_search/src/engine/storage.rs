@@ -346,6 +346,8 @@ impl RawSearchEngine {
         let (text_bigrams, title_bigrams) = if manifest.schema_version == 7 {
             let text = bigram::BigramIndex::open(&index_path.join(bigram::TEXT_BIGRAM_FILE))?;
             let title = bigram::BigramIndex::open(&index_path.join(bigram::TITLE_BIGRAM_FILE))?;
+            text.validate_term_universe(lexicon.count)?;
+            title.validate_term_universe(lexicon.count)?;
             if text.universe() != manifest.documents.max(1)
                 || title.universe() != manifest.videos.max(1)
             {
