@@ -463,16 +463,24 @@ where
             .unwrap_or(0),
         files: build_manifest_files(index_path, 7)?,
     };
+    let payload_bytes = manifest
+        .files
+        .values()
+        .try_fold(0_u64, |total, file| total.checked_add(file.bytes))
+        .ok_or_else(|| Error::Corrupt("manifest file bytes overflow u64".to_string()))?;
     let mut manifest_output = ColdWriter::create(&index_path.join(MANIFEST_FILE))?;
     serde_json::to_writer_pretty(&mut manifest_output, &manifest)?;
     manifest_output.finish()?;
+    let index_bytes = payload_bytes
+        .checked_add(fs::metadata(index_path.join(MANIFEST_FILE))?.len())
+        .ok_or_else(|| Error::Corrupt("generation file bytes overflow u64".to_string()))?;
 
     Ok(BuildReport {
         documents: u64::from(document_count),
         videos: videos.len(),
         channels: channels.len(),
         terms: term_count,
-        index_bytes: directory_size(index_path)?,
+        index_bytes,
         elapsed_ms: started.elapsed().as_millis(),
     })
 }
