@@ -8,6 +8,7 @@ const ALWAYS_DOCUMENT_VALIDATE_TARGETS: usize = 128;
 const MAX_ADAPTIVE_DOCUMENT_VALIDATE_TARGETS: usize = 512;
 const MIN_POSTING_TO_TARGET_RATIO: u64 = 512;
 const STREAMING_CONJUNCTION_MIN_DOCUMENTS: u64 = 100_000;
+const _: () = assert!(MAX_FUZZY_TERMS_PER_DISTANCE * 2 < u64::BITS as usize);
 
 pub(super) fn is_broad_two_plan(plans: &[TermPlan]) -> bool {
     plans.len() == 2
@@ -45,6 +46,8 @@ struct StreamingTermPlan<'a> {
     text: Vec<TextAlternativeCursor<'a>>,
     title: Vec<DocMatch>,
     title_index: usize,
+    current_document: Option<u32>,
+    active_text: u64,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -218,7 +221,7 @@ impl RawSearchEngine {
         mut visit: F,
     ) -> Result<()>
     where
-        F: FnMut(DocMatch, DocumentRecord) -> Result<()>,
+        F: FnMut(DocMatch, SearchDocumentRecord) -> Result<()>,
     {
         let [left_plan, right_plan] = plans else {
             return Err(Error::Corrupt(
@@ -243,9 +246,9 @@ impl RawSearchEngine {
             if left_document != right_document {
                 continue;
             }
-            let record = self.inner.metadata.document(left_document)?;
-            let left_match = left.take_current(record)?;
-            let right_match = right.take_current(record)?;
+            let record = self.inner.metadata.search_document(left_document)?;
+            let left_match = left.take_current(record.tokens)?;
+            let right_match = right.take_current(record.tokens)?;
             visit(
                 combine_plan_matches(left_document, left_match, right_match),
                 record,
@@ -612,6 +615,10 @@ impl RawSearchEngine {
 }
 
 impl<'a> TextAlternativeCursor<'a> {
+    fn current_document(&self) -> Option<u32> {
+        self.current.map(|current| current.0)
+    }
+
     fn new(engine: &'a RawSearchEngine, alternative: &'a TermAlternative) -> Result<Self> {
         let entry = alternative.entry;
         let effective_frequency = engine
@@ -689,12 +696,12 @@ impl<'a> TextAlternativeCursor<'a> {
         self.validate_complete()
     }
 
-    fn contribution(&self, record: DocumentRecord) -> Option<DocMatch> {
+    fn contribution(&self, document_tokens: u32) -> Option<DocMatch> {
         let (document, frequency, first_position) = self.current?;
         let fields = self.alternative.fields;
         let score = bm25(
             frequency,
-            record.tokens,
+            document_tokens,
             self.engine.inner.manifest.average_document_tokens,
         ) * self.idf
             * TEXT_QUERY_WEIGHT
@@ -776,22 +783,45 @@ impl<'a> StreamingTermPlan<'a> {
             text,
             title: union_all(title),
             title_index: 0,
+            current_document: None,
+            active_text: 0,
         })
     }
 
     fn current_document(&self) -> Option<u32> {
-        self.text
-            .iter()
-            .filter_map(|cursor| cursor.current.map(|(document, _, _)| document))
-            .chain(
-                self.title
-                    .get(self.title_index)
-                    .map(|candidate| candidate.document()),
-            )
-            .min()
+        self.current_document
+    }
+
+    fn refresh_current_document(&mut self) {
+        let mut current_document = self
+            .title
+            .get(self.title_index)
+            .map(|candidate| candidate.document());
+        let mut active_text = 0_u64;
+        for (index, cursor) in self.text.iter().enumerate() {
+            let Some(document) = cursor.current_document() else {
+                continue;
+            };
+            match current_document {
+                Some(current) if document > current => {}
+                Some(current) if document == current => active_text |= 1_u64 << index,
+                _ => {
+                    current_document = Some(document);
+                    active_text = 1_u64 << index;
+                }
+            }
+        }
+        self.current_document = current_document;
+        self.active_text = active_text;
     }
 
     fn advance_to(&mut self, target: u32) -> Result<()> {
+        if self
+            .current_document
+            .is_some_and(|document| document >= target)
+        {
+            return Ok(());
+        }
         for cursor in &mut self.text {
             cursor.advance_to(target)?;
         }
@@ -802,19 +832,22 @@ impl<'a> StreamingTermPlan<'a> {
         {
             self.title_index += 1;
         }
+        self.refresh_current_document();
         Ok(())
     }
 
-    fn take_current(&mut self, record: DocumentRecord) -> Result<DocMatch> {
+    fn take_current(&mut self, document_tokens: u32) -> Result<DocMatch> {
         let document = self
-            .current_document()
+            .current_document
             .ok_or_else(|| Error::Corrupt("streaming plan has no current document".to_string()))?;
         let mut combined: Option<DocMatch> = None;
-        for cursor in &mut self.text {
-            if cursor.current.map(|current| current.0) != Some(document) {
-                continue;
-            }
-            if let Some(contribution) = cursor.contribution(record) {
+        let mut active_text = self.active_text;
+        while active_text != 0 {
+            let index = active_text.trailing_zeros() as usize;
+            active_text &= active_text - 1;
+            let cursor = &mut self.text[index];
+            debug_assert_eq!(cursor.current_document(), Some(document));
+            if let Some(contribution) = cursor.contribution(document_tokens) {
                 merge_plan_contribution(&mut combined, contribution);
             }
             cursor.consume_current()?;
@@ -828,6 +861,7 @@ impl<'a> StreamingTermPlan<'a> {
             merge_plan_contribution(&mut combined, contribution);
             self.title_index += 1;
         }
+        self.refresh_current_document();
         combined.ok_or_else(|| Error::Corrupt("streaming plan contribution is empty".to_string()))
     }
 
@@ -836,6 +870,8 @@ impl<'a> StreamingTermPlan<'a> {
             cursor.finish()?;
         }
         self.title_index = self.title.len();
+        self.current_document = None;
+        self.active_text = 0;
         Ok(())
     }
 }

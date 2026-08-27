@@ -325,6 +325,7 @@ fn sufficient_single_token_results_do_not_expand_as_missing_separator_splits() {
         ("react-split", "unrelated split tokens", "re act"),
         ("fire-split", "unrelated split tokens", "fi re"),
         ("convex-split", "DEF CON", "called VEX"),
+        ("convex-adjacent", "unrelated split tokens", "con vex"),
     ] {
         writeln!(
             chunks,
@@ -366,7 +367,7 @@ fn sufficient_single_token_results_do_not_expand_as_missing_separator_splits() {
         let mut scoped = grouped_query(term);
         scoped.filter_by = Some("youtuber_handle:=@narrow".to_string());
         let scoped_response = engine.search(&scoped).expect("scoped single-token search");
-        let expected_found = if term == "convex" { 2 } else { 1 };
+        let expected_found = if term == "convex" { 3 } else { 1 };
         assert_eq!(scoped_response["found"], expected_found);
         assert_eq!(
             scoped_response["grouped_hits"][0]["group_key"][0],
@@ -722,6 +723,36 @@ fn ordered_bigram_postings_promote_only_matching_documents_and_titles() {
     assert!(matches[1].ordered_phrase());
     assert!(matches[2].ordered_phrase());
     assert!(matches[2].score > matches[1].score);
+}
+
+#[test]
+fn group_top_documents_stay_bounded_and_rank_sorted() {
+    let mut documents = SmallVec::new();
+    let mut exact = DocMatch::new(0, 1.0, true);
+    exact.set_exact_mask(0b01);
+    let mut ordered = DocMatch::new(1, 8.0, true);
+    ordered.set_exact_mask(0b01);
+    ordered.set_ordered_phrase(true);
+    let mut both_exact = DocMatch::new(2, 2.0, true);
+    both_exact.set_exact_mask(0b11);
+    let mut partial = DocMatch::new(3, 100.0, true);
+    partial.set_exact_mask(0b01);
+    let mut weakest = DocMatch::new(4, 0.0, true);
+    weakest.set_exact_mask(0b01);
+    let mut tied = DocMatch::new(5, 100.0, true);
+    tied.set_exact_mask(0b01);
+
+    for candidate in [exact, ordered, both_exact, partial, weakest, tied] {
+        retain_best_document(&mut documents, candidate, 3);
+    }
+
+    assert_eq!(
+        documents
+            .iter()
+            .map(|candidate| candidate.document())
+            .collect::<Vec<_>>(),
+        [2, 1, 3]
+    );
 }
 
 #[test]
@@ -1578,7 +1609,14 @@ fn streaming_group_accumulation_matches_materialized_response() {
     let mut groups = engine.empty_group_slots();
     engine
         .visit_two_plan_conjunction(&plans, |candidate, record| {
-            engine.record_group_match(&mut groups, candidate, record, hits_per_group)
+            engine.record_group_match_values(
+                &mut groups,
+                candidate,
+                record.video,
+                record.t_start_ms,
+                hits_per_group,
+                None,
+            )
         })
         .expect("streamed groups");
     let actual = engine
@@ -2184,6 +2222,10 @@ fn empty_corpus_builds_and_searches_without_special_cases() {
     let report = build_index(&chunks, &channels, &index).expect("build empty index");
     assert_eq!(report.documents, 0);
     assert_eq!(report.videos, 0);
+    assert_eq!(
+        report.index_bytes,
+        directory_size(&index).expect("index size")
+    );
     let engine = RawSearchEngine::open(&index).expect("open empty index");
     assert_eq!(
         engine

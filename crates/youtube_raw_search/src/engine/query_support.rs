@@ -137,37 +137,30 @@ pub(super) fn visible_group_moments(group: &VideoMatches) -> usize {
 }
 
 pub(super) fn retain_best_document(
-    documents: &mut Vec<DocMatch>,
+    documents: &mut SmallVec<[DocMatch; 3]>,
     candidate: DocMatch,
     limit: usize,
 ) {
-    if documents.len() < limit {
-        documents.push(candidate);
+    if limit == 0 {
         return;
     }
-    let Some((worst_index, worst)) = documents.iter().enumerate().min_by(|left, right| {
-        left.1
-            .exact_tokens()
-            .cmp(&right.1.exact_tokens())
-            .then_with(|| left.1.exact_mask().cmp(&right.1.exact_mask()))
-            .then_with(|| left.1.ordered_phrase().cmp(&right.1.ordered_phrase()))
-            .then_with(|| left.1.score.total_cmp(&right.1.score))
-    }) else {
-        return;
-    };
-    if candidate.exact_tokens() > worst.exact_tokens()
-        || (candidate.exact_tokens() == worst.exact_tokens()
-            && candidate.exact_mask() > worst.exact_mask())
-        || (candidate.exact_tokens() == worst.exact_tokens()
-            && candidate.exact_mask() == worst.exact_mask()
-            && candidate.ordered_phrase()
-            && !worst.ordered_phrase())
-        || (candidate.exact_tokens() == worst.exact_tokens()
-            && candidate.exact_mask() == worst.exact_mask()
-            && candidate.ordered_phrase() == worst.ordered_phrase()
-            && candidate.score > worst.score)
+    if documents.len() < limit {
+        documents.push(candidate);
+    } else {
+        let Some(worst) = documents.last_mut() else {
+            return;
+        };
+        if descending_doc_score(&candidate, worst) != Ordering::Less {
+            return;
+        }
+        *worst = candidate;
+    }
+    let mut index = documents.len() - 1;
+    while index > 0
+        && descending_doc_score(&documents[index], &documents[index - 1]) == Ordering::Less
     {
-        documents[worst_index] = candidate;
+        documents.swap(index, index - 1);
+        index -= 1;
     }
 }
 

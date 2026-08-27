@@ -13,6 +13,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use smallvec::SmallVec;
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet},
@@ -217,6 +218,13 @@ struct DocumentRecord {
 }
 
 #[derive(Clone, Copy)]
+struct SearchDocumentRecord {
+    video: u32,
+    tokens: u32,
+    t_start_ms: u32,
+}
+
+#[derive(Clone, Copy)]
 struct BlockRecord {
     offset: u64,
     compressed_length: u32,
@@ -367,7 +375,7 @@ struct VideoMatches {
     exact_mask: u8,
     ordered_phrase: bool,
     moments: MomentCounter,
-    documents: Vec<DocMatch>,
+    documents: SmallVec<[DocMatch; 3]>,
 }
 
 #[derive(Clone, Copy)]
@@ -1384,11 +1392,24 @@ impl RawSearchEngine {
         }
 
         let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
+        let full_exact_mask = plans
+            .iter()
+            .flat_map(|plan| &plan.alternatives)
+            .fold(0_u8, |mask, alternative| {
+                mask | alternative.fields.exact_mask
+            });
         let mut groups = self.empty_group_slots();
         let mut documents = 0_usize;
         self.visit_two_plan_conjunction(&plans, |candidate, record| {
             documents = documents.saturating_add(1);
-            self.record_group_match(&mut groups, candidate, record, hits_per_group)
+            self.record_group_match_values(
+                &mut groups,
+                candidate,
+                record.video,
+                record.t_start_ms,
+                hits_per_group,
+                Some(full_exact_mask),
+            )
         })?;
         let found = groups.iter().flatten().count();
         if documents <= MAX_EXACT_PROXIMITY_MATCHES || found < TYPO_RESULT_THRESHOLD {
@@ -1411,18 +1432,51 @@ impl RawSearchEngine {
         record: DocumentRecord,
         hits_per_group: usize,
     ) -> Result<()> {
+        self.record_group_match_values(
+            groups,
+            candidate,
+            record.video,
+            record.t_start_ms,
+            hits_per_group,
+            None,
+        )
+    }
+
+    fn record_group_match_values(
+        &self,
+        groups: &mut [Option<VideoMatches>],
+        candidate: DocMatch,
+        video: u32,
+        t_start_ms: u32,
+        hits_per_group: usize,
+        dominant_exact_mask: Option<u8>,
+    ) -> Result<()> {
         let slot = groups
-            .get_mut(record.video as usize)
+            .get_mut(video as usize)
             .ok_or_else(|| Error::Corrupt("document video is out of bounds".to_string()))?;
         let group = slot.get_or_insert_with(|| VideoMatches {
-            video: record.video,
+            video,
             score: candidate.score,
             exact_tokens: candidate.exact_tokens(),
             exact_mask: candidate.exact_mask(),
             ordered_phrase: candidate.ordered_phrase(),
             moments: MomentCounter::default(),
-            documents: Vec::with_capacity(hits_per_group),
+            documents: SmallVec::new(),
         });
+        if candidate.matches_text() {
+            group.moments.record(t_start_ms);
+        }
+        if dominant_exact_mask.is_some_and(|mask| {
+            candidate.exact_mask() != mask
+                && group.exact_mask == mask
+                && group.documents.len() == hits_per_group
+                && group
+                    .documents
+                    .last()
+                    .is_some_and(|document| document.exact_mask() == mask)
+        }) {
+            return Ok(());
+        }
         let candidate_rank = (
             candidate.exact_tokens(),
             candidate.exact_mask(),
@@ -1450,9 +1504,6 @@ impl RawSearchEngine {
             group.exact_mask = candidate_rank.1;
             group.ordered_phrase = candidate_rank.2;
             group.score = candidate_rank.3;
-        }
-        if candidate.matches_text() {
-            group.moments.record(record.t_start_ms);
         }
         retain_best_document(&mut group.documents, candidate, hits_per_group);
         Ok(())

@@ -55,6 +55,12 @@ struct ExactSplitMatches {
     work_exceeded: bool,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum OrderedSplitRank {
+    BelowLiteral,
+    QueryEquivalent,
+}
+
 impl RawSearchEngine {
     pub(super) fn search_single_token(
         &self,
@@ -64,6 +70,16 @@ impl RawSearchEngine {
         excluded_documents: &[u32],
     ) -> Result<Value> {
         let exact = self.matches_for_term(term, fields)?;
+        // A common literal token is stronger evidence than an accidental
+        // separator split such as `convex` -> `con vex`. Sparse compounds such
+        // as `createeffect` and `blackhole` still treat an adjacent split as
+        // equivalent intent.
+        let ordered_split_rank =
+            if self.reaches_unfiltered_video_threshold(&exact, TYPO_RESULT_THRESHOLD)? {
+                OrderedSplitRank::BelowLiteral
+            } else {
+                OrderedSplitRank::QueryEquivalent
+            };
         let mut cache = BlockCache::default();
         let mut matches = exact;
         retain_not_excluded(&mut matches, excluded_documents);
@@ -98,7 +114,13 @@ impl RawSearchEngine {
             && self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)?
         {
             if let Some(terms) = &split.proximity_terms {
-                self.apply_compact_split_proximity(terms, fields, &mut matches, &mut cache)?;
+                self.apply_compact_split_proximity(
+                    terms,
+                    fields,
+                    ordered_split_rank,
+                    &mut matches,
+                    &mut cache,
+                )?;
             }
             return self.format_matches(params, &[highlight_group], matches, &mut cache);
         }
@@ -131,7 +153,13 @@ impl RawSearchEngine {
             }
         }
         if let Some(terms) = &split.proximity_terms {
-            self.apply_compact_split_proximity(terms, fields, &mut matches, &mut cache)?;
+            self.apply_compact_split_proximity(
+                terms,
+                fields,
+                ordered_split_rank,
+                &mut matches,
+                &mut cache,
+            )?;
         }
         self.format_matches(params, &[highlight_group], matches, &mut cache)
     }
@@ -175,6 +203,26 @@ impl RawSearchEngine {
                 if found >= threshold {
                     return Ok(true);
                 }
+            }
+        }
+        Ok(false)
+    }
+
+    fn reaches_unfiltered_video_threshold(
+        &self,
+        matches: &[DocMatch],
+        threshold: usize,
+    ) -> Result<bool> {
+        let mut videos = HashSet::with_capacity(threshold);
+        for candidate in matches {
+            videos.insert(
+                self.inner
+                    .metadata
+                    .search_document(candidate.document())?
+                    .video,
+            );
+            if videos.len() >= threshold {
+                return Ok(true);
             }
         }
         Ok(false)
@@ -458,19 +506,18 @@ impl RawSearchEngine {
         &self,
         terms: &[String; 2],
         fields: QueryFields,
+        rank: OrderedSplitRank,
         matches: &mut [DocMatch],
         cache: &mut BlockCache,
     ) -> Result<()> {
         if compact_split_proximity_is_bounded(matches.len()) {
             self.apply_exact_proximity(terms, fields, matches, cache)?;
-            for candidate in matches {
-                if candidate.ordered_phrase() && candidate.exact_mask() == 0 {
-                    // An ordered `create effect` recovery carries the same
-                    // intent as `createeffect`. Loose or cross-field pairs
-                    // such as title `CON` plus transcript `VEX` stay below a
-                    // literal `convex` match on the exactness tier.
-                    candidate.set_exact_mask(fields.exact_mask);
-                    candidate.set_all_retained_exact(true);
+            if rank == OrderedSplitRank::QueryEquivalent {
+                for candidate in matches {
+                    if candidate.ordered_phrase() && candidate.exact_mask() == 0 {
+                        candidate.set_exact_mask(fields.exact_mask);
+                        candidate.set_all_retained_exact(true);
+                    }
                 }
             }
         }

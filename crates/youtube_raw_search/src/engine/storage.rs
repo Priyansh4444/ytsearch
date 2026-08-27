@@ -272,6 +272,22 @@ impl DocumentTable {
         })
     }
 
+    pub(super) fn search_document(&self, id: u32) -> Result<SearchDocumentRecord> {
+        if id as usize >= self.documents {
+            return Err(Error::Corrupt(format!("document {id} is out of bounds")));
+        }
+        let offset = METADATA_PREFIX_BYTES + id as usize * DOCUMENT_RECORD_BYTES + 12;
+        let bytes =
+            self.file.bytes().get(offset..offset + 12).ok_or_else(|| {
+                Error::Corrupt("document search metadata is truncated".to_string())
+            })?;
+        Ok(SearchDocumentRecord {
+            video: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            tokens: u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+            t_start_ms: u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
+        })
+    }
+
     pub(super) fn block(&self, id: u32) -> Result<BlockRecord> {
         if id as usize >= self.blocks {
             return Err(Error::Corrupt(format!("block {id} is out of bounds")));

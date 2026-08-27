@@ -2456,6 +2456,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "smallvec",
  "tempfile",
  "thiserror",
  "tokio",

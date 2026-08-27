@@ -18,6 +18,7 @@ memmap2 = "0.9"
 rusqlite = { version = "0.40.2", features = ["backup", "bundled"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+smallvec = "1.15"
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync"] }
 tracing = { workspace = true }
