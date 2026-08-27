@@ -796,15 +796,20 @@ impl RawSearchEngine {
             return Ok(false);
         };
         let key = bigram::BigramKey::new(left.term, right.term);
+        // The sidecar records the complete eligible-term set independently of
+        // observed pairs. For a covered pair, a missing key is therefore proof
+        // of no exact adjacency, not a reason to switch ranking algorithms.
+        if !text_index.covers(key)? || !title_index.covers(key)? {
+            return Ok(false);
+        }
         let targets = self.position_targets(matches)?;
         let mut text = Vec::new();
         let mut title = Vec::new();
-        let text_present =
-            fields.text && text_index.lookup_targets_into(key, &targets.documents, &mut text)?;
-        let title_present =
-            fields.title && title_index.lookup_targets_into(key, &targets.videos, &mut title)?;
-        if !text_present && !title_present {
-            return Ok(false);
+        if fields.text && !targets.documents.is_empty() {
+            text_index.lookup_targets_into(key, &targets.documents, &mut text)?;
+        }
+        if fields.title && !targets.videos.is_empty() {
+            title_index.lookup_targets_into(key, &targets.videos, &mut title)?;
         }
         apply_bigram_proximity(
             matches,

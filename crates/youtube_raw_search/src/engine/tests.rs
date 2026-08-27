@@ -751,14 +751,20 @@ fn schema_seven_bigram_is_targeted_but_small_queries_remain_document_exact() {
     bigram::write_bigram_index(
         &index_path.join(bigram::TEXT_BIGRAM_FILE),
         4,
+        &[create.term, effect.term],
         &[bigram::BigramWriteEntry {
             key: bigram::BigramKey::new(create.term, effect.term),
             postings: &posting,
         }],
     )
     .expect("write text bigram sidecar");
-    bigram::write_bigram_index(&index_path.join(bigram::TITLE_BIGRAM_FILE), 4, &[])
-        .expect("write title bigram sidecar");
+    bigram::write_bigram_index(
+        &index_path.join(bigram::TITLE_BIGRAM_FILE),
+        4,
+        &[create.term, effect.term],
+        &[],
+    )
+    .expect("write title bigram sidecar");
     let manifest_path = index_path.join(MANIFEST_FILE);
     let mut manifest: Manifest =
         serde_json::from_reader(File::open(&manifest_path).unwrap()).unwrap();
@@ -815,6 +821,126 @@ fn schema_seven_bigram_is_targeted_but_small_queries_remain_document_exact() {
         matches[1..]
             .iter()
             .all(|candidate| !candidate.ordered_phrase())
+    );
+}
+
+#[test]
+fn large_schema_seven_pair_absence_does_not_restore_loose_proximity() {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    for document in 0..129 {
+        let text = if document == 0 {
+            "create effect"
+        } else {
+            "create a nearby effect"
+        };
+        writeln!(
+            chunks,
+            "{}",
+            json!({
+                "id": format!("fixture-{document}"),
+                "video_id": format!("video-{document}"),
+                "title": "Fixture",
+                "text": text,
+                "youtuber_handle": "@fixture",
+                "youtuber_name": "Fixture"
+            })
+        )
+        .expect("write chunk");
+    }
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build");
+    let engine = RawSearchEngine::open(&index_path).expect("open");
+    let create = engine
+        .inner
+        .lexicon
+        .lookup("create")
+        .unwrap()
+        .expect("create term");
+    let effect = engine
+        .inner
+        .lexicon
+        .lookup("effect")
+        .unwrap()
+        .expect("effect term");
+    drop(engine);
+    let mut covered_terms = [create.term, effect.term];
+    covered_terms.sort_unstable();
+    let fields = QueryFields {
+        text: true,
+        title: true,
+        prioritize_position: true,
+        exact_mask: 1,
+    };
+    let terms = ["create".to_string(), "effect".to_string()];
+
+    let write_sidecars = |postings: &[bigram::BigramPosting]| {
+        let entries = (!postings.is_empty()).then_some(bigram::BigramWriteEntry {
+            key: bigram::BigramKey::new(create.term, effect.term),
+            postings,
+        });
+        bigram::write_bigram_index(
+            &index_path.join(bigram::TEXT_BIGRAM_FILE),
+            129,
+            &covered_terms,
+            entries.as_slice(),
+        )
+        .expect("write text sidecar");
+        bigram::write_bigram_index(
+            &index_path.join(bigram::TITLE_BIGRAM_FILE),
+            129,
+            &covered_terms,
+            &[],
+        )
+        .expect("write title sidecar");
+        let manifest_path = index_path.join(MANIFEST_FILE);
+        let mut manifest: Manifest =
+            serde_json::from_reader(File::open(&manifest_path).unwrap()).unwrap();
+        manifest.files = build_manifest_files(&index_path, 7).unwrap();
+        serde_json::to_writer_pretty(File::create(&manifest_path).unwrap(), &manifest).unwrap();
+    };
+
+    write_sidecars(&[bigram::BigramPosting {
+        document: 0,
+        earliest_end_offset: 2,
+    }]);
+    let present_engine = RawSearchEngine::open(&index_path).expect("open present-pair index");
+    let mut present = (0..129)
+        .map(|document| DocMatch::new(document, 1.0, true))
+        .collect::<Vec<_>>();
+    present_engine
+        .apply_exact_proximity(&terms, fields, &mut present, &mut BlockCache::default())
+        .expect("apply present pair");
+    assert!(present[0].ordered_phrase());
+    assert!(present[0].score > 1.0);
+    assert!(present[1..].iter().all(|candidate| candidate.score == 1.0));
+    drop(present_engine);
+
+    write_sidecars(&[]);
+    let absent_engine = RawSearchEngine::open(&index_path).expect("open absent-pair index");
+    let mut absent = (0..129)
+        .map(|document| DocMatch::new(document, 1.0, true))
+        .collect::<Vec<_>>();
+    absent_engine
+        .apply_exact_proximity(&terms, fields, &mut absent, &mut BlockCache::default())
+        .expect("apply absent pair");
+    assert!(
+        absent
+            .iter()
+            .all(|candidate| !candidate.ordered_phrase() && candidate.score == 1.0)
+    );
+    assert_eq!(
+        present[1..]
+            .iter()
+            .map(|candidate| candidate.score)
+            .collect::<Vec<_>>(),
+        absent[1..]
+            .iter()
+            .map(|candidate| candidate.score)
+            .collect::<Vec<_>>()
     );
 }
 

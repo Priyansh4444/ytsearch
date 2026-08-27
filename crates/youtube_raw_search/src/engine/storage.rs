@@ -353,6 +353,11 @@ impl RawSearchEngine {
                     "ordered-bigram universes do not match the manifest".to_string(),
                 ));
             }
+            if !text.has_same_coverage(&title) {
+                return Err(Error::Corrupt(
+                    "ordered-bigram field coverage does not match".to_string(),
+                ));
+            }
             (Some(text), Some(title))
         } else {
             (None, None)

@@ -1076,13 +1076,23 @@ fn write_bigram_indexes_with_threshold(
     maximum_shard_bytes: u64,
 ) -> Result<()> {
     let shard_paths = refine_bigram_shards(spool_directory, maximum_shard_bytes)?;
+    let covered_terms = lexicon
+        .iter()
+        .enumerate()
+        .filter_map(|(term, entry)| {
+            (safe_document_frequency((term as u32, entry)) > minimum_term_documents)
+                .then_some(term as u32)
+        })
+        .collect::<Vec<_>>();
     let mut text = bigram::BigramIndexWriter::create(
         &index_path.join(bigram::TEXT_BIGRAM_FILE),
         documents.max(1),
+        &covered_terms,
     )?;
     let mut title = bigram::BigramIndexWriter::create(
         &index_path.join(bigram::TITLE_BIGRAM_FILE),
         videos.max(1),
+        &covered_terms,
     )?;
     for path in shard_paths {
         if fs::metadata(&path)?.len() > maximum_shard_bytes {
