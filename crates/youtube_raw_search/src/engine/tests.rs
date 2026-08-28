@@ -2325,6 +2325,42 @@ fn newly_built_and_fully_verified_opens_have_response_parity() {
 }
 
 #[test]
+fn title_postings_are_document_sorted_across_interleaved_videos() {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    for document in [
+        json!({"id":"a-1","video_id":"a","title":"alpha beta","text":"one","youtuber_handle":"@one","youtuber_name":"One"}),
+        json!({"id":"b-1","video_id":"b","title":"alpha beta","text":"two","youtuber_handle":"@two","youtuber_name":"Two"}),
+        json!({"id":"a-2","video_id":"a","title":"alpha beta","text":"three","youtuber_handle":"@one","youtuber_name":"One"}),
+    ] {
+        writeln!(chunks, "{document}").expect("write chunk");
+    }
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build index");
+    let engine = RawSearchEngine::open(&index_path).expect("open index");
+    let entry = engine
+        .inner
+        .lexicon
+        .lookup("beta")
+        .expect("lookup beta")
+        .expect("beta entry");
+    let matches = engine
+        .decode_title_postings(entry, 1.0, true, 1)
+        .expect("decode title postings");
+
+    assert_eq!(
+        matches
+            .iter()
+            .map(|candidate| candidate.document())
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+}
+
+#[test]
 fn schema_seven_manifest_checksums_and_opens_both_bigram_sidecars() {
     let (root, engine) = test_engine();
     let index = root.path().join("index");

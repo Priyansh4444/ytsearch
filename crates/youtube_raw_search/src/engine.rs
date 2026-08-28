@@ -1277,6 +1277,7 @@ impl RawSearchEngine {
                 "title posting/position count does not match lexicon".to_string(),
             ));
         }
+        matches.sort_unstable_by_key(|candidate| candidate.document());
         Ok(matches)
     }
 
