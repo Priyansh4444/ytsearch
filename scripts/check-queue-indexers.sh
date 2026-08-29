@@ -9,6 +9,7 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 EXPECTED_RAW_SEARCH_API_URL="${EXPECTED_RAW_SEARCH_API_URL:-http://ytsearch-raw-production.internal:8108}"
 EXPECTED_CREATOR_LIST_FILE="${EXPECTED_CREATOR_LIST_FILE:-$SCRIPT_DIR/indexed-channels.txt}"
 EXPECTED_ENTRYPOINT_FILE="${EXPECTED_ENTRYPOINT_FILE:-$SCRIPT_DIR/cloud-index-queue-entrypoint.sh}"
+REQUIRED_STATES="${REQUIRED_QUEUE_WORKER_STATES:-}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required." >&2
@@ -47,12 +48,15 @@ if [ "$count" -ne 1 ]; then
   exit 1
 fi
 
-if ! printf '%s' "$machines" | jq -e --arg raw_url "$EXPECTED_RAW_SEARCH_API_URL" '
+if ! printf '%s' "$machines" | jq -e \
+  --arg raw_url "$EXPECTED_RAW_SEARCH_API_URL" \
+  --arg required_states "$REQUIRED_STATES" '
   first(.[] | select(
     .config.env.YTSEARCH_MACHINE_ROLE == "queue-indexer"
     and .config.env.QUEUE_TARGET_BACKEND == "raw"
   ))
-  | (.state == "started" or .state == "starting" or .state == "stopped")
+  | (.state == "created" or .state == "started" or .state == "starting" or .state == "stopped")
+    and ($required_states == "" or (.state as $state | ($required_states | split(",") | index($state)) != null))
     and (.config.env.QUEUE_LOOP == "1")
     and ((.config.env.IDLE_EXIT_AFTER_SECONDS | tonumber?) // 0) > 0
     and ((.config.env.RAW_PUBLICATION_TIMEOUT_SECONDS | tonumber?) // 0) >= 2700
@@ -65,8 +69,22 @@ if ! printf '%s' "$machines" | jq -e --arg raw_url "$EXPECTED_RAW_SEARCH_API_URL
     and (((.config.env.IDLE_GAP_FILL_BATCH_PASSES | tonumber?) // 0) <= 8)
     and (((.config.env.IDLE_GAP_FILL_MAX_NEW_VIDEOS | tonumber?) // 0) > 0)
     and (.config.env.RAW_PENDING_PUBLICATION_FILE == "/var/lib/ytsearch/raw-publication.pending")
-    and (([.config.init.entrypoint[]?, .config.init.cmd[]?]
-      | index("/usr/local/bin/cloud-index-queue")) != null)
+    and ((.config.files // []) | length) == 4
+    and (([.config.files[] | select(.guest_path == "/run/secrets/youtube-api-key.txt")] | length) == 1)
+    and (([.config.files[] | select(
+      .guest_path == "/run/secrets/youtube-api-key.txt"
+      and .secret_name == "YOUTUBE_API_KEY_FILE_B64"
+      and (has("raw_value") | not)
+    )] | length) == 1)
+    and (([.config.files[] | select(.guest_path == "/run/secrets/yt-dlp-cookies.txt")] | length) == 1)
+    and (([.config.files[] | select(
+      .guest_path == "/run/secrets/yt-dlp-cookies.txt"
+      and .secret_name == "YT_DLP_COOKIES_FILE_B64"
+      and (has("raw_value") | not)
+    )] | length) == 1)
+    and (.config.init.entrypoint == ["/bin/sh"])
+    and (.config.init.cmd == ["/usr/local/bin/cloud-index-queue"])
+    and (((.config.init.exec // []) | length) == 0)
     and ((.config.restart.policy // "no") == "no")
 ' >/dev/null; then
   echo "The raw worker does not satisfy the on-demand queue invariant." >&2

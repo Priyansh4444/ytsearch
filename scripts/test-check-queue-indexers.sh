@@ -41,6 +41,8 @@ fixture() {
         cmd:["/usr/local/bin/cloud-index-queue"]
       },
       files:[
+        {guest_path:"/run/secrets/youtube-api-key.txt",secret_name:"YOUTUBE_API_KEY_FILE_B64"},
+        {guest_path:"/run/secrets/yt-dlp-cookies.txt",secret_name:"YT_DLP_COOKIES_FILE_B64"},
         {guest_path:"/usr/local/bin/cloud-index-queue",raw_value:$entrypoint},
         {guest_path:"/tmp/daily-indexed-channels.txt",raw_value:$creator_list}
       ],
@@ -51,6 +53,20 @@ fixture() {
 
 fixture stopped 300 no >"$tmp/healthy.json"
 MACHINES_JSON_FILE="$tmp/healthy.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null
+if MACHINES_JSON_FILE="$tmp/healthy.json" \
+  REQUIRED_QUEUE_WORKER_STATES=started \
+  "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then
+  echo "a stopped worker must fail a required-started check" >&2
+  exit 1
+fi
+fixture started 300 no >"$tmp/started.json"
+MACHINES_JSON_FILE="$tmp/started.json" \
+  REQUIRED_QUEUE_WORKER_STATES=started \
+  "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null
+fixture created 300 no >"$tmp/created.json"
+MACHINES_JSON_FILE="$tmp/created.json" \
+  REQUIRED_QUEUE_WORKER_STATES=created,stopped \
+  "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null
 
 fixture stopped 0 no >"$tmp/no-idle-exit.json"
 if MACHINES_JSON_FILE="$tmp/no-idle-exit.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then
@@ -69,6 +85,13 @@ jq '.[0].config.init.cmd = ["-c", "sleep 3600"]' \
   "$tmp/healthy.json" >"$tmp/sleep-command.json"
 if MACHINES_JSON_FILE="$tmp/sleep-command.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then
   echo "worker with a placeholder sleep command should fail" >&2
+  exit 1
+fi
+
+jq '.[0].config.init.exec = ["/bin/sh", "-c", "sleep 3600"]' \
+  "$tmp/healthy.json" >"$tmp/stale-init-exec.json"
+if MACHINES_JSON_FILE="$tmp/stale-init-exec.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then
+  echo "worker with an overriding init exec should fail" >&2
   exit 1
 fi
 
@@ -96,6 +119,15 @@ jq '.[0].config.files |= map(if .guest_path == "/tmp/daily-indexed-channels.txt"
   "$tmp/healthy.json" >"$tmp/stale-list.json"
 if MACHINES_JSON_FILE="$tmp/stale-list.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then
   echo "worker with a stale creator list should fail" >&2
+  exit 1
+fi
+
+jq '.[0].config.files += [{
+  guest_path:"/run/secrets/youtube-api-key.txt",
+  raw_value:"c3RhbGUK"
+}]' "$tmp/healthy.json" >"$tmp/duplicate-secret-path.json"
+if MACHINES_JSON_FILE="$tmp/duplicate-secret-path.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then
+  echo "worker with an ambiguous secret file path should fail" >&2
   exit 1
 fi
 

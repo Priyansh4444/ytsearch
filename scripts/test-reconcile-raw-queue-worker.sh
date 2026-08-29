@@ -11,6 +11,8 @@ jq -n \
   --arg old_entrypoint "$old_entrypoint" \
   --arg old_list "$old_list" '[{
     id:"machine-1",
+    instance_id:"instance-1",
+    host_status:"ok",
     name:"ytsearch-queue-raw",
     state:"stopped",
     config:{
@@ -21,9 +23,11 @@ jq -n \
         RAW_SEARCH_API_URL:"http://stopped-canary.internal:8108",
         QUEUE_ONE_REQUEST_PER_PASS:"1"
       },
-      init:{entrypoint:["/bin/sh"],cmd:["-c","sleep 3600"]},
+      init:{entrypoint:["/bin/sh"],cmd:["-c","sleep 3600"],exec:["/bin/false"]},
       files:[
-        {guest_path:"/run/secrets/key",secret_name:"KEY_B64"},
+        {guest_path:"/run/secrets/youtube-api-key.txt",raw_value:$old_entrypoint},
+        {guest_path:"/run/secrets/youtube-api-key.txt",secret_name:"YOUTUBE_API_KEY_FILE_B64"},
+        {guest_path:"/run/secrets/yt-dlp-cookies.txt",secret_name:"YT_DLP_COOKIES_FILE_B64"},
         {guest_path:"/usr/local/bin/cloud-index-queue",raw_value:$old_entrypoint},
         {guest_path:"/tmp/daily-indexed-channels.txt",raw_value:$old_list}
       ],
@@ -48,9 +52,21 @@ jq -e '
   and .env.RAW_PENDING_PUBLICATION_FILE == "/var/lib/ytsearch/raw-publication.pending"
   and .init.entrypoint == ["/bin/sh"]
   and .init.cmd == ["/usr/local/bin/cloud-index-queue"]
+  and (.init | has("exec") | not)
   and .restart.policy == "no"
   and .metadata.lifecycle == "on-demand-queue-worker"
-  and ([.files[] | select(.guest_path == "/run/secrets/key" and .secret_name == "KEY_B64")] | length) == 1
+  and (.files | length) == 4
+  and ([.files[] | select(
+    .guest_path == "/run/secrets/youtube-api-key.txt"
+    and .secret_name == "YOUTUBE_API_KEY_FILE_B64"
+  )] | length) == 1
+  and ([.files[] | select(.guest_path == "/run/secrets/youtube-api-key.txt")] | length) == 1
+  and ([.files[] | select(
+    .guest_path == "/run/secrets/yt-dlp-cookies.txt"
+    and .secret_name == "YT_DLP_COOKIES_FILE_B64"
+  )] | length) == 1
+  and ([.files[] | select(.guest_path == "/usr/local/bin/cloud-index-all")] | length) == 0
+  and ([.files[] | select(.guest_path == "/tmp/indexed-channels.txt")] | length) == 0
 ' "$tmp/config.json" >/dev/null
 
 jq -r 'first(.files[] | select(.guest_path == "/usr/local/bin/cloud-index-queue")) | .raw_value' \
@@ -77,36 +93,56 @@ if MACHINES_JSON_FILE="$tmp/duplicate.json" \
 fi
 
 mkdir -p "$tmp/fake-bin"
+cat > "$tmp/fly-config.yml" <<'YAML'
+access_token: must-not-be-read-as-a-version
+app_secrets_minvers:
+    another-app: 1
+    ytsearch-indexer-raw-production: 104052993
+last_login: never
+YAML
 cat > "$tmp/fake-bin/flyctl" <<'SH'
 #!/usr/bin/env sh
 set -eu
 printf '%s\n' "$*" >> "$FAKE_FLY_LOG"
 case "$1 $2" in
+  "auth token")
+    printf 'fake-token\n'
+    ;;
   "machine list")
     cat "$FAKE_FLY_STATE"
-    ;;
-  "machine update")
-    shift 2
-    config=""
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = "--machine-config" ]; then
-        config="$2"
-        break
-      fi
-      shift
-    done
-    [ -n "$config" ]
-    case "$config" in
-      *.json) ;;
-      *) echo "machine config must use a .json path: $config" >&2; exit 1 ;;
-    esac
-    jq --slurpfile config "$config" '.[0].config = $config[0]' \
-      "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
-    mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
     ;;
   "machine start")
     jq '.[0].state = "started"' "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
     mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
+    ;;
+  "machine wait")
+    [ "$(jq -r '.[0].state' "$FAKE_FLY_STATE")" = "started" ]
+    ;;
+  "secrets list")
+    case "${FAKE_SECRETS_STATUS:-ready}" in
+      ready)
+        printf '[{"name":"YOUTUBE_API_KEY_FILE_B64","status":"Partial"},{"name":"YT_DLP_COOKIES_FILE_B64","status":"Partial"}]\n'
+        ;;
+      missing)
+        printf '[{"name":"UNRELATED_SECRET","status":"Deployed"}]\n'
+        ;;
+      unknown)
+        printf '[{"name":"YOUTUBE_API_KEY_FILE_B64","status":"Unknown"},{"name":"YT_DLP_COOKIES_FILE_B64","status":"Partial"}]\n'
+        ;;
+      staged)
+        printf '[{"name":"YOUTUBE_API_KEY_FILE_B64","status":"Staged"},{"name":"YT_DLP_COOKIES_FILE_B64","status":"Partial"}]\n'
+        ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  "secrets sync")
+    if [ "${FAKE_SECRET_SYNC_FAILURE:-0}" = "1" ]; then
+      exit 1
+    fi
+    sed 's/ytsearch-indexer-raw-production: 104052993/ytsearch-indexer-raw-production: 104052994/' \
+      "$FLY_CONFIG_FILE" > "$FLY_CONFIG_FILE.next"
+    mv "$FLY_CONFIG_FILE.next" "$FLY_CONFIG_FILE"
+    printf 'secrets synchronized\n' >> "$FAKE_FLY_LOG"
     ;;
   *)
     echo "unexpected fake flyctl command: $*" >&2
@@ -115,32 +151,307 @@ case "$1 $2" in
 esac
 SH
 chmod +x "$tmp/fake-bin/flyctl"
+cat > "$tmp/fake-bin/curl" <<'SH'
+#!/usr/bin/env sh
+set -eu
+request=""
+response=""
+auth_header=""
+lease_header=""
+method="GET"
+url=""
+printf '%s\n' "$*" >> "$FAKE_CURL_LOG"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --data-binary) request="${2#@}"; shift 2 ;;
+    --output) response="$2"; shift 2 ;;
+    --request) method="$2"; shift 2 ;;
+    --header)
+      case "$2" in
+        @*)
+          header_file="${2#@}"
+          if grep -q '^Authorization:' "$header_file"; then
+            auth_header="$header_file"
+          elif grep -q '^fly-machine-lease-nonce:' "$header_file"; then
+            lease_header="$header_file"
+          fi
+          ;;
+      esac
+      shift 2
+      ;;
+    http://*|https://*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+[ -n "$response" ] && [ -n "$auth_header" ] && [ -n "$url" ]
+[ "$(stat -c '%a' "$auth_header")" = "600" ]
+grep -Fx 'Authorization: Bearer fake-token' "$auth_header" >/dev/null
+case "$method:$url" in
+  POST:*/lease)
+    if [ "${FAKE_LEASE_CONFLICT:-0}" = "1" ]; then
+      printf '{"error":"lease conflict"}\n' > "$response"
+      printf '409'
+      exit 0
+    fi
+    [ -n "$request" ]
+    jq -e '.ttl == 120' "$request" >/dev/null
+    if [ "${FAKE_START_BEFORE_LEASE:-0}" = "1" ]; then
+      jq '.[0].state = "started"' "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
+      mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
+    fi
+    if [ "${FAKE_CONFIG_CHANGE_BEFORE_LEASE:-0}" = "1" ]; then
+      jq '.[0].config.metadata.external_owner = "fresh-leased-get"' \
+        "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
+      mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
+    fi
+    if [ "${FAKE_INCOMPLETE_BEFORE_LEASE:-0}" = "1" ]; then
+      jq '.[0].host_status = "unavailable" | .[0].incomplete_config = true' \
+        "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
+      mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
+    fi
+    printf '{"status":"success","data":{"nonce":"fake-nonce"}}\n' > "$response"
+    : > "$FAKE_FLY_LEASE"
+    printf 'lease acquired\n' >> "$FAKE_FLY_LOG"
+    printf '201'
+    ;;
+  GET:*/machines/machine-1)
+    [ -n "$lease_header" ] && [ -f "$FAKE_FLY_LEASE" ]
+    [ "$(stat -c '%a' "$lease_header")" = "600" ]
+    grep -Fx 'fly-machine-lease-nonce: fake-nonce' "$lease_header" >/dev/null
+    jq '.[0]' "$FAKE_FLY_STATE" > "$response"
+    printf 'machine read under lease\n' >> "$FAKE_FLY_LOG"
+    printf '200'
+    ;;
+  POST:*/machines/machine-1)
+    [ -n "$request" ] && [ -n "$lease_header" ] && [ -f "$FAKE_FLY_LEASE" ]
+    case "$request" in
+      *.json) ;;
+      *) echo "machine request must use a .json path: $request" >&2; exit 1 ;;
+    esac
+    current_version="$(jq -r '.[0].instance_id' "$FAKE_FLY_STATE")"
+    jq -e --arg version "$current_version" '
+      .current_version == $version
+      and .min_secrets_version == 104052994
+      and .skip_launch == true
+    ' "$request" >/dev/null
+    if [ "${FAKE_UPDATE_CONFLICT:-0}" = "1" ]; then
+      printf '{"error":"stale version"}\n' > "$response"
+      printf '409'
+      exit 0
+    fi
+    jq --slurpfile request "$request" '
+      .[0].config = $request[0].config
+      | .[0].instance_id = "instance-2"
+      | .[0].state = "created"
+    ' "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
+    mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
+    jq '.[0]' "$FAKE_FLY_STATE" > "$response"
+    printf 'api update\n' >> "$FAKE_FLY_LOG"
+    printf '200'
+    ;;
+  POST:*/machines/machine-1/start)
+    [ -n "$lease_header" ] && [ -f "$FAKE_FLY_LEASE" ]
+    [ "$(jq -r '.[0].state' "$FAKE_FLY_STATE")" = "created" ]
+    jq '.[0].state = "started"' "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
+    mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
+    jq '.[0]' "$FAKE_FLY_STATE" > "$response"
+    printf 'api start\n' >> "$FAKE_FLY_LOG"
+    printf '200'
+    ;;
+  DELETE:*/lease)
+    [ -n "$lease_header" ] && [ -f "$FAKE_FLY_LEASE" ]
+    rm -f "$FAKE_FLY_LEASE"
+    printf 'lease released\n' >> "$FAKE_FLY_LOG"
+    printf '200'
+    ;;
+  *)
+    echo "unexpected fake curl request: $method $url" >&2
+    exit 1
+    ;;
+esac
+SH
+chmod +x "$tmp/fake-bin/curl"
 cp "$tmp/machines.json" "$tmp/fly-state.json"
 : > "$tmp/fly.log"
+: > "$tmp/curl.log"
 PATH="$tmp/fake-bin:$PATH" \
 FAKE_FLY_LOG="$tmp/fly.log" \
 FAKE_FLY_STATE="$tmp/fly-state.json" \
+FAKE_FLY_LEASE="$tmp/fly-lease" \
+FAKE_CURL_LOG="$tmp/curl.log" \
+FAKE_CONFIG_CHANGE_BEFORE_LEASE=1 \
+FLY_CONFIG_FILE="$tmp/fly-config.yml" \
 APPLY_QUEUE_WORKER_RECONCILIATION=1 \
 INDEXER_IMAGE="registry.invalid/current:two" \
   "$SCRIPT_DIR/reconcile-raw-queue-worker.sh" >/dev/null
-jq -e '.[0].state == "stopped" and .[0].config.init.cmd == ["/usr/local/bin/cloud-index-queue"]' \
+jq -e '
+  .[0].state == "created"
+  and .[0].instance_id == "instance-2"
+  and .[0].config.init.cmd == ["/usr/local/bin/cloud-index-queue"]
+  and .[0].config.metadata.external_owner == "fresh-leased-get"
+' \
   "$tmp/fly-state.json" >/dev/null
+if grep -E 'fake-token|fake-nonce' "$tmp/curl.log"; then
+  echo "Fly credentials must not appear in curl arguments" >&2
+  exit 1
+fi
+grep -Fx 'lease acquired' "$tmp/fly.log" >/dev/null
+grep -Fx 'lease released' "$tmp/fly.log" >/dev/null
 
 : > "$tmp/fly.log"
 PATH="$tmp/fake-bin:$PATH" \
 FAKE_FLY_LOG="$tmp/fly.log" \
 FAKE_FLY_STATE="$tmp/fly-state.json" \
+FAKE_FLY_LEASE="$tmp/fly-lease" \
+FAKE_CURL_LOG="$tmp/curl.log" \
+FLY_CONFIG_FILE="$tmp/fly-config.yml" \
 INDEXER_IMAGE="registry.invalid/current:two" \
   "$SCRIPT_DIR/fly-run-queue-indexers.sh" >/dev/null
 jq -e '.[0].state == "started"' "$tmp/fly-state.json" >/dev/null
-update_line="$(grep -n '^machine update ' "$tmp/fly.log" | cut -d: -f1)"
-start_line="$(grep -n '^machine start ' "$tmp/fly.log" | cut -d: -f1)"
-[ -n "$update_line" ] && [ -n "$start_line" ] && [ "$update_line" -lt "$start_line" ] || {
-  echo "the worker must finish reconciliation before it starts" >&2
+update_line="$(grep -n '^api update$' "$tmp/fly.log" | cut -d: -f1)"
+api_start_line="$(grep -n '^api start$' "$tmp/fly.log" | cut -d: -f1)"
+wait_line="$(grep -n '^machine wait ' "$tmp/fly.log" | cut -d: -f1)"
+[ -n "$update_line" ] && [ -n "$api_start_line" ] && [ -n "$wait_line" ] \
+  && [ "$update_line" -lt "$api_start_line" ] && [ "$api_start_line" -lt "$wait_line" ] || {
+  echo "the leased update must start the worker before readiness is checked" >&2
   exit 1
 }
-if grep -Eq '^machine (run|create) ' "$tmp/fly.log"; then
-  echo "the existing-worker path must not create a Machine" >&2
+if grep -Eq '^machine (run|create|start) ' "$tmp/fly.log"; then
+  echo "the existing-worker path must atomically launch through the leased update" >&2
+  exit 1
+fi
+
+cp "$tmp/machines.json" "$tmp/race-state.json"
+: > "$tmp/race.log"
+: > "$tmp/race-curl.log"
+if PATH="$tmp/fake-bin:$PATH" \
+  FAKE_FLY_LOG="$tmp/race.log" \
+  FAKE_FLY_STATE="$tmp/race-state.json" \
+  FAKE_FLY_LEASE="$tmp/race-lease" \
+  FAKE_CURL_LOG="$tmp/race-curl.log" \
+  FLY_CONFIG_FILE="$tmp/fly-config.yml" \
+  FAKE_START_BEFORE_LEASE=1 \
+  APPLY_QUEUE_WORKER_RECONCILIATION=1 \
+  INDEXER_IMAGE="registry.invalid/current:two" \
+  "$SCRIPT_DIR/reconcile-raw-queue-worker.sh" >/dev/null 2>&1; then
+  echo "reconciliation must reject a worker started before lease acquisition" >&2
+  exit 1
+fi
+if grep -Fx 'api update' "$tmp/race.log"; then
+  echo "a concurrent start must prevent the API update" >&2
+  exit 1
+fi
+grep -Fx 'lease released' "$tmp/race.log" >/dev/null
+
+cp "$tmp/machines.json" "$tmp/incomplete-state.json"
+: > "$tmp/incomplete.log"
+: > "$tmp/incomplete-curl.log"
+if PATH="$tmp/fake-bin:$PATH" \
+  FAKE_FLY_LOG="$tmp/incomplete.log" \
+  FAKE_FLY_STATE="$tmp/incomplete-state.json" \
+  FAKE_FLY_LEASE="$tmp/incomplete-lease" \
+  FAKE_CURL_LOG="$tmp/incomplete-curl.log" \
+  FLY_CONFIG_FILE="$tmp/fly-config.yml" \
+  FAKE_INCOMPLETE_BEFORE_LEASE=1 \
+  APPLY_QUEUE_WORKER_RECONCILIATION=1 \
+  INDEXER_IMAGE="registry.invalid/current:two" \
+  "$SCRIPT_DIR/reconcile-raw-queue-worker.sh" >/dev/null 2>&1; then
+  echo "reconciliation must reject an incomplete leased Machine response" >&2
+  exit 1
+fi
+if grep -Fx 'api update' "$tmp/incomplete.log"; then
+  echo "an incomplete Machine response must prevent the API update" >&2
+  exit 1
+fi
+grep -Fx 'lease released' "$tmp/incomplete.log" >/dev/null
+
+cp "$tmp/machines.json" "$tmp/sync-failure-state.json"
+sed 's/104052994/104052993/' "$tmp/fly-config.yml" > "$tmp/sync-failure-config.yml"
+: > "$tmp/sync-failure.log"
+: > "$tmp/sync-failure-curl.log"
+if PATH="$tmp/fake-bin:$PATH" \
+  FAKE_FLY_LOG="$tmp/sync-failure.log" \
+  FAKE_FLY_STATE="$tmp/sync-failure-state.json" \
+  FAKE_FLY_LEASE="$tmp/sync-failure-lease" \
+  FAKE_CURL_LOG="$tmp/sync-failure-curl.log" \
+  FLY_CONFIG_FILE="$tmp/sync-failure-config.yml" \
+  FAKE_SECRET_SYNC_FAILURE=1 \
+  APPLY_QUEUE_WORKER_RECONCILIATION=1 \
+  INDEXER_IMAGE="registry.invalid/current:two" \
+  "$SCRIPT_DIR/reconcile-raw-queue-worker.sh" >/dev/null 2>&1; then
+  echo "reconciliation must fail when authoritative secret synchronization fails" >&2
+  exit 1
+fi
+if grep -Fx 'api update' "$tmp/sync-failure.log"; then
+  echo "failed secret synchronization must prevent the API update" >&2
+  exit 1
+fi
+grep -Fx 'lease released' "$tmp/sync-failure.log" >/dev/null
+
+for secret_status in missing unknown staged; do
+  cp "$tmp/machines.json" "$tmp/secret-$secret_status-state.json"
+  : > "$tmp/secret-$secret_status.log"
+  : > "$tmp/secret-$secret_status-curl.log"
+  if PATH="$tmp/fake-bin:$PATH" \
+    FAKE_FLY_LOG="$tmp/secret-$secret_status.log" \
+    FAKE_FLY_STATE="$tmp/secret-$secret_status-state.json" \
+    FAKE_FLY_LEASE="$tmp/secret-$secret_status-lease" \
+    FAKE_CURL_LOG="$tmp/secret-$secret_status-curl.log" \
+    FAKE_SECRETS_STATUS="$secret_status" \
+    FLY_CONFIG_FILE="$tmp/fly-config.yml" \
+    INDEXER_IMAGE="registry.invalid/current:two" \
+    "$SCRIPT_DIR/fly-run-queue-indexers.sh" >/dev/null 2>&1; then
+    echo "the launcher must reject $secret_status required-secret status" >&2
+    exit 1
+  fi
+  if grep -Fx 'api start' "$tmp/secret-$secret_status.log"; then
+    echo "$secret_status required-secret status must prevent boot" >&2
+    exit 1
+  fi
+  jq -e '.[0].state == "created"' "$tmp/secret-$secret_status-state.json" >/dev/null
+  grep -Fx 'lease released' "$tmp/secret-$secret_status.log" >/dev/null
+done
+
+cp "$tmp/machines.json" "$tmp/conflict-state.json"
+: > "$tmp/conflict.log"
+: > "$tmp/conflict-curl.log"
+if PATH="$tmp/fake-bin:$PATH" \
+  FAKE_FLY_LOG="$tmp/conflict.log" \
+  FAKE_FLY_STATE="$tmp/conflict-state.json" \
+  FAKE_FLY_LEASE="$tmp/conflict-lease" \
+  FAKE_CURL_LOG="$tmp/conflict-curl.log" \
+  FLY_CONFIG_FILE="$tmp/fly-config.yml" \
+  FAKE_UPDATE_CONFLICT=1 \
+  INDEXER_IMAGE="registry.invalid/current:two" \
+  "$SCRIPT_DIR/fly-run-queue-indexers.sh" >/dev/null 2>&1; then
+  echo "the launcher must fail when the Machines API rejects its update" >&2
+  exit 1
+fi
+if grep -Eq '^machine (wait|start) ' "$tmp/conflict.log"; then
+  echo "an update conflict must not continue to launch or wait" >&2
+  exit 1
+fi
+jq -e '.[0].state == "stopped"' "$tmp/conflict-state.json" >/dev/null
+grep -Fx 'lease released' "$tmp/conflict.log" >/dev/null
+
+cp "$tmp/machines.json" "$tmp/lease-conflict-state.json"
+: > "$tmp/lease-conflict.log"
+: > "$tmp/lease-conflict-curl.log"
+if PATH="$tmp/fake-bin:$PATH" \
+  FAKE_FLY_LOG="$tmp/lease-conflict.log" \
+  FAKE_FLY_STATE="$tmp/lease-conflict-state.json" \
+  FAKE_FLY_LEASE="$tmp/lease-conflict-lease" \
+  FAKE_CURL_LOG="$tmp/lease-conflict-curl.log" \
+  FLY_CONFIG_FILE="$tmp/fly-config.yml" \
+  FAKE_LEASE_CONFLICT=1 \
+  APPLY_QUEUE_WORKER_RECONCILIATION=1 \
+  INDEXER_IMAGE="registry.invalid/current:two" \
+  "$SCRIPT_DIR/reconcile-raw-queue-worker.sh" >/dev/null 2>&1; then
+  echo "reconciliation must fail closed when the Machine is already leased" >&2
+  exit 1
+fi
+if grep -Fx 'api update' "$tmp/lease-conflict.log"; then
+  echo "a lease conflict must prevent the API update" >&2
   exit 1
 fi
 
