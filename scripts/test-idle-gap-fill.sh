@@ -17,6 +17,13 @@ RAW_PENDING_PUBLICATION_FILE="$test_dir/data/raw-publication.pending"
 export CLOUD_INDEX_QUEUE_LIBRARY_ONLY INDEX_QUEUE_API_BASE_URL IDLE_GAP_FILL_STATE_FILE DAILY_UPDATE_STATE_FILE DAILY_UPDATE_INITIAL_DELAY_SECONDS DAILY_UPDATE_INTERVAL_SECONDS TRANSCRIPT_CACHE_DIR RAW_PENDING_PUBLICATION_FILE
 . "$SCRIPT_DIR/cloud-index-queue-entrypoint.sh"
 
+status=75
+log_queue_event error status_regression "" "@status" "" raw failed >/dev/null 2>&1
+[ "$status" -eq 75 ] || {
+  echo "queue logging must not overwrite a caller's status" >&2
+  exit 1
+}
+
 cat > "$test_dir/api/youtubers" <<'JSON'
 {"channels":[
   {"handle":"@complete","public_video_count":10,"indexed_video_count":10},

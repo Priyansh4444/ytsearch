@@ -1,5 +1,12 @@
 ARG BASE_IMAGE=registry.fly.io/ytsearch-raw-production:split-gate-c1f66fa
 
+FROM rust:1.97-bookworm AS builder
+WORKDIR /build
+COPY .cargo ./.cargo
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN cargo build --locked --release -p youtube_cli
+
 FROM denoland/deno:bin-2.8.1 AS deno
 FROM ${BASE_IMAGE}
 
@@ -10,9 +17,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=deno /deno /usr/local/bin/deno
-COPY ytsearch /usr/local/bin/ytsearch
+COPY --from=builder /build/target/release/ytsearch /usr/local/bin/ytsearch
 COPY cloud-index-queue /usr/local/bin/cloud-index-queue
-RUN chmod 0755 /usr/local/bin/cloud-index-queue
+RUN chmod 0755 /usr/local/bin/cloud-index-queue \
+    && /usr/local/bin/ytsearch --help >/dev/null
 
 ENTRYPOINT []
 CMD ["/bin/sh", "/usr/local/bin/cloud-index-queue"]

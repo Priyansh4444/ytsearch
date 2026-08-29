@@ -11,7 +11,7 @@ APP_NAME="${APP_NAME:-ytsearch-indexer-raw-production}"
 BASE_IMAGE="${BASE_IMAGE:?set BASE_IMAGE to the promoted Raw corpus image}"
 IMAGE_LABEL="${IMAGE_LABEL:-raw-indexer-$(git -C "$REPOSITORY_ROOT" rev-parse --short HEAD)}"
 
-for command in cargo flyctl; do
+for command in flyctl git tar; do
   command -v "$command" >/dev/null 2>&1 || {
     printf 'missing required command: %s\n' "$command" >&2
     exit 1
@@ -21,8 +21,8 @@ done
 temporary_directory="$(mktemp -d)"
 trap 'rm -rf "$temporary_directory"' EXIT INT TERM
 
-cargo build --locked --release -p youtube_cli --manifest-path "$REPOSITORY_ROOT/Cargo.toml"
-cp "$REPOSITORY_ROOT/target/release/ytsearch" "$temporary_directory/ytsearch"
+git -C "$REPOSITORY_ROOT" archive HEAD -- .cargo Cargo.toml Cargo.lock crates \
+  | tar -x -C "$temporary_directory"
 cp "$REPOSITORY_ROOT/scripts/cloud-index-queue-entrypoint.sh" \
   "$temporary_directory/cloud-index-queue"
 cp "$REPOSITORY_ROOT/Dockerfile.raw-indexer-overlay" "$temporary_directory/Dockerfile"

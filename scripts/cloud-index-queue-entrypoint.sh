@@ -133,15 +133,15 @@ validate_backend_scope() {
 }
 
 log_queue_event() {
-  level="$1"
-  event="$2"
-  request_id="${3:-}"
-  handle="${4:-}"
-  source_backend="${5:-}"
-  backends="${6:-}"
-  status="${7:-}"
+  log_level="$1"
+  log_event="$2"
+  log_request_id="${3:-}"
+  log_handle="${4:-}"
+  log_source_backend="${5:-}"
+  log_backends="${6:-}"
+  log_status="${7:-}"
 
-  python3 - "$level" "$event" "$request_id" "$handle" "$source_backend" "$backends" "$status" <<'PY'
+  python3 - "$log_level" "$log_event" "$log_request_id" "$log_handle" "$log_source_backend" "$log_backends" "$log_status" <<'PY'
 import json
 import os
 import sys

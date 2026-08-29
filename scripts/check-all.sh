@@ -10,6 +10,7 @@ scripts/test-setup-dev.sh
 scripts/test-doctor.sh
 scripts/test-check-queue-indexers.sh
 scripts/test-reconcile-raw-queue-worker.sh
+scripts/test-build-raw-indexer-overlay.sh
 scripts/test-cloud-index-queue-entrypoint.sh
 scripts/check-fly-cost-config.sh
 scripts/test-destroy-deprecated-typesense-fly.sh
