@@ -362,7 +362,8 @@ if [ "$START_AFTER_RECONCILIATION" = "1" ]; then
     --header "@$lease_header_file" \
     "$fly_api_hostname/v1/apps/$APP_NAME/machines/$machine_id/start")"
   if [ "$start_status" != "200" ]; then
-    echo "Could not start the reconciled Raw queue worker: status=$start_status" >&2
+    start_error="$(jq -r '.error // .message // "unknown Machines API start error"' "$response_file" 2>/dev/null || true)"
+    echo "Could not start the reconciled Raw queue worker: status=$start_status error=$start_error" >&2
     exit 1
   fi
   flyctl machine wait --app "$APP_NAME" --state started --wait-timeout 30s "$machine_id"
