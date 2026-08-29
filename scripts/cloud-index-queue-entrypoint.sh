@@ -27,7 +27,9 @@ IDLE_EXIT_AFTER_SECONDS="${IDLE_EXIT_AFTER_SECONDS:-0}"
 IDLE_GAP_FILL_ENABLED="${IDLE_GAP_FILL_ENABLED:-0}"
 IDLE_GAP_FILL_STATE_FILE="${IDLE_GAP_FILL_STATE_FILE:-/data/idle-gap-fill.cursor}"
 IDLE_GAP_FILL_MAX_PASSES="${IDLE_GAP_FILL_MAX_PASSES:-1}"
+IDLE_GAP_FILL_BATCH_PASSES="${IDLE_GAP_FILL_BATCH_PASSES:-4}"
 IDLE_GAP_FILL_MAX_NEW_VIDEOS="${IDLE_GAP_FILL_MAX_NEW_VIDEOS:-10}"
+RAW_PENDING_PUBLICATION_FILE="${RAW_PENDING_PUBLICATION_FILE:-/data/raw-publication.pending}"
 
 mkdir -p "$TRANSCRIPT_CACHE_DIR"
 
@@ -84,6 +86,12 @@ validate_idle_gap_fill() {
   case "$IDLE_GAP_FILL_MAX_NEW_VIDEOS" in
     ''|*[!0-9]*|0)
       echo "cloud-queue-indexer: IDLE_GAP_FILL_MAX_NEW_VIDEOS must be a positive integer" >&2
+      exit 1
+      ;;
+  esac
+  case "$IDLE_GAP_FILL_BATCH_PASSES" in
+    ''|*[!0-9]*|0)
+      echo "cloud-queue-indexer: IDLE_GAP_FILL_BATCH_PASSES must be a positive integer" >&2
       exit 1
       ;;
   esac
@@ -544,6 +552,25 @@ publish_raw_generation() {
   ytsearch publish --backend raw --collection "$COLLECTION"
 }
 
+mark_raw_publication_pending() {
+  state_dir="$(dirname "$RAW_PENDING_PUBLICATION_FILE")"
+  mkdir -p "$state_dir" || return 1
+  pending_tmp="${RAW_PENDING_PUBLICATION_FILE}.tmp.$$"
+  printf '%s\n' "$(date +%s)" > "$pending_tmp" || return 1
+  if ! mv "$pending_tmp" "$RAW_PENDING_PUBLICATION_FILE"; then
+    rm -f "$pending_tmp"
+    return 1
+  fi
+}
+
+publish_pending_raw_generation() {
+  [ -f "$RAW_PENDING_PUBLICATION_FILE" ] || return 0
+  if ! publish_raw_generation; then
+    return 1
+  fi
+  rm -f "$RAW_PENDING_PUBLICATION_FILE"
+}
+
 index_list_backend() {
   label="$1"
   backend="$2"
@@ -559,7 +586,6 @@ index_list_backend() {
       --stop-after-existing "$EXISTING_TAIL" --defer-publish "$@"; then
       failed=1
     fi
-    process_queue_once || true
   done < "$DAILY_UPDATE_LIST_FILE"
   return "$failed"
 }
@@ -578,13 +604,18 @@ index_daily_update_for_backends() {
       echo "cloud-queue-indexer: daily Raw update unavailable; missing RAW_SEARCH_API_URL or RAW_SEARCH_ADMIN_API_KEY" >&2
       failed=1
     else
-    if ! index_list_backend raw raw "$raw_jobs"; then
-      failed=1
-      log_queue_event error daily_update_backend_failed "" "" "" "raw" "failed"
-    elif ! publish_raw_generation; then
-      failed=1
-      log_queue_event error daily_update_publication_failed "" "" "" "raw" "failed"
-    fi
+      if ! mark_raw_publication_pending; then
+        log_queue_event error daily_update_marker_failed "" "" "" "raw" "failed"
+        return 1
+      fi
+      if ! index_list_backend raw raw "$raw_jobs"; then
+        failed=1
+        log_queue_event error daily_update_backend_failed "" "" "" "raw" "failed"
+      fi
+      if ! publish_pending_raw_generation; then
+        failed=1
+        log_queue_event error daily_update_publication_failed "" "" "" "raw" "failed"
+      fi
     fi
   fi
 
@@ -603,13 +634,57 @@ process_idle_gap_once() {
   echo "cloud-queue-indexer: idle gap fill handle=$handle"
   log_queue_event info idle_gap_fill_started "" "$handle" "" "$BACKENDS" "running"
   set_index_activity "$handle" || true
-  if index_youtuber_for_backends "$handle" --max-new-videos "$IDLE_GAP_FILL_MAX_NEW_VIDEOS"; then
+  if ! mark_raw_publication_pending; then
+    IDLE_GAP_HAD_WORK=0
+    set_index_activity "" || true
+    log_queue_event error idle_gap_marker_failed "" "$handle" "" "$BACKENDS" "failed"
+    return 1
+  fi
+  status=0
+  index_youtuber_for_backends "$handle" \
+    --max-new-videos "$IDLE_GAP_FILL_MAX_NEW_VIDEOS" \
+    --defer-publish || status=$?
+  if [ "$status" -eq 0 ]; then
     log_queue_event info idle_gap_fill_completed "" "$handle" "" "$BACKENDS" "completed"
   else
     log_queue_event error idle_gap_fill_failed "" "$handle" "" "$BACKENDS" "failed"
   fi
   remember_idle_gap_handle "$handle"
   set_index_activity "" || true
+  return "$status"
+}
+
+process_idle_gap_batch() {
+  maximum_passes="$1"
+  IDLE_GAP_HAD_WORK=0
+  IDLE_GAP_BATCH_PASSES=0
+  batch_failed=0
+
+  while [ "$IDLE_GAP_BATCH_PASSES" -lt "$maximum_passes" ]; do
+    IDLE_GAP_HAD_WORK=0
+    if ! process_idle_gap_once; then
+      batch_failed=1
+    fi
+    if [ "$IDLE_GAP_HAD_WORK" != "1" ]; then
+      break
+    fi
+    IDLE_GAP_BATCH_PASSES=$((IDLE_GAP_BATCH_PASSES + 1))
+    if [ "$batch_failed" -eq 1 ]; then
+      break
+    fi
+  done
+
+  if [ "$IDLE_GAP_BATCH_PASSES" -gt 0 ]; then
+    IDLE_GAP_HAD_WORK=1
+    if ! publish_pending_raw_generation; then
+      batch_failed=1
+      log_queue_event error idle_gap_batch_publication_failed "" "" "" "$BACKENDS" "failed"
+    else
+      log_queue_event info idle_gap_batch_published "" "" "" "$BACKENDS" "passes=$IDLE_GAP_BATCH_PASSES"
+    fi
+  fi
+
+  [ "$batch_failed" -eq 0 ]
 }
 
 if [ "${CLOUD_INDEX_QUEUE_LIBRARY_ONLY:-0}" != "1" ]; then
@@ -664,6 +739,14 @@ process_queue_once() {
       continue
     fi
     log_queue_event info index_request_started "$request_id" "$handle" "$source_backend" "$active_backends" "running"
+    if ! mark_raw_publication_pending; then
+      failed=$((failed + 1))
+      unresolved=$((unresolved + 1))
+      remember_queue_retry "$request_id" "$QUEUE_ACK_RETRY_SECONDS"
+      set_queue_status "$request_id" queued || true
+      log_queue_event error publication_marker_failed "$request_id" "$handle" "$source_backend" "$active_backends" "queued"
+      break
+    fi
     index_status=0
     index_youtuber_for_queue_target "$handle" "$target_backend" --defer-publish || index_status=$?
     publication_needed=1
@@ -708,7 +791,7 @@ process_queue_once() {
   done < "$tmp_queue"
 
   if [ "$publication_needed" -eq 1 ]; then
-    if publish_raw_generation; then
+    if publish_pending_raw_generation; then
       while IFS="$(printf '\t')" read -r request_id handle source_backend active_backends; do
         [ -n "$request_id" ] || continue
         if queue_request DELETE "/api/index-requests/$request_id" >/dev/null; then
@@ -758,6 +841,13 @@ if [ "$QUEUE_LOOP" = "1" ]; then
     echo "cloud-queue-indexer: daily update disabled"
   fi
   while :; do
+    if [ -f "$RAW_PENDING_PUBLICATION_FILE" ] \
+      && ! publish_pending_raw_generation; then
+      echo "cloud-queue-indexer: pending Raw publication failed; retrying before more work" >&2
+      log_queue_event error pending_publication_retry_failed "" "" "" "$BACKENDS" "failed"
+      sleep "$QUEUE_POLL_INTERVAL_SECONDS"
+      continue
+    fi
     process_queue_once || echo "cloud-queue-indexer: queue pass failed; continuing after poll interval" >&2
     if [ "$QUEUE_HAD_WORK" = "1" ]; then
       idle_since="$(date +%s)"
@@ -771,22 +861,28 @@ if [ "$QUEUE_LOOP" = "1" ]; then
         log_queue_event info daily_update_started "" "" "" "$BACKENDS" "running"
         if index_daily_update_for_backends; then
           log_queue_event info daily_update_completed "" "" "" "$BACKENDS" "completed"
+          completed_at="$(date +%s)"
+          remember_daily_update_completion "$completed_at"
+          next_daily_update=$(( completed_at + DAILY_UPDATE_INTERVAL_SECONDS ))
+          idle_since="$completed_at"
+          echo "cloud-queue-indexer: next daily update after epoch=$next_daily_update"
         else
           log_queue_event error daily_update_failed "" "" "" "$BACKENDS" "failed"
         fi
-        completed_at="$(date +%s)"
-        remember_daily_update_completion "$completed_at"
-        next_daily_update=$(( completed_at + DAILY_UPDATE_INTERVAL_SECONDS ))
-        idle_since="$completed_at"
         set_index_activity "" || true
-        echo "cloud-queue-indexer: next daily update after epoch=$next_daily_update"
       fi
     fi
     IDLE_GAP_HAD_WORK=0
+    IDLE_GAP_BATCH_PASSES=0
     if [ "$IDLE_GAP_FILL_ENABLED" = "1" ] && [ "$QUEUE_HAD_WORK" = "0" ] && [ "$DAILY_UPDATE_HAD_WORK" = "0" ] && [ "$idle_gap_passes" -lt "$IDLE_GAP_FILL_MAX_PASSES" ]; then
-      process_idle_gap_once || echo "cloud-queue-indexer: idle gap pass failed; continuing after poll interval" >&2
+      remaining_gap_passes=$((IDLE_GAP_FILL_MAX_PASSES - idle_gap_passes))
+      gap_batch_passes="$IDLE_GAP_FILL_BATCH_PASSES"
+      if [ "$remaining_gap_passes" -lt "$gap_batch_passes" ]; then
+        gap_batch_passes="$remaining_gap_passes"
+      fi
+      process_idle_gap_batch "$gap_batch_passes" || echo "cloud-queue-indexer: idle gap batch failed; continuing after poll interval" >&2
       if [ "$IDLE_GAP_HAD_WORK" = "1" ]; then
-        idle_gap_passes=$((idle_gap_passes + 1))
+        idle_gap_passes=$((idle_gap_passes + IDLE_GAP_BATCH_PASSES))
         idle_since="$(date +%s)"
       fi
     fi
@@ -799,4 +895,7 @@ if [ "$QUEUE_LOOP" = "1" ]; then
   done
 fi
 
+if [ -f "$RAW_PENDING_PUBLICATION_FILE" ]; then
+  publish_pending_raw_generation
+fi
 process_queue_once

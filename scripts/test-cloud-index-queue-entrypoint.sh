@@ -10,8 +10,9 @@ INDEX_QUEUE_API_BASE_URL="https://queue.invalid"
 YTSEARCH_INDEX_QUEUE_TOKEN="test-token"
 TRANSCRIPT_CACHE_DIR="$test_dir/cache"
 QUEUE_RETRY_STATE_FILE="$test_dir/retries.tsv"
+RAW_PENDING_PUBLICATION_FILE="$test_dir/raw-publication.pending"
 TRANSCRIPT_FAILURE_RETRY_SECONDS=21600
-export CLOUD_INDEX_QUEUE_LIBRARY_ONLY INDEX_QUEUE_API_BASE_URL YTSEARCH_INDEX_QUEUE_TOKEN TRANSCRIPT_CACHE_DIR QUEUE_RETRY_STATE_FILE TRANSCRIPT_FAILURE_RETRY_SECONDS
+export CLOUD_INDEX_QUEUE_LIBRARY_ONLY INDEX_QUEUE_API_BASE_URL YTSEARCH_INDEX_QUEUE_TOKEN TRANSCRIPT_CACHE_DIR QUEUE_RETRY_STATE_FILE RAW_PENDING_PUBLICATION_FILE TRANSCRIPT_FAILURE_RETRY_SECONDS
 . "$SCRIPT_DIR/cloud-index-queue-entrypoint.sh"
 
 log_queue_event() { :; }
@@ -44,6 +45,28 @@ if grep -F "queue is empty" "$test_dir/process-pull.out" >/dev/null; then
   echo "a failed pull must not masquerade as an empty queue" >&2
   exit 1
 fi
+
+safe_pending_file="$RAW_PENDING_PUBLICATION_FILE"
+RAW_PENDING_PUBLICATION_FILE="/proc/ytsearch-raw-publication.pending"
+guard_log="$test_dir/marker-guard.log"
+: > "$guard_log"
+pull_queue_tsv() { printf 'request-marker\t@example\tworker\traw\n'; }
+set_queue_status() { printf 'status %s %s\n' "$1" "$2" >> "$guard_log"; }
+index_youtuber_for_queue_target() { printf 'index\n' >> "$guard_log"; }
+publish_raw_generation() { printf 'publish\n' >> "$guard_log"; }
+queue_request() { printf 'ack\n' >> "$guard_log"; }
+if process_queue_once > "$test_dir/marker.out" 2> "$test_dir/marker.err"; then
+  echo "an unwritable publication marker must fail the queue pass" >&2
+  exit 1
+fi
+grep -Fx 'status request-marker running' "$guard_log" >/dev/null
+grep -Fx 'status request-marker queued' "$guard_log" >/dev/null
+if grep -Eq '^(index|publish|ack)$' "$guard_log"; then
+  echo "marker failure must prevent mutation, publication, and acknowledgement" >&2
+  exit 1
+fi
+RAW_PENDING_PUBLICATION_FILE="$safe_pending_file"
+: > "$QUEUE_RETRY_STATE_FILE"
 
 status_log="$test_dir/status.log"
 pull_queue_tsv() {
@@ -155,6 +178,10 @@ if grep -F "acked request=" "$test_dir/publication-failure.out" >/dev/null; then
   echo "a request was acknowledged before publication" >&2
   exit 1
 fi
+[ -f "$RAW_PENDING_PUBLICATION_FILE" ] || {
+  echo "publication failure must retain a durable retry marker" >&2
+  exit 1
+}
 
 : > "$status_log"
 : > "$publication_log"
@@ -168,6 +195,10 @@ publish_raw_generation() {
 }
 queue_request() { return 0; }
 process_queue_once > "$test_dir/coalesced.out" 2> "$test_dir/coalesced.err"
+[ ! -f "$RAW_PENDING_PUBLICATION_FILE" ] || {
+  echo "successful publication must clear the durable retry marker" >&2
+  exit 1
+}
 [ "$(wc -l < "$publication_log" | tr -d ' ')" -eq 1 ] || {
   echo "two successful queue requests must share one publication" >&2
   exit 1

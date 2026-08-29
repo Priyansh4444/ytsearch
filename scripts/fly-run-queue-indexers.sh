@@ -33,7 +33,16 @@ run_worker() {
     state="$(printf '%s' "$machines" | jq -r --arg backend "$backend" 'first(.[] | select(.config.env.QUEUE_TARGET_BACKEND == $backend)) | .state')"
     case "$state" in
       started|starting) echo "Queue worker already active: backend=$backend state=$state" ;;
-      stopped) flyctl machine start --app "$APP_NAME" "$machine_id" ;;
+      stopped)
+        if [ -z "${INDEXER_IMAGE:-}" ]; then
+          echo "Set INDEXER_IMAGE to the verified current indexer image before reconciling the stopped worker." >&2
+          exit 1
+        fi
+        APPLY_QUEUE_WORKER_RECONCILIATION=1 \
+        INDEXER_IMAGE="$INDEXER_IMAGE" \
+          "$SCRIPT_DIR/reconcile-raw-queue-worker.sh"
+        flyctl machine start --app "$APP_NAME" "$machine_id"
+        ;;
       *) echo "Refusing to start $backend worker in state: $state" >&2; exit 1 ;;
     esac
     return 0
