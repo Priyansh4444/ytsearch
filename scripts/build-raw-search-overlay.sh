@@ -10,7 +10,7 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 APP_NAME="${APP_NAME:-ytsearch-raw-production}"
 BASE_IMAGE="${BASE_IMAGE:?set BASE_IMAGE to a tested Raw corpus image}"
 
-for command in flyctl git tar; do
+for command in flyctl git jq tar; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'missing required command: %s\n' "$command" >&2
     exit 1
@@ -18,7 +18,17 @@ for command in flyctl git tar; do
 done
 
 source_commit="$(git -C "$REPO_ROOT" rev-parse HEAD)"
-IMAGE_LABEL="${IMAGE_LABEL:-raw-overlay-$(git -C "$REPO_ROOT" rev-parse --short "$source_commit")}"
+if [[ ! "$BASE_IMAGE" =~ @sha256:([0-9a-f]{64})$ ]]; then
+  printf 'BASE_IMAGE must name an immutable sha256 digest, got: %s\n' "$BASE_IMAGE" >&2
+  exit 1
+fi
+base_digest="${BASH_REMATCH[1]}"
+source_short="${source_commit:0:12}"
+image_label="raw-overlay-${source_short}-${base_digest:0:12}"
+if [[ -n "${IMAGE_LABEL:-}" && "$IMAGE_LABEL" != "$image_label" ]]; then
+  printf 'IMAGE_LABEL is derived and must equal %s\n' "$image_label" >&2
+  exit 1
+fi
 "$SCRIPT_DIR/require-committed-rust-build-inputs.sh" "$source_commit" \
   Dockerfile.raw-search-overlay fly.raw-search-overlay.toml \
   scripts/build-raw-search-overlay.sh scripts/require-committed-rust-build-inputs.sh
@@ -39,10 +49,16 @@ mv "$tmp/fly.raw-search-overlay.toml" "$tmp/fly.toml"
     --app "$APP_NAME" \
     --config fly.toml \
     --build-arg "BASE_IMAGE=$BASE_IMAGE" \
-    --image-label "$IMAGE_LABEL" \
+    --build-arg "SOURCE_COMMIT=$source_commit" \
+    --image-label "$image_label" \
     --build-only \
     --push \
     --remote-only
 )
 
-printf 'image=registry.fly.io/%s:%s\n' "$APP_NAME" "$IMAGE_LABEL"
+jq -cn \
+  --arg app "$APP_NAME" \
+  --arg source_commit "$source_commit" \
+  --arg base_image "$BASE_IMAGE" \
+  --arg image "registry.fly.io/$APP_NAME:$image_label" \
+  '{schema_version:1,kind:"raw-reader-overlay",app:$app,source_commit:$source_commit,base_image:$base_image,image:$image}'

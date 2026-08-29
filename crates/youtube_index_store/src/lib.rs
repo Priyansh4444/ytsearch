@@ -55,6 +55,8 @@ pub struct BackendReadiness {
     pub acknowledged_readers: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publication_api_version: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_commit: Option<String>,
 }
 
 pub const RAW_PUBLICATION_API_VERSION: u16 = 1;

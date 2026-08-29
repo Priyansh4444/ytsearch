@@ -1,6 +1,8 @@
 ARG BASE_IMAGE=registry.fly.io/ytsearch-raw-production:split-gate-c1f66fa
 
 FROM rust:1.97-bookworm AS builder
+ARG SOURCE_COMMIT
+ENV YTSEARCH_SOURCE_COMMIT=${SOURCE_COMMIT}
 WORKDIR /build
 COPY .cargo ./.cargo
 COPY Cargo.toml Cargo.lock ./
@@ -9,6 +11,10 @@ RUN cargo build --locked --release -p youtube_cli
 
 FROM denoland/deno:bin-2.8.1 AS deno
 FROM ${BASE_IMAGE}
+ARG BASE_IMAGE
+ARG SOURCE_COMMIT
+LABEL org.opencontainers.image.revision=${SOURCE_COMMIT} \
+      io.ytsearch.base-image=${BASE_IMAGE}
 
 USER root
 RUN apt-get update \

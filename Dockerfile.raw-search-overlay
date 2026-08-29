@@ -1,6 +1,8 @@
 ARG BASE_IMAGE=registry.fly.io/ytsearch-raw-production:query-intersection-47d7a71-r2
 
 FROM rust:1.97-bookworm AS builder
+ARG SOURCE_COMMIT
+ENV YTSEARCH_SOURCE_COMMIT=${SOURCE_COMMIT}
 WORKDIR /build
 COPY .cargo ./.cargo
 COPY Cargo.toml Cargo.lock ./
@@ -8,6 +10,10 @@ COPY crates ./crates
 RUN cargo build --locked --release -p youtube_raw_search
 
 FROM ${BASE_IMAGE}
+ARG BASE_IMAGE
+ARG SOURCE_COMMIT
+LABEL org.opencontainers.image.revision=${SOURCE_COMMIT} \
+      io.ytsearch.base-image=${BASE_IMAGE}
 
 # Rust-only releases reuse the checksummed corpus/source layers from a fully
 # built Raw image. Compile against the same Debian generation as the runtime so

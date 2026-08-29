@@ -2525,6 +2525,7 @@ mod tests {
             last_sequence: Some(1),
             acknowledged_readers: 1,
             publication_api_version: None,
+            source_commit: None,
         };
 
         let error = require_remote_publication_api(&readiness).unwrap_err();

@@ -465,6 +465,7 @@ fn readiness_value(state: &AdminState) -> Result<BackendReadiness, AdminError> {
         last_sequence: Some(state.store.last_sequence()?),
         acknowledged_readers: 1,
         publication_api_version: Some(RAW_PUBLICATION_API_VERSION),
+        source_commit: option_env!("YTSEARCH_SOURCE_COMMIT").map(str::to_string),
     })
 }
 
