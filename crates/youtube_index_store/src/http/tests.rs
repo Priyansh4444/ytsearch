@@ -65,6 +65,7 @@ async fn replacement_uses_the_authenticated_raw_contract() {
         let request = read_request(&mut socket).await;
         assert!(request.starts_with("PUT /admin/videos/video-1 HTTP/1.1"));
         assert!(request.contains("x-raw-admin-key: test-admin-key"));
+        assert!(request.contains(r#""publication_api_version":1"#));
         assert!(request.contains(r#""idempotency_key":"replace-video-1""#));
         assert!(request.contains(r#""video_id":"video-1""#));
         respond(
@@ -103,6 +104,7 @@ async fn assert_channel_deletion_query(scope: ChannelDeletionScope, expected: &s
         assert!(request.starts_with("DELETE /admin/channels/creator?"));
         assert!(request.contains("idempotency_key=delete-creator"));
         assert!(request.contains(&format!("cascade={expected}")));
+        assert!(request.contains("publication_api_version=1"));
         respond(
             &mut socket,
             "202 Accepted",
@@ -140,6 +142,16 @@ fn status_mapping_preserves_retry_and_conflict_semantics() {
         IndexStoreError::Unavailable { .. }
     ));
     assert!(RawIndexAdminClient::new(RawIndexAdminConfig::new("file:///tmp", "key")).is_err());
+}
+
+#[test]
+fn empty_error_responses_preserve_the_http_status() {
+    let error = map_status(StatusCode::NOT_FOUND, String::new());
+
+    assert_eq!(
+        error.to_string(),
+        "invalid index administration input: raw admin returned 404 Not Found"
+    );
 }
 
 #[test]

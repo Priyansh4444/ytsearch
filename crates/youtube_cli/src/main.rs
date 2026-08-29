@@ -13,9 +13,10 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 use youtube_client::{ListResource, Page, Query, YouTubeClient};
 use youtube_index_store::{
-    ChannelDeletionScope, ChannelDocument, ChunkStats, IndexOperation, IndexStoreError,
-    RAW_GENERATION_FILES, RawGenerationManifest, RawIndexAdminClient, RawPublicationJob,
-    RawPublicationStatus, SearchIndexAdmin, VideoReplacement,
+    BackendReadiness, ChannelDeletionScope, ChannelDocument, ChunkStats, IndexOperation,
+    IndexStoreError, RAW_GENERATION_FILES, RAW_PUBLICATION_API_VERSION, RawGenerationManifest,
+    RawIndexAdminClient, RawPublicationJob, RawPublicationStatus, SearchIndexAdmin,
+    VideoReplacement,
 };
 use youtube_ingest::{Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource};
 use youtube_raw_search::{GenerationBuilder, MutationStore};
@@ -215,6 +216,7 @@ async fn main() -> ExitCode {
 async fn init_backend_command(command: InitBackendCommand) -> Result<(), CliError> {
     let search = command.search.client(command.collection.collection)?;
     let readiness = search.readiness().await?;
+    require_remote_publication_api(&readiness)?;
     println!(
         "Raw backend ready: generation={}, durable_sequence={}",
         readiness.generation.as_deref().unwrap_or("base"),
@@ -455,6 +457,7 @@ fn unique_operation_key(kind: &str, target: &str) -> String {
 
 async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> {
     let readiness = search.readiness().await?;
+    require_remote_publication_api(&readiness)?;
     let mut active = readiness
         .generation
         .as_deref()
@@ -500,6 +503,18 @@ async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> 
     }
     println!("Published required Raw sequence {required_sequence}");
     Ok(())
+}
+
+fn require_remote_publication_api(readiness: &BackendReadiness) -> Result<(), CliError> {
+    if readiness.publication_api_version == Some(RAW_PUBLICATION_API_VERSION) {
+        return Ok(());
+    }
+    let actual = readiness
+        .publication_api_version
+        .map_or_else(|| "missing".to_string(), |version| version.to_string());
+    Err(CliError::Message(format!(
+        "Raw reader publication API is incompatible: expected version {RAW_PUBLICATION_API_VERSION}, got {actual}; deploy a matching Raw reader before indexing"
+    )))
 }
 
 async fn publish_generation(
@@ -2464,6 +2479,27 @@ mod tests {
         assert!(!is_publication_job_id(
             "../00000000000000000001-0123456789abcdef"
         ));
+    }
+
+    #[test]
+    fn remote_publication_requires_a_matching_reader_protocol() {
+        let mut readiness = BackendReadiness {
+            backend: "raw".to_string(),
+            ready: true,
+            generation: Some("1".to_string()),
+            last_sequence: Some(1),
+            acknowledged_readers: 1,
+            publication_api_version: None,
+        };
+
+        let error = require_remote_publication_api(&readiness).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Raw reader publication API is incompatible: expected version 1, got missing; deploy a matching Raw reader before indexing"
+        );
+
+        readiness.publication_api_version = Some(RAW_PUBLICATION_API_VERSION);
+        require_remote_publication_api(&readiness).unwrap();
     }
 
     #[test]

@@ -1,6 +1,16 @@
 ARG BASE_IMAGE=registry.fly.io/ytsearch-raw-production:query-intersection-47d7a71-r2
+
+FROM rust:1.97-bookworm AS builder
+WORKDIR /build
+COPY .cargo ./.cargo
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN cargo build --locked --release -p youtube_raw_search
+
 FROM ${BASE_IMAGE}
 
 # Rust-only releases reuse the checksummed corpus/source layers from a fully
-# built Raw image. Build with a tar context containing only this release binary.
-COPY youtube-raw-search /usr/local/bin/youtube-raw-search
+# built Raw image. Compile against the same Debian generation as the runtime so
+# a developer workstation's newer glibc can never leak into production.
+COPY --from=builder /build/target/release/youtube-raw-search /usr/local/bin/youtube-raw-search
+RUN /usr/local/bin/youtube-raw-search --help >/dev/null

@@ -11,6 +11,8 @@ scripts/test-doctor.sh
 scripts/test-check-queue-indexers.sh
 scripts/test-reconcile-raw-queue-worker.sh
 scripts/test-build-raw-indexer-overlay.sh
+scripts/test-build-raw-search-overlay.sh
+scripts/test-require-committed-rust-build-inputs.sh
 scripts/test-cloud-index-queue-entrypoint.sh
 scripts/check-fly-cost-config.sh
 scripts/test-destroy-deprecated-typesense-fly.sh

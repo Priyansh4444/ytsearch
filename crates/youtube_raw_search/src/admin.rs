@@ -15,8 +15,8 @@ use serde_json::json;
 use std::{collections::BTreeMap, num::NonZeroU16, sync::Arc};
 use tokio_util::io::ReaderStream;
 use youtube_index_store::{
-    BackendReadiness, ChannelDeletionScope, ChannelDocument, IndexStoreError, VideoIdPage,
-    VideoReplacement,
+    BackendReadiness, ChannelDeletionScope, ChannelDocument, IndexStoreError,
+    RAW_PUBLICATION_API_VERSION, VideoIdPage, VideoReplacement,
 };
 use youtube_ingest::TranscriptChunk;
 
@@ -37,6 +37,7 @@ pub struct AdminState {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReplaceVideoRequest {
+    publication_api_version: u16,
     idempotency_key: String,
     chunks: Vec<TranscriptChunk>,
 }
@@ -44,12 +45,14 @@ struct ReplaceVideoRequest {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DeleteRequest {
+    publication_api_version: u16,
     idempotency_key: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DeleteChannelRequest {
+    publication_api_version: u16,
     idempotency_key: String,
     #[serde(default)]
     cascade: bool,
@@ -58,6 +61,7 @@ struct DeleteChannelRequest {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UpsertChannelRequest {
+    publication_api_version: u16,
     idempotency_key: String,
     document: ChannelDocument,
 }
@@ -282,6 +286,7 @@ async fn replace_video(
     Json(request): Json<ReplaceVideoRequest>,
 ) -> Result<(StatusCode, Json<youtube_index_store::IndexOperation>), AdminError> {
     authorize(&state, &headers)?;
+    require_publication_api_version(request.publication_api_version)?;
     let store = Arc::clone(&state.store);
     let operation = tokio::task::spawn_blocking(move || {
         let replacement = VideoReplacement::new(&video_id, &request.chunks)?;
@@ -299,6 +304,7 @@ async fn delete_video(
     Query(request): Query<DeleteRequest>,
 ) -> Result<(StatusCode, Json<youtube_index_store::IndexOperation>), AdminError> {
     authorize(&state, &headers)?;
+    require_publication_api_version(request.publication_api_version)?;
     let store = Arc::clone(&state.store);
     let operation = tokio::task::spawn_blocking(move || {
         store.delete_video(&video_id, &request.idempotency_key)
@@ -315,6 +321,7 @@ async fn upsert_channel(
     Json(request): Json<UpsertChannelRequest>,
 ) -> Result<(StatusCode, Json<youtube_index_store::IndexOperation>), AdminError> {
     authorize(&state, &headers)?;
+    require_publication_api_version(request.publication_api_version)?;
     if request.document.id != channel_id {
         return Err(AdminError::Store(IndexStoreError::InvalidInput(
             "channel document id must match the URL".to_string(),
@@ -336,6 +343,7 @@ async fn delete_channel(
     Query(request): Query<DeleteChannelRequest>,
 ) -> Result<(StatusCode, Json<youtube_index_store::IndexOperation>), AdminError> {
     authorize(&state, &headers)?;
+    require_publication_api_version(request.publication_api_version)?;
     let store = Arc::clone(&state.store);
     let operation = tokio::task::spawn_blocking(move || {
         store.delete_channel(
@@ -456,7 +464,18 @@ fn readiness_value(state: &AdminState) -> Result<BackendReadiness, AdminError> {
         generation: Some(format!("{:020}", state.engine.sequence())),
         last_sequence: Some(state.store.last_sequence()?),
         acknowledged_readers: 1,
+        publication_api_version: Some(RAW_PUBLICATION_API_VERSION),
     })
+}
+
+fn require_publication_api_version(version: u16) -> Result<(), AdminError> {
+    if version == RAW_PUBLICATION_API_VERSION {
+        Ok(())
+    } else {
+        Err(AdminError::Store(IndexStoreError::Conflict(format!(
+            "Raw mutation publication API is incompatible: expected version {RAW_PUBLICATION_API_VERSION}, got {version}"
+        ))))
+    }
 }
 
 fn authorize(state: &AdminState, headers: &HeaderMap) -> Result<(), AdminError> {

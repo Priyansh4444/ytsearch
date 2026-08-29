@@ -9,22 +9,29 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 APP_NAME="${APP_NAME:-ytsearch-raw-production}"
 BASE_IMAGE="${BASE_IMAGE:?set BASE_IMAGE to a tested Raw corpus image}"
-IMAGE_LABEL="${IMAGE_LABEL:-raw-overlay-$(git -C "$REPO_ROOT" rev-parse --short HEAD)}"
 
-for command in cargo flyctl; do
+for command in flyctl git tar; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'missing required command: %s\n' "$command" >&2
     exit 1
   fi
 done
 
+source_commit="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+IMAGE_LABEL="${IMAGE_LABEL:-raw-overlay-$(git -C "$REPO_ROOT" rev-parse --short "$source_commit")}"
+"$SCRIPT_DIR/require-committed-rust-build-inputs.sh" "$source_commit" \
+  Dockerfile.raw-search-overlay fly.raw-search-overlay.toml \
+  scripts/build-raw-search-overlay.sh scripts/require-committed-rust-build-inputs.sh
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-cargo build --locked --release -p youtube_raw_search --manifest-path "$REPO_ROOT/Cargo.toml"
-cp "$REPO_ROOT/target/release/youtube-raw-search" "$tmp/youtube-raw-search"
-cp "$REPO_ROOT/Dockerfile.raw-search-overlay" "$tmp/Dockerfile"
-cp "$REPO_ROOT/fly.raw-search-overlay.toml" "$tmp/fly.toml"
+git -C "$REPO_ROOT" archive "$source_commit" -- \
+  .cargo Cargo.toml Cargo.lock crates \
+  Dockerfile.raw-search-overlay fly.raw-search-overlay.toml \
+  | tar -x -C "$tmp"
+mv "$tmp/Dockerfile.raw-search-overlay" "$tmp/Dockerfile"
+mv "$tmp/fly.raw-search-overlay.toml" "$tmp/fly.toml"
 
 (
   cd "$tmp"

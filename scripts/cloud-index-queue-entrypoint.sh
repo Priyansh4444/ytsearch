@@ -173,6 +173,13 @@ validate_backend_scope() {
   fi
 }
 
+validate_raw_backend() {
+  if ! ytsearch init-backend --backend raw --collection "$COLLECTION"; then
+    echo "cloud-queue-indexer: Raw reader compatibility preflight failed" >&2
+    exit 1
+  fi
+}
+
 log_queue_event() {
   log_level="$1"
   log_event="$2"
@@ -740,8 +747,10 @@ if [ "${CLOUD_INDEX_QUEUE_LIBRARY_ONLY:-0}" != "1" ]; then
     echo "cloud-queue-indexer: credential preflight generation is invalid" >&2
     exit 1
   fi
-  validate_file_credentials
+  rm -f "$CREDENTIAL_PREFLIGHT_MARKER"
   validate_backend_scope
+  validate_raw_backend
+  validate_file_credentials
   validate_update_schedule
   validate_idle_exit
   validate_idle_gap_fill

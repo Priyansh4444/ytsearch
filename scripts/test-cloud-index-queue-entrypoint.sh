@@ -8,9 +8,20 @@ trap 'rm -rf "$test_dir"' EXIT
 printf '%s\n' 'AIza12345678901234567890123456789012345' > "$test_dir/youtube-api-key.txt"
 printf '# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t4102444800\tSAPISID\ttest-cookie-value\n' \
   > "$test_dir/yt-dlp-cookies.txt"
+mkdir -p "$test_dir/bin"
+cat > "$test_dir/bin/ytsearch" <<'SH'
+#!/usr/bin/env sh
+set -eu
+[ "$1" = "init-backend" ]
+[ "${FAKE_RAW_BACKEND_COMPATIBLE:-1}" = "1" ]
+printf 'Raw backend ready: generation=1, durable_sequence=1\n'
+SH
+chmod +x "$test_dir/bin/ytsearch"
 
 run_credential_preflight() {
   env \
+    PATH="$test_dir/bin:$PATH" \
+    FAKE_RAW_BACKEND_COMPATIBLE="${FAKE_RAW_BACKEND_COMPATIBLE:-1}" \
     CLOUD_INDEX_QUEUE_PREFLIGHT_ONLY=1 \
     INDEX_QUEUE_API_BASE_URL=https://queue.invalid \
     YTSEARCH_INDEX_QUEUE_TOKEN=test-token \
@@ -30,6 +41,16 @@ run_credential_preflight \
   "$test_dir/preflight.ok" > "$test_dir/preflight.out"
 test -f "$test_dir/preflight.ok"
 grep -Fx 'cloud-queue-indexer: credential preflight passed generation=test-generation' "$test_dir/preflight.out" >/dev/null
+
+: > "$test_dir/incompatible-reader.ok"
+if FAKE_RAW_BACKEND_COMPATIBLE=0 run_credential_preflight \
+  "$test_dir/youtube-api-key.txt" \
+  "$test_dir/yt-dlp-cookies.txt" \
+  "$test_dir/incompatible-reader.ok" >/dev/null 2>&1; then
+  echo "credential preflight must reject an incompatible Raw reader" >&2
+  exit 1
+fi
+test ! -e "$test_dir/incompatible-reader.ok"
 
 printf '%s\n' '#!/usr/bin/env sh' 'echo not-a-key' > "$test_dir/invalid-api-key.txt"
 if run_credential_preflight \

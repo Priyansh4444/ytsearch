@@ -47,14 +47,29 @@ pub struct RawIndexAdminClient {
 
 #[derive(Serialize)]
 struct ReplaceVideoRequest<'a> {
+    publication_api_version: u16,
     idempotency_key: &'a str,
     chunks: &'a [youtube_ingest::TranscriptChunk],
 }
 
 #[derive(Serialize)]
 struct UpsertChannelRequest<'a> {
+    publication_api_version: u16,
     idempotency_key: &'a str,
     document: &'a ChannelDocument,
+}
+
+#[derive(Serialize)]
+struct DeleteVideoRequest<'a> {
+    publication_api_version: u16,
+    idempotency_key: &'a str,
+}
+
+#[derive(Serialize)]
+struct DeleteChannelRequest<'a> {
+    publication_api_version: u16,
+    idempotency_key: &'a str,
+    cascade: bool,
 }
 
 #[derive(Deserialize)]
@@ -384,6 +399,7 @@ impl SearchIndexAdmin for RawIndexAdminClient {
             self.client
                 .put(self.endpoint(&format!("/admin/videos/{}", replacement.video_id())))
                 .json(&ReplaceVideoRequest {
+                    publication_api_version: crate::RAW_PUBLICATION_API_VERSION,
                     idempotency_key,
                     chunks: replacement.chunks(),
                 }),
@@ -399,7 +415,10 @@ impl SearchIndexAdmin for RawIndexAdminClient {
         self.execute(
             self.client
                 .delete(self.endpoint(&format!("/admin/videos/{video_id}")))
-                .query(&[("idempotency_key", idempotency_key)]),
+                .query(&DeleteVideoRequest {
+                    publication_api_version: crate::RAW_PUBLICATION_API_VERSION,
+                    idempotency_key,
+                }),
         )
         .await
     }
@@ -413,6 +432,7 @@ impl SearchIndexAdmin for RawIndexAdminClient {
             self.client
                 .put(self.endpoint(&format!("/admin/channels/{}", channel.id)))
                 .json(&UpsertChannelRequest {
+                    publication_api_version: crate::RAW_PUBLICATION_API_VERSION,
                     idempotency_key,
                     document: channel,
                 }),
@@ -429,17 +449,11 @@ impl SearchIndexAdmin for RawIndexAdminClient {
         self.execute(
             self.client
                 .delete(self.endpoint(&format!("/admin/channels/{channel_id}")))
-                .query(&[
-                    ("idempotency_key", idempotency_key),
-                    (
-                        "cascade",
-                        if scope.cascades_videos() {
-                            "true"
-                        } else {
-                            "false"
-                        },
-                    ),
-                ]),
+                .query(&DeleteChannelRequest {
+                    publication_api_version: crate::RAW_PUBLICATION_API_VERSION,
+                    idempotency_key,
+                    cascade: scope.cascades_videos(),
+                }),
         )
         .await
     }
@@ -501,7 +515,14 @@ fn map_status(status: StatusCode, body: String) -> IndexStoreError {
     let message = serde_json::from_str::<serde_json::Value>(&body)
         .ok()
         .and_then(|value| value.get("message")?.as_str().map(ToOwned::to_owned))
-        .unwrap_or(body);
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or_else(|| {
+            if body.trim().is_empty() {
+                format!("raw admin returned {status}")
+            } else {
+                body
+            }
+        });
     match status {
         StatusCode::BAD_REQUEST
         | StatusCode::UNAUTHORIZED

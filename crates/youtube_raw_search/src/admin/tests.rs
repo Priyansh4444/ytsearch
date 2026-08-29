@@ -163,6 +163,7 @@ async fn video_mutation_is_durable_then_atomically_published() {
         Path("new-video".to_string()),
         headers(),
         Json(ReplaceVideoRequest {
+            publication_api_version: RAW_PUBLICATION_API_VERSION,
             idempotency_key: "replace-new-video".to_string(),
             chunks: vec![chunk("new-video", "currenttoken")],
         }),
@@ -213,6 +214,7 @@ async fn handle_form_mutations_keep_canonical_channel_counts_and_scope() {
         Path("handle-video".to_string()),
         headers(),
         Json(ReplaceVideoRequest {
+            publication_api_version: RAW_PUBLICATION_API_VERSION,
             idempotency_key: "replace-handle-video".to_string(),
             chunks: vec![chunk_for_channel("handle-video", "handletoken", "@Creator")],
         }),
@@ -242,6 +244,7 @@ async fn channel_deletion_scope_controls_transcript_retention() {
             Path("creator".to_string()),
             headers(),
             Query(DeleteChannelRequest {
+                publication_api_version: RAW_PUBLICATION_API_VERSION,
                 idempotency_key: format!("delete-creator-{cascade}"),
                 cascade,
             }),
@@ -269,6 +272,31 @@ async fn channel_deletion_scope_controls_transcript_retention() {
             .unwrap();
         assert_eq!(result["found"], expected_hits);
     }
+}
+
+#[tokio::test]
+async fn incompatible_mutation_protocol_is_rejected_before_durable_write() {
+    let (_root, state, _publisher) = setup();
+    let before = state.store.last_sequence().unwrap();
+    let error = replace_video(
+        State(state.clone()),
+        Path("blocked-video".to_string()),
+        headers(),
+        Json(ReplaceVideoRequest {
+            publication_api_version: RAW_PUBLICATION_API_VERSION + 1,
+            idempotency_key: "replace-blocked-video".to_string(),
+            chunks: vec![chunk("blocked-video", "blockedtoken")],
+        }),
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    assert_eq!(state.store.last_sequence().unwrap(), before);
+    assert!(matches!(
+        state.store.operation("replace-blocked-video"),
+        Err(IndexStoreError::InvalidInput(_))
+    ));
 }
 
 #[tokio::test]

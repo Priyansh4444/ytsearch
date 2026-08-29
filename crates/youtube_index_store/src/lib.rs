@@ -53,7 +53,11 @@ pub struct BackendReadiness {
     pub generation: Option<String>,
     pub last_sequence: Option<u64>,
     pub acknowledged_readers: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_api_version: Option<u16>,
 }
+
+pub const RAW_PUBLICATION_API_VERSION: u16 = 1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RawGenerationCompatibility {
