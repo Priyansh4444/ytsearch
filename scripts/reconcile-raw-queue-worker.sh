@@ -64,7 +64,7 @@ creator_list_b64="$(base64 < "$CREATOR_LIST_FILE" | tr -d '\n')"
 creator_count="$(awk 'NF && $1 !~ /^#/ { count += 1 } END { print count + 0 }' "$CREATOR_LIST_FILE")"
 source_commit="$(git -C "$REPOSITORY_ROOT" rev-parse --short HEAD)"
 
-config_file="${RECONCILED_CONFIG_FILE:-$(mktemp)}"
+config_file="${RECONCILED_CONFIG_FILE:-$(mktemp --suffix=.json)}"
 cleanup_config=0
 if [ -z "${RECONCILED_CONFIG_FILE:-}" ]; then
   cleanup_config=1

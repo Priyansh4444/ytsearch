@@ -96,6 +96,10 @@ case "$1 $2" in
       shift
     done
     [ -n "$config" ]
+    case "$config" in
+      *.json) ;;
+      *) echo "machine config must use a .json path: $config" >&2; exit 1 ;;
+    esac
     jq --slurpfile config "$config" '.[0].config = $config[0]' \
       "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
     mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
