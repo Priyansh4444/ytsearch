@@ -1,6 +1,6 @@
 # Raw production cost and persistence decision
 
-Re-audited from live Fly state on 2026-08-23 in `sjc`. Prices are monthly estimates for a 30-day
+Re-audited from live Fly state and Fly's published SJC rates on 2026-08-29. Prices are monthly estimates for a 30-day
 month from [Fly.io resource pricing](https://fly.io/docs/about/pricing/); actual
 billing is prorated and egress remains usage-dependent.
 
@@ -74,7 +74,24 @@ runtime cap is reached.
 At current SJC pricing, the previous `performance-2x`, 4 GB Raw reader alone
 would cost about $73.92/month and violate the complete-system ceiling.
 Moving the workload to the shared 2 GB allocation keeps the complete retained
-topology below the $65/month target without destroying the Typesense trial.
+topology below the $65/month target while the Typesense trial remains available
+through the final retirement gates.
+
+## Final Raw-only allocation after approved retirement
+
+The requested terminal state also removes the 61 GB Typesense trial volumes and
+the 30 GB temporary Raw canary/ORD repair volumes after their exact final gates.
+That leaves 31 GB provisioned: 20 GB reader, 1 GB API, and 10 GB on-demand
+indexer. Using the current official SJC prices, the deterministic provisioned
+floor is $17.39 reader/API compute plus $4.65 volumes, or $22.04/month. The
+stopped 10 GB indexer rootfs adds at most $1.50/month.
+
+With the existing 60-hour indexer cap ($1.13), Cloudflare Paid minimum ($5),
+$8 egress reserve, and $2 snapshot-growth reserve, the conservative complete
+Raw-only bound is $39.67/month. Actual invoices can be lower or higher only in
+usage-priced categories such as egress and snapshot changed bytes; those are
+not truthfully expressible as an exact fixed number in advance. The exact fixed
+provisioned amount is $23.54/month including the stopped-rootfs ceiling.
 
 ## Resource and latency gates
 

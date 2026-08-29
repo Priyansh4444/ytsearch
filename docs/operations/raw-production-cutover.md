@@ -68,6 +68,11 @@ stopped and preserved:
 A configuration redeploy is preferred to a stale Worker binary because it keeps
 current frontend and cache-correctness fixes.
 
+For Raw reader binary rollback, stop the on-demand indexer first, roll the
+reader back, and start only a worker whose publication protocol matches the
+reader. Protocol v1 also fails closed per mutation, so a race or incorrect
+ordering cannot append writes that the active reader cannot publish.
+
 ## Mutable write path
 
 Raw now stores idempotent video/channel mutations in SQLite WAL, publishes a

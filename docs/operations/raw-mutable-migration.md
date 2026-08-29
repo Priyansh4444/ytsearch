@@ -15,6 +15,10 @@ Invariants:
 - A candidate is activated only after checksums, counts, and `RawSearchEngine::open`
   succeed.
 - Idempotency keys make indexer retries safe.
+- Publication protocol v1 is required by readiness and every mutation. This is
+  a per-request rollback barrier: an old reader rejects the new field because
+  its request schema denies unknown fields, and a new reader rejects an old or
+  mismatched request before opening the mutation store.
 - Typesense stays stopped and deprecated after queue state, active writes,
   search reads, scheduler ownership, and recovery move to Raw. Its source,
   documentation, Machines, and volumes are preserved unless a later explicit
@@ -87,6 +91,12 @@ building and validating a custom transactional log without making reads faster.
 6. Expose readiness, operation state, counts, video-ID pagination, replacement,
    deletion, and channel administration over an authenticated Raw admin API.
    The CLI consumes the backend-neutral `SearchIndexAdmin` contract.
+
+Reader and builder releases use the same protocol constant. Release images are
+built only from one captured full commit OID; modified, untracked, or concurrently
+changed Rust and packaging inputs fail the build before any registry upload.
+Roll back or stop the worker before rolling the reader back. The per-mutation
+barrier is still authoritative if an operator violates that ordering.
 
 This design removes work from the common write batch and keeps query reads on
 an immutable `Arc<RawSearchEngine>`. The generic fallback is a full verified

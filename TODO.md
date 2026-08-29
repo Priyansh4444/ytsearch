@@ -91,6 +91,10 @@ Raw can replace Typesense as the canonical search index.
     an immutable, checksummed, read-only backup through one captured sequence.
   - [x] Implement detached build/verification for the existing on-demand SJC
     indexer and stream nine allowlisted files with corpus/schema/size/hash gates.
+  - [x] Version the detached-publication readiness and every durable mutation
+    request. New workers fail before work against an old reader, old workers
+    fail extraction against a new reader, and a mismatched request cannot
+    advance the SQLite sequence.
   - [x] Atomically activate the transferred generation, mark only the captured
     sequence published, and leave later mutations durable for the next batch.
   - [ ] Pass the full-corpus 2-GB indexer disk/RSS gate and the continuous
@@ -118,7 +122,7 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Batch by bytes and document count; avoid retaining transcripts twice.
 - [ ] Emit progress, retry, failure-reason, throughput, and freshness metrics.
 - [x] Add `scripts/index-all-raw.sh` after restart and recovery tests passed;
-  the canonical list now covers all 61 live creator profiles and one CLI process
+  the canonical list now covers all 62 requested creator profiles and one CLI process
   coalesces their mutations into a single verified generation.
 
 ### P2: operations and cutover
@@ -155,9 +159,14 @@ Raw can replace Typesense as the canonical search index.
   - [x] Observe the current production visual browser gate: T3 rendered twelve
     Raw-ranked cards, every active sort, 24/7 availability, and the 21-video
     Veritasium `blackhole` scope without an alert.
-  - [ ] Finish the classified 61-creator repair and post-publication gates while
+  - [ ] Finish the classified 62-creator repair and post-publication gates while
     keeping the four exact legacy Machines stopped and all seven verified
     volumes preserved. Any destruction requires a new explicit decision.
+  - [ ] Publish the durable sequence-2950 mutation, add Brodie Robertson as the
+    62nd active profile, and rerun every creator. The 2026-08-29 checkpoint has
+    61 active profiles, 40 reported count gaps totaling 1,425 videos, and 868
+    failure records: 651 no-captions, 37 unavailable, 24 unknown, 11 scheduled,
+    3 bot-challenge, 1 rate-limited, and 141 legacy records awaiting upgrade.
 
 ### Non-negotiable performance and resource gates
 
@@ -198,6 +207,13 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Update this ledger in the same commit that completes each item.
 
 ## Regression Log
+
+- [x] The detached-builder CLI reached an old production reader whose
+  `/admin/publications/prepare` route did not exist, turning a blank 404 into an
+  unhelpful error after a mutation was already durable. Readiness now advertises
+  publication protocol v1, every mutation carries that version, blank HTTP
+  errors preserve their status, and both overlay builders bind all packaged
+  bytes and labels to one guarded full commit OID.
 
 - [x] Compact split fallback recovered `createEffect` as `create` plus `effect`
   without carrying token positions, allowing a frequent gapped match to outrank
