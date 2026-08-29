@@ -85,7 +85,7 @@ validate_file_credentials() {
   YOUTUBE_API_KEY="$youtube_api_key"
   export YOUTUBE_API_KEY
   : > "$CREDENTIAL_PREFLIGHT_MARKER"
-  echo "cloud-queue-indexer: credential preflight passed"
+  echo "cloud-queue-indexer: credential preflight passed generation=$CREDENTIAL_PREFLIGHT_GENERATION"
 }
 
 validate_update_schedule() {
@@ -735,6 +735,11 @@ if [ "${CLOUD_INDEX_QUEUE_LIBRARY_ONLY:-0}" != "1" ]; then
   require_env RAW_SEARCH_ADMIN_API_KEY
   require_env YOUTUBE_API_KEY_FILE
   require_env YT_DLP_COOKIES_FILE
+  require_env CREDENTIAL_PREFLIGHT_GENERATION
+  if ! printf '%s' "$CREDENTIAL_PREFLIGHT_GENERATION" | grep -Eq '^[A-Za-z0-9._-]{1,128}$'; then
+    echo "cloud-queue-indexer: credential preflight generation is invalid" >&2
+    exit 1
+  fi
   validate_file_credentials
   validate_backend_scope
   validate_update_schedule

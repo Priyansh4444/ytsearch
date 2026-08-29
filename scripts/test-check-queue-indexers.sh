@@ -37,7 +37,8 @@ fixture() {
         RAW_SEARCH_API_URL:"http://ytsearch-raw-production.internal:8108",
         YOUTUBE_API_KEY_FILE:"/run/secrets/youtube-api-key.txt",
         YT_DLP_COOKIES_FILE:"/run/secrets/yt-dlp-cookies.txt",
-        CREDENTIAL_PREFLIGHT_MARKER:"/run/ytsearch-credential-preflight.ok"
+        CREDENTIAL_PREFLIGHT_MARKER:"/run/ytsearch-credential-preflight.ok",
+        CREDENTIAL_PREFLIGHT_GENERATION:"test-instance-1"
       },
       init:{
         entrypoint:["/bin/sh"],

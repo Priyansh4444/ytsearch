@@ -72,6 +72,7 @@ entrypoint_b64="$(base64 < "$ENTRYPOINT_FILE" | tr -d '\n')"
 creator_list_b64="$(base64 < "$CREATOR_LIST_FILE" | tr -d '\n')"
 creator_count="$(awk 'NF && $1 !~ /^#/ { count += 1 } END { print count + 0 }' "$CREATOR_LIST_FILE")"
 source_commit="$(git -C "$REPOSITORY_ROOT" rev-parse --short HEAD)"
+preflight_generation="$source_commit-$machine_version"
 
 config_file="${RECONCILED_CONFIG_FILE:-$(mktemp --suffix=.json)}"
 cleanup_config=0
@@ -154,7 +155,8 @@ write_reconciled_config() {
     --arg creator_list "$creator_list_b64" \
     --arg max_passes "${IDLE_GAP_FILL_MAX_PASSES:-$creator_count}" \
     --arg max_new_videos "${IDLE_GAP_FILL_MAX_NEW_VIDEOS:-10}" \
-    --arg source_commit "$source_commit" '
+    --arg source_commit "$source_commit" \
+    --arg preflight_generation "$preflight_generation" '
   def upsert_file($path; $raw):
     .config.files = (
       ((.config.files // []) | map(select(.guest_path != $path)))
@@ -183,6 +185,7 @@ write_reconciled_config() {
       YOUTUBE_API_KEY_FILE: "/run/secrets/youtube-api-key.txt",
       YT_DLP_COOKIES_FILE: "/run/secrets/yt-dlp-cookies.txt",
       CREDENTIAL_PREFLIGHT_MARKER: "/run/ytsearch-credential-preflight.ok",
+      CREDENTIAL_PREFLIGHT_GENERATION: $preflight_generation,
       RAW_PUBLICATION_TIMEOUT_SECONDS: "3600",
       RAW_PENDING_PUBLICATION_FILE: "/var/lib/ytsearch/raw-publication.pending",
       IDLE_EXIT_AFTER_SECONDS: "300",
@@ -373,10 +376,32 @@ if [ "$START_AFTER_RECONCILIATION" = "1" ]; then
   fi
   flyctl machine wait --app "$APP_NAME" --state started --wait-timeout 30s "$machine_id"
   REQUIRED_QUEUE_WORKER_STATES=started "$SCRIPT_DIR/check-queue-indexers.sh"
-  flyctl machine exec "$machine_id" \
-    "test -f /run/ytsearch-credential-preflight.ok" \
-    --app "$APP_NAME" \
-    --timeout 10 >/dev/null
+  preflight_attempts="${CREDENTIAL_PREFLIGHT_POLL_ATTEMPTS:-10}"
+  case "$preflight_attempts" in
+    ''|*[!0-9]*|0)
+      echo "CREDENTIAL_PREFLIGHT_POLL_ATTEMPTS must be a positive integer." >&2
+      exit 1
+      ;;
+  esac
+  preflight_observed=0
+  preflight_log_line="cloud-queue-indexer: credential preflight passed generation=$preflight_generation"
+  preflight_attempt=1
+  while [ "$preflight_attempt" -le "$preflight_attempts" ]; do
+    if flyctl logs \
+      --app "$APP_NAME" \
+      --machine "$machine_id" \
+      --no-tail 2>/dev/null \
+      | grep -F "$preflight_log_line" >/dev/null; then
+      preflight_observed=1
+      break
+    fi
+    sleep 1
+    preflight_attempt=$((preflight_attempt + 1))
+  done
+  if [ "$preflight_observed" -ne 1 ]; then
+    echo "The Raw queue worker credential preflight handshake was not observed." >&2
+    exit 1
+  fi
   sleep 2
   stable_status="$(curl --silent --show-error \
     --output "$response_file" \

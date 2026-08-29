@@ -19,6 +19,7 @@ run_credential_preflight() {
     YOUTUBE_API_KEY_FILE="$1" \
     YT_DLP_COOKIES_FILE="$2" \
     CREDENTIAL_PREFLIGHT_MARKER="$3" \
+    CREDENTIAL_PREFLIGHT_GENERATION=test-generation \
     TRANSCRIPT_CACHE_DIR="$test_dir/preflight-cache" \
     "$SCRIPT_DIR/cloud-index-queue-entrypoint.sh"
 }
@@ -28,7 +29,7 @@ run_credential_preflight \
   "$test_dir/yt-dlp-cookies.txt" \
   "$test_dir/preflight.ok" > "$test_dir/preflight.out"
 test -f "$test_dir/preflight.ok"
-grep -Fx 'cloud-queue-indexer: credential preflight passed' "$test_dir/preflight.out" >/dev/null
+grep -Fx 'cloud-queue-indexer: credential preflight passed generation=test-generation' "$test_dir/preflight.out" >/dev/null
 
 printf '%s\n' '#!/usr/bin/env sh' 'echo not-a-key' > "$test_dir/invalid-api-key.txt"
 if run_credential_preflight \

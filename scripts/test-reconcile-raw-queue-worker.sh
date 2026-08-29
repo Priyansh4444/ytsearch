@@ -135,9 +135,11 @@ case "$1 $2" in
         ;;
     esac
     ;;
-  "machine exec")
+  "logs --app")
     [ "$(jq -r '.[0].state' "$FAKE_FLY_STATE")" = "started" ]
     [ "${FAKE_RUNTIME_PREFLIGHT_FAILURE:-0}" != "1" ]
+    generation="$(jq -r '.[0].config.env.CREDENTIAL_PREFLIGHT_GENERATION' "$FAKE_FLY_STATE")"
+    printf 'cloud-queue-indexer: credential preflight passed generation=%s\n' "$generation"
     printf 'runtime preflight observed\n' >> "$FAKE_FLY_LOG"
     ;;
   "secrets list")
@@ -433,6 +435,7 @@ if PATH="$tmp/fake-bin:$PATH" \
   FAKE_FLY_LEASE="$tmp/preflight-failure-lease" \
   FAKE_CURL_LOG="$tmp/preflight-failure-curl.log" \
   FAKE_RUNTIME_PREFLIGHT_FAILURE=1 \
+  CREDENTIAL_PREFLIGHT_POLL_ATTEMPTS=1 \
   FLY_CONFIG_FILE="$tmp/fly-config.yml" \
   INDEXER_IMAGE="registry.invalid/current:two" \
   "$SCRIPT_DIR/fly-run-queue-indexers.sh" >/dev/null 2>&1; then
