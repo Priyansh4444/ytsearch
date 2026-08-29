@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [solidPlugin({ hot: false })],
   test: {
     environment: "jsdom",
-    exclude: ["tests/e2e/**", "worker/**", "node_modules/**", "dist/**"],
+    include: ["src/**/*.{test,spec}.{ts,tsx}", "shared/**/*.{test,spec}.{ts,tsx}"],
     setupFiles: ["./src/test/setup.ts"],
     clearMocks: true,
     restoreMocks: true,
