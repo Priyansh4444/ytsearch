@@ -124,6 +124,12 @@ case "$1 $2" in
         fi
         [ "$(jq -r '.[0].state' "$FAKE_FLY_STATE")" = "stopped" ]
         ;;
+      *" --state settled "*)
+        case "$(jq -r '.[0].state' "$FAKE_FLY_STATE")" in
+          created|stopped) ;;
+          *) exit 1 ;;
+        esac
+        ;;
       *)
         [ "$(jq -r '.[0].state' "$FAKE_FLY_STATE")" = "started" ]
         ;;
@@ -337,10 +343,12 @@ INDEXER_IMAGE="registry.invalid/current:two" \
   "$SCRIPT_DIR/fly-run-queue-indexers.sh" >/dev/null
 jq -e '.[0].state == "started"' "$tmp/fly-state.json" >/dev/null
 update_line="$(grep -n '^api update$' "$tmp/fly.log" | cut -d: -f1)"
+settled_line="$(grep -n 'machine wait .*--state settled' "$tmp/fly.log" | cut -d: -f1)"
 api_start_line="$(grep -n '^api start$' "$tmp/fly.log" | cut -d: -f1)"
-wait_line="$(grep -n '^machine wait ' "$tmp/fly.log" | cut -d: -f1)"
-[ -n "$update_line" ] && [ -n "$api_start_line" ] && [ -n "$wait_line" ] \
-  && [ "$update_line" -lt "$api_start_line" ] && [ "$api_start_line" -lt "$wait_line" ] || {
+wait_line="$(grep -n 'machine wait .*--state started' "$tmp/fly.log" | cut -d: -f1)"
+[ -n "$update_line" ] && [ -n "$settled_line" ] && [ -n "$api_start_line" ] && [ -n "$wait_line" ] \
+  && [ "$update_line" -lt "$settled_line" ] && [ "$settled_line" -lt "$api_start_line" ] \
+  && [ "$api_start_line" -lt "$wait_line" ] || {
   echo "the leased update must start the worker before readiness is checked" >&2
   exit 1
 }

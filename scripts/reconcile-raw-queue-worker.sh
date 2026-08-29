@@ -351,6 +351,11 @@ if [ "$http_status" != "200" ]; then
   echo "Machines API update failed: status=$http_status error=$error_message" >&2
   exit 1
 fi
+flyctl machine wait \
+  --app "$APP_NAME" \
+  --state settled \
+  --wait-timeout 30s \
+  "$machine_id" >/dev/null
 
 if [ "$START_AFTER_RECONCILIATION" = "1" ]; then
   started_by_reconciliation=1
