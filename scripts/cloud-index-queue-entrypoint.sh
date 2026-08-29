@@ -30,13 +30,9 @@ IDLE_GAP_FILL_MAX_PASSES="${IDLE_GAP_FILL_MAX_PASSES:-1}"
 IDLE_GAP_FILL_BATCH_PASSES="${IDLE_GAP_FILL_BATCH_PASSES:-4}"
 IDLE_GAP_FILL_MAX_NEW_VIDEOS="${IDLE_GAP_FILL_MAX_NEW_VIDEOS:-10}"
 RAW_PENDING_PUBLICATION_FILE="${RAW_PENDING_PUBLICATION_FILE:-/data/raw-publication.pending}"
+CREDENTIAL_PREFLIGHT_MARKER="${CREDENTIAL_PREFLIGHT_MARKER:-/run/ytsearch-credential-preflight.ok}"
 
 mkdir -p "$TRANSCRIPT_CACHE_DIR"
-
-if [ -n "${YOUTUBE_API_KEY_FILE:-}" ] && [ -f "$YOUTUBE_API_KEY_FILE" ]; then
-  YOUTUBE_API_KEY="$(cat "$YOUTUBE_API_KEY_FILE")"
-  export YOUTUBE_API_KEY
-fi
 
 require_env() {
   name="$1"
@@ -45,6 +41,51 @@ require_env() {
     echo "cloud-queue-indexer: missing required environment variable: $name" >&2
     exit 1
   fi
+}
+
+validate_file_credentials() {
+  rm -f "$CREDENTIAL_PREFLIGHT_MARKER"
+  if [ ! -f "$YOUTUBE_API_KEY_FILE" ] || [ ! -r "$YOUTUBE_API_KEY_FILE" ]; then
+    echo "cloud-queue-indexer: YouTube API key file is not readable" >&2
+    exit 1
+  fi
+  youtube_api_key="$(tr -d '\r\n' < "$YOUTUBE_API_KEY_FILE")"
+  if ! printf '%s' "$youtube_api_key" | grep -Eq '^AIza[A-Za-z0-9_-]{35}$'; then
+    echo "cloud-queue-indexer: YouTube API key file has an invalid shape" >&2
+    exit 1
+  fi
+  if [ ! -f "$YT_DLP_COOKIES_FILE" ] || [ ! -r "$YT_DLP_COOKIES_FILE" ]; then
+    echo "cloud-queue-indexer: yt-dlp cookie file is not readable" >&2
+    exit 1
+  fi
+  if ! grep -Eq '^# Netscape HTTP Cookie File' "$YT_DLP_COOKIES_FILE"; then
+    echo "cloud-queue-indexer: yt-dlp cookie file is not Netscape format" >&2
+    exit 1
+  fi
+  now="$(date +%s)"
+  if ! awk -F '\t' -v now="$now" '
+    NF == 7 {
+      domain = $1
+      sub(/^#HttpOnly_/, "", domain)
+      expiry = $5
+      name = $6
+      value = $7
+      valid_domain = domain ~ /(^|\.)youtube\.com$/ || domain ~ /(^|\.)google\.com$/
+      valid_expiry = expiry == "0" || (expiry ~ /^[0-9]+$/ && expiry + 0 > now)
+      valid_name = name ~ /^(SID|HSID|SSID|APISID|SAPISID|__Secure-1PAPISID|__Secure-3PAPISID|LOGIN_INFO)$/
+      if (valid_domain && valid_expiry && valid_name && value != "") {
+        found = 1
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$YT_DLP_COOKIES_FILE"; then
+    echo "cloud-queue-indexer: yt-dlp cookie file has no usable YouTube or Google auth cookie" >&2
+    exit 1
+  fi
+  YOUTUBE_API_KEY="$youtube_api_key"
+  export YOUTUBE_API_KEY
+  : > "$CREDENTIAL_PREFLIGHT_MARKER"
+  echo "cloud-queue-indexer: credential preflight passed"
 }
 
 validate_update_schedule() {
@@ -690,10 +731,19 @@ process_idle_gap_batch() {
 if [ "${CLOUD_INDEX_QUEUE_LIBRARY_ONLY:-0}" != "1" ]; then
   require_env INDEX_QUEUE_API_BASE_URL
   require_env YTSEARCH_INDEX_QUEUE_TOKEN
+  require_env RAW_SEARCH_API_URL
+  require_env RAW_SEARCH_ADMIN_API_KEY
+  require_env YOUTUBE_API_KEY_FILE
+  require_env YT_DLP_COOKIES_FILE
+  validate_file_credentials
   validate_backend_scope
   validate_update_schedule
   validate_idle_exit
   validate_idle_gap_fill
+fi
+
+if [ "${CLOUD_INDEX_QUEUE_PREFLIGHT_ONLY:-0}" = "1" ]; then
+  exit 0
 fi
 
 process_queue_once() {

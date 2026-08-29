@@ -82,8 +82,30 @@ lease_header_file=""
 lease_request_file=""
 lease_response_file=""
 lease_acquired=0
+started_by_reconciliation=0
+reconciliation_succeeded=0
 fly_api_hostname=""
 cleanup_files() {
+  if [ "$started_by_reconciliation" -eq 1 ] && [ "$reconciliation_succeeded" -ne 1 ]; then
+    stop_status="$(curl --silent --show-error \
+      --output /dev/null \
+      --write-out '%{http_code}' \
+      --request POST \
+      --header "@$auth_header_file" \
+      --header "@$lease_header_file" \
+      "$fly_api_hostname/v1/apps/$APP_NAME/machines/$machine_id/stop" || true)"
+    case "$stop_status" in
+      200) ;;
+      *) echo "Warning: fail-closed Raw queue worker stop returned status=$stop_status." >&2 ;;
+    esac
+    if ! flyctl machine wait \
+      --app "$APP_NAME" \
+      --state stopped \
+      --wait-timeout 30s \
+      "$machine_id" >/dev/null; then
+      echo "Warning: Raw queue worker stop could not be confirmed before lease release." >&2
+    fi
+  fi
   if [ "$lease_acquired" -eq 1 ]; then
     release_status="$(curl --silent --show-error \
       --output /dev/null \
@@ -158,6 +180,9 @@ write_reconciled_config() {
       QUEUE_ONE_REQUEST_PER_PASS: "0",
       LIMIT: "1000",
       RAW_SEARCH_API_URL: $raw_url,
+      YOUTUBE_API_KEY_FILE: "/run/secrets/youtube-api-key.txt",
+      YT_DLP_COOKIES_FILE: "/run/secrets/yt-dlp-cookies.txt",
+      CREDENTIAL_PREFLIGHT_MARKER: "/run/ytsearch-credential-preflight.ok",
       RAW_PUBLICATION_TIMEOUT_SECONDS: "3600",
       RAW_PENDING_PUBLICATION_FILE: "/var/lib/ytsearch/raw-publication.pending",
       IDLE_EXIT_AFTER_SECONDS: "300",
@@ -327,22 +352,8 @@ if [ "$http_status" != "200" ]; then
   exit 1
 fi
 
-if ! flyctl secrets list --app "$APP_NAME" --json | jq -e '
-  [
-    .[]
-    | select(
-        .name == "YOUTUBE_API_KEY_FILE_B64"
-        or .name == "YT_DLP_COOKIES_FILE_B64"
-      )
-  ] as $required
-  | ($required | map(.name) | unique | length) == 2
-    and all($required[]; .status == "Deployed" or .status == "Partial")
-' >/dev/null; then
-  echo "The Raw queue worker update did not deploy the staged Fly secrets." >&2
-  exit 1
-fi
-
 if [ "$START_AFTER_RECONCILIATION" = "1" ]; then
+  started_by_reconciliation=1
   start_status="$(curl --silent --show-error \
     --output "$response_file" \
     --write-out '%{http_code}' \
@@ -356,8 +367,26 @@ if [ "$START_AFTER_RECONCILIATION" = "1" ]; then
   fi
   flyctl machine wait --app "$APP_NAME" --state started --wait-timeout 30s "$machine_id"
   REQUIRED_QUEUE_WORKER_STATES=started "$SCRIPT_DIR/check-queue-indexers.sh"
+  flyctl machine exec "$machine_id" \
+    "test -f /run/ytsearch-credential-preflight.ok" \
+    --app "$APP_NAME" \
+    --timeout 10 >/dev/null
+  sleep 2
+  stable_status="$(curl --silent --show-error \
+    --output "$response_file" \
+    --write-out '%{http_code}' \
+    --request GET \
+    --header "@$auth_header_file" \
+    --header "@$lease_header_file" \
+    "$fly_api_hostname/v1/apps/$APP_NAME/machines/$machine_id")"
+  if [ "$stable_status" != "200" ] \
+    || ! jq -e '.state == "started"' "$response_file" >/dev/null; then
+    echo "The Raw queue worker did not remain stable after credential preflight." >&2
+    exit 1
+  fi
 else
   REQUIRED_QUEUE_WORKER_STATES=created,stopped "$SCRIPT_DIR/check-queue-indexers.sh"
 fi
 
+reconciliation_succeeded=1
 echo "Reconciled Raw queue worker machine=$machine_id creators=$creator_count started=$START_AFTER_RECONCILIATION"

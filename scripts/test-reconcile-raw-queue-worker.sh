@@ -116,7 +116,23 @@ case "$1 $2" in
     mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
     ;;
   "machine wait")
+    case " $* " in
+      *" --state stopped "*)
+        if [ "$(jq -r '.[0].state' "$FAKE_FLY_STATE")" = "stopping" ]; then
+          jq '.[0].state = "stopped"' "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
+          mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
+        fi
+        [ "$(jq -r '.[0].state' "$FAKE_FLY_STATE")" = "stopped" ]
+        ;;
+      *)
+        [ "$(jq -r '.[0].state' "$FAKE_FLY_STATE")" = "started" ]
+        ;;
+    esac
+    ;;
+  "machine exec")
     [ "$(jq -r '.[0].state' "$FAKE_FLY_STATE")" = "started" ]
+    [ "${FAKE_RUNTIME_PREFLIGHT_FAILURE:-0}" != "1" ]
+    printf 'runtime preflight observed\n' >> "$FAKE_FLY_LOG"
     ;;
   "secrets list")
     case "${FAKE_SECRETS_STATUS:-ready}" in
@@ -256,6 +272,18 @@ case "$method:$url" in
     mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
     jq '.[0]' "$FAKE_FLY_STATE" > "$response"
     printf 'api start\n' >> "$FAKE_FLY_LOG"
+    if [ "${FAKE_START_RESPONSE_LOST:-0}" = "1" ]; then
+      exit 7
+    fi
+    printf '200'
+    ;;
+  POST:*/machines/machine-1/stop)
+    [ -n "$lease_header" ] && [ -f "$FAKE_FLY_LEASE" ]
+    jq --arg async "${FAKE_ASYNC_STOP:-0}" \
+      '.[0].state = (if $async == "1" then "stopping" else "stopped" end)' \
+      "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
+    mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
+    printf 'api stop\n' >> "$FAKE_FLY_LOG"
     printf '200'
     ;;
   DELETE:*/lease)
@@ -388,29 +416,51 @@ if grep -Fx 'api update' "$tmp/sync-failure.log"; then
 fi
 grep -Fx 'lease released' "$tmp/sync-failure.log" >/dev/null
 
-for secret_status in missing unknown staged; do
-  cp "$tmp/machines.json" "$tmp/secret-$secret_status-state.json"
-  : > "$tmp/secret-$secret_status.log"
-  : > "$tmp/secret-$secret_status-curl.log"
-  if PATH="$tmp/fake-bin:$PATH" \
-    FAKE_FLY_LOG="$tmp/secret-$secret_status.log" \
-    FAKE_FLY_STATE="$tmp/secret-$secret_status-state.json" \
-    FAKE_FLY_LEASE="$tmp/secret-$secret_status-lease" \
-    FAKE_CURL_LOG="$tmp/secret-$secret_status-curl.log" \
-    FAKE_SECRETS_STATUS="$secret_status" \
-    FLY_CONFIG_FILE="$tmp/fly-config.yml" \
-    INDEXER_IMAGE="registry.invalid/current:two" \
-    "$SCRIPT_DIR/fly-run-queue-indexers.sh" >/dev/null 2>&1; then
-    echo "the launcher must reject $secret_status required-secret status" >&2
-    exit 1
-  fi
-  if grep -Fx 'api start' "$tmp/secret-$secret_status.log"; then
-    echo "$secret_status required-secret status must prevent boot" >&2
-    exit 1
-  fi
-  jq -e '.[0].state == "created"' "$tmp/secret-$secret_status-state.json" >/dev/null
-  grep -Fx 'lease released' "$tmp/secret-$secret_status.log" >/dev/null
-done
+cp "$tmp/machines.json" "$tmp/preflight-failure-state.json"
+: > "$tmp/preflight-failure.log"
+: > "$tmp/preflight-failure-curl.log"
+if PATH="$tmp/fake-bin:$PATH" \
+  FAKE_FLY_LOG="$tmp/preflight-failure.log" \
+  FAKE_FLY_STATE="$tmp/preflight-failure-state.json" \
+  FAKE_FLY_LEASE="$tmp/preflight-failure-lease" \
+  FAKE_CURL_LOG="$tmp/preflight-failure-curl.log" \
+  FAKE_RUNTIME_PREFLIGHT_FAILURE=1 \
+  FLY_CONFIG_FILE="$tmp/fly-config.yml" \
+  INDEXER_IMAGE="registry.invalid/current:two" \
+  "$SCRIPT_DIR/fly-run-queue-indexers.sh" >/dev/null 2>&1; then
+  echo "the launcher must fail when runtime credential preflight is not observed" >&2
+  exit 1
+fi
+grep -Fx 'api start' "$tmp/preflight-failure.log" >/dev/null
+grep -Fx 'api stop' "$tmp/preflight-failure.log" >/dev/null
+grep -Fx 'lease released' "$tmp/preflight-failure.log" >/dev/null
+jq -e '.[0].state == "stopped"' "$tmp/preflight-failure-state.json" >/dev/null
+
+cp "$tmp/machines.json" "$tmp/lost-start-state.json"
+: > "$tmp/lost-start.log"
+: > "$tmp/lost-start-curl.log"
+if PATH="$tmp/fake-bin:$PATH" \
+  FAKE_FLY_LOG="$tmp/lost-start.log" \
+  FAKE_FLY_STATE="$tmp/lost-start-state.json" \
+  FAKE_FLY_LEASE="$tmp/lost-start-lease" \
+  FAKE_CURL_LOG="$tmp/lost-start-curl.log" \
+  FAKE_START_RESPONSE_LOST=1 \
+  FAKE_ASYNC_STOP=1 \
+  FLY_CONFIG_FILE="$tmp/fly-config.yml" \
+  INDEXER_IMAGE="registry.invalid/current:two" \
+  "$SCRIPT_DIR/fly-run-queue-indexers.sh" >/dev/null 2>&1; then
+  echo "the launcher must fail when the start response is lost" >&2
+  exit 1
+fi
+grep -Fx 'api start' "$tmp/lost-start.log" >/dev/null
+grep -Fx 'api stop' "$tmp/lost-start.log" >/dev/null
+stop_wait_line="$(grep -n 'machine wait .*--state stopped' "$tmp/lost-start.log" | cut -d: -f1)"
+release_line="$(grep -n '^lease released$' "$tmp/lost-start.log" | cut -d: -f1)"
+[ -n "$stop_wait_line" ] && [ -n "$release_line" ] && [ "$stop_wait_line" -lt "$release_line" ] || {
+  echo "cleanup must confirm stopped before releasing the Machine lease" >&2
+  exit 1
+}
+jq -e '.[0].state == "stopped"' "$tmp/lost-start-state.json" >/dev/null
 
 cp "$tmp/machines.json" "$tmp/conflict-state.json"
 : > "$tmp/conflict.log"

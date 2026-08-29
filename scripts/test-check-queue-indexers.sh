@@ -34,7 +34,10 @@ fixture() {
         IDLE_GAP_FILL_MAX_NEW_VIDEOS:"10",
         RAW_PUBLICATION_TIMEOUT_SECONDS:"3600",
         RAW_PENDING_PUBLICATION_FILE:"/var/lib/ytsearch/raw-publication.pending",
-        RAW_SEARCH_API_URL:"http://ytsearch-raw-production.internal:8108"
+        RAW_SEARCH_API_URL:"http://ytsearch-raw-production.internal:8108",
+        YOUTUBE_API_KEY_FILE:"/run/secrets/youtube-api-key.txt",
+        YT_DLP_COOKIES_FILE:"/run/secrets/yt-dlp-cookies.txt",
+        CREDENTIAL_PREFLIGHT_MARKER:"/run/ytsearch-credential-preflight.ok"
       },
       init:{
         entrypoint:["/bin/sh"],

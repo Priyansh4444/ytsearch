@@ -5,6 +5,63 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "$test_dir"' EXIT
 
+printf '%s\n' 'AIza12345678901234567890123456789012345' > "$test_dir/youtube-api-key.txt"
+printf '# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t4102444800\tSAPISID\ttest-cookie-value\n' \
+  > "$test_dir/yt-dlp-cookies.txt"
+
+run_credential_preflight() {
+  env \
+    CLOUD_INDEX_QUEUE_PREFLIGHT_ONLY=1 \
+    INDEX_QUEUE_API_BASE_URL=https://queue.invalid \
+    YTSEARCH_INDEX_QUEUE_TOKEN=test-token \
+    RAW_SEARCH_API_URL=http://raw.invalid:8108 \
+    RAW_SEARCH_ADMIN_API_KEY=test-admin-key \
+    YOUTUBE_API_KEY_FILE="$1" \
+    YT_DLP_COOKIES_FILE="$2" \
+    CREDENTIAL_PREFLIGHT_MARKER="$3" \
+    TRANSCRIPT_CACHE_DIR="$test_dir/preflight-cache" \
+    "$SCRIPT_DIR/cloud-index-queue-entrypoint.sh"
+}
+
+run_credential_preflight \
+  "$test_dir/youtube-api-key.txt" \
+  "$test_dir/yt-dlp-cookies.txt" \
+  "$test_dir/preflight.ok" > "$test_dir/preflight.out"
+test -f "$test_dir/preflight.ok"
+grep -Fx 'cloud-queue-indexer: credential preflight passed' "$test_dir/preflight.out" >/dev/null
+
+printf '%s\n' '#!/usr/bin/env sh' 'echo not-a-key' > "$test_dir/invalid-api-key.txt"
+if run_credential_preflight \
+  "$test_dir/invalid-api-key.txt" \
+  "$test_dir/yt-dlp-cookies.txt" \
+  "$test_dir/invalid-key.ok" >/dev/null 2>&1; then
+  echo "credential preflight must reject a non-key file" >&2
+  exit 1
+fi
+test ! -e "$test_dir/invalid-key.ok"
+
+printf '# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t1\tSAPISID\texpired-value\n' \
+  > "$test_dir/expired-cookies.txt"
+if run_credential_preflight \
+  "$test_dir/youtube-api-key.txt" \
+  "$test_dir/expired-cookies.txt" \
+  "$test_dir/expired-cookie.ok" >/dev/null 2>&1; then
+  echo "credential preflight must reject expired auth cookies" >&2
+  exit 1
+fi
+test ! -e "$test_dir/expired-cookie.ok"
+
+printf '# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t4102444800\tPREF\tbenign-value\n' \
+  > "$test_dir/non-auth-cookies.txt"
+if run_credential_preflight \
+  "$test_dir/youtube-api-key.txt" \
+  "$test_dir/non-auth-cookies.txt" \
+  "$test_dir/non-auth-cookie.ok" >/dev/null 2>&1; then
+  echo "credential preflight must require an auth-bearing cookie" >&2
+  exit 1
+fi
+test ! -e "$test_dir/non-auth-cookie.ok"
+
 CLOUD_INDEX_QUEUE_LIBRARY_ONLY=1
 INDEX_QUEUE_API_BASE_URL="https://queue.invalid"
 YTSEARCH_INDEX_QUEUE_TOKEN="test-token"

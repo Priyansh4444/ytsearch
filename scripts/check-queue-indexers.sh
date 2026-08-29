@@ -61,6 +61,9 @@ if ! printf '%s' "$machines" | jq -e \
     and ((.config.env.IDLE_EXIT_AFTER_SECONDS | tonumber?) // 0) > 0
     and ((.config.env.RAW_PUBLICATION_TIMEOUT_SECONDS | tonumber?) // 0) >= 2700
     and (.config.env.RAW_SEARCH_API_URL == $raw_url)
+    and (.config.env.YOUTUBE_API_KEY_FILE == "/run/secrets/youtube-api-key.txt")
+    and (.config.env.YT_DLP_COOKIES_FILE == "/run/secrets/yt-dlp-cookies.txt")
+    and (.config.env.CREDENTIAL_PREFLIGHT_MARKER == "/run/ytsearch-credential-preflight.ok")
     and (.config.env.QUEUE_ONE_REQUEST_PER_PASS == "0")
     and (((.config.env.LIMIT | tonumber?) // 0) >= 100)
     and (.config.env.IDLE_GAP_FILL_ENABLED == "1")
