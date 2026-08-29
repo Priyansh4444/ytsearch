@@ -76,6 +76,17 @@ jq -r 'first(.files[] | select(.guest_path == "/tmp/daily-indexed-channels.txt")
   "$tmp/config.json" | base64 -d > "$tmp/creators"
 cmp -s "$SCRIPT_DIR/indexed-channels.txt" "$tmp/creators"
 
+jq '.[0].config.env.YTSEARCH_MACHINE_ROLE = "queue-indexer-migration-hold"' \
+  "$tmp/machines.json" > "$tmp/held.json"
+MACHINES_JSON_FILE="$tmp/held.json" \
+RECONCILED_CONFIG_FILE="$tmp/held-config.json" \
+INDEXER_IMAGE="registry.invalid/current:two" \
+"$SCRIPT_DIR/reconcile-raw-queue-worker.sh" >/dev/null
+jq -e '
+  .env.YTSEARCH_MACHINE_ROLE == "queue-indexer"
+  and .metadata.lifecycle == "on-demand-queue-worker"
+' "$tmp/held-config.json" >/dev/null
+
 jq '.[0].state = "started"' "$tmp/machines.json" > "$tmp/started.json"
 if MACHINES_JSON_FILE="$tmp/started.json" \
   RECONCILED_CONFIG_FILE="$tmp/started-config.json" \

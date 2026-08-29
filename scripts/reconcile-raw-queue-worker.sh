@@ -33,7 +33,8 @@ else
   machines="$(flyctl machine list --app "$APP_NAME" --json)"
 fi
 worker_count="$(printf '%s' "$machines" | jq '[.[] | select(
-  .config.env.YTSEARCH_MACHINE_ROLE == "queue-indexer"
+  (.config.env.YTSEARCH_MACHINE_ROLE == "queue-indexer"
+    or .config.env.YTSEARCH_MACHINE_ROLE == "queue-indexer-migration-hold")
   and .config.env.QUEUE_TARGET_BACKEND == "raw"
 )] | length')"
 if [ "$worker_count" -ne 1 ]; then
@@ -41,7 +42,8 @@ if [ "$worker_count" -ne 1 ]; then
   exit 1
 fi
 worker="$(printf '%s' "$machines" | jq -c 'first(.[] | select(
-  .config.env.YTSEARCH_MACHINE_ROLE == "queue-indexer"
+  (.config.env.YTSEARCH_MACHINE_ROLE == "queue-indexer"
+    or .config.env.YTSEARCH_MACHINE_ROLE == "queue-indexer-migration-hold")
   and .config.env.QUEUE_TARGET_BACKEND == "raw"
 ))')"
 machine_id="$(printf '%s' "$worker" | jq -r '.id')"
