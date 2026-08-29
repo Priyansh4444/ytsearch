@@ -199,6 +199,7 @@ async fn main() -> ExitCode {
         Command::IndexVideo(command) => index_video_command(command).await,
         Command::Search(command) => search_command(command).await,
         Command::Publish(command) => publish_command(command).await,
+        Command::FailureReport(command) => failure_report_command(command),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -211,6 +212,18 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn failure_report_command(command: FailureReportCommand) -> Result<(), CliError> {
+    let ledger = FailureLedger::new(
+        command.transcript_cache_directory.join(".failures"),
+        Duration::from_secs(command.transcript_failure_retry_seconds),
+    );
+    let report = ledger.report()?;
+    let encoded = serde_json::to_string_pretty(&report)
+        .map_err(|error| CliError::Message(format!("failed to encode failure report: {error}")))?;
+    println!("{encoded}");
+    Ok(())
 }
 
 async fn init_backend_command(command: InitBackendCommand) -> Result<(), CliError> {
@@ -904,7 +917,12 @@ async fn index_youtuber(
         command.transcript.transcript_cache_dir.join(".failures"),
         Duration::from_secs(command.transcript_failure_retry_seconds),
     );
-    defer_recent_transcript_failures(&mut videos_to_index, &failure_ledger, &mut stats);
+    defer_recent_transcript_failures(
+        &mut videos_to_index,
+        &failure_ledger,
+        &youtuber_id,
+        &mut stats,
+    );
     if let Some(limit) = command.max_new_videos {
         videos_to_index.truncate(limit);
         println!(
@@ -951,6 +969,7 @@ async fn index_youtuber(
             let timeout_title = video.title.clone();
             let failure_ledger = failure_ledger.clone();
             let timeout_failure_ledger = failure_ledger.clone();
+            let timeout_youtuber_id = youtuber_id.clone();
             tasks.spawn(async move {
                 tokio::time::timeout(
                     Duration::from_secs(timeout_seconds),
@@ -973,6 +992,7 @@ async fn index_youtuber(
                 .unwrap_or_else(|_| {
                     let category = timeout_failure_ledger.record(
                         &timeout_video_id,
+                        &timeout_youtuber_id,
                         FailureStage::Timeout,
                         "video indexing exceeded its timeout",
                     );
@@ -1309,9 +1329,11 @@ fn should_use_worker_existing_checks(
 fn defer_recent_transcript_failures(
     videos: &mut Vec<DiscoveredVideo>,
     failure_ledger: &FailureLedger,
+    creator_id: &str,
     stats: &mut IndexStats,
 ) {
     videos.retain(|video| {
+        failure_ledger.attribute(&video.video_id, creator_id);
         let decision = failure_ledger.decision(&video.video_id);
         if decision.deferred {
             stats.deferred_transcript_failures =
@@ -1492,8 +1514,12 @@ async fn index_discovered_video(
     let mut metadata = match metadata_source.metadata_for_video(&video.video_id).await {
         Ok(metadata) => metadata,
         Err(error) => {
-            let category =
-                failure_ledger.record(&video.video_id, FailureStage::Metadata, &error.to_string());
+            let category = failure_ledger.record(
+                &video.video_id,
+                &youtuber_id,
+                FailureStage::Metadata,
+                &error.to_string(),
+            );
             tracing::warn!(
                 video_id = %video.video_id,
                 %error,
@@ -1550,6 +1576,7 @@ async fn index_discovered_video(
             );
             let category = failure_ledger.record(
                 &video.video_id,
+                &metadata.youtuber.id,
                 FailureStage::Transcript,
                 &error.to_string(),
             );
@@ -1567,8 +1594,12 @@ async fn index_discovered_video(
     let chunks = match chunker.chunks(&metadata, &transcript) {
         Ok(chunks) => chunks,
         Err(error) => {
-            let category =
-                failure_ledger.record(&video.video_id, FailureStage::Chunking, &error.to_string());
+            let category = failure_ledger.record(
+                &video.video_id,
+                &metadata.youtuber.id,
+                FailureStage::Chunking,
+                &error.to_string(),
+            );
             tracing::warn!(
                 video_id = %video.video_id,
                 %error,
@@ -1589,8 +1620,12 @@ async fn index_discovered_video(
     let chunk_count = chunks.len();
     let import_started = Instant::now();
     if let Err(error) = replace_video_document(&search, &video.video_id, &chunks).await {
-        let category =
-            failure_ledger.record(&video.video_id, FailureStage::Import, &error.to_string());
+        let category = failure_ledger.record(
+            &video.video_id,
+            &metadata.youtuber.id,
+            FailureStage::Import,
+            &error.to_string(),
+        );
         tracing::warn!(
             video_id = %video.video_id,
             %error,
@@ -2512,13 +2547,14 @@ mod tests {
         let ledger = FailureLedger::new(failure_dir.clone(), Duration::from_secs(3_600));
         ledger.record(
             "failed-video",
+            "creator",
             FailureStage::Transcript,
             "temporary request failed",
         );
         let mut videos = vec![video("failed-video"), video("next-video")];
         let mut stats = IndexStats::default();
 
-        defer_recent_transcript_failures(&mut videos, &ledger, &mut stats);
+        defer_recent_transcript_failures(&mut videos, &ledger, "creator", &mut stats);
 
         assert_eq!(
             videos

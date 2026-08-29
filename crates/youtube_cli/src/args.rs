@@ -6,6 +6,8 @@ use youtube_search_client::{DEFAULT_COLLECTION, SearchClient, SearchClientConfig
 
 use super::{CliError, ContentKindFilter, RAW_PUBLICATION_TIMEOUT_ENV, raw_publication_timeout};
 
+const DEFAULT_TRANSCRIPT_FAILURE_RETRY_SECONDS: u64 = 21_600;
+
 #[derive(Debug, Parser)]
 #[command(name = "ytsearch")]
 #[command(about = "YouTube transcript search indexing utilities")]
@@ -40,6 +42,23 @@ pub(super) enum Command {
     Search(SearchCommand),
     #[command(about = "Build and activate pending Raw mutations on the external builder")]
     Publish(PublishCommand),
+    #[command(about = "Summarize classified video failures by creator as JSON")]
+    FailureReport(FailureReportCommand),
+}
+
+#[derive(Clone, Debug, Args)]
+pub(super) struct FailureReportCommand {
+    #[arg(
+        value_name = "TRANSCRIPT_CACHE_DIRECTORY",
+        default_value = "data/transcript-cache"
+    )]
+    pub(super) transcript_cache_directory: PathBuf,
+    #[arg(
+        long,
+        default_value_t = DEFAULT_TRANSCRIPT_FAILURE_RETRY_SECONDS,
+        help = "Retry policy used by the indexing run whose failures are being reported"
+    )]
+    pub(super) transcript_failure_retry_seconds: u64,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -176,7 +195,7 @@ pub(super) struct IndexYoutuberCommand {
     pub(super) transcript: TranscriptOptions,
     #[arg(
         long,
-        default_value_t = 21_600,
+        default_value_t = DEFAULT_TRANSCRIPT_FAILURE_RETRY_SECONDS,
         help = "Seconds before retrying a video whose transcript fetch previously failed"
     )]
     pub(super) transcript_failure_retry_seconds: u64,
@@ -235,7 +254,7 @@ pub(super) struct IndexYoutubersCommand {
     pub(super) transcript: TranscriptOptions,
     #[arg(
         long,
-        default_value_t = 21_600,
+        default_value_t = DEFAULT_TRANSCRIPT_FAILURE_RETRY_SECONDS,
         help = "Seconds before retrying a video whose transcript fetch previously failed"
     )]
     pub(super) transcript_failure_retry_seconds: u64,

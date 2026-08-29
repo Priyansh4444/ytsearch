@@ -116,7 +116,10 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Add bounded fetch concurrency with per-host and per-channel limits.
 - [x] Classify retryable, terminal, private, deleted, and unavailable-video
   failures in an atomic, versioned per-video ledger. Legacy cooldown markers
-  remain readable and are upgraded on the next failure.
+  remain readable and are upgraded on the next failure. Schema v2 attributes
+  outcomes to canonical creator IDs, serializes record/attribute/clear across
+  processes with a bounded lock-shard pool, and exposes a retry-policy-aware
+  JSON report that excludes temporary and unrelated files.
 - [x] Persist bounded exponential backoff with stable per-video jitter and
   resume incomplete channels after restarts through the durable gap cursor.
 - [ ] Batch by bytes and document count; avoid retaining transcripts twice.
@@ -167,6 +170,8 @@ Raw can replace Typesense as the canonical search index.
     61 active profiles, 40 reported count gaps totaling 1,425 videos, and 868
     failure records: 651 no-captions, 37 unavailable, 24 unknown, 11 scheduled,
     3 bot-challenge, 1 rate-limited, and 141 legacy records awaiting upgrade.
+    - [x] Add per-creator classified-outcome reporting so reconciliation can be
+      proved from indexed videos plus explicit terminal/retryable outcomes.
 
 ### Non-negotiable performance and resource gates
 

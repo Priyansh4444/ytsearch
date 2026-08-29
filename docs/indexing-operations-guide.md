@@ -218,6 +218,24 @@ Useful controls:
 The end-of-run summary reports both newly observed and deferred failure
 categories. Unavailable newest videos do not starve older repairable gaps.
 
+Produce the persistent reconciliation evidence as JSON:
+
+```bash
+ytsearch failure-report /var/lib/ytsearch/transcript-cache \
+  --transcript-failure-retry-seconds 21600
+```
+
+The report separates structured and legacy records, retryable and terminal
+outcomes, retries whose cooldown has elapsed, unattributed historical records,
+and category counts for every attributed creator. Schema-v1 JSON records remain
+readable and gain their canonical creator ID when that video is rediscovered;
+new records use schema v2. A conflicting creator ID is never silently reassigned.
+Record, attribution, and clear operations share a 256-shard cross-process lock
+pool, so concurrent creator jobs cannot lose attempt history or overwrite
+ownership without creating one lock inode per video. The CLI fails closed when
+Unix advisory locking is unavailable. Writer temporary files and unrelated
+operator files are excluded from totals.
+
 ## Removal
 
 Cancel/ack any active queue row and stop the single writer before deletion:
