@@ -113,6 +113,7 @@ pub fn router(state: AdminState) -> Router {
             "/admin/channels/{channel_id}",
             get(channel).put(upsert_channel).delete(delete_channel),
         )
+        .route("/admin/active/channels/{channel_id}", get(active_channel))
         .route(
             "/admin/channels/{channel_id}/video-ids",
             get(indexed_video_ids),
@@ -420,6 +421,15 @@ async fn channel(
     if let Some(mutation) = state.store.channel_mutation(&channel_id)? {
         return Ok(Json(mutation.document));
     }
+    Ok(Json(state.engine.active()?.channel_document(&channel_id)?))
+}
+
+async fn active_channel(
+    State(state): State<AdminState>,
+    Path(channel_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Option<ChannelDocument>>, AdminError> {
+    authorize(&state, &headers)?;
     Ok(Json(state.engine.active()?.channel_document(&channel_id)?))
 }
 

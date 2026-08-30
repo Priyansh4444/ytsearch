@@ -207,6 +207,43 @@ async fn video_mutation_is_durable_then_atomically_published() {
 }
 
 #[tokio::test]
+async fn active_channel_read_does_not_report_an_unpublished_overlay() {
+    let (root, state, _publisher) = setup();
+    let mut replacement = channel();
+    replacement.name = "Replacement creator".to_string();
+    let _ = upsert_channel(
+        State(state.clone()),
+        Path("creator".to_string()),
+        headers(),
+        Json(UpsertChannelRequest {
+            publication_api_version: RAW_PUBLICATION_API_VERSION,
+            idempotency_key: "replace-creator-metadata".to_string(),
+            document: replacement.clone(),
+        }),
+    )
+    .await
+    .unwrap();
+
+    let Json(merged) = super::channel(State(state.clone()), Path("creator".to_string()), headers())
+        .await
+        .unwrap();
+    let Json(active_before) =
+        super::active_channel(State(state.clone()), Path("creator".to_string()), headers())
+            .await
+            .unwrap();
+    assert_eq!(merged, Some(replacement.clone()));
+    assert_eq!(active_before, Some(channel()));
+
+    publish_remotely(root.path(), &state).await;
+
+    let Json(active_after) =
+        super::active_channel(State(state), Path("creator".to_string()), headers())
+            .await
+            .unwrap();
+    assert_eq!(active_after, Some(replacement));
+}
+
+#[tokio::test]
 async fn handle_form_mutations_keep_canonical_channel_counts_and_scope() {
     let (root, state, _publisher) = setup();
     let _ = replace_video(
