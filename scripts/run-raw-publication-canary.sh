@@ -308,6 +308,7 @@ canary_is_safe() {
     .config.env.RAW_SEARCH_BASE_CHUNKS_GZIP == "/data/source/youtube_transcript_chunks.jsonl.gz" and
     .config.env.RAW_SEARCH_BIND == "[::]:8108" and
     .config.env.RAW_SEARCH_INDEX_PATH == "/data/index" and
+    .config.env.RAW_SEARCH_REQUIRE_FILE_SECRETS == "1" and
     .config.env.RAW_SEARCH_STATE_DIRECTORY == "/data/mutable" and
     .config.env.RUST_LOG == "youtube_raw_search=info" and
     ((.config.env | keys | sort) == [
@@ -315,6 +316,7 @@ canary_is_safe() {
       "RAW_SEARCH_BASE_CHUNKS_GZIP",
       "RAW_SEARCH_BIND",
       "RAW_SEARCH_INDEX_PATH",
+      "RAW_SEARCH_REQUIRE_FILE_SECRETS",
       "RAW_SEARCH_STATE_DIRECTORY",
       "RUST_LOG"
     ]) and
@@ -322,7 +324,10 @@ canary_is_safe() {
     ((.config.init.entrypoint // []) | length) == 0 and
     ((.config.init.cmd // []) | length) == 0 and
     ((.config.init.exec // []) | length) == 0 and
-    ((.config.files // []) | length) == 0 and
+    .config.files == [
+      {guest_path:"/run/secrets/raw-search-admin-api-key",secret_name:"RAW_SEARCH_ADMIN_API_KEY"},
+      {guest_path:"/run/secrets/raw-search-api-key",secret_name:"RAW_SEARCH_API_KEY"}
+    ] and
     (.config.image | contains("raw-overlay-" + ($source[0:12]) + "-")) and
     ((if (.config.image | contains("@sha256:")) then .config.image
       else .config.image + "@" + .image_ref.digest end) == $expected_resolved_image)

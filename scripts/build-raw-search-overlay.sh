@@ -31,15 +31,17 @@ if [[ -n "${IMAGE_LABEL:-}" && "$IMAGE_LABEL" != "$image_label" ]]; then
 fi
 "$SCRIPT_DIR/require-committed-rust-build-inputs.sh" "$source_commit" \
   Dockerfile.raw-search-overlay fly.raw-search-overlay.toml \
-  scripts/build-raw-search-overlay.sh scripts/require-committed-rust-build-inputs.sh
+  scripts/build-raw-search-overlay.sh scripts/raw-search-entrypoint.sh \
+  scripts/require-committed-rust-build-inputs.sh
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
 git -C "$REPO_ROOT" archive "$source_commit" -- \
   .cargo Cargo.toml Cargo.lock crates \
-  Dockerfile.raw-search-overlay fly.raw-search-overlay.toml \
+  Dockerfile.raw-search-overlay fly.raw-search-overlay.toml scripts/raw-search-entrypoint.sh \
   | tar -x -C "$tmp"
+cp "$tmp/scripts/raw-search-entrypoint.sh" "$tmp/raw-search-entrypoint"
 mv "$tmp/Dockerfile.raw-search-overlay" "$tmp/Dockerfile"
 mv "$tmp/fly.raw-search-overlay.toml" "$tmp/fly.toml"
 

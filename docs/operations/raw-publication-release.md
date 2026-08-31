@@ -92,6 +92,14 @@ Machine config; stale queue environment variables, embedded scripts, file
 mappings, services, and checks are not carried into the publication role. The
 volume and Machine identity are preserved.
 
+The reader canary maps the staged `RAW_SEARCH_API_KEY` and
+`RAW_SEARCH_ADMIN_API_KEY` secrets into `/run/secrets`. Its image entrypoint
+loads those files before dropping privileges. This is intentionally scoped to
+the isolated Machine: a staged credential can be exercised without promoting
+it into the sole production reader's environment. The canary requires both
+files and stops startup when either is missing, empty, or multiline. Production
+preserves its deployed environment because its require-files flag remains off.
+
 ## Run the complete gate
 
 The gate permits up to 300 one-second health probes for a cold reader start.
@@ -139,6 +147,11 @@ The six-hour reader lease is a worst-case mutual-exclusion and recovery
 envelope derived from both complete builder runs, restarts, health checks, and
 cleanup. It does not keep a stopped Machine running for six hours; normal
 cleanup stops the Machines and releases both leases immediately.
+Machine API requests refresh the persisted `flyctl` login once after an HTTP
+401 or 403. Safe reads retry once. Mutations return the original rejection so
+their caller must resolve Machine state before deciding whether to issue a new
+request. This keeps cleanup viable when the original bearer expires during a
+long cold start without blindly replaying a mutation.
 
 Evidence is written under
 `.search-experiment/results/raw-canary-<commit>-<timestamp>/`. A successful run

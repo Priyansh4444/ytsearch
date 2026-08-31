@@ -537,3 +537,8 @@ Raw can replace Typesense as the canonical search index.
   peaks versus sampled-current fallbacks honestly, fail when v1 swap accounting
   is unavailable, and gate the measured inter-sample gaps instead of claiming a
   cadence from the configured sleep alone.
+- [x] Exercise staged Raw credentials on the isolated canary through exact
+  Machine secret-file mappings; keep the production reader on its deployed
+  environment until the canary gate succeeds.
+- [x] Refresh an expired Fly API bearer once during a leased Machine session so
+  a multi-minute integrity check cannot strand a started canary during cleanup.

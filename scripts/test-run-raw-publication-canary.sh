@@ -23,12 +23,16 @@ jq -n --arg source "$source_commit" --arg base "$base_digest" \
         RAW_SEARCH_BASE_CHANNELS_GZIP:"/data/source/youtube_youtubers.jsonl.gz",
         RAW_SEARCH_BASE_CHUNKS_GZIP:"/data/source/youtube_transcript_chunks.jsonl.gz",
         RAW_SEARCH_BIND:"[::]:8108",RAW_SEARCH_INDEX_PATH:"/data/index",
+        RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
         RAW_SEARCH_STATE_DIRECTORY:"/data/mutable",RUST_LOG:"youtube_raw_search=info"
       },
       init:{swap_size_mb:512},guest:{cpu_kind:"shared",cpus:2,memory_mb:2048},
       metadata:{lifecycle:"temporary-canary",source_commit:$source,base_image_digest:$base},
       mounts:[{volume:"vol_1111111111111111",path:"/data/mutable"}],
-      restart:{policy:"no"},dns:{skip_registration:true},services:[],checks:{},files:[]
+      restart:{policy:"no"},dns:{skip_registration:true},services:[],checks:{},files:[
+        {guest_path:"/run/secrets/raw-search-admin-api-key",secret_name:"RAW_SEARCH_ADMIN_API_KEY"},
+        {guest_path:"/run/secrets/raw-search-api-key",secret_name:"RAW_SEARCH_API_KEY"}
+      ]
     }
   }]' > "$tmp/reader-list.json"
 jq '.[0]' "$tmp/reader-list.json" > "$tmp/reader-state.json"

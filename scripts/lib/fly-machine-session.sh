@@ -101,6 +101,27 @@ _fly_machine_session_url() {
   printf '%s/v1/apps/%s/machines/%s' "$api_host" "$app" "$machine_id"
 }
 
+_fly_machine_session_refresh_auth() {
+  local directory="$1"
+  local token temporary_header
+
+  # Ignore a process-scoped token here: it is the credential the API just
+  # rejected. Ask flyctl for the current persisted login instead.
+  token="$(env -u FLY_API_TOKEN flyctl auth token)" || {
+    _fly_machine_session_error "could not refresh the Fly API token"
+    return 1
+  }
+  if [[ -z "$token" || "$(printf '%s' "$token" | tr -d '\r\n')" != "$token" ]]; then
+    _fly_machine_session_error "refreshed Fly API token must be one nonempty line"
+    return 1
+  fi
+
+  temporary_header="$(mktemp "$directory/auth.header.refresh.XXXXXX")" || return 1
+  chmod 600 "$temporary_header"
+  printf 'Authorization: Bearer %s\n' "$token" > "$temporary_header"
+  mv -f -- "$temporary_header" "$directory/auth.header"
+}
+
 _fly_machine_session_request() {
   local directory="$1"
   local method="$2"
@@ -108,7 +129,7 @@ _fly_machine_session_request() {
   local output="$4"
   local request_file="${5:-}"
   local use_lease="${6:-1}"
-  local url status
+  local url status attempt
   local connect_timeout="${FLY_MACHINE_SESSION_CONNECT_TIMEOUT_SECONDS:-5}"
   local request_timeout="${FLY_MACHINE_SESSION_REQUEST_TIMEOUT_SECONDS:-30}"
   local curl_bin="${FLY_MACHINE_SESSION_CURL_BIN:-curl}"
@@ -152,14 +173,23 @@ _fly_machine_session_request() {
   if [[ -n "$request_file" ]]; then
     arguments+=(--header 'Content-Type: application/json' --data-binary "@$request_file")
   fi
-  if ! status="$("$curl_bin" "${arguments[@]}" "$url")"; then
-    printf '000'
-    return 70
-  fi
-  if [[ ! "$status" =~ ^[0-9]{3}$ ]]; then
-    _fly_machine_session_error "curl returned an invalid HTTP status"
-    return 1
-  fi
+  for attempt in 1 2; do
+    if ! status="$("$curl_bin" "${arguments[@]}" "$url")"; then
+      printf '000'
+      return 70
+    fi
+    if [[ ! "$status" =~ ^[0-9]{3}$ ]]; then
+      _fly_machine_session_error "curl returned an invalid HTTP status"
+      return 1
+    fi
+    if (( attempt == 1 )) && [[ "$status" == 401 || "$status" == 403 ]]; then
+      _fly_machine_session_refresh_auth "$directory" || return 1
+      # Reads are safe to replay. Mutating callers receive the original status
+      # and resolve state before deciding whether to issue another request.
+      [[ "$method" == GET || "$method" == HEAD ]] && continue
+    fi
+    break
+  done
   printf '%s' "$status"
 }
 

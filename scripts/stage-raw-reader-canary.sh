@@ -15,7 +15,7 @@ if [[ ! "$RAW_CANARY_MACHINE_ID" =~ ^[0-9a-f]{14}$ ]]; then
   printf 'RAW_CANARY_MACHINE_ID must be one exact Machine ID\n' >&2
   exit 1
 fi
-for command in curl flyctl git jq; do
+for command in curl flyctl git jq tr; do
   command -v "$command" >/dev/null 2>&1 || {
     printf 'missing required command: %s\n' "$command" >&2
     exit 1
@@ -75,6 +75,7 @@ canary_is_exact() {
       RAW_SEARCH_BASE_CHUNKS_GZIP:"/data/source/youtube_transcript_chunks.jsonl.gz",
       RAW_SEARCH_BIND:"[::]:8108",
       RAW_SEARCH_INDEX_PATH:"/data/index",
+      RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
       RAW_SEARCH_STATE_DIRECTORY:"/data/mutable",
       RUST_LOG:"youtube_raw_search=info"
     } and
@@ -86,7 +87,10 @@ canary_is_exact() {
     } and
     ((.config.services // []) | length) == 0 and
     ((.config.checks // {}) | length) == 0 and
-    ((.config.files // []) | length) == 0
+    .config.files == [
+      {guest_path:"/run/secrets/raw-search-admin-api-key",secret_name:"RAW_SEARCH_ADMIN_API_KEY"},
+      {guest_path:"/run/secrets/raw-search-api-key",secret_name:"RAW_SEARCH_API_KEY"}
+    ]
   ' <<<"$candidate" >/dev/null
 }
 
@@ -159,6 +163,7 @@ jq -n --arg image "$reader_image" --arg source "$source_commit" \
     RAW_SEARCH_BASE_CHUNKS_GZIP:"/data/source/youtube_transcript_chunks.jsonl.gz",
     RAW_SEARCH_BIND:"[::]:8108",
     RAW_SEARCH_INDEX_PATH:"/data/index",
+    RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
     RAW_SEARCH_STATE_DIRECTORY:"/data/mutable",
     RUST_LOG:"youtube_raw_search=info"
   },
@@ -174,7 +179,10 @@ jq -n --arg image "$reader_image" --arg source "$source_commit" \
   dns:{skip_registration:true},
   services:[],
   checks:{},
-  files:[]
+  files:[
+    {guest_path:"/run/secrets/raw-search-admin-api-key",secret_name:"RAW_SEARCH_ADMIN_API_KEY"},
+    {guest_path:"/run/secrets/raw-search-api-key",secret_name:"RAW_SEARCH_API_KEY"}
+  ]
 }' --arg mount_path "$RAW_CANARY_MOUNT_PATH" > "$machine_config"
 chmod 600 "$machine_config"
 

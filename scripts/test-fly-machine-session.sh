@@ -33,7 +33,7 @@ if [[ "${0##*/}" == curl ]]; then
   done
   [[ -n "$output" && -n "$auth_header" && -n "$url" ]]
   [[ "$(stat -c '%a' "$auth_header")" == 600 ]]
-  grep -Fx 'Authorization: Bearer test-secret-token' "$auth_header" >/dev/null
+  grep -Eq '^Authorization: Bearer (test-secret-token|refreshed-test-token)$' "$auth_header"
   if [[ "$url" != */lease || "$method" == DELETE ]]; then
     [[ -n "$lease_header" && "$(stat -c '%a' "$lease_header")" == 600 ]]
     grep -Fx 'fly-machine-lease-nonce: test-lease-nonce' "$lease_header" >/dev/null
@@ -59,12 +59,17 @@ if [[ "${0##*/}" == curl ]]; then
       esac
       ;;
     GET:*/machines/0123456789abcd)
-      if [[ "$FAKE_MODE" == malformed-get ]]; then
+      if [[ "$FAKE_MODE" == expired-auth ]] \
+        && grep -Fx 'Authorization: Bearer test-secret-token' "$auth_header" >/dev/null; then
+        printf '{"error":"expired token"}\n' > "$output"
+        printf 403
+      elif [[ "$FAKE_MODE" == malformed-get ]]; then
         printf '[]\n' > "$output"
+        printf 200
       else
         cp "$FAKE_MACHINE_STATE" "$output"
+        printf 200
       fi
-      printf 200
       ;;
     POST:*/machines/0123456789abcd/start)
       [[ -f "$FAKE_SESSION_DIRECTORY/start.intent" ]]
@@ -102,7 +107,11 @@ if [[ "${0##*/}" == curl ]]; then
         and .config == {image:"registry.invalid/test:one",restart:{policy:"no"}}
       ' "$request" >/dev/null
       cp "$request" "$FAKE_UPDATE_CAPTURE"
-      if [[ "$FAKE_MODE" == update-conflict ]]; then
+      if [[ "$FAKE_MODE" == expired-auth-update ]] \
+        && grep -Fx 'Authorization: Bearer test-secret-token' "$auth_header" >/dev/null; then
+        printf '{"error":"expired token"}\n' > "$output"
+        printf 403
+      elif [[ "$FAKE_MODE" == update-conflict ]]; then
         printf '{"error":"stale version"}\n' > "$output"
         printf 409
       else
@@ -136,6 +145,7 @@ fi
 if [[ "${0##*/}" == flyctl ]]; then
   printf '%s\n' "$*" >> "$FAKE_FLY_LOG"
   case "$*" in
+    'auth token') printf 'refreshed-test-token\n'; exit 0 ;;
     'secrets sync --stage --app test-app') exit 0 ;;
     *) printf 'unexpected fake flyctl command: %s\n' "$*" >&2; exit 93 ;;
   esac
@@ -293,6 +303,22 @@ FAKE_MODE=normal
 export FAKE_MODE
 fly_machine_session_release "$FAKE_SESSION_DIRECTORY"
 
+new_session expired-auth-update
+acquire_session
+FAKE_MODE=expired-auth-update
+export FAKE_MODE
+if fly_machine_session_update "$FAKE_SESSION_DIRECTORY" "$temporary_directory/config.json" \
+  104052994 >/dev/null 2>&1; then
+  printf 'an authentication-rejected mutation must not be replayed automatically\n' >&2
+  exit 1
+fi
+[[ "$(grep -c 'POST .*machines/0123456789abcd$' "$FAKE_CURL_LOG")" == 1 ]]
+grep -Fx 'Authorization: Bearer refreshed-test-token' \
+  "$FAKE_SESSION_DIRECTORY/auth.header" >/dev/null
+FAKE_MODE=normal
+export FAKE_MODE
+fly_machine_session_release "$FAKE_SESSION_DIRECTORY"
+
 new_session malformed-get
 acquire_session
 FAKE_MODE=malformed-get
@@ -303,6 +329,20 @@ if fly_machine_session_get "$FAKE_SESSION_DIRECTORY" "$temporary_directory/malfo
   exit 1
 fi
 [[ -f "$FAKE_SESSION_DIRECTORY/lease.header" ]]
+FAKE_MODE=normal
+export FAKE_MODE
+fly_machine_session_release "$FAKE_SESSION_DIRECTORY"
+
+new_session expired-auth
+acquire_session
+FAKE_MODE=expired-auth
+export FAKE_MODE
+fly_machine_session_get "$FAKE_SESSION_DIRECTORY" "$temporary_directory/refreshed-get.json"
+jq -e '.id == "0123456789abcd"' "$temporary_directory/refreshed-get.json" >/dev/null
+grep -Fx 'Authorization: Bearer refreshed-test-token' \
+  "$FAKE_SESSION_DIRECTORY/auth.header" >/dev/null
+[[ "$(grep -c 'GET .*machines/0123456789abcd' "$FAKE_CURL_LOG")" == 2 ]]
+[[ "$(grep -c '^auth token$' "$FAKE_FLY_LOG")" == 1 ]]
 FAKE_MODE=normal
 export FAKE_MODE
 fly_machine_session_release "$FAKE_SESSION_DIRECTORY"

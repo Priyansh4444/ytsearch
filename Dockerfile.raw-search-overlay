@@ -22,4 +22,7 @@ RUN install -d -m 0755 /usr/local/share/ytsearch-release \
 # built Raw image. Compile against the same Debian generation as the runtime so
 # a developer workstation's newer glibc can never leak into production.
 COPY --from=builder /build/target/release/youtube-raw-search /usr/local/bin/youtube-raw-search
-RUN /usr/local/bin/youtube-raw-search --help >/dev/null
+COPY raw-search-entrypoint /usr/local/bin/raw-search-entrypoint
+RUN chmod 0755 /usr/local/bin/raw-search-entrypoint \
+    && /usr/local/bin/youtube-raw-search --help >/dev/null
+ENTRYPOINT ["raw-search-entrypoint"]

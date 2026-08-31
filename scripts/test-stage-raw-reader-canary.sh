@@ -115,13 +115,17 @@ case "$method:$url" in
         "RAW_SEARCH_BASE_CHUNKS_GZIP",
         "RAW_SEARCH_BIND",
         "RAW_SEARCH_INDEX_PATH",
+        "RAW_SEARCH_REQUIRE_FILE_SECRETS",
         "RAW_SEARCH_STATE_DIRECTORY",
         "RUST_LOG"
       ] and
       .config.init == {swap_size_mb:512} and
       (.config.services | length) == 0 and
       (.config.checks | length) == 0 and
-      (.config.files | length) == 0
+      .config.files == [
+        {guest_path:"/run/secrets/raw-search-admin-api-key",secret_name:"RAW_SEARCH_ADMIN_API_KEY"},
+        {guest_path:"/run/secrets/raw-search-api-key",secret_name:"RAW_SEARCH_API_KEY"}
+      ]
     ' "$request" >/dev/null
     cp "$request" "$FAKE_UPDATE_CAPTURE"
     jq --slurpfile request "$request" --arg digest "$FAKE_RESOLVED_DIGEST" '
@@ -181,7 +185,10 @@ jq -e '
   (.[0].config.env | has("STALE_QUEUE_MODE") | not) and
   (.[0].config.init | has("entrypoint") | not) and
   (.[0].config.init | has("cmd") | not) and
-  (.[0].config.files | length) == 0 and
+  .[0].config.files == [
+    {guest_path:"/run/secrets/raw-search-admin-api-key",secret_name:"RAW_SEARCH_ADMIN_API_KEY"},
+    {guest_path:"/run/secrets/raw-search-api-key",secret_name:"RAW_SEARCH_API_KEY"}
+  ] and
   (.[0].config.services | length) == 0
 ' "$tmp/state.json" >/dev/null
 grep -F 'https://api.test/v1/apps/ytsearch-raw-production/machines/22222222222222' \
