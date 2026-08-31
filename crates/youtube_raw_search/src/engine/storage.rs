@@ -317,14 +317,14 @@ impl RawSearchEngine {
     fn open_with_validation(index_path: &Path, validation: ManifestValidation) -> Result<Self> {
         let manifest: Manifest =
             serde_json::from_reader(BufReader::new(File::open(index_path.join(MANIFEST_FILE))?))?;
-        if !matches!(manifest.schema_version, 5..=7) {
+        if !matches!(manifest.schema_version, 5..=8) {
             return Err(Error::Corrupt(format!(
                 "unsupported schema version {}",
                 manifest.schema_version
             )));
         }
         if matches!(validation, ManifestValidation::VerifiedByBuilder)
-            && manifest.schema_version != 7
+            && !matches!(manifest.schema_version, 7 | 8)
         {
             return Err(Error::Corrupt(
                 "newly built index does not use schema version 7".to_string(),
@@ -359,7 +359,7 @@ impl RawSearchEngine {
             .transpose()?;
         let documents = MappedFile::open(&index_path.join(DOCUMENTS_FILE), DOCUMENTS_MAGIC)?;
         let metadata = DocumentTable::open(&index_path.join(METADATA_FILE))?;
-        let (text_bigrams, title_bigrams) = if manifest.schema_version == 7 {
+        let (text_bigrams, title_bigrams) = if manifest.schema_version >= 7 {
             let text = bigram::BigramIndex::open(&index_path.join(bigram::TEXT_BIGRAM_FILE))?;
             let title = bigram::BigramIndex::open(&index_path.join(bigram::TITLE_BIGRAM_FILE))?;
             text.validate_term_universe(lexicon.count)?;
@@ -380,6 +380,15 @@ impl RawSearchEngine {
         } else {
             (None, None)
         };
+        let broad_single = (manifest.schema_version >= 8)
+            .then(|| {
+                broad_single::BroadSingleIndex::open(
+                    &index_path.join(broad_single::BROAD_SINGLE_FILE),
+                    videos.len(),
+                    manifest.documents,
+                )
+            })
+            .transpose()?;
         let counts_match = manifest.documents as usize == metadata.documents
             && manifest.blocks as usize == metadata.blocks
             && manifest.videos as usize == videos.len()
@@ -402,6 +411,7 @@ impl RawSearchEngine {
                 full_positions,
                 text_bigrams,
                 title_bigrams,
+                broad_single,
                 documents,
                 metadata,
                 index_bytes: directory_size(index_path)?,

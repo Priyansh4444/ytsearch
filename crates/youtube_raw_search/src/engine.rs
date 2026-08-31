@@ -102,6 +102,20 @@ const GENERATION_FILES_SCHEMA_7: [&str; 11] = [
     bigram::TEXT_BIGRAM_FILE,
     bigram::TITLE_BIGRAM_FILE,
 ];
+const GENERATION_FILES_SCHEMA_8: [&str; 12] = [
+    CHANNELS_FILE,
+    VIDEOS_FILE,
+    LEXICON_FILE,
+    POSTINGS_FILE,
+    POSITIONS_FILE,
+    FULL_POSITIONS_FILE,
+    DOCUMENTS_FILE,
+    METADATA_FILE,
+    FUZZY_FILE,
+    bigram::TEXT_BIGRAM_FILE,
+    bigram::TITLE_BIGRAM_FILE,
+    broad_single::BROAD_SINGLE_FILE,
+];
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BuildReport {
@@ -109,6 +123,7 @@ pub struct BuildReport {
     pub videos: usize,
     pub channels: usize,
     pub terms: usize,
+    pub broad_plans: usize,
     pub index_bytes: u64,
     pub elapsed_ms: u128,
 }
@@ -189,6 +204,7 @@ enum ManifestValidation {
 
 mod bigram;
 mod broad_measure;
+mod broad_single;
 mod builder;
 mod conjunction;
 mod query_support;
@@ -262,6 +278,7 @@ struct EngineInner {
     full_positions: Option<PositionIndex>,
     text_bigrams: Option<bigram::BigramIndex>,
     title_bigrams: Option<bigram::BigramIndex>,
+    broad_single: Option<broad_single::BroadSingleIndex>,
     documents: MappedFile,
     metadata: DocumentTable,
     index_bytes: u64,
@@ -1452,6 +1469,28 @@ impl RawSearchEngine {
     ) -> Result<Option<Value>> {
         if params.group_by.as_deref() != Some("video_id") {
             return Ok(None);
+        }
+        if let Some(index) = &self.inner.broad_single
+            && let Some(mut answer) = index.lookup(term, fields)?
+        {
+            let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
+            for group in &mut answer.groups {
+                group.documents.truncate(hits_per_group);
+            }
+            let mut groups = self.empty_group_slots();
+            for group in answer.groups {
+                let slot = groups
+                    .get_mut(group.video as usize)
+                    .ok_or_else(|| Error::Corrupt("broad video is out of bounds".to_string()))?;
+                *slot = Some(group);
+            }
+            let terms = [term.to_string()];
+            let (_, highlights) = self.conjunction_plans(&terms, fields, true, 0)?;
+            let mut cache = BlockCache::default();
+            let response = self.format_group_slots(params, &highlights, groups, &mut cache)?;
+            debug_assert_eq!(response["found"], answer.found);
+            debug_assert_eq!(response["total_moments"], answer.total_moments);
+            return Ok(Some(response));
         }
         let terms = [term.to_string()];
         let (plans, highlights) = self.conjunction_plans(&terms, fields, true, 0)?;

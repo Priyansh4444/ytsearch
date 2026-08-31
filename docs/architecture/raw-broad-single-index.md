@@ -185,6 +185,9 @@ traffic proves that additional materialization is necessary.
 
 ## Next implementation step
 
-Extract one pure shared group reducer and implement the read-only production
-corpus sizing command. The sizing report can reject or revise the physical
-layout before schema 8 enters the publication contract.
+The checked binary format, schema-aware publication contract, six-profile
+reader, and lexicon-token builder path are implemented. The next unit must
+enumerate accepted query prefixes that are not themselves lexicon entries,
+deduplicate identical plan fingerprints through a bounded spool, and add
+byte-for-byte differential tests. Schema 8 must not be deployed until that work
+and the production build/RSS/disk gate pass.

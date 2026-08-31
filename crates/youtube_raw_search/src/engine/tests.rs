@@ -799,6 +799,7 @@ fn schema_seven_bigram_is_targeted_but_small_queries_remain_document_exact() {
     let manifest_path = index_path.join(MANIFEST_FILE);
     let mut manifest: Manifest =
         serde_json::from_reader(File::open(&manifest_path).unwrap()).unwrap();
+    manifest.schema_version = 7;
     manifest.files = build_manifest_files(&index_path, 7).unwrap();
     serde_json::to_writer_pretty(File::create(&manifest_path).unwrap(), &manifest).unwrap();
 
@@ -930,6 +931,7 @@ fn large_schema_seven_pair_absence_does_not_restore_loose_proximity() {
         let manifest_path = index_path.join(MANIFEST_FILE);
         let mut manifest: Manifest =
             serde_json::from_reader(File::open(&manifest_path).unwrap()).unwrap();
+        manifest.schema_version = 7;
         manifest.files = build_manifest_files(&index_path, 7).unwrap();
         serde_json::to_writer_pretty(File::create(&manifest_path).unwrap(), &manifest).unwrap();
     };
@@ -2410,16 +2412,20 @@ fn title_postings_are_document_sorted_across_interleaved_videos() {
 }
 
 #[test]
-fn schema_seven_manifest_checksums_and_opens_both_bigram_sidecars() {
+fn schema_eight_manifest_checksums_and_opens_acceleration_sidecars() {
     let (root, engine) = test_engine();
     let index = root.path().join("index");
     let manifest: Manifest =
         serde_json::from_reader(File::open(index.join(MANIFEST_FILE)).expect("manifest"))
             .expect("manifest JSON");
-    assert_eq!(manifest.schema_version, 7);
-    assert_eq!(manifest.files.len(), GENERATION_FILES_SCHEMA_7.len());
-    for name in [bigram::TEXT_BIGRAM_FILE, bigram::TITLE_BIGRAM_FILE] {
-        let file = manifest.files.get(name).expect("bigram manifest entry");
+    assert_eq!(manifest.schema_version, 8);
+    assert_eq!(manifest.files.len(), GENERATION_FILES_SCHEMA_8.len());
+    for name in [
+        bigram::TEXT_BIGRAM_FILE,
+        bigram::TITLE_BIGRAM_FILE,
+        broad_single::BROAD_SINGLE_FILE,
+    ] {
+        let file = manifest.files.get(name).expect("sidecar manifest entry");
         assert_eq!(file.bytes, fs::metadata(index.join(name)).unwrap().len());
         assert_eq!(file.blake3, checksum_file(&index.join(name)).unwrap());
     }
@@ -2441,6 +2447,7 @@ fn schema_seven_manifest_checksums_and_opens_both_bigram_sidecars() {
             .universe(),
         manifest.videos.max(1)
     );
+    assert!(engine.inner.broad_single.is_some());
 }
 
 #[test]
@@ -2455,7 +2462,11 @@ fn schema_six_reader_remains_compatible_without_bigram_sidecars() {
             .expect("manifest JSON");
     manifest["schema_version"] = json!(6);
     let files = manifest["files"].as_object_mut().expect("manifest files");
-    for name in [bigram::TEXT_BIGRAM_FILE, bigram::TITLE_BIGRAM_FILE] {
+    for name in [
+        bigram::TEXT_BIGRAM_FILE,
+        bigram::TITLE_BIGRAM_FILE,
+        broad_single::BROAD_SINGLE_FILE,
+    ] {
         files.remove(name);
         fs::remove_file(index.join(name)).unwrap();
     }

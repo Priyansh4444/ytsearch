@@ -438,7 +438,7 @@ where
     } else {
         total_tokens as f32 / document_count as f32
     };
-    let manifest = Manifest {
+    let mut manifest = Manifest {
         schema_version: 7,
         documents: document_count,
         videos: videos.len() as u32,
@@ -461,8 +461,31 @@ where
             .map(|video| video.comment_count)
             .max()
             .unwrap_or(0),
-        files: build_manifest_files(index_path, 7)?,
+        files: generation_files(7)?
+            .iter()
+            .map(|name| {
+                Ok((
+                    (*name).to_string(),
+                    ManifestFile {
+                        bytes: fs::metadata(index_path.join(name))?.len(),
+                        blake3: String::new(),
+                    },
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?,
     };
+    let mut manifest_output = ColdWriter::create(&index_path.join(MANIFEST_FILE))?;
+    serde_json::to_writer_pretty(&mut manifest_output, &manifest)?;
+    manifest_output.finish()?;
+
+    let preliminary = RawSearchEngine::open_newly_built(index_path)?;
+    let broad_plans = broad_single::build_index(
+        &preliminary,
+        &index_path.join(broad_single::BROAD_SINGLE_FILE),
+    )?;
+    drop(preliminary);
+    manifest.schema_version = 8;
+    manifest.files = build_manifest_files(index_path, 8)?;
     let payload_bytes = manifest
         .files
         .values()
@@ -480,6 +503,7 @@ where
         videos: videos.len(),
         channels: channels.len(),
         terms: term_count,
+        broad_plans,
         index_bytes,
         elapsed_ms: started.elapsed().as_millis(),
     })

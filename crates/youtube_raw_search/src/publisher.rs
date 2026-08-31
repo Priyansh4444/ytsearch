@@ -17,7 +17,7 @@ const BACKEND: &str = "raw";
 const ACTIVE_MANIFEST: &str = "active-generation.json";
 const GENERATION_MANIFEST: &str = "manifest.json";
 const REMOTE_PUBLICATION_WORK: &str = "work/remote-publication";
-pub const RAW_GENERATION_FORMAT: &str = "raw-index-schema-7-v2";
+pub const RAW_GENERATION_FORMAT: &str = "raw-index-schema-8-v1";
 const CORPUS_IDENTITY_DOMAIN: &[u8] = b"ytsearch raw corpus identity v1\0";
 
 #[derive(Clone, Debug)]
@@ -602,6 +602,7 @@ fn report_for_existing(engine: &RawSearchEngine) -> BuildReport {
         videos: engine.video_count(),
         channels: engine.channel_count(),
         terms: engine.term_count(),
+        broad_plans: 0,
         index_bytes: engine.index_size(),
         elapsed_ms: 0,
     }

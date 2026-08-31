@@ -356,6 +356,9 @@ async fn restart_retires_a_schema_seven_v1_manifest_accepted_job() {
         &legacy.compatibility,
     );
     legacy.status = RemoteJobStatus::ManifestAccepted;
+    let mut manifest = manifest;
+    manifest.schema_version = 7;
+    manifest.files.remove("broad-single.bin");
     legacy.manifest = Some(manifest);
     legacy.completed_files.insert("channels.json".to_string());
     let legacy_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
@@ -394,6 +397,7 @@ async fn restart_retires_a_valid_incompatible_manifest_accepted_job() {
     manifest.schema_version = 6;
     manifest.files.remove("bigrams.text.bin");
     manifest.files.remove("bigrams.title.bin");
+    manifest.files.remove("broad-single.bin");
 
     let state_path = fixture.publication.state_path();
     let mut legacy: PersistedJob =

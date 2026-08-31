@@ -563,5 +563,17 @@ Raw can replace Typesense as the canonical search index.
   the exact shared2/2 GB canary. Two independent processes reproduced an
   11.18-second cold `fire` traversal; the identical second profile took 8 ms.
   Accept query-plan materialization and reject relying on the volume page cache.
+- [ ] Complete schema-8 broad-query materialization before another reader
+  deployment.
+  - [x] Add the checked `broad-single.bin` format, six typed profiles, exact
+    score bits/flags/totals, strict corruption validation, schema-aware
+    publication allowlists, and schema 5-7 reader fallback.
+  - [x] Add the reader fast path and generic 25,000-estimated-document builder
+    threshold for lexicon-token plans; retain up to the contract maximum of 250
+    documents per video.
+  - [ ] Enumerate and deduplicate accepted non-lexicon prefix plan keys without
+    an unbounded in-memory prefix set; then prove differential response equality.
+  - [ ] Measure production build duration, scratch/disk bytes, plan count,
+    artifact bytes, and peak RSS before accepting the schema-8 generation.
 - [x] Refresh an expired Fly API bearer once during a leased Machine session so
   a multi-minute integrity check cannot strand a started canary during cleanup.
