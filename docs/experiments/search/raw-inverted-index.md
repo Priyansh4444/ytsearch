@@ -9,6 +9,12 @@ Typesense-shaped route and an explicit raw route:
 - `GET /health`
 - `GET /metrics`
 
+The metrics response reports cumulative end-to-end `search_nanos` separately
+from `queue_wait_nanos` and `backend_nanos`. This matters because the 2 GB
+reader deliberately serializes uncancellable blocking searches: a slow posting
+scan can make the next request wait even when that request's own engine work is
+fast. The benchmark resource artifact records all three deltas.
+
 ## Representation
 
 The immutable index contains:

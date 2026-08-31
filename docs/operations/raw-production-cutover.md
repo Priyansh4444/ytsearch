@@ -23,6 +23,11 @@ the image built from commit `87ba9115c388bc9bde9387ef17685bd37e2e838e`,
 keeps restart policy `no`, and remains stopped until an approved Cloudflare
 Queue wake. `scripts/check-queue-indexers.sh` verifies the embedded entrypoint
 and canonical 62-creator list byte-for-byte.
+
+Its first approved wake failed closed before queue consumption because the
+production reader still runs the pre-publication-protocol image. The Machine
+configuration is restored, but the operational gate remains open until a
+publication-v1 reader also satisfies the 200 ms search ceiling and is promoted.
 | Production Worker | `ytsearch-search` | Cloudflare deployment; exact version recorded by each deployment log |
 | Deprecated Typesense engine | `ytsearch-typesense-staging` / `8147deb94937e8` | Stopped and preserved with benchmark Machine `d8de466f330468` |
 | Deprecated Typesense API | `ytsearch-api-typesense-fly-staging` / `1855eddf654298` | Stopped and preserved |

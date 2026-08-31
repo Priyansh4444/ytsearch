@@ -157,7 +157,7 @@ done
 if [[ "$CAPTURE_RESOURCES" == 1 ]]; then
   metrics_after="$(curl --fail --silent --show-error "${SEARCH_URL%/}/metrics")"
   jq -n --argjson before "$metrics_before" --argjson after "$metrics_after" \
-    '{before:$before,after:$after,cpu_ticks:($after.cpu_ticks-$before.cpu_ticks),search_nanos:($after.search_nanos-$before.search_nanos),searches:($after.searches-$before.searches)}' \
+    '{before:$before,after:$after,cpu_ticks:($after.cpu_ticks-$before.cpu_ticks),search_nanos:($after.search_nanos-$before.search_nanos),queue_wait_nanos:(($after.queue_wait_nanos//0)-($before.queue_wait_nanos//0)),backend_nanos:(($after.backend_nanos//0)-($before.backend_nanos//0)),searches:($after.searches-$before.searches)}' \
     > "${OUTPUT%.jsonl}-resources.json"
 fi
 

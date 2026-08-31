@@ -119,6 +119,8 @@ struct Metrics {
     searches: AtomicU64,
     errors: AtomicU64,
     search_nanos: AtomicU64,
+    queue_wait_nanos: AtomicU64,
+    backend_nanos: AtomicU64,
     cache_hits: AtomicU64,
 }
 
@@ -143,6 +145,8 @@ struct MetricsResponse {
     searches: u64,
     errors: u64,
     search_nanos: u64,
+    queue_wait_nanos: u64,
+    backend_nanos: u64,
     cache_hits: u64,
     uptime_seconds: u64,
 }
@@ -203,6 +207,8 @@ async fn metrics(State(state): State<AppState>) -> Json<MetricsResponse> {
         searches: state.metrics.searches.load(Ordering::Relaxed),
         errors: state.metrics.errors.load(Ordering::Relaxed),
         search_nanos: state.metrics.search_nanos.load(Ordering::Relaxed),
+        queue_wait_nanos: state.metrics.queue_wait_nanos.load(Ordering::Relaxed),
+        backend_nanos: state.metrics.backend_nanos.load(Ordering::Relaxed),
         cache_hits: state.metrics.cache_hits.load(Ordering::Relaxed),
         uptime_seconds: state.started.elapsed().as_secs(),
     })
@@ -252,6 +258,7 @@ async fn search(
         CHANNEL_COLLECTION => true,
         _ => return Err(ServerError::NotFound(collection)),
     };
+    let queued = Instant::now();
     let permit = Arc::clone(&state.search_permits)
         .acquire_owned()
         .await
@@ -260,6 +267,11 @@ async fn search(
                 "search concurrency limiter closed: {error}"
             )))
         })?;
+    state
+        .metrics
+        .queue_wait_nanos
+        .fetch_add(duration_nanos(queued.elapsed()), Ordering::Relaxed);
+    let backend_started = Instant::now();
     let backend = Arc::clone(&state.backend);
     let backend_params = params.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -276,6 +288,10 @@ async fn search(
             "search task terminated: {error}"
         )))
     })?;
+    state
+        .metrics
+        .backend_nanos
+        .fetch_add(duration_nanos(backend_started.elapsed()), Ordering::Relaxed);
     record_elapsed(&state, started);
     match result {
         Ok(value) => {
@@ -318,7 +334,11 @@ fn record_elapsed(state: &AppState, started: Instant) {
     state
         .metrics
         .search_nanos
-        .fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        .fetch_add(duration_nanos(started.elapsed()), Ordering::Relaxed);
+}
+
+fn duration_nanos(duration: std::time::Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
 
 impl SearchCache {
@@ -561,5 +581,13 @@ mod tests {
         assert!(left.is_ok());
         assert!(right.is_ok());
         assert_eq!(backend.maximum.load(AtomicOrdering::SeqCst), 1);
+        assert!(
+            state.metrics.queue_wait_nanos.load(Ordering::SeqCst)
+                >= Duration::from_millis(40).as_nanos() as u64
+        );
+        assert!(
+            state.metrics.backend_nanos.load(Ordering::SeqCst)
+                >= Duration::from_millis(90).as_nanos() as u64
+        );
     }
 }
