@@ -102,6 +102,12 @@ provisioned amount is $23.54/month including the stopped-rootfs ceiling.
 The measured canary generation contains 8.32 million transcript documents. On 2026-08-13
 the clean Raw process used about 275 MiB RSS, had a 365 MiB peak, and used no
 swap; live bounded publication has previously peaked near 736 MiB process RSS.
+On 2026-08-30 the live 2 GB reader reported 851,877,888 bytes (812.4 MiB) of
+cgroup-v1 current memory, zero current swap, zero allocation failures, zero OOM
+kills, and 17% volume utilization. Fly exposed a zero cgroup-v1 kernel peak for
+that Machine, so this is explicitly a current sample rather than a claimed
+historical peak; the publication gate records actual sample timestamps and
+fails if their gap exceeds six seconds.
 The 2 GB allocation includes 512 MB swap as a last-resort recovery margin;
 normal operation must not depend on swap. Keep 2 GB until publication and load
 tests prove that 1 GB retains safe headroom. The 17 MiB API is a candidate for a

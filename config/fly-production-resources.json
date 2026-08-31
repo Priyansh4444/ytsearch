@@ -2,6 +2,12 @@
   "schema_version": 1,
   "environment": "production",
   "resources": {
+    "raw_api": {
+      "app": "ytsearch-api-raw-production",
+      "machine_id": "8e7204a7694d28",
+      "volume_id": "vol_4y8ynnd9o110m33r",
+      "mount_path": "/data"
+    },
     "raw_reader": {
       "app": "ytsearch-raw-production",
       "machine_id": "d89303da029328",

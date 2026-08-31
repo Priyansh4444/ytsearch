@@ -28,6 +28,7 @@ MACHINE_RESOURCE_PROBE="${MACHINE_RESOURCE_PROBE:-}"
 BUILDER_RESOURCE_PROBE="${BUILDER_RESOURCE_PROBE:-}"
 MACHINE_RESOURCE_SAMPLE_INTERVAL_SECONDS="${MACHINE_RESOURCE_SAMPLE_INTERVAL_SECONDS:-5}"
 MACHINE_RESOURCE_PROBE_TIMEOUT_SECONDS="${MACHINE_RESOURCE_PROBE_TIMEOUT_SECONDS:-20}"
+MAX_MACHINE_RESOURCE_SAMPLE_GAP_MS="${MAX_MACHINE_RESOURCE_SAMPLE_GAP_MS:-6000}"
 MAX_CGROUP_MEMORY_BYTES="${MAX_CGROUP_MEMORY_BYTES:-1986422374}"
 MAX_SWAP_BYTES="${MAX_SWAP_BYTES:-0}"
 MAX_DISK_PERCENT="${MAX_DISK_PERCENT:-80}"
@@ -44,6 +45,7 @@ done
 [[ "$RESOURCE_SAMPLE_INTERVAL_SECONDS" =~ ^[1-9][0-9]*$ ]]
 [[ "$MACHINE_RESOURCE_SAMPLE_INTERVAL_SECONDS" =~ ^[1-9][0-9]*$ ]]
 [[ "$MACHINE_RESOURCE_PROBE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]
+[[ "$MAX_MACHINE_RESOURCE_SAMPLE_GAP_MS" =~ ^[1-9][0-9]*$ ]]
 [[ "$MAX_CGROUP_MEMORY_BYTES" =~ ^[1-9][0-9]*$ ]]
 [[ "$MAX_SWAP_BYTES" =~ ^[0-9]+$ ]]
 [[ "$MAX_DISK_PERCENT" =~ ^[1-9][0-9]*$ ]]
@@ -239,6 +241,10 @@ summarize_machine_resources() {
   output="$2"
   jq -s '
     [.[] | select(.ok == true and (.state // "started") == "started")] as $samples |
+    ($samples | sort_by(.sampled_at_ms)) as $ordered_samples |
+    [range(1; ($ordered_samples | length)) as $index |
+      ($ordered_samples[$index].sampled_at_ms -
+        $ordered_samples[$index - 1].sampled_at_ms)] as $sample_gaps |
     {
       samples:($samples | length),
       probe_errors:([.[] | select(.ok != true)] | length),
@@ -247,6 +253,13 @@ summarize_machine_resources() {
       max_disk_percent:([$samples[].disk_percent] | max // null),
       max_oom:([$samples[].oom] | max // null),
       max_oom_kill:([$samples[].oom_kill] | max // null),
+      cgroup_versions:([$samples[].cgroup_version] | unique),
+      memory_peak_sources:([$samples[].memory_peak_source] | unique),
+      swap_peak_sources:([$samples[].swap_peak_source] | unique),
+      sample_timestamps_valid:all($samples[]; (.sampled_at_ms | type) == "number"),
+      sample_span_ms:(if ($ordered_samples | length) < 2 then null else
+        ($ordered_samples[-1].sampled_at_ms - $ordered_samples[0].sampled_at_ms) end),
+      max_sample_gap_ms:($sample_gaps | max // null),
       oom_delta:(if ($samples | length) == 0 then null else ($samples[-1].oom - $samples[0].oom) end),
       oom_kill_delta:(if ($samples | length) == 0 then null else ($samples[-1].oom_kill - $samples[0].oom_kill) end)
     }
@@ -259,7 +272,8 @@ gate_machine_resources() {
   jq -e \
     --argjson maximum_memory "$MAX_CGROUP_MEMORY_BYTES" \
     --argjson maximum_swap "$MAX_SWAP_BYTES" \
-    --argjson maximum_disk "$MAX_DISK_PERCENT" '
+    --argjson maximum_disk "$MAX_DISK_PERCENT" \
+    --argjson maximum_sample_gap "$MAX_MACHINE_RESOURCE_SAMPLE_GAP_MS" '
       .samples > 0 and
       .probe_errors == 0 and
       .max_memory_peak_bytes != null and
@@ -268,6 +282,22 @@ gate_machine_resources() {
       .max_swap_peak_bytes <= $maximum_swap and
       .max_disk_percent != null and
       .max_disk_percent < $maximum_disk and
+      (.cgroup_versions | length) == 1 and
+      (.cgroup_versions[0] == 1 or .cgroup_versions[0] == 2) and
+      (.memory_peak_sources | length) == 1 and
+      (.memory_peak_sources[0] == "kernel" or
+        .memory_peak_sources[0] == "sampled_current") and
+      (.swap_peak_sources | length) == 1 and
+      (.swap_peak_sources[0] == "kernel" or
+        .swap_peak_sources[0] == "sampled_current") and
+      (
+        (.memory_peak_sources[0] == "kernel" and .swap_peak_sources[0] == "kernel") or
+        (
+          .samples >= 2 and .sample_timestamps_valid == true and
+          .sample_span_ms != null and .sample_span_ms >= 1 and
+          .max_sample_gap_ms != null and .max_sample_gap_ms <= $maximum_sample_gap
+        )
+      ) and
       .max_oom == 0 and
       .max_oom_kill == 0 and
       .oom_delta == 0 and

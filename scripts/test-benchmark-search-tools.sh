@@ -181,13 +181,13 @@ set -eu
 sleep 2
 printf '10\n' > "$FAKE_ACTIVE_SEQUENCE"
 mkdir -p "$(dirname -- "$RAW_BUILDER_FINAL_RESOURCE_OUTPUT")"
-printf '{"state":"started","memory_peak_bytes":2048,"swap_peak_bytes":0,"disk_percent":1,"oom":0,"oom_kill":0}\n' \
-  > "$RAW_BUILDER_FINAL_RESOURCE_OUTPUT"
+printf '{"state":"started","sampled_at_ms":%s,"memory_peak_bytes":2048,"swap_peak_bytes":0,"disk_percent":1,"oom":0,"oom_kill":0,"cgroup_version":1,"memory_peak_source":"sampled_current","swap_peak_source":"sampled_current"}\n' \
+  "$(date +%s%3N)" > "$RAW_BUILDER_FINAL_RESOURCE_OUTPUT"
 EOF
 cat > "$tmp/bin/publication-resource" <<'EOF'
 #!/usr/bin/env sh
 set -eu
-printf '{"state":"started","sampled_at_ms":1,"memory_peak_bytes":2048,"swap_peak_bytes":0,"disk_percent":1,"oom":0,"oom_kill":0}\n'
+printf '{"state":"started","sampled_at_ms":%s,"memory_peak_bytes":2048,"swap_peak_bytes":0,"disk_percent":1,"oom":0,"oom_kill":0,"cgroup_version":1,"memory_peak_source":"sampled_current","swap_peak_source":"sampled_current"}\n' "$(date +%s%3N)"
 EOF
 chmod +x "$tmp/bin/publication-curl" "$tmp/bin/publication-publish" \
   "$tmp/bin/publication-resource"
@@ -212,5 +212,22 @@ jq -e '.scrape_errors == 0 and .search_error_delta == 0 and .max_rss_bytes <= 16
   "$tmp/publication-output/resource-summary.json" >/dev/null
 jq -e '.probe_errors == 0 and .max_oom_kill == 0' \
   "$tmp/publication-output/machine-resource-summary.json" >/dev/null
+
+printf '9\n' > "$tmp/active-sequence"
+if PATH="$tmp/publication-bin:$PATH" SEARCH_URL=http://fixture.invalid \
+  SEARCH_API_KEY=fixture-search RAW_ADMIN_API_KEY=fixture-admin \
+  ALLOW_PUBLISH_BENCHMARK=1 CASES_FILE="$tmp/publication-cases.tsv" \
+  OUTPUT_DIR="$tmp/publication-gap-output" CONCURRENCY=2 BASELINE_RUNS=1 \
+  WARM_NEW_SECONDS=1 PUBLICATION_TIMEOUT_SECONDS=10 \
+  PUBLISH_PROCESS_TIMEOUT_SECONDS=20 PUBLISH_PROCESS_KILL_AFTER_SECONDS=5 \
+  RESOURCE_SAMPLE_INTERVAL_SECONDS=1 MACHINE_RESOURCE_SAMPLE_INTERVAL_SECONDS=2 \
+  MAX_MACHINE_RESOURCE_SAMPLE_GAP_MS=1 \
+  MACHINE_RESOURCE_PROBE="$tmp/bin/publication-resource" \
+  BUILDER_RESOURCE_PROBE="$tmp/bin/publication-resource" \
+  PUBLISH_BIN="$tmp/bin/publication-publish" FAKE_ACTIVE_SEQUENCE="$tmp/active-sequence" \
+  "$publication_benchmark" >/dev/null 2>&1; then
+  printf 'sampled-current resource gates must reject unbounded sample gaps\n' >&2
+  exit 1
+fi
 
 printf 'benchmark search tooling tests passed\n'

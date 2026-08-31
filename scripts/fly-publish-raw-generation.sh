@@ -306,7 +306,10 @@ if ! jq -e '
   (.swap_peak_bytes | type) == "number" and
   (.disk_percent | type) == "number" and
   (.oom | type) == "number" and
-  (.oom_kill | type) == "number"
+  (.oom_kill | type) == "number" and
+  (.cgroup_version == 1 or .cgroup_version == 2) and
+  (.memory_peak_source == "kernel" or .memory_peak_source == "sampled_current") and
+  (.swap_peak_source == "kernel" or .swap_peak_source == "sampled_current")
 ' <<<"$final_resource_snapshot" >/dev/null; then
   printf 'publication builder final resource snapshot is invalid\n' >&2
   exit 1

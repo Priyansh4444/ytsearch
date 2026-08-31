@@ -494,10 +494,6 @@ Raw can replace Typesense as the canonical search index.
 - [x] Typesense Fly: equivalent `I` check.
 - [x] Compare Veritasium, Vsauce, and newly requested creator coverage on the active backend. Cross-backend comparison is retired with Meilisearch; Typesense live counts: Vsauce `621/621`, Veritasium `150/517`, marimo `151/151`.
 
-## Deployment/Operations
-
-- [ ] Apply and measure the guarded Typesense display-field memory optimization after the active `@ryansolid` writer finishes; use the measured restart peak before reducing the 8 GB Machine.
-
 ### Autoresearch Follow-ups (Non-semantic)
 
 - [x] Benchmark public search with gzip on/off using the frozen query suite. A 20-pair alternating production run on 2026-07-15 returned identical counts and zero errors: gzip reduced average transfer from 90,461 to 17,351 bytes, average latency from 479 to 263 ms, p50 from 338 to 212 ms, and p95 from 980 to 566 ms.
@@ -524,9 +520,15 @@ Raw can replace Typesense as the canonical search index.
 - [x] Before replacing queue daemon, confirm existing `ytsearch-indexer-staging` queue daemon state and logs.
 - [x] After replacing queue daemon, confirm only one persistent daemon is processing the JSONL queue. Existing daemon was left running; no replacement daemon started.
 - [x] Record final machine state, frontend URLs, and indexing status.
-- [ ] Start getting rid of TODOs from this file that are unused.
-- [x] Centralize the canary, builder, runtime, and retirement identities in one
+- [x] Remove obsolete TODOs that no longer lead to the Raw-only terminal state,
+  including the stopped Typesense display-field optimization.
+- [x] Centralize the API, reader, queue worker, canary, builder, and retirement identities in one
   validated non-secret inventory; derive the production base image, private
   target, source commit, and image digests from authoritative state; replace
   copied production and placeholder test values with synthetic fixtures; and
-  enforce every mirrored identity and release-script caller in the test suite.
+  enforce every mirrored identity, exact topology, and release-script caller in
+  the test suite.
+- [x] Support both cgroup v1 and v2 in the 2-GB resource gate, label kernel
+  peaks versus sampled-current fallbacks honestly, fail when v1 swap accounting
+  is unavailable, and gate the measured inter-sample gaps instead of claiming a
+  cadence from the configured sleep alone.

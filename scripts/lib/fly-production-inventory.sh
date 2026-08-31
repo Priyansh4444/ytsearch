@@ -42,26 +42,36 @@ fly_production_inventory_validate() {
     (keys | sort) == ["environment", "resources", "retirement_sets", "schema_version"] and
     .schema_version == 1 and .environment == "production" and
     (.resources | keys | sort) == [
+      "raw_api",
       "raw_publication_builder",
       "raw_queue_worker",
       "raw_reader",
       "raw_reader_canary"
     ] and
+    (.resources.raw_api | resource) and
     (.resources.raw_reader | resource) and
     (.resources.raw_reader_canary | resource) and
     (.resources.raw_queue_worker | resource) and
     (.resources.raw_publication_builder | resource) and
+    .resources.raw_api.mount_path == "/data" and
     .resources.raw_reader.mount_path == "/data/mutable" and
     .resources.raw_reader_canary.mount_path == "/data/mutable" and
     .resources.raw_queue_worker.mount_path == "/var/lib/ytsearch" and
     .resources.raw_publication_builder.mount_path == "/var/lib/ytsearch" and
     .resources.raw_reader.app == .resources.raw_reader_canary.app and
     .resources.raw_queue_worker.app == .resources.raw_publication_builder.app and
+    ([.resources.raw_api.app, .resources.raw_reader.app, .resources.raw_queue_worker.app] |
+      unique | length) == 3 and
     (.retirement_sets | keys) == ["typesense"] and
     (.retirement_sets.typesense | keys | sort) == ["machines", "reason", "unattached_volumes"] and
     .retirement_sets.typesense.reason == "raw-search-cutover" and
     (.retirement_sets.typesense.machines | length) == 4 and
     (.retirement_sets.typesense.machines | all(retired_machine)) and
+    (
+      [.resources.raw_api.app, .resources.raw_reader.app, .resources.raw_queue_worker.app] as $successor_apps |
+      (.retirement_sets.typesense.machines |
+        all(.successor_app as $successor | ($successor_apps | index($successor)) != null))
+    ) and
     (.retirement_sets.typesense.unattached_volumes | length) == 3 and
     (.retirement_sets.typesense.unattached_volumes | all(retired_volume)) and
     ([.resources[] | .machine_id] + [.retirement_sets.typesense.machines[].machine_id] | length) ==
@@ -120,6 +130,10 @@ fly_production_inventory_load_raw_runtime() {
   local -a variable_names
   fly_production_inventory_validate || return 1
   mapfile -t values < <(jq -er '
+    .resources.raw_api.app,
+    .resources.raw_api.machine_id,
+    .resources.raw_api.volume_id,
+    .resources.raw_api.mount_path,
     .resources.raw_reader.app,
     .resources.raw_reader.machine_id,
     .resources.raw_reader.volume_id,
@@ -129,12 +143,13 @@ fly_production_inventory_load_raw_runtime() {
     .resources.raw_queue_worker.volume_id,
     .resources.raw_queue_worker.mount_path
   ' "$FLY_PRODUCTION_INVENTORY_RESOLVED_PATH")
-  if (( ${#values[@]} != 8 )); then
+  if (( ${#values[@]} != 12 )); then
     _fly_production_inventory_error 'Raw runtime inventory returned an unexpected value count'
     return 1
   fi
 
   variable_names=(
+    RAW_API_APP RAW_API_MACHINE_ID RAW_API_VOLUME_ID RAW_API_MOUNT_PATH
     RAW_READER_APP RAW_READER_MACHINE_ID RAW_READER_VOLUME_ID RAW_READER_MOUNT_PATH
     RAW_QUEUE_WORKER_APP RAW_QUEUE_WORKER_MACHINE_ID RAW_QUEUE_WORKER_VOLUME_ID
     RAW_QUEUE_WORKER_MOUNT_PATH

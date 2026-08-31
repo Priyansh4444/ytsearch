@@ -116,7 +116,7 @@ cat > "$tmp/bin/resource-probe" <<'SH'
 #!/usr/bin/env sh
 set -eu
 test "$(jq -r '.[0].state' "$FAKE_FLY_STATE")" = started
-printf '{"state":"started","memory_peak_bytes":1024,"swap_peak_bytes":0,"disk_percent":1,"oom":0,"oom_kill":0}\n'
+printf '{"state":"started","memory_peak_bytes":1024,"swap_peak_bytes":0,"disk_percent":1,"oom":0,"oom_kill":0,"cgroup_version":1,"memory_peak_source":"sampled_current","swap_peak_source":"sampled_current"}\n'
 SH
 chmod +x "$tmp/bin/resource-probe"
 

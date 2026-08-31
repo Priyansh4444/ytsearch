@@ -14,19 +14,39 @@ if [[ "$#" -gt 1 || ( "$mode" != --check && "$mode" != --write ) ]]; then
 fi
 
 wrangler_config="${WRANGLER_CONFIG_PATH:-$REPOSITORY_ROOT/wrangler.jsonc}"
+fly_raw_api_config="${FLY_RAW_API_CONFIG_PATH:-$REPOSITORY_ROOT/fly.raw-api.toml}"
 if [[ ! -f "$wrangler_config" || -L "$wrangler_config" ]]; then
   printf 'Wrangler config must be one regular, non-symlink file: %s\n' \
     "$wrangler_config" >&2
   exit 1
 fi
+if [[ ! -f "$fly_raw_api_config" || -L "$fly_raw_api_config" ]]; then
+  printf 'Raw API Fly config must be one regular, non-symlink file: %s\n' \
+    "$fly_raw_api_config" >&2
+  exit 1
+fi
+
+mapfile -t fly_api_apps < <(sed -nE \
+  "s/^[[:space:]]*app[[:space:]]*=[[:space:]]*'([^']+)'[[:space:]]*$/\\1/p" \
+  "$fly_raw_api_config")
+if (( ${#fly_api_apps[@]} != 1 )) || [[ "${fly_api_apps[0]}" != "$RAW_API_APP" ]]; then
+  printf 'Raw API Fly app drifted from %s: expected=%s actual=%s\n' \
+    "$FLY_PRODUCTION_INVENTORY_RESOLVED_PATH" "$RAW_API_APP" \
+    "${fly_api_apps[*]:-missing-or-duplicate}" >&2
+  exit 1
+fi
 
 keys=(
+  API_BASE_URL
+  INDEX_QUEUE_API_BASE_URL
   FLY_APP_NAME
   FLY_RAW_SEARCH_APP_NAME
   FLY_RAW_SEARCH_MACHINE_ID
   RAW_SEARCH_HEALTH_URL
 )
 expected_values=(
+  "https://${RAW_API_APP}.fly.dev"
+  "https://${RAW_API_APP}.fly.dev"
   "$RAW_QUEUE_WORKER_APP"
   "$RAW_READER_APP"
   "$RAW_READER_MACHINE_ID"
@@ -107,10 +127,12 @@ for index in "${!keys[@]}"; do
 done
 
 jq -cn --arg mode "${mode#--}" --arg config "$wrangler_config" \
+  --arg api_app "$RAW_API_APP" --arg api_machine "$RAW_API_MACHINE_ID" \
   --arg reader_app "$RAW_READER_APP" --arg reader_machine "$RAW_READER_MACHINE_ID" \
   --arg queue_worker_app "$RAW_QUEUE_WORKER_APP" '{
     mode:$mode,
     config:$config,
+    raw_api:{app:$api_app,machine_id:$api_machine},
     raw_reader:{app:$reader_app,machine_id:$reader_machine},
     raw_queue_worker:{app:$queue_worker_app},
     synchronized:true

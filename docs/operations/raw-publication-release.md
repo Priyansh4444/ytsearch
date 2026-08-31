@@ -119,8 +119,12 @@ The one command performs these checks in order:
 7. Requires every request to complete in at most 200 ms with zero HTTP, JSON,
    metrics, or search errors.
 8. Requires reader process RSS at or below 1.5 GiB. For both 2-GB Machines it
-   also requires cgroup peak memory at or below 1.85 GiB, peak swap of zero, no
-   OOM event, and volume utilization below 80%.
+   also requires observed cgroup memory at or below 1.85 GiB, observed swap of
+   zero, no OOM event, and volume utilization below 80%. Cgroup v2 uses kernel
+   peak counters. Fly's current cgroup v1 reports an unusable zero peak, so the
+   gate records that limitation, requires v1 memory-plus-swap accounting, and
+   fails if consecutive accepted samples are more than six seconds apart. It
+   never labels current-usage samples as a kernel peak.
 9. Runs the warmed new generation for 60 seconds, verifies the operation is
    published, restarts the reader, and verifies it again.
 10. Deletes the synthetic channel, publishes the deletion, restarts again, and

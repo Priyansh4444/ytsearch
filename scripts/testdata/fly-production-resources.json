@@ -2,6 +2,12 @@
   "schema_version": 1,
   "environment": "production",
   "resources": {
+    "raw_api": {
+      "app": "ytsearch-api-raw-production",
+      "machine_id": "13131313131313",
+      "volume_id": "vol_1313131313131313",
+      "mount_path": "/data"
+    },
     "raw_reader": {
       "app": "ytsearch-raw-production",
       "machine_id": "10101010101010",
@@ -47,7 +53,7 @@
           "app": "old-api",
           "machine_id": "66666666666666",
           "volume_id": "vol_6666666666666666",
-          "successor_app": "new-api"
+          "successor_app": "ytsearch-api-raw-production"
         },
         {
           "app": "old-indexer",

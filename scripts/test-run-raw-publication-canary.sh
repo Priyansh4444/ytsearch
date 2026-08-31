@@ -230,13 +230,13 @@ set -euo pipefail
 printf 'publisher\n' >> "$FAKE_COMPONENT_LOG"
 printf '11\n' > "$FAKE_ACTIVE_SEQUENCE"
 mkdir -p "$(dirname -- "$RAW_BUILDER_FINAL_RESOURCE_OUTPUT")"
-printf '{"state":"started","memory_peak_bytes":1024,"swap_peak_bytes":0,"disk_percent":1,"oom":0,"oom_kill":0}\n' \
+printf '{"state":"started","memory_peak_bytes":1024,"swap_peak_bytes":0,"disk_percent":1,"oom":0,"oom_kill":0,"cgroup_version":1,"memory_peak_source":"sampled_current","swap_peak_source":"sampled_current"}\n' \
   > "$RAW_BUILDER_FINAL_RESOURCE_OUTPUT"
 SH
 cat > "$tmp/bin/resource-probe" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '{"state":"started","memory_peak_bytes":1024,"swap_peak_bytes":0,"disk_percent":1,"oom":0,"oom_kill":0}\n'
+printf '{"state":"started","memory_peak_bytes":1024,"swap_peak_bytes":0,"disk_percent":1,"oom":0,"oom_kill":0,"cgroup_version":1,"memory_peak_source":"sampled_current","swap_peak_source":"sampled_current"}\n'
 SH
 chmod +x "$tmp/bin/protocol-check" "$tmp/bin/publication-benchmark" \
   "$tmp/bin/publisher" "$tmp/bin/resource-probe"

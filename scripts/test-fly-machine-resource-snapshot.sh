@@ -17,19 +17,35 @@ case "$1 $2" in
     }]'
     ;;
   "ssh console")
-    cat <<'EOF'
+    if [[ "${FAKE_CGROUP_VERSION:-2}" == 1 ]]; then
+      cat <<'EOF'
+1725000000123
+345678901
+345678901
+0
+0
+0
+0
+1
+sampled_current
+sampled_current
+/dev/vdb 20000000000 4000000000 16000000000 20% /data/mutable
+EOF
+    else
+      cat <<'EOF'
+1725000000456
 123456789
 234567890
 0
 0
-low 0
-high 0
-max 0
-oom 2
-oom_kill 1
-oom_group_kill 0
+2
+1
+2
+kernel
+kernel
 /dev/vdb 20000000000 4000000000 16000000000 20% /data/mutable
 EOF
+    fi
     ;;
   *) printf 'unexpected flyctl command: %s\n' "$*" >&2; exit 1 ;;
 esac
@@ -45,13 +61,29 @@ jq -e '
   .app == "ytsearch-raw-production" and
   .machine_id == "22222222222222" and
   .state == "started" and
+  .sampled_at_ms == 1725000000456 and
   .memory_current_bytes == 123456789 and
   .memory_peak_bytes == 234567890 and
   .swap_current_bytes == 0 and
   .swap_peak_bytes == 0 and
   .oom == 2 and .oom_kill == 1 and
+  .cgroup_version == 2 and
+  .memory_peak_source == "kernel" and .swap_peak_source == "kernel" and
   .disk_total_bytes == 20000000000 and
   .disk_percent == 20
+' <<<"$output" >/dev/null
+
+output="$(PATH="$temporary_directory/bin:$PATH" FAKE_CGROUP_VERSION=1 \
+  FLY_RESOURCE_APP=ytsearch-raw-production \
+  FLY_RESOURCE_MACHINE_ID=22222222222222 \
+  FLY_RESOURCE_MOUNT_PATH=/data/mutable \
+  "$SCRIPT_DIR/fly-machine-resource-snapshot.sh")"
+jq -e '
+  .cgroup_version == 1 and
+  .sampled_at_ms == 1725000000123 and
+  .memory_current_bytes == 345678901 and .memory_peak_bytes == 345678901 and
+  .memory_peak_source == "sampled_current" and
+  .swap_peak_source == "sampled_current"
 ' <<<"$output" >/dev/null
 
 if PATH="$temporary_directory/bin:$PATH" FAKE_MACHINE_STATE=stopped \
@@ -83,7 +115,7 @@ case "$1 $2" in
     fi
     ;;
   "ssh console")
-    printf '123\n234\n0\n0\nlow 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n/dev/vdb 20000000000 4000000000 16000000000 20%% /data/mutable\n'
+    printf '1725000000789\n123\n234\n0\n0\n0\n0\n2\nkernel\nkernel\n/dev/vdb 20000000000 4000000000 16000000000 20%% /data/mutable\n'
     ;;
   *) printf 'unexpected wrapper flyctl command: %s\n' "$*" >&2; exit 1 ;;
 esac

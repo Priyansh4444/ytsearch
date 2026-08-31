@@ -13,6 +13,10 @@ jq -n '{
   schema_version:1,
   environment:"production",
   resources:{
+    raw_api:{
+      app:"api-app",machine_id:"09090909090909",
+      volume_id:"vol_0909090909090909",mount_path:"/data"
+    },
     raw_reader:{
       app:"reader-app",machine_id:"10101010101010",
       volume_id:"vol_1010101010101010",mount_path:"/data/mutable"
@@ -35,7 +39,7 @@ jq -n '{
     machines:[
       {app:"old-engine",machine_id:"33333333333333",volume_id:"vol_3333333333333333",successor_app:"reader-app"},
       {app:"old-engine",machine_id:"44444444444444",volume_id:"vol_4444444444444444",successor_app:"reader-app"},
-      {app:"old-api",machine_id:"55555555555555",volume_id:"vol_5555555555555555",successor_app:"new-api"},
+      {app:"old-api",machine_id:"55555555555555",volume_id:"vol_5555555555555555",successor_app:"api-app"},
       {app:"old-indexer",machine_id:"66666666666666",volume_id:"vol_6666666666666666",successor_app:"builder-app"}
     ],
     unattached_volumes:[
@@ -54,6 +58,8 @@ fly_production_inventory_load_raw_release
 [[ "$RAW_PUBLICATION_TARGET_MACHINE_ID" == 11111111111111 ]]
 
 fly_production_inventory_load_raw_runtime
+[[ "$RAW_API_APP" == api-app ]]
+[[ "$RAW_API_MACHINE_ID" == 09090909090909 ]]
 [[ "$RAW_READER_APP" == reader-app ]]
 [[ "$RAW_READER_MACHINE_ID" == 10101010101010 ]]
 [[ "$RAW_QUEUE_WORKER_APP" == builder-app ]]
@@ -84,6 +90,7 @@ fi
 )
 
 (
+  unset RAW_API_APP RAW_API_MACHINE_ID RAW_API_VOLUME_ID RAW_API_MOUNT_PATH
   unset RAW_READER_APP RAW_READER_MACHINE_ID RAW_READER_VOLUME_ID RAW_READER_MOUNT_PATH
   unset RAW_QUEUE_WORKER_APP RAW_QUEUE_WORKER_MACHINE_ID RAW_QUEUE_WORKER_VOLUME_ID
   unset RAW_QUEUE_WORKER_MOUNT_PATH
