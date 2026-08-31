@@ -191,3 +191,8 @@ enumerate accepted query prefixes that are not themselves lexicon entries,
 deduplicate identical plan fingerprints through a bounded spool, and add
 byte-for-byte differential tests. Schema 8 must not be deployed until that work
 and the production build/RSS/disk gate pass.
+
+The current writer encodes and drops one plan at a time into a cold payload
+spool, retaining only its small ordered directory in memory. Final composition
+streams the spool into `broad-single.bin`; it never keeps all groups or encoded
+payloads resident together.

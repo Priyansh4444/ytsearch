@@ -571,6 +571,8 @@ Raw can replace Typesense as the canonical search index.
   - [x] Add the reader fast path and generic 25,000-estimated-document builder
     threshold for lexicon-token plans; retain up to the contract maximum of 250
     documents per video.
+  - [x] Spool one encoded plan at a time and compose the final immutable file
+    without retaining every plan's groups or payload in builder RAM.
   - [ ] Enumerate and deduplicate accepted non-lexicon prefix plan keys without
     an unbounded in-memory prefix set; then prove differential response equality.
   - [ ] Measure production build duration, scratch/disk bytes, plan count,

@@ -1,5 +1,5 @@
 use super::*;
-use std::{cmp::Ordering, ops::Range};
+use std::{cmp::Ordering, io::BufReader, ops::Range};
 
 pub(super) const BROAD_SINGLE_FILE: &str = "broad-single.bin";
 const BROAD_SINGLE_MAGIC: &[u8; 8] = b"RAWBRD01";
@@ -88,10 +88,25 @@ pub(super) struct BroadAnswer {
     pub(super) groups: Vec<VideoMatches>,
 }
 
+#[cfg(test)]
 pub(super) struct BroadBuildPlan {
     pub(super) token: String,
     pub(super) profile: BroadProfile,
     pub(super) groups: Vec<Option<VideoMatches>>,
+}
+
+struct BuildEntry {
+    token: String,
+    profile: BroadProfile,
+    payload_offset: u64,
+    payload_length: u64,
+}
+
+struct BroadIndexWriter {
+    payload_path: PathBuf,
+    payload: ColdWriter,
+    payload_bytes: u64,
+    entries: Vec<BuildEntry>,
 }
 
 impl BroadSingleIndex {
@@ -199,7 +214,7 @@ impl BroadSingleIndex {
 }
 
 pub(super) fn build_index(engine: &RawSearchEngine, path: &Path) -> Result<usize> {
-    let mut plans = Vec::new();
+    let mut writer = BroadIndexWriter::create(path)?;
     for index in 0..engine.inner.lexicon.count {
         let (token, _) = engine.inner.lexicon.entry_at(index)?;
         let token = token.to_string();
@@ -231,19 +246,14 @@ pub(super) fn build_index(engine: &RawSearchEngine, path: &Path) -> Result<usize
                 )
             })?;
             if groups.iter().flatten().count() >= TYPO_RESULT_THRESHOLD {
-                plans.push(BroadBuildPlan {
-                    token: token.clone(),
-                    profile,
-                    groups,
-                });
+                writer.append(&token, profile, &groups)?;
             }
         }
     }
-    let count = plans.len();
-    write_index(path, &plans)?;
-    Ok(count)
+    writer.finish(path)
 }
 
+#[cfg(test)]
 pub(super) fn write_index(path: &Path, plans: &[BroadBuildPlan]) -> Result<()> {
     let mut ordered = plans.iter().collect::<Vec<_>>();
     ordered.sort_unstable_by(|left, right| {
@@ -261,44 +271,85 @@ pub(super) fn write_index(path: &Path, plans: &[BroadBuildPlan]) -> Result<()> {
         }
     }
 
-    let count = u32::try_from(ordered.len())
-        .map_err(|_| Error::InvalidInput("too many broad query plans".to_string()))?;
-    let directory_bytes = ordered.iter().try_fold(HEADER_BYTES, |total, plan| {
-        let key_length = u16::try_from(plan.token.len())
-            .map_err(|_| Error::InvalidInput("broad query key is too long".to_string()))?;
-        if key_length == 0 {
-            return Err(Error::InvalidInput("broad query key is empty".to_string()));
+    let mut writer = BroadIndexWriter::create(path)?;
+    for plan in ordered {
+        writer.append(&plan.token, plan.profile, &plan.groups)?;
+    }
+    writer.finish(path).map(|_| ())
+}
+
+impl BroadIndexWriter {
+    fn create(path: &Path) -> Result<Self> {
+        let payload_path = path.with_extension("payloads.spool");
+        let payload = ColdWriter::create(&payload_path)?;
+        Ok(Self {
+            payload_path,
+            payload,
+            payload_bytes: 0,
+            entries: Vec::new(),
+        })
+    }
+
+    fn append(
+        &mut self,
+        token: &str,
+        profile: BroadProfile,
+        groups: &[Option<VideoMatches>],
+    ) -> Result<()> {
+        if token.is_empty() || token.len() > usize::from(u16::MAX) {
+            return Err(Error::InvalidInput(
+                "broad query key has an invalid length".to_string(),
+            ));
         }
-        total
-            .checked_add(DIRECTORY_FIXED_BYTES + usize::from(key_length))
-            .ok_or_else(|| Error::InvalidInput("broad directory is too large".to_string()))
-    })?;
-    let payloads = ordered
-        .iter()
-        .map(|plan| encode_answer(&plan.groups))
-        .collect::<Result<Vec<_>>>()?;
-    let mut output = Vec::with_capacity(
-        directory_bytes.saturating_add(payloads.iter().map(Vec::len).sum::<usize>()),
-    );
-    write_header(&mut output, BROAD_SINGLE_MAGIC, count);
-    let mut payload_offset = directory_bytes;
-    for (plan, payload) in ordered.iter().zip(&payloads) {
-        output.extend_from_slice(&(plan.token.len() as u16).to_le_bytes());
-        output.push(plan.profile as u8);
-        output.push(0);
-        output.extend_from_slice(&(payload_offset as u64).to_le_bytes());
-        output.extend_from_slice(&(payload.len() as u64).to_le_bytes());
-        output.extend_from_slice(plan.token.as_bytes());
-        payload_offset = payload_offset
-            .checked_add(payload.len())
+        if self.entries.last().is_some_and(|previous| {
+            (previous.token.as_bytes(), previous.profile) >= (token.as_bytes(), profile)
+        }) {
+            return Err(Error::InvalidInput(
+                "broad build plans are not strictly ordered".to_string(),
+            ));
+        }
+        let payload = encode_answer(groups)?;
+        let payload_length = payload.len() as u64;
+        self.payload.write_all(&payload)?;
+        self.entries.push(BuildEntry {
+            token: token.to_string(),
+            profile,
+            payload_offset: self.payload_bytes,
+            payload_length,
+        });
+        self.payload_bytes = self
+            .payload_bytes
+            .checked_add(payload_length)
             .ok_or_else(|| Error::InvalidInput("broad payload bytes overflow".to_string()))?;
+        Ok(())
     }
-    for payload in payloads {
-        output.extend_from_slice(&payload);
+
+    fn finish(self, path: &Path) -> Result<usize> {
+        self.payload.finish()?;
+        let count = u32::try_from(self.entries.len())
+            .map_err(|_| Error::InvalidInput("too many broad query plans".to_string()))?;
+        let directory_bytes = self.entries.iter().try_fold(HEADER_BYTES, |total, entry| {
+            total
+                .checked_add(DIRECTORY_FIXED_BYTES + entry.token.len())
+                .ok_or_else(|| Error::InvalidInput("broad directory is too large".to_string()))
+        })?;
+        let mut output = ColdWriter::create(path)?;
+        let mut header = Vec::new();
+        write_header(&mut header, BROAD_SINGLE_MAGIC, count);
+        output.write_all(&header)?;
+        for entry in &self.entries {
+            output.write_all(&(entry.token.len() as u16).to_le_bytes())?;
+            output.write_all(&[entry.profile as u8, 0])?;
+            output.write_all(&(directory_bytes as u64 + entry.payload_offset).to_le_bytes())?;
+            output.write_all(&entry.payload_length.to_le_bytes())?;
+            output.write_all(entry.token.as_bytes())?;
+        }
+        let mut payload = BufReader::new(ColdReader::open(&self.payload_path)?);
+        std::io::copy(&mut payload, &mut output)?;
+        output.finish()?;
+        fs::remove_file(&self.payload_path)?;
+        Ok(self.entries.len())
     }
-    let mut writer = ColdWriter::create(path)?;
-    writer.write_all(&output)?;
-    Ok(writer.finish()?)
 }
 
 fn encode_answer(groups: &[Option<VideoMatches>]) -> Result<Vec<u8>> {
