@@ -30,7 +30,7 @@ fly_production_inventory_load_raw_release
 : "${CANARY_BASELINE_RUNS:=3}"
 : "${CANARY_CONCURRENCY:=4}"
 : "${CANARY_SEARCH_CURL_MAX_TIME:=5}"
-: "${CANARY_HEALTH_ATTEMPTS:=120}"
+: "${CANARY_HEALTH_ATTEMPTS:=300}"
 : "${CANARY_CLEANUP_RESERVE_SECONDS:=600}"
 : "${CANARY_MACHINE_RESOURCE_SAMPLE_INTERVAL_SECONDS:=1}"
 : "${CANARY_MAX_MACHINE_RESOURCE_SAMPLE_GAP_MS:=6000}"
@@ -68,7 +68,11 @@ case "$RAW_CANARY_TEST_MODE" in
     CANARY_BASELINE_RUNS=3
     CANARY_CONCURRENCY=4
     CANARY_SEARCH_CURL_MAX_TIME=5
-    CANARY_HEALTH_ATTEMPTS=120
+    # A cold 20 GB Fly volume took 193 seconds to checksum and structurally
+    # open the 8.4-million-document active generation on a shared 2x/2 GB
+    # canary. Keep this above the measured cold path; query latency retains its
+    # separate 200 ms fail-closed ceiling below.
+    CANARY_HEALTH_ATTEMPTS=300
     CANARY_CLEANUP_RESERVE_SECONDS=600
     CANARY_MACHINE_RESOURCE_SAMPLE_INTERVAL_SECONDS=1
     CANARY_MAX_MACHINE_RESOURCE_SAMPLE_GAP_MS=6000

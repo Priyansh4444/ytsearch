@@ -94,6 +94,11 @@ volume and Machine identity are preserved.
 
 ## Run the complete gate
 
+The gate permits up to 300 one-second health probes for a cold reader start.
+This is an integrity-check allowance, not a search-latency allowance: the
+2 GB canary took 193 seconds to fully checksum and open active generation 2145
+on August 31, 2026. Search cases still fail closed above 200 ms.
+
 ```bash
 SEARCH_API_KEY="$RAW_CANARY_SEARCH_API_KEY" \
 RAW_ADMIN_API_KEY="$RAW_SEARCH_ADMIN_API_KEY" \
