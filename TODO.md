@@ -549,5 +549,11 @@ Raw can replace Typesense as the canonical search index.
   backend work, and add materialized-vs-streamed and concurrency regressions.
 - [ ] Prove `react`, `fire`, and the full search matrix stay below 200 ms on the
   exact 2 GB canary without OOM, swap growth, or response-contract drift.
+- [x] Add a schema-7 broad-query sizing probe that runs the canonical reducer
+  for all six field/position profiles and reports posting visits, exact totals,
+  retained depths, byte estimates, elapsed time, and process RSS.
+- [ ] Run the broad-query sizing probe against the production snapshot and use
+  the evidence to accept or reject the schema-8 materialization layout before
+  changing the on-disk contract.
 - [x] Refresh an expired Fly API bearer once during a leased Machine session so
   a multi-minute integrity check cannot strand a started canary during cleanup.

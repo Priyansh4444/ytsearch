@@ -5,7 +5,7 @@ use youtube_raw_search::{
 };
 use youtube_search_service::{SearchBackend, ServerConfig};
 
-const USAGE: &str = "usage: youtube-raw-search build <chunks.jsonl> <channels.jsonl> <index-dir> | serve [index-dir] | serve-mutable | slice <input.jsonl> <output.jsonl> <max-videos>";
+const USAGE: &str = "usage: youtube-raw-search build <chunks.jsonl> <channels.jsonl> <index-dir> | measure-broad-single <index-dir> <query>... | serve [index-dir] | serve-mutable | slice <input.jsonl> <output.jsonl> <max-videos>";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -56,6 +56,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::new(engine),
             )
             .await?;
+        }
+        Some("measure-broad-single") => {
+            let index = required_path(args.next(), "index directory")?;
+            let queries = args.collect::<Vec<_>>();
+            let engine = RawSearchEngine::open(&index)?;
+            let report = engine.measure_broad_single(&queries)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Some("serve-mutable") => {
             serve_mutable().await?;

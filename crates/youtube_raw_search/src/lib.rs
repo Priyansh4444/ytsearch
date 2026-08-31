@@ -9,7 +9,10 @@ mod publisher;
 mod reloadable;
 mod remote_publication;
 
-pub use engine::{BuildReport, RawSearchEngine, SliceReport, build_index, slice_corpus};
+pub use engine::{
+    BroadMeasureFields, BroadMeasurePosition, BroadMeasureReport, BroadQueryMeasure, BuildReport,
+    RawSearchEngine, SliceReport, build_index, slice_corpus,
+};
 pub use mutable::{
     MutationSnapshot, MutationSnapshotExport, MutationStore, StoredChannelMutation,
     StoredVideoMutation, VideoMutationSummary,

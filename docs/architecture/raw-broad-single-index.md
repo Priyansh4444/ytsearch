@@ -125,6 +125,17 @@ Rejected shapes:
 ## Measurement gate
 
 Do not publish schema 8 until a sizing command runs on the production snapshot.
+The first schema-7 probe is available as:
+
+```console
+youtube-raw-search measure-broad-single /data/mutable/generations/<id> react fire
+```
+
+It executes the canonical reducer sequentially for all six profiles and reports
+posting visits, exact result totals, retained depths, estimated encoding bytes,
+elapsed time, and before/after RSS. It intentionally accepts explicit tokens;
+the threshold sweep and throwaway artifact below remain the next gate.
+
 It must measure thresholds `{25k, 50k, 100k, 250k}` and retained depths
 `{5, 20, 250}`, including:
 

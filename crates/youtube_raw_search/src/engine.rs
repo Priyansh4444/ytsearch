@@ -188,6 +188,7 @@ enum ManifestValidation {
 }
 
 mod bigram;
+mod broad_measure;
 mod builder;
 mod conjunction;
 mod query_support;
@@ -196,6 +197,9 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
+pub use broad_measure::{
+    BroadMeasureFields, BroadMeasurePosition, BroadMeasureReport, BroadQueryMeasure,
+};
 #[cfg(test)]
 use builder::BuildPosting;
 pub(crate) use builder::build_index_from_lines_and_open;
