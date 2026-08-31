@@ -186,11 +186,12 @@ traffic proves that additional materialization is necessary.
 ## Next implementation step
 
 The checked binary format, schema-aware publication contract, six-profile
-reader, and lexicon-token builder path are implemented. The next unit must
-enumerate accepted query prefixes that are not themselves lexicon entries,
-deduplicate identical plan fingerprints through a bounded spool, and add
-byte-for-byte differential tests. Schema 8 must not be deployed until that work
-and the production build/RSS/disk gate pass.
+reader, and prefix-plan builder path are implemented. A post-order trie pass
+retains only the four frequency winners required by the query contract for each
+subtree, so non-terminal prefixes such as `con` can be selected without a
+global prefix set. A focused differential test proves the materialized response
+equals the canonical posting reducer. Schema 8 must not be deployed until the
+production build/RSS/disk gate and broader differential matrix pass.
 
 The current writer encodes and drops one plan at a time into a cold payload
 spool, retaining only its small ordered directory in memory. Final composition

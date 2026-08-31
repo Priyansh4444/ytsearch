@@ -237,6 +237,76 @@ fn grouped_query(query: &str) -> SearchParams {
 }
 
 #[test]
+fn materialized_broad_plan_matches_the_posting_reducer_response() {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    for video in 0..6 {
+        writeln!(
+            chunks,
+            "{}",
+            json!({
+                "id": format!("video-{video}-1"),
+                "video_id": format!("video-{video}"),
+                "title": if video == 0 { "React internals" } else { "Runtime internals" },
+                "text": format!("react rendering example {video}"),
+                "youtuber_handle": format!("@creator{video}"),
+                "youtuber_name": format!("Creator {video}"),
+                "t_start_ms": video * 30_000,
+            })
+        )
+        .expect("chunk");
+    }
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build index");
+    let engine = RawSearchEngine::open(&index_path).expect("open baseline");
+    let params = grouped_query("react");
+    let expected = engine.search(&params).expect("baseline response");
+
+    let fields = query_fields(Some("text,title"), true).unwrap();
+    let (plans, _) = engine
+        .conjunction_plans(&["react".to_string()], fields, true, 0)
+        .unwrap();
+    let plan = &plans[0];
+    let dominant_exact_mask = plan.alternatives.iter().fold(0_u8, |mask, alternative| {
+        mask | alternative.fields.exact_mask
+    });
+    let mut groups = engine.empty_group_slots();
+    engine
+        .visit_term_plan(plan, |candidate, record| {
+            engine.record_group_match_values(
+                &mut groups,
+                candidate,
+                record.video,
+                record.t_start_ms,
+                usize::from(MAX_PAGE_SIZE),
+                Some(dominant_exact_mask),
+            )
+        })
+        .unwrap();
+    broad_single::write_index(
+        &index_path.join(broad_single::BROAD_SINGLE_FILE),
+        &[broad_single::BroadBuildPlan {
+            token: "react".to_string(),
+            profile: broad_single::BroadProfile::CombinedPosition,
+            groups,
+        }],
+    )
+    .unwrap();
+    drop(engine);
+    let manifest_path = index_path.join(MANIFEST_FILE);
+    let mut manifest: Manifest =
+        serde_json::from_reader(File::open(&manifest_path).unwrap()).unwrap();
+    manifest.files = build_manifest_files(&index_path, 8).unwrap();
+    serde_json::to_writer_pretty(File::create(&manifest_path).unwrap(), &manifest).unwrap();
+
+    let accelerated = RawSearchEngine::open(&index_path).expect("open accelerated index");
+    assert_eq!(accelerated.search(&params).unwrap(), expected);
+}
+
+#[test]
 fn raw_index_groups_chunks_and_highlights_matches() {
     let (_root, engine) = test_engine();
     let response = engine

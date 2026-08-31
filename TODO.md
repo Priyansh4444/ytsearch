@@ -573,8 +573,9 @@ Raw can replace Typesense as the canonical search index.
     documents per video.
   - [x] Spool one encoded plan at a time and compose the final immutable file
     without retaining every plan's groups or payload in builder RAM.
-  - [ ] Enumerate and deduplicate accepted non-lexicon prefix plan keys without
-    an unbounded in-memory prefix set; then prove differential response equality.
+  - [x] Enumerate accepted non-lexicon prefix keys with one post-order trie pass
+    and four frequency winners per subtree, without an unbounded prefix set;
+    prove a materialized plan is JSON-equal to the canonical posting reducer.
   - [ ] Measure production build duration, scratch/disk bytes, plan count,
     artifact bytes, and peak RSS before accepting the schema-8 generation.
 - [x] Refresh an expired Fly API bearer once during a leased Machine session so

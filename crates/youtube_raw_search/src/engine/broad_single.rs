@@ -215,9 +215,17 @@ impl BroadSingleIndex {
 
 pub(super) fn build_index(engine: &RawSearchEngine, path: &Path) -> Result<usize> {
     let mut writer = BroadIndexWriter::create(path)?;
-    for index in 0..engine.inner.lexicon.count {
-        let (token, _) = engine.inner.lexicon.entry_at(index)?;
-        let token = token.to_string();
+    let average_documents_per_video = engine
+        .inner
+        .manifest
+        .documents
+        .checked_div(engine.inner.manifest.videos)
+        .unwrap_or(0);
+    let tokens = engine
+        .inner
+        .fuzzy
+        .broad_prefixes(MIN_MATERIALIZED_DOCUMENTS, average_documents_per_video)?;
+    for token in tokens {
         for profile in BroadProfile::ALL {
             let fields = profile.fields()?;
             let terms = [token.clone()];
