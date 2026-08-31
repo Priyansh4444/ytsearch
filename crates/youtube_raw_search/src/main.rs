@@ -5,6 +5,8 @@ use youtube_raw_search::{
 };
 use youtube_search_service::{SearchBackend, ServerConfig};
 
+const USAGE: &str = "usage: youtube-raw-search build <chunks.jsonl> <channels.jsonl> <index-dir> | serve [index-dir] | serve-mutable | slice <input.jsonl> <output.jsonl> <max-videos>";
+
 #[tokio::main]
 async fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -26,6 +28,7 @@ async fn main() -> ExitCode {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
+        Some("--help" | "-h") => println!("{USAGE}"),
         Some("build") => {
             let chunks = required_path(args.next(), "chunks JSONL path")?;
             let channels = required_path(args.next(), "channels JSONL path")?;
@@ -68,7 +71,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         _ => {
-            return Err("usage: youtube-raw-search build <chunks.jsonl> <channels.jsonl> <index-dir> | serve [index-dir] | serve-mutable | slice <input.jsonl> <output.jsonl> <max-videos>".into());
+            return Err(USAGE.into());
         }
     }
     Ok(())
