@@ -1627,6 +1627,55 @@ fn streaming_group_accumulation_matches_materialized_response() {
 }
 
 #[test]
+fn streaming_single_plan_group_accumulation_matches_materialized_response() {
+    let (_root, engine) = token_drop_engine();
+    let terms = vec!["rel".to_string()];
+    let fields = query_fields(None, true).expect("query fields");
+    let (plans, highlights) = engine
+        .conjunction_plans(&terms, fields, true, 0)
+        .expect("single-token plan");
+    let [plan] = plans.as_slice() else {
+        panic!("single token must produce one plan");
+    };
+    let params = grouped_query("rel");
+
+    let materialized = engine
+        .matches_for_plan(plan, None, &mut BlockCache::default())
+        .expect("materialized plan");
+    let expected = engine
+        .format_matches(
+            &params,
+            &highlights,
+            materialized,
+            &mut BlockCache::default(),
+        )
+        .expect("materialized response");
+
+    let hits_per_group = usize::from(params.group_limit.expect("group limit"));
+    let dominant_exact_mask = plan.alternatives.iter().fold(0_u8, |mask, alternative| {
+        mask | alternative.fields.exact_mask
+    });
+    let mut groups = engine.empty_group_slots();
+    engine
+        .visit_term_plan(plan, |candidate, record| {
+            engine.record_group_match_values(
+                &mut groups,
+                candidate,
+                record.video,
+                record.t_start_ms,
+                hits_per_group,
+                Some(dominant_exact_mask),
+            )
+        })
+        .expect("streamed plan");
+    let actual = engine
+        .format_group_slots(&params, &highlights, groups, &mut BlockCache::default())
+        .expect("streamed response");
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn document_local_proximity_matches_postings_at_the_direct_path_boundary() {
     let root = TempDir::new().expect("temp dir");
     let chunks_path = root.path().join("chunks.jsonl");

@@ -7,7 +7,7 @@ const ALWAYS_DOCUMENT_VALIDATE_TARGETS: usize = 128;
 // terms after rare terms have already narrowed the candidate set.
 const MAX_ADAPTIVE_DOCUMENT_VALIDATE_TARGETS: usize = 512;
 const MIN_POSTING_TO_TARGET_RATIO: u64 = 512;
-const STREAMING_CONJUNCTION_MIN_DOCUMENTS: u64 = 100_000;
+pub(super) const STREAMING_CONJUNCTION_MIN_DOCUMENTS: u64 = 100_000;
 const _: () = assert!(MAX_FUZZY_TERMS_PER_DISTANCE * 2 < u64::BITS as usize);
 
 pub(super) fn is_broad_two_plan(plans: &[TermPlan]) -> bool {
@@ -215,6 +215,20 @@ impl RawSearchEngine {
         Ok(matches)
     }
 
+    pub(super) fn visit_term_plan<F>(&self, plan: &TermPlan, mut visit: F) -> Result<()>
+    where
+        F: FnMut(DocMatch, SearchDocumentRecord) -> Result<()>,
+    {
+        let mut stream = StreamingTermPlan::new(self, plan)?;
+        stream.advance_to(0)?;
+        while let Some(document) = stream.current_document() {
+            let record = self.inner.metadata.search_document(document)?;
+            let candidate = stream.take_current(record.tokens)?;
+            visit(candidate, record)?;
+        }
+        stream.finish()
+    }
+
     pub(super) fn visit_two_plan_conjunction<F>(
         &self,
         plans: &[TermPlan],
@@ -284,7 +298,7 @@ impl RawSearchEngine {
         Ok(())
     }
 
-    fn matches_for_plan(
+    pub(super) fn matches_for_plan(
         &self,
         plan: &TermPlan,
         targets: Option<&[DocMatch]>,

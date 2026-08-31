@@ -537,8 +537,17 @@ Raw can replace Typesense as the canonical search index.
   peaks versus sampled-current fallbacks honestly, fail when v1 swap accounting
   is unavailable, and gate the measured inter-sample gaps instead of claiming a
   cadence from the configured sleep alone.
-- [x] Exercise staged Raw credentials on the isolated canary through exact
-  Machine secret-file mappings; keep the production reader on its deployed
-  environment until the canary gate succeeds.
+- [x] Exercise deployed Raw credentials on the isolated canary through exact
+  Machine secret-file mappings while keeping the production reader on ordinary
+  environment injection.
+- [x] Correct Fly Machine file-secret handling: `secret_name` materializes
+  base64-decoded bytes, so the Raw entrypoint re-encodes them to preserve the
+  same credential used by normal environment injection. Document that staged
+  secrets must be activated before file mappings can exercise them.
+- [x] Fix the 2 GB broad-query OOM regression: stream grouped single-token
+  exact/prefix postings into per-video slots, serialize uncancellable blocking
+  backend work, and add materialized-vs-streamed and concurrency regressions.
+- [ ] Prove `react`, `fire`, and the full search matrix stay below 200 ms on the
+  exact 2 GB canary without OOM, swap growth, or response-contract drift.
 - [x] Refresh an expired Fly API bearer once during a leased Machine session so
   a multi-minute integrity check cannot strand a started canary during cleanup.

@@ -23,7 +23,12 @@ use tokio::sync::Semaphore;
 const TRANSCRIPT_COLLECTION: &str = "youtube_transcript_chunks";
 const CHANNEL_COLLECTION: &str = "youtube_youtubers";
 const MAX_CACHE_TTL_SECONDS: u64 = 300;
-const MAX_CONCURRENT_BACKEND_SEARCHES: usize = 4;
+// A Raw search can fault and score a large posting list. Letting timed-out
+// clients leave four uncancellable spawn_blocking searches behind exceeded a
+// 2 GiB Machine before any individual request reached its own memory limit.
+// Serialize backend work; queued HTTP futures remain cancellable while the
+// active synchronous search owns the sole permit.
+const MAX_CONCURRENT_BACKEND_SEARCHES: usize = 1;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -394,7 +399,11 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{thread, time::Duration};
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering as AtomicOrdering},
+        thread,
+        time::Duration,
+    };
 
     struct SlowBackend;
 
@@ -405,6 +414,37 @@ mod tests {
 
         fn search(&self, _params: &SearchParams) -> Result<Value, BackendError> {
             thread::sleep(Duration::from_millis(200));
+            Ok(json!({ "found": 1 }))
+        }
+
+        fn search_channels(&self, params: &SearchParams) -> Result<Value, BackendError> {
+            self.search(params)
+        }
+
+        fn documents(&self) -> u64 {
+            1
+        }
+
+        fn index_bytes(&self) -> u64 {
+            1
+        }
+    }
+
+    struct ConcurrencyBackend {
+        active: AtomicUsize,
+        maximum: AtomicUsize,
+    }
+
+    impl SearchBackend for ConcurrencyBackend {
+        fn name(&self) -> &'static str {
+            "concurrency-test"
+        }
+
+        fn search(&self, _params: &SearchParams) -> Result<Value, BackendError> {
+            let active = self.active.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+            self.maximum.fetch_max(active, AtomicOrdering::SeqCst);
+            thread::sleep(Duration::from_millis(50));
+            self.active.fetch_sub(1, AtomicOrdering::SeqCst);
             Ok(json!({ "found": 1 }))
         }
 
@@ -496,5 +536,30 @@ mod tests {
             "health handler was starved by synchronous search work"
         );
         assert!(search_task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn backend_searches_are_serialized_to_bound_memory() {
+        let backend = Arc::new(ConcurrencyBackend {
+            active: AtomicUsize::new(0),
+            maximum: AtomicUsize::new(0),
+        });
+        let state = test_state(backend.clone());
+        let request = || {
+            search(
+                State(state.clone()),
+                Path(TRANSCRIPT_COLLECTION.to_string()),
+                Query(SearchParams {
+                    q: "fire".to_string(),
+                    ..SearchParams::default()
+                }),
+                HeaderMap::new(),
+            )
+        };
+        let (left, right) = tokio::join!(request(), request());
+
+        assert!(left.is_ok());
+        assert!(right.is_ok());
+        assert_eq!(backend.maximum.load(AtomicOrdering::SeqCst), 1);
     }
 }

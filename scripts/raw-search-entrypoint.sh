@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-load_secret_file() {
+load_fly_secret_file() {
   variable="$1"
   path="$2"
   if [ ! -f "$path" ]; then
@@ -9,15 +9,14 @@ load_secret_file() {
     echo "raw-search-entrypoint: required secret file is missing: $path" >&2
     exit 1
   fi
-  value="$(cat "$path")"
-  [ -n "$value" ] || {
+  [ -s "$path" ] || {
     echo "raw-search-entrypoint: $path is empty" >&2
     exit 1
   }
-  [ "$(printf '%s' "$value" | tr -d '\r\n')" = "$value" ] || {
-    echo "raw-search-entrypoint: $path must contain one line" >&2
-    exit 1
-  }
+  # Fly decodes an app secret as base64 before materializing a Machine
+  # config.files secret. Re-encode those bytes so file-backed and ordinary
+  # environment injection expose the same application credential.
+  value="$(base64 < "$path" | tr -d '\r\n')"
   export "$variable=$value"
 }
 
@@ -30,12 +29,11 @@ case "$require_file_secrets" in
     ;;
 esac
 
-# Canary Machines receive staged app secrets as Machine-scoped files. This
-# validates a rotation without promoting it into the sole production reader.
+# Canary Machines receive deployed app secrets as Machine-scoped files.
 # Production continues to use environment secrets when these files are absent.
-load_secret_file RAW_SEARCH_API_KEY \
+load_fly_secret_file RAW_SEARCH_API_KEY \
   "${RAW_SEARCH_API_KEY_FILE:-/run/secrets/raw-search-api-key}"
-load_secret_file RAW_SEARCH_ADMIN_API_KEY \
+load_fly_secret_file RAW_SEARCH_ADMIN_API_KEY \
   "${RAW_SEARCH_ADMIN_API_KEY_FILE:-/run/secrets/raw-search-admin-api-key}"
 
 chown rawsearch:rawsearch /data/mutable

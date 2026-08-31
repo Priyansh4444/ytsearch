@@ -579,6 +579,13 @@ impl RawSearchEngine {
         let terms = parsed.terms;
 
         if terms.len() == 1 {
+            if filter.is_none()
+                && excluded_documents.is_empty()
+                && let Some(response) =
+                    self.try_stream_broad_single_grouped(params, &terms[0], fields)?
+            {
+                return Ok(response);
+            }
             return self.search_single_token(params, &terms[0], fields, &excluded_documents);
         }
 
@@ -1430,6 +1437,48 @@ impl RawSearchEngine {
             return Ok(None);
         }
         self.format_group_slots(params, &highlights, groups, cache)
+            .map(Some)
+    }
+
+    fn try_stream_broad_single_grouped(
+        &self,
+        params: &SearchParams,
+        term: &str,
+        fields: QueryFields,
+    ) -> Result<Option<Value>> {
+        if params.group_by.as_deref() != Some("video_id") {
+            return Ok(None);
+        }
+        let terms = [term.to_string()];
+        let (plans, highlights) = self.conjunction_plans(&terms, fields, true, 0)?;
+        let [plan] = plans.as_slice() else {
+            return Ok(None);
+        };
+        if plan.estimated_documents < conjunction::STREAMING_CONJUNCTION_MIN_DOCUMENTS {
+            return Ok(None);
+        }
+
+        let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
+        let dominant_exact_mask = plan.alternatives.iter().fold(0_u8, |mask, alternative| {
+            mask | alternative.fields.exact_mask
+        });
+        let mut groups = self.empty_group_slots();
+        self.visit_term_plan(plan, |candidate, record| {
+            self.record_group_match_values(
+                &mut groups,
+                candidate,
+                record.video,
+                record.t_start_ms,
+                hits_per_group,
+                Some(dominant_exact_mask),
+            )
+        })?;
+        if groups.iter().flatten().count() < TYPO_RESULT_THRESHOLD {
+            return Ok(None);
+        }
+
+        let mut cache = BlockCache::default();
+        self.format_group_slots(params, &highlights, groups, &mut cache)
             .map(Some)
     }
 

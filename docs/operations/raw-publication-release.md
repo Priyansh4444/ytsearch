@@ -92,13 +92,21 @@ Machine config; stale queue environment variables, embedded scripts, file
 mappings, services, and checks are not carried into the publication role. The
 volume and Machine identity are preserved.
 
-The reader canary maps the staged `RAW_SEARCH_API_KEY` and
-`RAW_SEARCH_ADMIN_API_KEY` secrets into `/run/secrets`. Its image entrypoint
-loads those files before dropping privileges. This is intentionally scoped to
-the isolated Machine: a staged credential can be exercised without promoting
-it into the sole production reader's environment. The canary requires both
-files and stops startup when either is missing, empty, or multiline. Production
-preserves its deployed environment because its require-files flag remains off.
+The reader canary maps the deployed `RAW_SEARCH_API_KEY` and
+`RAW_SEARCH_ADMIN_API_KEY` secrets into `/run/secrets`. Fly base64-decodes a
+secret when materializing a Machine `config.files` entry, so the image
+entrypoint re-encodes those bytes before exporting the application credential.
+This keeps file-backed injection identical to Fly's ordinary environment
+injection. The canary requires both non-empty files and stops startup when
+either is absent. Production preserves environment injection because its
+require-files flag remains off.
+
+`flyctl secrets import --stage` does not make a staged secret available through
+`config.files.secret_name`. Activate a coordinated reader/API credential
+rotation with `flyctl secrets deploy` before staging this canary. Verify the
+credential only through a one-way digest of the `youtube-raw-search` process
+environment; `fly ssh console ... env` describes the SSH process and is not
+proof of what the server received.
 
 ## Run the complete gate
 
@@ -106,6 +114,22 @@ The gate permits up to 300 one-second health probes for a cold reader start.
 This is an integrity-check allowance, not a search-latency allowance: the
 2 GB canary took 193 seconds to fully checksum and open active generation 2145
 on August 31, 2026. Search cases still fail closed above 200 ms.
+
+### Broad-query memory gate
+
+On August 31, 2026, repeated global warmups drove four uncancellable blocking
+searches to about 1.90 GB anonymous RSS and the 2 GB reader was OOM-killed.
+Single-token exact and prefix candidates were each materialized as complete
+posting vectors before grouping. A client timeout did not cancel that
+synchronous backend work.
+
+Grouped, unfiltered broad single-token queries now merge their exact and prefix
+posting cursors directly into bounded per-video slots. The response still
+computes exact `found`, `total_moments`, ranking, pagination, and highlights,
+without retaining one match per corpus hit. The HTTP service also permits one
+backend search at a time; requests waiting for that permit remain cancellable.
+The canary gate must include broad global terms such as `react` and `fire`,
+verify every request remains below 200 ms, and show no OOM increase.
 
 ```bash
 SEARCH_API_KEY="$RAW_CANARY_SEARCH_API_KEY" \

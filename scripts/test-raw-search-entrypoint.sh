@@ -18,16 +18,18 @@ printf 'api=%s\nadmin=%s\ncommand=%s\n' \
 EOF
 chmod +x "$temporary_directory/bin/chown" "$temporary_directory/bin/gosu"
 
-printf 'staged-search' > "$temporary_directory/search"
-printf 'staged-admin' > "$temporary_directory/admin"
+staged_search='0123456789abcdef0123456789abcdef0123456789abcdef'
+staged_admin='fedcba9876543210fedcba9876543210fedcba9876543210'
+printf '%s' "$staged_search" | base64 -d > "$temporary_directory/search"
+printf '%s' "$staged_admin" | base64 -d > "$temporary_directory/admin"
 PATH="$temporary_directory/bin:$PATH" \
 RAW_SEARCH_API_KEY=deployed-search \
 RAW_SEARCH_ADMIN_API_KEY=deployed-admin \
 RAW_SEARCH_API_KEY_FILE="$temporary_directory/search" \
 RAW_SEARCH_ADMIN_API_KEY_FILE="$temporary_directory/admin" \
   "$SCRIPT_DIR/raw-search-entrypoint.sh" > "$temporary_directory/with-files"
-grep -Fx 'api=staged-search' "$temporary_directory/with-files" >/dev/null
-grep -Fx 'admin=staged-admin' "$temporary_directory/with-files" >/dev/null
+grep -Fx "api=$staged_search" "$temporary_directory/with-files" >/dev/null
+grep -Fx "admin=$staged_admin" "$temporary_directory/with-files" >/dev/null
 grep -Fx 'command=youtube-raw-search serve-mutable' "$temporary_directory/with-files" >/dev/null
 
 PATH="$temporary_directory/bin:$PATH" \
@@ -45,24 +47,6 @@ if PATH="$temporary_directory/bin:$PATH" \
   RAW_SEARCH_ADMIN_API_KEY_FILE="$temporary_directory/missing-admin" \
   "$SCRIPT_DIR/raw-search-entrypoint.sh" >/dev/null 2>&1; then
   printf 'required secret files must fail closed when missing\n' >&2
-  exit 1
-fi
-
-printf 'bad\nvalue\n' > "$temporary_directory/multiline"
-if PATH="$temporary_directory/bin:$PATH" \
-  RAW_SEARCH_API_KEY_FILE="$temporary_directory/multiline" \
-  RAW_SEARCH_ADMIN_API_KEY_FILE="$temporary_directory/missing-admin" \
-  "$SCRIPT_DIR/raw-search-entrypoint.sh" >/dev/null 2>&1; then
-  printf 'multiline secret files must fail closed\n' >&2
-  exit 1
-fi
-
-printf 'bad\rvalue' > "$temporary_directory/carriage-return"
-if PATH="$temporary_directory/bin:$PATH" \
-  RAW_SEARCH_API_KEY_FILE="$temporary_directory/carriage-return" \
-  RAW_SEARCH_ADMIN_API_KEY_FILE="$temporary_directory/missing-admin" \
-  "$SCRIPT_DIR/raw-search-entrypoint.sh" >/dev/null 2>&1; then
-  printf 'secret files containing carriage returns must fail closed\n' >&2
   exit 1
 fi
 
