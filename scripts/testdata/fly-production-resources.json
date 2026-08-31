@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "environment": "production",
+  "resources": {
+    "raw_reader": {
+      "app": "ytsearch-raw-production",
+      "machine_id": "10101010101010",
+      "volume_id": "vol_1010101010101010",
+      "mount_path": "/data/mutable"
+    },
+    "raw_reader_canary": {
+      "app": "ytsearch-raw-production",
+      "machine_id": "22222222222222",
+      "volume_id": "vol_1111111111111111",
+      "mount_path": "/data/mutable"
+    },
+    "raw_queue_worker": {
+      "app": "ytsearch-indexer-raw-production",
+      "machine_id": "12121212121212",
+      "volume_id": "vol_1212121212121212",
+      "mount_path": "/var/lib/ytsearch"
+    },
+    "raw_publication_builder": {
+      "app": "ytsearch-indexer-raw-production",
+      "machine_id": "33333333333333",
+      "volume_id": "vol_2222222222222222",
+      "mount_path": "/var/lib/ytsearch"
+    }
+  },
+  "retirement_sets": {
+    "typesense": {
+      "reason": "raw-search-cutover",
+      "machines": [
+        {
+          "app": "old-engine",
+          "machine_id": "44444444444444",
+          "volume_id": "vol_4444444444444444",
+          "successor_app": "ytsearch-raw-production"
+        },
+        {
+          "app": "old-engine",
+          "machine_id": "55555555555555",
+          "volume_id": "vol_5555555555555555",
+          "successor_app": "ytsearch-raw-production"
+        },
+        {
+          "app": "old-api",
+          "machine_id": "66666666666666",
+          "volume_id": "vol_6666666666666666",
+          "successor_app": "new-api"
+        },
+        {
+          "app": "old-indexer",
+          "machine_id": "77777777777777",
+          "volume_id": "vol_7777777777777777",
+          "successor_app": "ytsearch-indexer-raw-production"
+        }
+      ],
+      "unattached_volumes": [
+        { "app": "old-indexer", "volume_id": "vol_8888888888888888" },
+        { "app": "old-indexer", "volume_id": "vol_9999999999999999" },
+        { "app": "old-indexer", "volume_id": "vol_abc123def456gh78" }
+      ]
+    }
+  }
+}

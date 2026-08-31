@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "corpus": "raw-full-snapshot-2026-08-23",
+  "cases": {
+    "react_global": {
+      "top_video_id": "eYx_43BkRPE",
+      "top_handle": "@t3dotgg",
+      "required_highlight_tokens": ["react"]
+    },
+    "fire_global": {
+      "top_video_id": "0kCn2f6ngAs",
+      "top_handle": "@t3dotgg",
+      "required_highlight_tokens": ["fire"]
+    },
+    "one_fire_global": {
+      "top_video_id": "tcQVrD7RnNI",
+      "top_handle": "@smartereveryday",
+      "required_highlight_tokens": ["one", "fire"]
+    },
+    "coding_is_dead_global": {
+      "top_video_id": "eTY2Lwnd2fI",
+      "top_handle": "@neetcode",
+      "required_highlight_tokens": ["coding", "dead"]
+    },
+    "css_phrase_global": {
+      "top_video_id": "7_jpgSfOI58",
+      "top_handle": "@t3dotgg",
+      "required_highlight_tokens": ["css", "dead"]
+    },
+    "css_phrase_t3": {
+      "top_video_id": "7_jpgSfOI58",
+      "top_handle": "@t3dotgg",
+      "required_highlight_tokens": ["css", "dead"]
+    },
+    "blackhole_global": {
+      "top_video_id": "zfOYEMnpqdM",
+      "top_handle": "@dwarkeshpatel",
+      "required_highlight_tokens": ["black", "hole"]
+    },
+    "blackhole_veritasium": {
+      "top_video_id": "ORxKf1FN3ro",
+      "top_handle": "@veritasium",
+      "required_highlight_tokens": ["black", "hole"]
+    },
+    "blackhole_vsauce": {
+      "top_video_id": "3pAnRKD4raY",
+      "top_handle": "@vsauce",
+      "required_highlight_tokens": ["black", "hole"]
+    },
+    "create_effect_global": {
+      "top_video_id": "eZAcJc_eR1M",
+      "top_handle": "@ryansolid",
+      "required_highlight_tokens": ["create", "effect"]
+    },
+    "convex_global": {
+      "top_video_id": "hW2IiPFFd_0",
+      "top_handle": "@convex-dev",
+      "required_highlight_tokens": ["convex"]
+    }
+  }
+}

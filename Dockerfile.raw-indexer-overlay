@@ -15,6 +15,9 @@ ARG BASE_IMAGE
 ARG SOURCE_COMMIT
 LABEL org.opencontainers.image.revision=${SOURCE_COMMIT} \
       io.ytsearch.base-image=${BASE_IMAGE}
+RUN install -d -m 0755 /usr/local/share/ytsearch-release \
+    && printf '%s\n' "$SOURCE_COMMIT" > /usr/local/share/ytsearch-release/source-commit \
+    && printf '%s\n' "$BASE_IMAGE" > /usr/local/share/ytsearch-release/base-image
 
 USER root
 RUN apt-get update \

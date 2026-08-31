@@ -1,0 +1,312 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+source_commit="$(printf '%040d' 1)"
+base_digest="sha256:$(printf '%064d' 2)"
+builder_id=33333333333333
+target_id=22222222222222
+target_ip='fdaa::2'
+target_url="http://[$target_ip]:8108"
+source_prefix="$(printf '%.12s' "$source_commit")"
+digest_value="${base_digest#sha256:}"
+digest_prefix="$(printf '%.12s' "$digest_value")"
+builder_image="registry.fly.io/ytsearch-indexer-raw-production:raw-indexer-${source_prefix}-${digest_prefix}"
+builder_resolved_image="$builder_image@sha256:$(jq -nr '"6" * 64')"
+export RAW_BUILDER_EXPECTED_IMAGE="$builder_resolved_image"
+export FAKE_PROVENANCE_SOURCE="$source_commit"
+export FAKE_PROVENANCE_BASE="registry.fly.io/ytsearch-raw-production:base@$base_digest"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+mkdir -p "$tmp/bin"
+export FLY_PRODUCTION_INVENTORY_PATH="$SCRIPT_DIR/testdata/fly-production-resources.json"
+export RAW_RELEASE_RECOVERY_ROOT="$tmp/recovery"
+
+cat > "$tmp/bin/flyctl" <<'SH'
+#!/usr/bin/env sh
+set -eu
+printf '%s\n' "$*" >> "$FAKE_FLY_LOG"
+case "$1 $2" in
+  "auth token") printf 'fake-token\n' ;;
+  "machine list")
+    case " $* " in
+      *" --app ytsearch-raw-production "*) cat "$FAKE_TARGET_STATE" ;;
+      *) cat "$FAKE_FLY_STATE" ;;
+    esac
+    ;;
+  "machine wait")
+    case " $* " in
+      *" --state started "*) test "$(jq -r '.[0].state' "$FAKE_FLY_STATE")" = started ;;
+      *" --state stopped "*) test "$(jq -r '.[0].state' "$FAKE_FLY_STATE")" = stopped ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  "ssh console")
+    case " $* " in
+      *" --command true "*) ;;
+      *"/usr/local/share/ytsearch-release/source-commit"*)
+        printf '%s\n%s\n' "$FAKE_PROVENANCE_SOURCE" "$FAKE_PROVENANCE_BASE"
+        ;;
+      *" --command ytsearch init-backend --backend raw "*) ;;
+      *" --command ytsearch publish --backend raw "*)
+        if [ "${FAKE_HANG_PUBLISH:-0}" = 1 ]; then
+          sleep 30
+        fi
+        test "${FAKE_PUBLISH_FAILURE:-0}" != 1
+        ;;
+      *) echo "unexpected ssh command: $*" >&2; exit 1 ;;
+    esac
+    ;;
+  *) echo "unexpected flyctl command: $*" >&2; exit 1 ;;
+esac
+SH
+chmod +x "$tmp/bin/flyctl"
+
+cat > "$tmp/bin/curl" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+method=GET
+output=""
+url=""
+while (($#)); do
+  case "$1" in
+    --request) method="$2"; shift 2 ;;
+    --output) output="$2"; shift 2 ;;
+    http://*|https://*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+printf '%s %s\n' "$method" "$url" >> "$FAKE_CURL_LOG"
+case "$method:$url" in
+  POST:*/lease)
+    printf '{"data":{"nonce":"fake-nonce","expires_at":4102444800}}\n' > "$output"
+    printf '201'
+    ;;
+  GET:*/machines/33333333333333)
+    if [ "${FAKE_BUILDER_DIGEST_DRIFT:-0}" = 1 ]; then
+      jq '.[0] | .image_ref.digest = ("sha256:" + ("9" * 64))' \
+        "$FAKE_FLY_STATE" > "$output"
+    else
+      jq '.[0]' "$FAKE_FLY_STATE" > "$output"
+    fi
+    printf '200'
+    ;;
+  POST:*/machines/33333333333333/start)
+    jq '.[0].state = "started"' "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
+    mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
+    : > "$output"
+    printf '200'
+    ;;
+  POST:*/machines/33333333333333/stop)
+    if [ "${FAKE_STOP_FAILURE:-0}" = 1 ]; then
+      printf '503'
+      exit 0
+    fi
+    jq '.[0].state = "stopped"' "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
+    mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
+    printf '200'
+    ;;
+  DELETE:*/machines/33333333333333/lease) printf '204' ;;
+  *) echo "unexpected curl request: $method $url" >&2; exit 1 ;;
+esac
+SH
+chmod +x "$tmp/bin/curl"
+
+cat > "$tmp/bin/resource-probe" <<'SH'
+#!/usr/bin/env sh
+set -eu
+test "$(jq -r '.[0].state' "$FAKE_FLY_STATE")" = started
+printf '{"state":"started","memory_peak_bytes":1024,"swap_peak_bytes":0,"disk_percent":1,"oom":0,"oom_kill":0}\n'
+SH
+chmod +x "$tmp/bin/resource-probe"
+
+write_machine() {
+  role="$1"
+  jq -n --arg role "$role" --arg source "$source_commit" \
+    --arg base "$base_digest" --arg target "$target_url" \
+    --arg target_id "$target_id" --arg image "$builder_image" '[{
+    id:"33333333333333",
+    instance_id:"builder-version-1",
+    state:"stopped",
+    image_ref:{digest:("sha256:" + ("6" * 64))},
+    config:{
+      env:{
+        YTSEARCH_MACHINE_ROLE:$role,
+        RAW_SEARCH_API_URL:$target,
+        RAW_PUBLICATION_WORK_DIRECTORY:"/var/lib/ytsearch/raw-generation-work",
+        RAW_PUBLICATION_MIN_FREE_BYTES:"8000000000"
+      },
+      image:$image,
+      init:{entrypoint:["/usr/bin/sleep"],cmd:["infinity"],swap_size_mb:512},
+      guest:{cpu_kind:"shared",cpus:2,memory_mb:2048},
+      metadata:{
+        lifecycle:"on-demand-publication-builder",
+        source_commit:$source,
+        base_image_digest:$base,
+        target_machine:$target_id
+      },
+      mounts:[{volume:"vol_2222222222222222",path:"/var/lib/ytsearch"}],
+      restart:{policy:"no"},
+      dns:{skip_registration:true},
+      services:[],
+      checks:{},
+      files:[]
+    }
+  }]'
+}
+
+jq -n --arg id "$target_id" --arg ip "$target_ip" --arg source "$source_commit" '[{
+  id:$id,
+  state:"started",
+  private_ip:$ip,
+  config:{metadata:{source_commit:$source}}
+}]' > "$tmp/target-state.json"
+
+write_machine queue-indexer > "$tmp/state.json"
+: > "$tmp/fly.log"
+: > "$tmp/curl.log"
+if PATH="$tmp/bin:$PATH" FAKE_FLY_STATE="$tmp/state.json" FAKE_TARGET_STATE="$tmp/target-state.json" FAKE_FLY_LOG="$tmp/fly.log" \
+  FAKE_CURL_LOG="$tmp/curl.log" \
+  RAW_PUBLICATION_TARGET_URL="$target_url" \
+RAW_PUBLICATION_SOURCE_COMMIT="$source_commit" \
+RAW_PUBLICATION_BASE_IMAGE_DIGEST="$base_digest" \
+RAW_BUILDER_RESOURCE_PROBE="$tmp/bin/resource-probe" \
+RAW_BUILDER_FINAL_RESOURCE_OUTPUT="$tmp/rejected-final.json" \
+  "$SCRIPT_DIR/fly-publish-raw-generation.sh" publish --backend raw >/dev/null 2>&1; then
+  echo "publication wrapper must reject a queue worker" >&2
+  exit 1
+fi
+! grep -q '/start$' "$tmp/curl.log"
+
+write_machine publication-builder > "$tmp/state.json"
+: > "$tmp/fly.log"
+: > "$tmp/curl.log"
+PATH="$tmp/bin:$PATH" FAKE_FLY_STATE="$tmp/state.json" FAKE_TARGET_STATE="$tmp/target-state.json" FAKE_FLY_LOG="$tmp/fly.log" \
+FAKE_CURL_LOG="$tmp/curl.log" \
+RAW_PUBLICATION_TARGET_URL="$target_url" \
+RAW_PUBLICATION_SOURCE_COMMIT="$source_commit" \
+RAW_PUBLICATION_BASE_IMAGE_DIGEST="$base_digest" \
+RAW_BUILDER_RESOURCE_PROBE="$tmp/bin/resource-probe" \
+RAW_BUILDER_FINAL_RESOURCE_OUTPUT="$tmp/final.json" \
+"$SCRIPT_DIR/fly-publish-raw-generation.sh" publish --backend raw >/dev/null
+test "$(jq -r '.[0].state' "$tmp/state.json")" = stopped
+jq -e '.state == "started" and .memory_peak_bytes == 1024' "$tmp/final.json" >/dev/null
+grep -q "POST .*/machines/$builder_id/start$" "$tmp/curl.log"
+grep -q -- '--command ytsearch init-backend --backend raw' "$tmp/fly.log"
+grep -q -- '--command ytsearch publish --backend raw' "$tmp/fly.log"
+grep -q "POST .*/machines/$builder_id/stop$" "$tmp/curl.log"
+grep -q "DELETE .*/machines/$builder_id/lease$" "$tmp/curl.log"
+
+write_machine publication-builder > "$tmp/state.json"
+: > "$tmp/fly.log"
+: > "$tmp/curl.log"
+if PATH="$tmp/bin:$PATH" FAKE_FLY_STATE="$tmp/state.json" \
+  FAKE_TARGET_STATE="$tmp/target-state.json" FAKE_FLY_LOG="$tmp/fly.log" \
+  FAKE_CURL_LOG="$tmp/curl.log" FAKE_BUILDER_DIGEST_DRIFT=1 \
+  RAW_PUBLICATION_TARGET_URL="$target_url" \
+  RAW_PUBLICATION_SOURCE_COMMIT="$source_commit" \
+  RAW_PUBLICATION_BASE_IMAGE_DIGEST="$base_digest" \
+  RAW_BUILDER_RESOURCE_PROBE="$tmp/bin/resource-probe" \
+  RAW_BUILDER_FINAL_RESOURCE_OUTPUT="$tmp/digest-drift-final.json" \
+  "$SCRIPT_DIR/fly-publish-raw-generation.sh" publish --backend raw >/dev/null 2>&1; then
+  echo "builder digest drift after lease must fail" >&2
+  exit 1
+fi
+! grep -q "POST .*/machines/$builder_id/start$" "$tmp/curl.log"
+grep -q "DELETE .*/machines/$builder_id/lease$" "$tmp/curl.log"
+
+write_machine publication-builder > "$tmp/state.json"
+: > "$tmp/fly.log"
+: > "$tmp/curl.log"
+if PATH="$tmp/bin:$PATH" FAKE_FLY_STATE="$tmp/state.json" \
+  FAKE_TARGET_STATE="$tmp/target-state.json" FAKE_FLY_LOG="$tmp/fly.log" \
+  FAKE_CURL_LOG="$tmp/curl.log" FAKE_HANG_PUBLISH=1 \
+  RAW_PUBLICATION_TARGET_URL="$target_url" \
+  RAW_PUBLICATION_SOURCE_COMMIT="$source_commit" \
+  RAW_PUBLICATION_BASE_IMAGE_DIGEST="$base_digest" \
+  RAW_BUILDER_RESOURCE_PROBE="$tmp/bin/resource-probe" \
+  RAW_BUILDER_FINAL_RESOURCE_OUTPUT="$tmp/hung-final.json" \
+  RAW_BUILDER_PUBLICATION_COMMAND_TIMEOUT_SECONDS=1 \
+  RAW_BUILDER_COMMAND_KILL_AFTER_SECONDS=1 \
+  "$SCRIPT_DIR/fly-publish-raw-generation.sh" publish --backend raw >/dev/null 2>&1; then
+  echo "hung publication ssh must be killed and fail" >&2
+  exit 1
+fi
+test "$(jq -r '.[0].state' "$tmp/state.json")" = stopped
+
+write_machine publication-builder > "$tmp/state.json"
+: > "$tmp/fly.log"
+: > "$tmp/curl.log"
+if PATH="$tmp/bin:$PATH" FAKE_FLY_STATE="$tmp/state.json" \
+  FAKE_TARGET_STATE="$tmp/target-state.json" FAKE_FLY_LOG="$tmp/fly.log" \
+  FAKE_CURL_LOG="$tmp/curl.log" FAKE_PROVENANCE_SOURCE="$(printf '%040d' 9)" \
+  RAW_PUBLICATION_TARGET_URL="$target_url" \
+  RAW_PUBLICATION_SOURCE_COMMIT="$source_commit" \
+  RAW_PUBLICATION_BASE_IMAGE_DIGEST="$base_digest" \
+  RAW_BUILDER_RESOURCE_PROBE="$tmp/bin/resource-probe" \
+  RAW_BUILDER_FINAL_RESOURCE_OUTPUT="$tmp/provenance-final.json" \
+  "$SCRIPT_DIR/fly-publish-raw-generation.sh" publish --backend raw >/dev/null 2>&1; then
+  echo "mismatched builder provenance must fail" >&2
+  exit 1
+fi
+test "$(jq -r '.[0].state' "$tmp/state.json")" = stopped
+
+write_machine publication-builder > "$tmp/state.json"
+: > "$tmp/fly.log"
+: > "$tmp/curl.log"
+if PATH="$tmp/bin:$PATH" FAKE_FLY_STATE="$tmp/state.json" FAKE_TARGET_STATE="$tmp/target-state.json" FAKE_FLY_LOG="$tmp/fly.log" \
+  FAKE_CURL_LOG="$tmp/curl.log" FAKE_PUBLISH_FAILURE=1 \
+  RAW_PUBLICATION_TARGET_URL="$target_url" \
+  RAW_PUBLICATION_SOURCE_COMMIT="$source_commit" \
+  RAW_PUBLICATION_BASE_IMAGE_DIGEST="$base_digest" \
+  RAW_BUILDER_RESOURCE_PROBE="$tmp/bin/resource-probe" \
+  RAW_BUILDER_FINAL_RESOURCE_OUTPUT="$tmp/failed-final.json" \
+  "$SCRIPT_DIR/fly-publish-raw-generation.sh" publish --backend raw >/dev/null 2>&1; then
+  echo "publication failure must propagate" >&2
+  exit 1
+fi
+test "$(jq -r '.[0].state' "$tmp/state.json")" = stopped
+
+write_machine publication-builder > "$tmp/state.json"
+: > "$tmp/fly.log"
+: > "$tmp/curl.log"
+if PATH="$tmp/bin:$PATH" FAKE_FLY_STATE="$tmp/state.json" FAKE_TARGET_STATE="$tmp/target-state.json" FAKE_FLY_LOG="$tmp/fly.log" \
+  FAKE_CURL_LOG="$tmp/curl.log" FAKE_STOP_FAILURE=1 \
+  RAW_PUBLICATION_TARGET_URL="$target_url" \
+  RAW_PUBLICATION_SOURCE_COMMIT="$source_commit" \
+  RAW_PUBLICATION_BASE_IMAGE_DIGEST="$base_digest" \
+  RAW_BUILDER_RESOURCE_PROBE="$tmp/bin/resource-probe" \
+  RAW_BUILDER_FINAL_RESOURCE_OUTPUT="$tmp/unconfirmed-stop-final.json" \
+  RAW_BUILDER_STOP_RETRIES=1 RAW_BUILDER_STOP_POLL_ATTEMPTS=1 \
+  RAW_BUILDER_STOP_POLL_INTERVAL_SECONDS=0 \
+  "$SCRIPT_DIR/fly-publish-raw-generation.sh" publish --backend raw >/dev/null 2>&1; then
+  echo "unconfirmed builder stop must fail the publication wrapper" >&2
+  exit 1
+fi
+test "$(jq -r '.[0].state' "$tmp/state.json")" = started
+if grep -q "DELETE .*/machines/$builder_id/lease$" "$tmp/curl.log"; then
+  echo "the builder lease must remain held when stop cannot be confirmed" >&2
+  exit 1
+fi
+test -f "$tmp"/recovery/builder-publish-*/lease.header
+
+write_machine publication-builder \
+  | jq '.[0].config.env.STALE_QUEUE_MODE = "1"' > "$tmp/state.json"
+: > "$tmp/curl.log"
+if PATH="$tmp/bin:$PATH" FAKE_FLY_STATE="$tmp/state.json" \
+  FAKE_TARGET_STATE="$tmp/target-state.json" FAKE_FLY_LOG="$tmp/fly.log" \
+  FAKE_CURL_LOG="$tmp/curl.log" RAW_PUBLICATION_TARGET_URL="$target_url" \
+  RAW_PUBLICATION_SOURCE_COMMIT="$source_commit" \
+  RAW_PUBLICATION_BASE_IMAGE_DIGEST="$base_digest" \
+  RAW_BUILDER_RESOURCE_PROBE="$tmp/bin/resource-probe" \
+  RAW_BUILDER_FINAL_RESOURCE_OUTPUT="$tmp/stale-env-final.json" \
+  "$SCRIPT_DIR/fly-publish-raw-generation.sh" publish --backend raw >/dev/null 2>&1; then
+  echo "publication wrapper must reject stale builder environment" >&2
+  exit 1
+fi
+if grep -q '/lease$' "$tmp/curl.log"; then
+  echo "unsafe builder config must be rejected before lease acquisition" >&2
+  exit 1
+fi
+
+echo "raw_publication_builder_wrapper=ok"

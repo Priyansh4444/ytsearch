@@ -2,6 +2,9 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import worker from "./index";
 import { shouldWakeIndexer } from "./wake-policy";
 
+const TEST_RAW_MACHINE_ID = "11111111111111";
+const TEST_RETIRED_RAW_MACHINE_ID = "22222222222222";
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -152,7 +155,7 @@ describe("scheduled search availability", () => {
       schedule_phase: "closed",
       time_zone: "America/Los_Angeles",
     });
-    expect(text).not.toContain("8147deb94937e8");
+    expect(text).not.toContain(TEST_RAW_MACHINE_ID);
     expect(text).not.toContain("fly-token");
   });
 
@@ -168,12 +171,12 @@ describe("scheduled search availability", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
-      "/apps/ytsearch-raw-production/machines/8147deb94937e8",
+      `/apps/ytsearch-raw-production/machines/${TEST_RAW_MACHINE_ID}`,
     );
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
-      "/apps/ytsearch-raw-production/machines/8147deb94937e8/start",
+      `/apps/ytsearch-raw-production/machines/${TEST_RAW_MACHINE_ID}/start`,
     );
-    expect(fetchMock.mock.calls.join(" ")).not.toContain("d8de466f330468");
+    expect(fetchMock.mock.calls.join(" ")).not.toContain(TEST_RETIRED_RAW_MACHINE_ID);
     expect(log).toHaveBeenCalledWith(expect.stringContaining("raw_search_schedule_started"));
   });
 
@@ -198,7 +201,7 @@ describe("scheduled search availability", () => {
       signal: expect.any(AbortSignal),
     });
     expect(fetchMock.mock.calls.join(" ")).not.toContain(
-      "/apps/ytsearch-raw-production/machines/8147deb94937e8/stop",
+      `/apps/ytsearch-raw-production/machines/${TEST_RAW_MACHINE_ID}/stop`,
     );
     expect(log).toHaveBeenCalledWith(expect.stringContaining("indexer_schedule_stop_requested"));
   });
@@ -233,7 +236,7 @@ describe("scheduled search availability", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain(
-      "/apps/ytsearch-raw-production/machines/8147deb94937e8/stop",
+      `/apps/ytsearch-raw-production/machines/${TEST_RAW_MACHINE_ID}/stop`,
     );
   });
 
@@ -252,7 +255,7 @@ describe("scheduled search availability", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
-      "/apps/ytsearch-raw-production/machines/8147deb94937e8/start",
+      `/apps/ytsearch-raw-production/machines/${TEST_RAW_MACHINE_ID}/start`,
     );
   });
 
@@ -411,7 +414,7 @@ function testEnv(overrides: Record<string, unknown> = {}): Env {
     FLY_API_BASE_URL: "https://api.machines.dev",
     FLY_APP_NAME: "ytsearch-indexer-raw-production",
     FLY_RAW_SEARCH_APP_NAME: "ytsearch-raw-production",
-    FLY_RAW_SEARCH_MACHINE_ID: "8147deb94937e8",
+    FLY_RAW_SEARCH_MACHINE_ID: TEST_RAW_MACHINE_ID,
     RAW_SEARCH_HEALTH_URL: "https://ytsearch-raw-production.fly.dev/health",
     SEARCH_SCHEDULE_MODE: "enforce",
     FLYIO_TOKEN: "fly-token",

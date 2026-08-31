@@ -15,15 +15,28 @@ APPEND_OUTPUT="${APPEND_OUTPUT:-0}"
 STOP_FILE="${STOP_FILE:-}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CASES_FILE="${CASES_FILE:-$SCRIPT_DIR/benchmark-search-cases.tsv}"
+CONTRACT_FILE="${CONTRACT_FILE:-$SCRIPT_DIR/benchmark-search-contract.json}"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/search-benchmark-cases.sh"
 validate_search_benchmark_cases "$CASES_FILE"
+validate_search_benchmark_contract "$CONTRACT_FILE"
 mkdir -p "$(dirname "$OUTPUT")"
 if [[ "$APPEND_OUTPUT" != 1 ]]; then
   : > "$OUTPUT"
 fi
 BENCHMARK_TMP="$(mktemp -d)"
 trap 'rm -rf "$BENCHMARK_TMP"' EXIT INT TERM
+chmod 700 "$BENCHMARK_TMP"
+SEARCH_HEADER_FILE=""
+if [[ -n "$SEARCH_API_KEY" ]]; then
+  if [[ "$(printf '%s' "$SEARCH_API_KEY" | tr -d '\r\n')" != "$SEARCH_API_KEY" ]]; then
+    printf 'SEARCH_API_KEY must be a single-line value\n' >&2
+    exit 1
+  fi
+  SEARCH_HEADER_FILE="$BENCHMARK_TMP/search.header"
+  printf 'x-raw-search-key: %s\n' "$SEARCH_API_KEY" > "$SEARCH_HEADER_FILE"
+  chmod 600 "$SEARCH_HEADER_FILE"
+fi
 
 declare -a labels=()
 declare -a queries=()
@@ -61,8 +74,8 @@ request() {
     --data-urlencode 'limit=10'
     --output "$output"
   )
-  if [[ -n "$SEARCH_API_KEY" ]]; then
-    args+=(-H "x-raw-search-key: $SEARCH_API_KEY")
+  if [[ -n "$SEARCH_HEADER_FILE" ]]; then
+    args+=(--header "@$SEARCH_HEADER_FILE")
   fi
   if [[ -n "$creator" ]]; then
     args+=(--data-urlencode "filter_by=youtuber_handle:=$creator")
@@ -112,9 +125,23 @@ for index in "${!queries[@]}"; do
     [[ -n "$seconds" ]] || seconds="$CURL_MAX_TIME"
     [[ -n "$bytes" ]] || bytes=0
     valid=false
-    if (( curl_exit == 0 )) && [[ "$http" == 200 ]] && jq -e '
-      (.found | type == "number") and
-      (.grouped_hits | type == "array")
+    if (( curl_exit == 0 )) && [[ "$http" == 200 ]] && jq -e \
+      --arg label "${labels[$index]}" --arg creator "${creators[$index]}" \
+      --slurpfile contract "$CONTRACT_FILE" '
+      (.found | type == "number") and .found > 0 and
+      (.grouped_hits | type == "array") and (.grouped_hits | length) > 0 and
+      (if $creator == "" then true else
+        all(.grouped_hits[].hits[].document.youtuber_handle;
+          ascii_downcase == ($creator | ascii_downcase))
+      end) and
+      (($contract[0].cases[$label] // null) as $rule |
+        if $rule == null then true else
+          .grouped_hits[0].group_key[0] == $rule.top_video_id and
+          any(.grouped_hits[0].hits[].document.youtuber_handle;
+            ascii_downcase == ($rule.top_handle | ascii_downcase)) and
+          (([.grouped_hits[0].hits[].highlights[]?.snippet] | join(" ") | ascii_downcase) as $snippets |
+            all($rule.required_highlight_tokens[]; . as $token | $snippets | contains($token)))
+        end)
     ' "$response_file" >/dev/null 2>&1; then
       valid=true
     fi

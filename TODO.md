@@ -90,13 +90,18 @@ Raw can replace Typesense as the canonical search index.
   - [x] Pin mutation snapshots in an explicit SQLite read transaction and export
     an immutable, checksummed, read-only backup through one captured sequence.
   - [x] Implement detached build/verification for the existing on-demand SJC
-    indexer and stream nine allowlisted files with corpus/schema/size/hash gates.
+    indexer and stream eleven allowlisted files with corpus/schema/size/hash gates.
   - [x] Version the detached-publication readiness and every durable mutation
     request. New workers fail before work against an old reader, old workers
     fail extraction against a new reader, and a mismatched request cannot
     advance the SQLite sequence.
   - [x] Atomically activate the transferred generation, mark only the captured
     sequence published, and leave later mutations durable for the next batch.
+  - [x] Add one fail-closed isolated-canary command that binds reader and builder
+    images to the exact source/base digests, rejects publication-protocol drift
+    without consuming a sequence, proves mutation idempotency, continuously
+    samples both 2-GB cgroups, and verifies upsert/delete across publication and
+    restart. Execution against the full corpus remains the next unchecked gate.
   - [ ] Pass the full-corpus 2-GB indexer disk/RSS gate and the continuous
     search-load gate before deploying the external builder.
   - [ ] Fail closed on local reader-side builds in production after the remote
@@ -164,7 +169,8 @@ Raw can replace Typesense as the canonical search index.
     Veritasium `blackhole` scope without an alert.
   - [ ] Finish the classified 62-creator repair and post-publication gates while
     keeping the four exact legacy Machines stopped and all seven verified
-    volumes preserved. Any destruction requires a new explicit decision.
+    volumes preserved. After those gates pass, destroy only the exact reviewed
+    retirement set and verify that it is absent.
   - [ ] Publish the durable sequence-2950 mutation, add Brodie Robertson as the
     62nd active profile, and rerun every creator. The 2026-08-29 checkpoint has
     61 active profiles, 40 reported count gaps totaling 1,425 videos, and 868
@@ -518,3 +524,9 @@ Raw can replace Typesense as the canonical search index.
 - [x] Before replacing queue daemon, confirm existing `ytsearch-indexer-staging` queue daemon state and logs.
 - [x] After replacing queue daemon, confirm only one persistent daemon is processing the JSONL queue. Existing daemon was left running; no replacement daemon started.
 - [x] Record final machine state, frontend URLs, and indexing status.
+- [ ] Start getting rid of TODOs from this file that are unused.
+- [x] Centralize the canary, builder, runtime, and retirement identities in one
+  validated non-secret inventory; derive the production base image, private
+  target, source commit, and image digests from authoritative state; replace
+  copied production and placeholder test values with synthetic fixtures; and
+  enforce every mirrored identity and release-script caller in the test suite.

@@ -9,9 +9,11 @@ The production target has four components:
 | On-demand indexer | `ytsearch-indexer-raw-production` | Transcript cache and repair cursor |
 | Frontend and scheduler | Cloudflare Worker `ytsearch-search` | Cloudflare Queue wake messages |
 
-The checked-in configuration is the target configuration. The deployed legacy
-queue must be copied before the Worker is redeployed; follow
-[Typesense retirement](operations/typesense-retirement.md) in order.
+The checked-in configuration is the target configuration. For an initial Raw
+cutover, copy the deployed legacy queue before changing the Worker origin. The
+production migration already completed that one-time copy. Follow [Typesense
+retirement](operations/typesense-retirement.md) for the recorded order and
+current final gates.
 
 ## Prerequisites
 
@@ -94,22 +96,11 @@ scripts/verify-search-release.sh
 ```
 
 This command is non-mutating. The full-corpus publication isolation benchmark
-remains an explicit operator action because it starts a pending generation:
-
-```bash
-ALLOW_PUBLISH_BENCHMARK=1 \
-SEARCH_URL="$RAW_SEARCH_URL" \
-SEARCH_API_KEY="$RAW_SEARCH_API_KEY" \
-RAW_ADMIN_API_KEY="$RAW_SEARCH_ADMIN_API_KEY" \
-RAW_SEARCH_BASE_CHUNKS_GZIP="$RAW_SEARCH_BASE_CHUNKS_GZIP" \
-RAW_SEARCH_BASE_CHANNELS_GZIP="$RAW_SEARCH_BASE_CHANNELS_GZIP" \
-RAW_PUBLICATION_WORK_DIRECTORY="$RAW_PUBLICATION_WORK_DIRECTORY" \
-scripts/benchmark-publication-isolation.sh
-```
-
-The script invokes the single `ytsearch publish` workflow and continuously
-loads the canonical query matrix; it does not call the disabled legacy
-`/admin/publish` route. The builder workspace must have at least 8 GB free.
+remains an explicit operator action because it creates and publishes an
+idempotent synthetic mutation. Follow
+[Raw publication release](operations/raw-publication-release.md). The release
+command uses one exact isolated reader and one exclusively leased detached
+builder; it never runs generation construction inside the serving reader.
 
 Also verify in a clean browser:
 
@@ -128,12 +119,14 @@ Run a bounded concurrent search load while publishing and require zero errors.
 After every gate passes, stop the legacy writer/API/engine and mark the exact
 Machines with `scripts/deprecate-typesense-fly.sh`. Keep the source archive,
 documentation, stopped Machines, and verified volumes as deprecated rollback
-and differential-test evidence. Do not run the archived destructive cleanup
-without a new explicit user decision.
+and differential-test evidence until the final creator, publication, recovery,
+and exact-inventory gates pass. The active Raw-only migration authorizes only
+the separately reviewed exact retirement set after those gates.
 
 Rollback to Typesense is a Worker configuration redeploy plus a restart of the
 retained legacy engine/API. Raw also retains its previous verified generation
-through the atomic manifest.
+through the atomic manifest. After final Typesense retirement, only the Raw
+generation rollback remains.
 
 ## Secret rules
 

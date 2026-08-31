@@ -11,6 +11,8 @@ grep -Fq 'COPY --from=builder /build/target/release/ytsearch /usr/local/bin/ytse
 grep -Fq '/usr/local/bin/ytsearch --help >/dev/null' "$dockerfile"
 grep -Fq 'ENV YTSEARCH_SOURCE_COMMIT=${SOURCE_COMMIT}' "$dockerfile"
 grep -Fq 'org.opencontainers.image.revision=${SOURCE_COMMIT}' "$dockerfile"
+grep -Fq '/usr/local/share/ytsearch-release/source-commit' "$dockerfile"
+grep -Fq '/usr/local/share/ytsearch-release/base-image' "$dockerfile"
 grep -Fq 'source_commit="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"' "$builder"
 grep -Fq 'git -C "$REPOSITORY_ROOT" archive "$source_commit"' "$builder"
 grep -Fq 'require-committed-rust-build-inputs.sh' "$builder"

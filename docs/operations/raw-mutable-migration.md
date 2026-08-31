@@ -21,8 +21,9 @@ Invariants:
   mismatched request before opening the mutation store.
 - Typesense stays stopped and deprecated after queue state, active writes,
   search reads, scheduler ownership, and recovery move to Raw. Its source,
-  documentation, Machines, and volumes are preserved unless a later explicit
-  decision authorizes exact destruction targets.
+  documentation, Machines, and volumes remain preserved until the final
+  creator, publication, recovery, and exact-inventory gates authorize the
+  separately reviewed retirement set.
 - The initial browser route remains below 30 KB gzip.
 
 Primary gate: an indexed test video and channel update become searchable after

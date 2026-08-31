@@ -4,7 +4,13 @@ Typesense is no longer on the live read or write path. It remains a deprecated,
 stopped rollback and differential-testing artifact. Its source is retained on
 the `typesense-fly-selfhost-comparison` archive branch; its comparison scripts,
 compatibility notes, and experiment reports remain reproducible evidence for
-Raw relevance and resource claims. Deprecation does not authorize deletion.
+Raw relevance and resource claims. Deprecation alone does not authorize
+deletion. The active Raw-only migration authorizes the exact retirement set
+only after the final creator, publication, recovery, and inventory gates pass.
+
+The table below is a historical ledger. The fail-closed executable inventory is
+[`config/fly-production-resources.json`](../../config/fly-production-resources.json);
+deprecation and preservation scripts derive their exact sets from that file.
 
 ## Known Fly resources
 
@@ -48,16 +54,18 @@ unexpected Machine or volume makes it fail closed without changing anything.
 6. Stop the legacy indexer, API, and engine. Mark their Machines deprecated
    with `scripts/deprecate-typesense-fly.sh`.
 7. Keep the four known Machines stopped and deprecated and retain all seven
-   verified legacy volumes as the rollback/oracle snapshot. Re-run `fly apps
-   list`, `fly machines list`, and `fly volumes list` during cost reviews to
-   prove that nothing has restarted. Destruction requires a new, explicit user
-   decision and is not part of the Raw migration.
+   verified legacy volumes as the rollback/oracle snapshot until every final
+   gate passes. Re-run `fly apps list`, `fly machines list`, and `fly volumes
+   list` during cost reviews to prove that nothing has restarted.
+8. After the final gates pass, verify the inventory again and run only a
+   separately reviewed cleanup that names this exact set. Confirm that every
+   Machine, volume, and app is absent before declaring retirement complete.
 
 The historical cleanup implementation remains on the Typesense archive branch.
 On master, `scripts/destroy-deprecated-typesense-fly.sh` is verification-only:
 it resolves every exact Machine and volume and detects inventory drift but has
-no destructive mode. A future deletion requires a new explicit user decision
-and a separately reviewed implementation naming the exact resources.
+no destructive mode. The final migration still requires a separately reviewed
+implementation that deletes only the verified inventory.
 
 Never delete the legacy queue before its request IDs have been copied and
 acknowledged by the Raw queue. A successful search-read cutover alone is not a
@@ -99,5 +107,5 @@ The shared T3 browser now passes the production visual gate: the page reports
 24/7 availability, renders twelve result cards without an alert, supports every
 active sort, and returns 21 creator-scoped `blackhole` videos for Veritasium.
 The exact retained set also passes its live verification-only gate. It remains
-deprecated and stopped after the repair and performance gates; those gates do
-not implicitly convert preservation into permission to destroy it.
+deprecated and stopped until all final gates pass. A passing gate authorizes no
+resource outside the separately reviewed exact retirement set.

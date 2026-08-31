@@ -65,7 +65,7 @@ serving cgroup. Query scoring changes cannot repair that tail.
 - SQLite exports one immutable, checksummed snapshot through sequence N.
 - The builder verifies an exact corpus identity and builds from the read-only
   snapshot using the shared `GenerationBuilder`.
-- Nine fixed files stream sequentially with exact length and BLAKE3 checks.
+- Eleven fixed files stream sequentially with exact length and BLAKE3 checks.
 - Reader upload uses a 256-KiB buffer and a bounded 64-MiB
   sync-and-`DONTNEED` window, preserving the active mmap.
 - The reader reserves 1 GB after the declared upload and rejects insufficient
@@ -81,10 +81,11 @@ serving cgroup. Query scoring changes cannot repair that tail.
 
 ## Remaining release gate
 
-Run `scripts/benchmark-publication-isolation.sh`; it continuously drives the
-canonical mixed-query matrix at concurrency four from before snapshot export
-through activation and the warmed new generation. The gate records every
-timeout and invalid body instead of aborting early.
+Run the isolated workflow in
+[Raw publication release](../../operations/raw-publication-release.md). It
+continuously drives the canonical mixed-query matrix at concurrency four from
+before snapshot export through activation and the warmed new generation. The
+gate records every timeout and invalid body instead of aborting early.
 
 Required before cutover:
 
@@ -92,7 +93,8 @@ Required before cutover:
 - correct `react`, `fire`, `one fire`, `coding is dead`, CSS phrase, GitHub,
   Prototype chain, `createEffect`, and scoped/global `blackhole` results;
 - one atomic sequence change, with N visible and later mutations still durable;
-- current builder peak RSS below 1.75 GiB and cgroup memory below 1.85 GiB;
+- reader process RSS at or below 1.5 GiB and both reader/builder cgroup peak
+  memory at or below 1.85 GiB;
 - no OOM, swap dependence, or disk use above 80%;
 - a 60-second post-swap warm phase with the same relevance/highlight contract.
 

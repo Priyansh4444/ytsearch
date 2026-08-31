@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "environment": "production",
+  "resources": {
+    "raw_reader": {
+      "app": "ytsearch-raw-production",
+      "machine_id": "d89303da029328",
+      "volume_id": "vol_v3gnjjw9elpy5ew4",
+      "mount_path": "/data/mutable"
+    },
+    "raw_reader_canary": {
+      "app": "ytsearch-raw-production",
+      "machine_id": "847314c22d52e8",
+      "volume_id": "vol_r7y9220glk19p73r",
+      "mount_path": "/data/mutable"
+    },
+    "raw_queue_worker": {
+      "app": "ytsearch-indexer-raw-production",
+      "machine_id": "8e426df7e305e8",
+      "volume_id": "vol_vwnq1y52yxn3308v",
+      "mount_path": "/var/lib/ytsearch"
+    },
+    "raw_publication_builder": {
+      "app": "ytsearch-indexer-raw-production",
+      "machine_id": "080d297f070d08",
+      "volume_id": "vol_vp2w5pwendym77j4",
+      "mount_path": "/var/lib/ytsearch"
+    }
+  },
+  "retirement_sets": {
+    "typesense": {
+      "reason": "raw-search-cutover",
+      "machines": [
+        {
+          "app": "ytsearch-typesense-staging",
+          "machine_id": "8147deb94937e8",
+          "volume_id": "vol_v8e6yy17jo63nplv",
+          "successor_app": "ytsearch-raw-production"
+        },
+        {
+          "app": "ytsearch-typesense-staging",
+          "machine_id": "d8de466f330468",
+          "volume_id": "vol_vdezd781q880qm34",
+          "successor_app": "ytsearch-raw-production"
+        },
+        {
+          "app": "ytsearch-api-typesense-fly-staging",
+          "machine_id": "1855eddf654298",
+          "volume_id": "vol_vwnydd578odzzo8v",
+          "successor_app": "ytsearch-api-raw-production"
+        },
+        {
+          "app": "ytsearch-indexer-staging",
+          "machine_id": "68352d2be17728",
+          "volume_id": "vol_r68z3gl5wq7jkqd4",
+          "successor_app": "ytsearch-indexer-raw-production"
+        }
+      ],
+      "unattached_volumes": [
+        {"app": "ytsearch-indexer-staging", "volume_id": "vol_v8e6wk3g1l6kj15v"},
+        {"app": "ytsearch-indexer-staging", "volume_id": "vol_458zq611m0yppz14"},
+        {"app": "ytsearch-indexer-staging", "volume_id": "vol_4qlzgynglnz786gr"}
+      ]
+    }
+  }
+}

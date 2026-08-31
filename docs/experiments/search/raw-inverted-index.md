@@ -129,32 +129,20 @@ rollback-preserving operation after the search contract and resource gates
 pass. A custom enriched chunks archive must have a sibling `.sha256` file and
 is verified independently from the immutable source backup.
 
-## Deployment and rollback
+## Historical deployment record
 
 The retired isolated deployment used
 [archived experiment Fly configuration](https://github.com/Priyansh4444/ytsearch/blob/b00c51d/fly.raw-search-experiment.toml). Its
 Worker, API app, and engine app were removed after the production gate, while
 the experiment configuration and results remain in version control.
 
-Production uses [fly.raw-search.toml](../../../fly.raw-search.toml) for the
-4 GiB / 2-performance-vCPU engine and
-[fly.raw-api.toml](../../../fly.raw-api.toml) for the 512 MiB API facade. The
-engine is <https://ytsearch-raw-production.fly.dev>; the user-facing frontend is
-<https://search.pronsh.dev>.
-The Raw API deployment sets `YTSEARCH_PRESERVE_BACKEND_RELEVANCE_ORDER=true`
-so the compatibility layer does not replace the engine's exact-token order;
-the Typesense default remains unchanged.
+The first production promotion used a 4 GiB, two-performance-vCPU Raw engine.
+That allocation and its direct Fly deployment commands are historical. Do not
+use them as current deployment instructions.
 
-```sh
-fly deploy --config fly.raw-search.toml --ha=false
-fly status --config fly.raw-search.toml
-```
-
-Production rollback changes the Worker `API_BASE_URL` back to the retained
-Typesense API and redeploys the last known-good Worker version. Typesense must
-not be deleted until Raw owns durable writes, atomic generation publication,
-recovery, and freshness monitoring. Exact live IDs and the tested rollback
-procedure are recorded in [raw-production-cutover.md](../../operations/raw-production-cutover.md).
+Use [Deployment](../../deploy.md) for the current release procedure and [Raw
+production cutover](../../operations/raw-production-cutover.md) for the dated
+promotion evidence and conditional rollback path.
 
 See [raw-validation.md](raw-validation.md) for the real-corpus results and
 [typesense-compatibility.md](typesense-compatibility.md) for the Typesense 30.2

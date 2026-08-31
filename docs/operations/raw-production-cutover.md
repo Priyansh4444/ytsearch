@@ -21,9 +21,10 @@ there is no Typesense dependency in the live read or write path.
 | Deprecated Typesense API | `ytsearch-api-typesense-fly-staging` / `1855eddf654298` | Stopped and preserved |
 | Deprecated Typesense indexer | `ytsearch-indexer-staging` / `68352d2be17728` | Stopped and preserved |
 
-Image digests and Worker version IDs are deployment outputs, not stable topology.
-Resolve them from Fly and Cloudflare immediately before rollback instead of
-copying an old value from this document.
+The table records the Machine IDs observed during the 2026-08-29 audit. App
+names are stable topology. `wrangler.jsonc` and the exact Typesense retirement
+inventory are the executable identities. Resolve image digests and Worker
+version IDs from Fly and Cloudflare immediately before rollback.
 
 ## Promotion gates
 
@@ -39,23 +40,25 @@ copying an old value from this document.
 - Post-load Raw RSS: 373,096,448 bytes; engine-reported search errors: zero.
 - Initial-route JavaScript: 24,342 bytes gzip, below the 30 KB limit.
 
-The current pre-rollout production baseline on 2026-08-13 is generation 2144
-with 8,322,725 documents on the 2 GiB shared Raw Machine. Earlier generation
-1166/1167 repair results remain historical evidence in the experiment reports,
-not a statement of current production state.
+The 2026-08-13 pre-rollout baseline was generation 2144 with 8,322,725
+documents on the 2 GiB shared Raw Machine. Generation 1166, generation 1167,
+and generation 2144 remain historical evidence. They do not describe the
+current production generation.
 
 The last verified browser build remains below the 30 KB initial-JavaScript
 ceiling. Treat old 308 ms/75-request and generation-1167 results as historical
 gates; each rollout must record fresh latency, ordering, highlight, cache, and
 browser evidence. The four legacy Machines are stopped and deprecated. Their
-seven volumes total 61 GB ($9.15/month); they remain preserved unless the user
-makes a new explicit destruction decision. Current complete pricing is in
-[Raw production cost and persistence decision](raw-production-cost.md).
+seven volumes total 61 GB ($9.15/month). Preserve them until the final creator,
+publication, recovery, and exact-inventory gates pass. The active Raw-only
+migration authorizes only the exact, separately reviewed retirement set after
+those gates. Current complete pricing is in [Raw production cost and
+persistence decision](raw-production-cost.md).
 
 ## Rollback
 
-Rollback is intentionally reversible because the deprecated resources remain
-stopped and preserved:
+Rollback remains reversible while the deprecated resources are stopped and
+preserved:
 
 1. Set `API_BASE_URL` in `wrangler.jsonc` back to
    `https://ytsearch-api-typesense-fly-staging.fly.dev`.
@@ -67,6 +70,9 @@ stopped and preserved:
 
 A configuration redeploy is preferred to a stale Worker binary because it keeps
 current frontend and cache-correctness fixes.
+
+After the final Typesense retirement, this rollback path no longer exists. Use
+Raw's previous verified generation for rollback after that point.
 
 For Raw reader binary rollback, stop the on-demand indexer first, roll the
 reader back, and start only a worker whose publication protocol matches the

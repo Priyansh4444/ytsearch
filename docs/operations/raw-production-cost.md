@@ -1,8 +1,9 @@
 # Raw production cost and persistence decision
 
-Re-audited from live Fly state and Fly's published SJC rates on 2026-08-29. Prices are monthly estimates for a 30-day
-month from [Fly.io resource pricing](https://fly.io/docs/about/pricing/); actual
-billing is prorated and egress remains usage-dependent.
+Re-audited from live Fly state and Fly's published SJC rates on 2026-08-29.
+Prices are monthly estimates for a 30-day month from [Fly.io resource
+pricing](https://fly.io/docs/about/pricing/). Actual billing is prorated, and
+egress remains usage-dependent.
 
 ## Current temporary allocation
 
@@ -16,10 +17,12 @@ billing is prorated and egress remains usage-dependent.
 | Stopped Machine rootfs ceiling | at most 62 GB | at most $9.30 |
 | **Current fixed allocation** | | **about $54.57/month before egress/indexer/Cloudflare** |
 
-The temporary canary `847314c22d52e8` is not a serving replica and was verified
-stopped on 2026-08-23. Its 20 GB volume remains provisioned. The retained
-on-demand SJC indexer `8e426df7e305e8` is also stopped and must not be confused
-with the obsolete ORD repair builder. The canary's
+The temporary canary recorded in
+[`config/fly-production-resources.json`](../../config/fly-production-resources.json)
+is not a serving replica and was verified stopped on 2026-08-30. Its 20 GB
+volume remains provisioned. The retained on-demand SJC indexer in
+`ytsearch-indexer-raw-production` was also verified stopped and must not be
+confused with the obsolete ORD repair builder. The canary's
 publication proved that a same-reader full build causes requests to exceed the
 five-second timeout, so adding permanent reader capacity is not the fix.
 
@@ -50,8 +53,9 @@ its 10 GB volume. It preserves the active reader/API, the retained on-demand SJC
 indexer, and every Typesense rollback resource. Immediately after those
 deletions, retained snapshots make the conservative estimate about $63.50;
 their approximately $0.98 reduction arrives after the five-day retention
-window. Those deletions are irreversible and require explicit approval. Merely
-stopping the Machines leaves the projection at about $70.70 including
+window. Those deletions are irreversible and remain gated on the exact final
+inventory and a separately reviewed cleanup. Merely stopping the Machines
+leaves the projection at about $70.70 including
 Cloudflare, the indexer allowance, egress, and snapshot-growth reserves.
 
 Load-gating the API from 512 MB to 256 MB remains an optional further saving,
@@ -135,7 +139,7 @@ memory-mapped inverted-index generation and acquire no SQLite connection or
 lock. SQLite stores only acknowledged mutations, idempotency keys, latest
 video/channel replacements, and publication state.
 
-The live files measured:
+On 2026-08-29, the live files measured:
 
 | File | Bytes |
 | --- | ---: |

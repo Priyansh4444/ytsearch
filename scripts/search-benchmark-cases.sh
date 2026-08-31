@@ -27,3 +27,22 @@ validate_search_benchmark_cases() {
     END { exit ok ? 0 : 1 }
   ' "$cases_file"
 }
+
+validate_search_benchmark_contract() {
+  contract_file="$1"
+  jq -e '
+    .schema_version == 1 and
+    (.corpus | type) == "string" and (.corpus | length) > 0 and
+    (.cases | type) == "object" and
+    all(.cases | to_entries[];
+      (.key | test("^[a-z0-9_]+$")) and
+      (.value | keys | sort) == ["required_highlight_tokens", "top_handle", "top_video_id"] and
+      (.value.top_video_id | type) == "string" and (.value.top_video_id | length) == 11 and
+      (.value.top_handle | type) == "string" and (.value.top_handle | startswith("@")) and
+      (.value.required_highlight_tokens | type) == "array" and
+      (.value.required_highlight_tokens | length) > 0 and
+      all(.value.required_highlight_tokens[];
+        (type == "string") and (length > 0) and (. == ascii_downcase))
+    )
+  ' "$contract_file" >/dev/null
+}
