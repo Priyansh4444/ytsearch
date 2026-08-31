@@ -156,6 +156,10 @@ Raw can replace Typesense as the canonical search index.
   - [x] Prove idempotent replace and delete operations, publication, and both
     post-publication Machine restarts without leaving the synthetic document.
   - [x] Deploy `search.pronsh.dev` with Raw-only search and queue origins.
+  - [x] Restore the exact SJC Machine `8e426df7e305e8` from
+    `queue-indexer-migration-hold` to the sole stopped/on-demand Raw queue
+    worker using the current verified indexer overlay; verify its embedded
+    62-creator list, entrypoint, restart policy, and Cloudflare resource sync.
   - [x] Finish the nine-channel drift reconciliation, publish generation 1166,
     replay the interrupted Veritasium video into bounded generation 1167, and
     pass a post-publication restart.

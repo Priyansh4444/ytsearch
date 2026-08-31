@@ -16,6 +16,13 @@ there is no Typesense dependency in the live read or write path.
 | Raw engine | `ytsearch-raw-production` / `d89303da029328` | 2 GiB, 2 shared vCPUs; 512 MiB swap recovery margin |
 | Raw API | `ytsearch-api-raw-production` / `8e7204a7694d28` | 512 MiB, 1 shared vCPU |
 | Raw indexer | `ytsearch-indexer-raw-production` / `8e426df7e305e8` | 2 GiB, 2 shared vCPUs; stopped/on demand, five-minute idle exit |
+
+The indexer was reconciled on 2026-08-31 from its temporary
+`queue-indexer-migration-hold` role into the sole `queue-indexer` role. It uses
+the image built from commit `87ba9115c388bc9bde9387ef17685bd37e2e838e`,
+keeps restart policy `no`, and remains stopped until an approved Cloudflare
+Queue wake. `scripts/check-queue-indexers.sh` verifies the embedded entrypoint
+and canonical 62-creator list byte-for-byte.
 | Production Worker | `ytsearch-search` | Cloudflare deployment; exact version recorded by each deployment log |
 | Deprecated Typesense engine | `ytsearch-typesense-staging` / `8147deb94937e8` | Stopped and preserved with benchmark Machine `d8de466f330468` |
 | Deprecated Typesense API | `ytsearch-api-typesense-fly-staging` / `1855eddf654298` | Stopped and preserved |
