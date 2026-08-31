@@ -552,8 +552,9 @@ Raw can replace Typesense as the canonical search index.
 - [x] Add a schema-7 broad-query sizing probe that runs the canonical reducer
   for all six field/position profiles and reports posting visits, exact totals,
   retained depths, byte estimates, elapsed time, and process RSS.
-- [ ] Run the broad-query sizing probe against the production snapshot and use
-  the evidence to accept or reject the schema-8 materialization layout before
-  changing the on-disk contract.
+- [x] Run the broad-query sizing probe against production generation 2145 on
+  the exact shared2/2 GB canary. Two independent processes reproduced an
+  11.18-second cold `fire` traversal; the identical second profile took 8 ms.
+  Accept query-plan materialization and reject relying on the volume page cache.
 - [x] Refresh an expired Fly API bearer once during a leased Machine session so
   a multi-minute integrity check cannot strand a started canary during cleanup.

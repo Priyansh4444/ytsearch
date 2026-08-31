@@ -146,6 +146,25 @@ It must measure thresholds `{25k, 50k, 100k, 250k}` and retained depths
 - total posting visits, build duration, scratch bytes, and peak builder RSS;
 - active + rollback + incoming generation disk requirement.
 
+### Production-snapshot evidence
+
+On 2026-08-31, generation 2145 (8,322,725 documents and 34,610 videos) was
+measured twice on the exact shared2/2 GB canary. Each fresh diagnostic process
+reproduced the same cold-volume pattern:
+
+| Plan | Emitted documents | Matching videos | Packed upper bound | First pass | Identical warm pass |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `fire`, text | 26,139 | 7,499 | 354,092 B | 11,190/11,178 ms | 8 ms |
+| `react`, text | 54,356 | 6,059 | 582,332 B | 451/445 ms | 14 ms |
+| `react`, text + title | 283,326 | 5,187 | 1,854,327 B | 39/40 ms | 49/43 ms |
+
+The process grew from about 84 MB to 265 MB RSS. The eleven-second first pass
+followed by an eight-millisecond identical pass proves that the worst latency is
+page-fault and volume-read amplification across postings, not the relevance
+comparator. A 2 GB machine cannot depend on keeping the 1.9 GB corpus image hot.
+The compact query-plan payloads are small enough to make schema-8
+materialization the accepted direction; a runtime cache or posting scan is not.
+
 The release gate requires semantic differential equality, zero document
 posting decodes on an indexed hit, shared2/2 GB reader peak RSS below 1.5 GiB,
 zero swap/OOM, and concurrent broad-query p95 and worst `react`/`fire` below
