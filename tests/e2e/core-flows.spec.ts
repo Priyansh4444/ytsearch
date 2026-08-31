@@ -138,7 +138,12 @@ test("renders the search shell while an initial lazy chunk is delayed", async ({
   });
 
   const navigation = page.goto("/");
-  await expect.poll(() => chunkRequested).toBe(true);
+  await expect
+    .poll(() => chunkRequested, {
+      message: "the cold Vite server should eventually request the delayed lazy chunk",
+      timeout: 15_000,
+    })
+    .toBe(true);
   let shellFailure: unknown;
   try {
     await expect(page.getByRole("combobox", { name: "Search transcripts" })).toBeVisible({

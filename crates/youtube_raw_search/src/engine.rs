@@ -538,6 +538,19 @@ impl RawSearchEngine {
             .map_err(Error::Json)
     }
 
+    pub fn channel_documents(&self) -> Result<Vec<ChannelDocument>> {
+        let mut channels = self
+            .inner
+            .channels
+            .iter()
+            .cloned()
+            .map(serde_json::from_value)
+            .collect::<std::result::Result<Vec<ChannelDocument>, _>>()
+            .map_err(Error::Json)?;
+        channels.sort_unstable_by(|left, right| left.id.cmp(&right.id));
+        Ok(channels)
+    }
+
     pub fn search(&self, params: &SearchParams) -> Result<Value> {
         validate_search_params(params)?;
         let parsed = parse_query(&params.q)?;

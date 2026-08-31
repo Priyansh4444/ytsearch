@@ -178,6 +178,11 @@ Raw can replace Typesense as the canonical search index.
     3 bot-challenge, 1 rate-limited, and 141 legacy records awaiting upgrade.
     - [x] Add per-creator classified-outcome reporting so reconciliation can be
       proved from indexed videos plus explicit terminal/retryable outcomes.
+    - [x] Add one fail-closed, video-ID-exact whole-catalog reconciliation check
+      derived from the canonical creator list. Bind every complete discovery
+      manifest to one catalog run; require discovered IDs to equal the disjoint
+      union of published indexed and classified IDs; reject stale IDs, missing
+      profiles, unresolved legacy, unattributed, unknown, or ready-retry outcomes.
 
 ### Non-negotiable performance and resource gates
 

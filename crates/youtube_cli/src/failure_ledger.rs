@@ -101,6 +101,22 @@ pub(super) struct FailureCounts {
     pub(super) categories: BTreeMap<String, u64>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum FailureRetryState {
+    Terminal,
+    Deferred,
+    Ready,
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+pub(super) struct FailureRecordSummary {
+    pub(super) video_id: String,
+    pub(super) creator_id: Option<String>,
+    pub(super) category: FailureCategory,
+    pub(super) retry_state: FailureRetryState,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub(super) struct FailureReport {
     pub(super) total_records: u64,
@@ -110,6 +126,7 @@ pub(super) struct FailureReport {
     pub(super) unattributed_records: u64,
     pub(super) totals: FailureCounts,
     pub(super) by_creator: BTreeMap<String, FailureCounts>,
+    pub(super) records: Vec<FailureRecordSummary>,
 }
 
 impl FailureLedger {
@@ -246,6 +263,22 @@ impl FailureLedger {
                 continue;
             };
             report.structured_records = report.structured_records.saturating_add(1);
+            let category = effective_category(&record);
+            let retry_state = if !category.retryable() {
+                FailureRetryState::Terminal
+            } else if effective_retry_at(&record, self.default_retry_after)
+                .is_none_or(|retry_at| retry_at <= now)
+            {
+                FailureRetryState::Ready
+            } else {
+                FailureRetryState::Deferred
+            };
+            report.records.push(FailureRecordSummary {
+                video_id: record.video_id.clone(),
+                creator_id: record.creator_id.clone(),
+                category,
+                retry_state,
+            });
             accumulate_failure_count(&mut report.totals, &record, now, self.default_retry_after);
             if let Some(creator_id) = record.creator_id.as_deref() {
                 report.attributed_records = report.attributed_records.saturating_add(1);
@@ -259,6 +292,11 @@ impl FailureLedger {
                 report.unattributed_records = report.unattributed_records.saturating_add(1);
             }
         }
+        report.records.sort_by(|left, right| {
+            left.creator_id
+                .cmp(&right.creator_id)
+                .then_with(|| left.video_id.cmp(&right.video_id))
+        });
         Ok(report)
     }
 
@@ -823,6 +861,23 @@ mod tests {
             1
         );
         assert_eq!(report.by_creator["creator-two"].categories["import"], 1);
+        assert_eq!(
+            report.records,
+            [
+                FailureRecordSummary {
+                    video_id: "video-terminal".to_string(),
+                    creator_id: Some("creator-one".to_string()),
+                    category: FailureCategory::NoCaptions,
+                    retry_state: FailureRetryState::Terminal,
+                },
+                FailureRecordSummary {
+                    video_id: "video-retryable".to_string(),
+                    creator_id: Some("creator-two".to_string()),
+                    category: FailureCategory::Import,
+                    retry_state: FailureRetryState::Deferred,
+                },
+            ]
+        );
         let _ = fs::remove_dir_all(&ledger.directory);
     }
 

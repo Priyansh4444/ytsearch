@@ -26,6 +26,18 @@ impl ReloadableEngine {
             .map_err(|_| BackendError::Internal("raw engine read lock poisoned".to_string()))
     }
 
+    /// Pins one immutable engine and its activation sequence under the same
+    /// read lock. Administrative audits can then enumerate a catalog without
+    /// mixing generations during a concurrent atomic replacement.
+    pub fn snapshot(&self) -> Result<(Arc<RawSearchEngine>, u64), BackendError> {
+        let engine = self
+            .engine
+            .read()
+            .map_err(|_| BackendError::Internal("raw engine read lock poisoned".to_string()))?;
+        let sequence = self.sequence.load(Ordering::Acquire);
+        Ok((Arc::clone(&engine), sequence))
+    }
+
     pub fn replace(&self, engine: RawSearchEngine, sequence: u64) -> Result<(), BackendError> {
         let mut active = self
             .engine

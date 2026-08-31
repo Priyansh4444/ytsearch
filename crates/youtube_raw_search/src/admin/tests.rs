@@ -244,6 +244,42 @@ async fn active_channel_read_does_not_report_an_unpublished_overlay() {
 }
 
 #[tokio::test]
+async fn active_catalog_is_one_generation_and_excludes_unpublished_mutations() {
+    let (root, state, _publisher) = setup();
+    let (_, Json(operation)) = replace_video(
+        State(state.clone()),
+        Path("new-video".to_string()),
+        headers(),
+        Json(ReplaceVideoRequest {
+            publication_api_version: RAW_PUBLICATION_API_VERSION,
+            idempotency_key: "catalog-new-video".to_string(),
+            chunks: vec![chunk("new-video", "catalogtoken")],
+        }),
+    )
+    .await
+    .unwrap();
+
+    let Json(before) = active_catalog(State(state.clone()), headers())
+        .await
+        .unwrap();
+    assert_eq!(before.generation, 0);
+    assert_eq!(before.last_sequence_before, operation.sequence.unwrap());
+    assert_eq!(before.last_sequence_after, operation.sequence.unwrap());
+    assert_eq!(before.channels, [channel()]);
+    assert_eq!(before.video_ids_by_creator["creator"], ["old-video"]);
+
+    publish_remotely(root.path(), &state).await;
+    let Json(after) = active_catalog(State(state), headers()).await.unwrap();
+    assert_eq!(after.generation, operation.sequence.unwrap());
+    assert_eq!(after.last_sequence_before, after.generation);
+    assert_eq!(after.last_sequence_after, after.generation);
+    assert_eq!(
+        after.video_ids_by_creator["creator"],
+        ["new-video", "old-video"]
+    );
+}
+
+#[tokio::test]
 async fn handle_form_mutations_keep_canonical_channel_counts_and_scope() {
     let (root, state, _publisher) = setup();
     let _ = replace_video(

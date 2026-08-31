@@ -29,9 +29,11 @@ use youtube_ytdlp::{YtDlpTranscriptSource, YtDlpVideo};
 
 mod args;
 mod failure_ledger;
+mod reconciliation_manifest;
 
 use args::*;
 use failure_ledger::{FailureCategory, FailureLedger, FailureStage};
+use reconciliation_manifest::{begin_catalog_run, write_complete_discovery};
 
 const DEFAULT_RAW_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 const MAX_RAW_PUBLICATION_TIMEOUT_SECONDS: u64 = 2 * 60 * 60;
@@ -817,9 +819,19 @@ async fn index_youtuber(
         println!("    - {} {}", video.video_id, video.title);
     }
 
-    let youtuber_search = transcript_search.clone();
-
     let youtuber_id = youtuber_id_from_handle(&youtuber.handle, &youtuber.channel_id);
+    let discovery_manifest = write_complete_discovery(
+        &command.transcript.transcript_cache_dir,
+        &youtuber_id,
+        &youtuber.handle,
+        &public_videos,
+    )?;
+    println!(
+        "Persisted complete discovery evidence: {}",
+        discovery_manifest.display()
+    );
+
+    let youtuber_search = transcript_search.clone();
     let initial_youtuber_doc = upsert_youtuber_document_from_chunks(
         &youtuber_search,
         &youtuber,
@@ -1147,6 +1159,8 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
         .search
         .client(command.collection.collection.clone())?;
     let handles = read_youtuber_list(&command.list_file)?;
+    let reconciliation_run_id = begin_catalog_run(&command.transcript.transcript_cache_dir)?;
+    println!("Started catalog reconciliation run: {reconciliation_run_id}");
     let channel_jobs = effective_channel_jobs(command.channel_jobs, command.jobs);
     println!(
         "Indexing creators with {channel_jobs} concurrent creator job(s) and up to {} video worker(s) each",
@@ -2013,35 +2027,23 @@ async fn discover_videos_for_youtuber_with_ytdlp(
         ytdlp.channel_videos(handle, None),
         ytdlp.channel_streams(handle, None),
     );
-    let mut videos = match &uploads {
-        Ok(uploads) => uploads
-            .iter()
-            .cloned()
-            .map(discovered_video_from_ytdlp_video)
-            .collect::<Vec<_>>(),
-        Err(error) => {
-            tracing::warn!(handle = %handle, %error, "yt-dlp uploads-tab discovery failed; trying streams");
-            println!("  uploads-tab discovery skipped ({error})");
-            Vec::new()
-        }
-    };
-
-    match streams {
-        Ok(streams) => {
-            println!(
-                "  discovery source: yt-dlp streams tab ({} entries)",
-                streams.len()
-            );
-            videos.extend(streams.into_iter().map(discovered_video_from_ytdlp_video));
-        }
-        Err(error) => {
-            if videos.is_empty() {
-                return Err(uploads.err().unwrap_or(error).into());
-            }
-            tracing::warn!(handle = %handle, %error, "yt-dlp stream-tab discovery failed; continuing with uploads");
-            println!("  stream-tab discovery skipped ({error})");
-        }
-    }
+    let uploads = uploads.map_err(|error| {
+        tracing::warn!(handle = %handle, %error, "yt-dlp uploads-tab discovery failed; refusing a streams-only partial catalog");
+        error
+    })?;
+    let streams = streams.map_err(|error| {
+        tracing::warn!(handle = %handle, %error, "yt-dlp streams-tab discovery failed; refusing an uploads-only partial catalog");
+        error
+    })?;
+    let mut videos = uploads
+        .into_iter()
+        .map(discovered_video_from_ytdlp_video)
+        .collect::<Vec<_>>();
+    println!(
+        "  discovery source: yt-dlp streams tab ({} entries)",
+        streams.len()
+    );
+    videos.extend(streams.into_iter().map(discovered_video_from_ytdlp_video));
 
     Ok(dedupe_discovered_videos(videos))
 }

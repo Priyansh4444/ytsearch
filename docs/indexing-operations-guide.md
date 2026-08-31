@@ -225,11 +225,43 @@ ytsearch failure-report /var/lib/ytsearch/transcript-cache \
   --transcript-failure-retry-seconds 21600
 ```
 
+After the complete-list pass publishes, prove the whole catalog with one
+fail-closed command on the queue worker:
+
+```bash
+scripts/check-raw-creator-reconciliation.sh
+```
+
+The checker derives the expected creator count and handles from
+`scripts/indexed-channels.txt`; it does not embed a second list or a fixed
+count. One `index-youtubers` process assigns a catalog-run ID and atomically
+persists each creator's complete discovered video-ID set. The checker compares
+those sets with one authenticated, generation-pinned Raw catalog snapshot and
+the exact records in the durable failure report. The admin snapshot contains
+the channel documents and video IDs from one immutable engine clone; mutation
+sequence values captured around construction must both equal that generation.
+The checker requires every discovered ID to be either indexed or classified,
+never both, and rejects stale indexed or failure IDs. It also rejects
+unpublished or concurrent mutation sequences, missing or duplicate profiles,
+evidence from an older catalog run, legacy, unattributed, or unknown records,
+retries whose cooldown has elapsed, and outcomes attributed to removed
+creators. Set `CATALOG_SNAPSHOT_JSON_PATH`, `FAILURE_REPORT_JSON_PATH`, and
+`DISCOVERY_MANIFEST_DIRECTORY` to verify a complete captured evidence set
+offline without contacting production or reading the live transcript cache.
+
+Discovery itself also fails closed: a successful streams-tab response can no
+longer hide a failed uploads tab, and a successful uploads tab can no longer
+hide a failed streams tab. Either partial yt-dlp result triggers the complete
+YouTube API fallback; without a configured fallback, the creator remains
+failed and cannot receive a `complete` manifest for that catalog run.
+
 The report separates structured and legacy records, retryable and terminal
 outcomes, retries whose cooldown has elapsed, unattributed historical records,
-and category counts for every attributed creator. Schema-v1 JSON records remain
-readable and gain their canonical creator ID when that video is rediscovered;
-new records use schema v2. A conflicting creator ID is never silently reassigned.
+and category counts for every attributed creator. It also emits the exact video
+ID, creator ID, category, and retry state for each structured record so a stale
+record cannot numerically hide a different missing video. Schema-v1 JSON
+records remain readable and gain their canonical creator ID when that video is
+rediscovered; new records use schema v2. A conflicting creator ID is never silently reassigned.
 Record, attribution, and clear operations share a 256-shard cross-process lock
 pool, so concurrent creator jobs cannot lose attempt history or overwrite
 ownership without creating one lock inode per video. The CLI fails closed when

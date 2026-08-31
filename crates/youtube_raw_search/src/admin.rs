@@ -10,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{collections::BTreeMap, num::NonZeroU16, sync::Arc};
 use tokio_util::io::ReaderStream;
@@ -73,6 +73,15 @@ struct PageQuery {
     limit: Option<u16>,
 }
 
+#[derive(Debug, Serialize)]
+struct ActiveCatalogSnapshot {
+    generation: u64,
+    last_sequence_before: u64,
+    last_sequence_after: u64,
+    channels: Vec<ChannelDocument>,
+    video_ids_by_creator: BTreeMap<String, Vec<String>>,
+}
+
 impl AdminState {
     pub fn new(
         engine: Arc<ReloadableEngine>,
@@ -114,6 +123,7 @@ pub fn router(state: AdminState) -> Router {
             get(channel).put(upsert_channel).delete(delete_channel),
         )
         .route("/admin/active/channels/{channel_id}", get(active_channel))
+        .route("/admin/active/catalog", get(active_catalog))
         .route(
             "/admin/channels/{channel_id}/video-ids",
             get(indexed_video_ids),
@@ -431,6 +441,28 @@ async fn active_channel(
 ) -> Result<Json<Option<ChannelDocument>>, AdminError> {
     authorize(&state, &headers)?;
     Ok(Json(state.engine.active()?.channel_document(&channel_id)?))
+}
+
+async fn active_catalog(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+) -> Result<Json<ActiveCatalogSnapshot>, AdminError> {
+    authorize(&state, &headers)?;
+    let last_sequence_before = state.store.last_sequence()?;
+    let (engine, generation) = state.engine.snapshot()?;
+    let channels = engine.channel_documents()?;
+    let video_ids_by_creator = channels
+        .iter()
+        .map(|channel| (channel.id.clone(), engine.indexed_video_ids(&channel.id)))
+        .collect();
+    let last_sequence_after = state.store.last_sequence()?;
+    Ok(Json(ActiveCatalogSnapshot {
+        generation,
+        last_sequence_before,
+        last_sequence_after,
+        channels,
+        video_ids_by_creator,
+    }))
 }
 
 fn merged_video_counts(

@@ -9,6 +9,7 @@ scripts/check-rust-dependency-policy.sh
 scripts/test-setup-dev.sh
 scripts/test-doctor.sh
 scripts/test-check-staging-machines.sh
+scripts/test-check-raw-creator-reconciliation.sh
 scripts/test-check-queue-indexers.sh
 scripts/test-reconcile-raw-queue-worker.sh
 scripts/test-reconcile-raw-publication-builder.sh
