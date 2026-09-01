@@ -337,6 +337,15 @@ fi
 curl --fail --silent --show-error --max-time 5 "${SEARCH_URL%/}/metrics" \
   > "$OUTPUT_DIR/metrics-before.json"
 run_engine "$OUTPUT_DIR/baseline.jsonl" "$BASELINE_RUNS" 1
+summarize_phase baseline "$OUTPUT_DIR/baseline.jsonl" \
+  | tee "$OUTPUT_DIR/baseline-summary.json"
+jq -e --argjson maximum "$MAX_ACCEPTABLE_MS" '
+  .samples > 0 and .errors == 0 and .max_ms != null and .max_ms <= $maximum
+' "$OUTPUT_DIR/baseline-summary.json" >/dev/null || {
+  printf 'publication baseline gate failed; required zero errors and max <= %sms\n' \
+    "$MAX_ACCEPTABLE_MS" >&2
+  exit 1
+}
 
 target_sequence="$initial_last"
 resource_worker &

@@ -195,7 +195,9 @@ impl RawSearchEngine {
             }
             let estimated_documents = alternatives
                 .iter()
-                .map(|alternative| self.estimated_entry_documents(alternative.entry))
+                .map(|alternative| {
+                    self.estimated_entry_documents_for_fields(alternative.entry, alternative.fields)
+                })
                 .sum();
             plans.push(TermPlan {
                 alternatives,
@@ -459,17 +461,33 @@ impl RawSearchEngine {
     }
 
     pub(super) fn estimated_entry_documents(&self, entry: TermEntry) -> u64 {
+        self.estimated_entry_documents_for_fields(
+            entry,
+            QueryFields {
+                text: true,
+                title: true,
+                prioritize_position: false,
+                exact_mask: 0,
+            },
+        )
+    }
+
+    fn estimated_entry_documents_for_fields(&self, entry: TermEntry, fields: QueryFields) -> u64 {
         let average_documents_per_video = self
             .inner
             .manifest
             .documents
             .checked_div(self.inner.manifest.videos)
             .unwrap_or(0);
-        u64::from(entry.text_frequency).saturating_add(u64::from(
+        let text_documents = fields.text.then_some(u64::from(entry.text_frequency));
+        let title_documents = fields.title.then_some(u64::from(
             entry
                 .title_frequency
                 .saturating_mul(average_documents_per_video),
-        ))
+        ));
+        text_documents
+            .unwrap_or(0)
+            .saturating_add(title_documents.unwrap_or(0))
     }
 
     fn matches_for_entry_targets(

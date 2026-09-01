@@ -258,6 +258,13 @@ Raw can replace Typesense as the canonical search index.
   baseline passed the 200 ms ceiling, but requests timed out above five seconds
   immediately after publication began. Keep full builds off the serving reader;
   the remaining work is the full-corpus external-builder gate and deployment.
+  The first schema-eight external-builder run on 2026-09-01 also failed closed:
+  it timed out after 2,422.8 seconds before activation, peaked at 993 MB builder
+  memory and 81% of its 10-GB volume, and drove the old-generation reader to a
+  5.001-second p95 under four-way stress. Field-aware broad-plan admission,
+  amortized large-spool durability barriers, build-phase timing, and a
+  pre-publication baseline gate are implemented locally; rebuild and rerun on
+  an adequately sized isolated builder volume before promotion.
 - [x] Single-token compact-split fallback treated `react` as `re + act` and
   `fire` as `fi + re`, returning unrelated results and driving 11-13 second
   backend searches. Split recovery now runs only after exact/prefix results are

@@ -167,7 +167,7 @@ case "$url" in
     sleep 0.5
     body='{"found":1,"grouped_hits":[{"group_key":["fixture-video"],"hits":[{"document":{"youtuber_handle":"@fixture"},"highlights":[{"snippet":"<mark>fixture</mark>"}]}]}]}'
     if [ -n "$output" ]; then printf '%s\n' "$body" > "$output"; else printf '%s\n' "$body"; fi
-    [ -z "$write_out" ] || printf '200\t0.010\t180'
+    [ -z "$write_out" ] || printf '200\t%s\t180' "${MOCK_PUBLICATION_SECONDS:-0.010}"
     ;;
   *) printf 'unexpected publication fixture URL: %s\n' "$url" >&2; exit 1 ;;
 esac
@@ -212,6 +212,20 @@ jq -e '.scrape_errors == 0 and .search_error_delta == 0 and .max_rss_bytes <= 16
   "$tmp/publication-output/resource-summary.json" >/dev/null
 jq -e '.probe_errors == 0 and .max_oom_kill == 0' \
   "$tmp/publication-output/machine-resource-summary.json" >/dev/null
+
+printf '9\n' > "$tmp/active-sequence"
+if PATH="$tmp/publication-bin:$PATH" SEARCH_URL=http://fixture.invalid \
+  SEARCH_API_KEY=fixture-search RAW_ADMIN_API_KEY=fixture-admin \
+  ALLOW_PUBLISH_BENCHMARK=1 CASES_FILE="$tmp/publication-cases.tsv" \
+  OUTPUT_DIR="$tmp/publication-baseline-fail" CONCURRENCY=2 BASELINE_RUNS=1 \
+  MOCK_PUBLICATION_SECONDS=0.250 PUBLISH_BIN=/bin/false \
+  FAKE_ACTIVE_SEQUENCE="$tmp/active-sequence" \
+  "$publication_benchmark" >/dev/null 2>&1; then
+  printf 'slow publication baseline unexpectedly reached the publisher\n' >&2
+  exit 1
+fi
+jq -e '.errors == 0 and .max_ms == 250' \
+  "$tmp/publication-baseline-fail/baseline-summary.json" >/dev/null
 
 printf '9\n' > "$tmp/active-sequence"
 if PATH="$tmp/publication-bin:$PATH" SEARCH_URL=http://fixture.invalid \

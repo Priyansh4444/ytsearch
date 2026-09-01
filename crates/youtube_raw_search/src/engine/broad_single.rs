@@ -289,7 +289,7 @@ pub(super) fn write_index(path: &Path, plans: &[BroadBuildPlan]) -> Result<()> {
 impl BroadIndexWriter {
     fn create(path: &Path) -> Result<Self> {
         let payload_path = path.with_extension("payloads.spool");
-        let payload = ColdWriter::create(&payload_path)?;
+        let payload = ColdWriter::create_large_spool(&payload_path)?;
         Ok(Self {
             payload_path,
             payload,

@@ -307,6 +307,45 @@ fn materialized_broad_plan_matches_the_posting_reducer_response() {
 }
 
 #[test]
+fn broad_plan_estimates_only_the_selected_fields() {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    for video in 0..6 {
+        writeln!(
+            chunks,
+            "{}",
+            json!({
+                "id": format!("video-{video}-1"),
+                "video_id": format!("video-{video}"),
+                "title": if video == 0 { "React internals" } else { "Runtime internals" },
+                "text": "react rendering example",
+                "youtuber_handle": format!("@creator{video}"),
+                "youtuber_name": format!("Creator {video}"),
+                "t_start_ms": video * 30_000,
+            })
+        )
+        .expect("chunk");
+    }
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build index");
+    let engine = RawSearchEngine::open(&index_path).expect("open index");
+    let estimate = |query_by| {
+        let fields = query_fields(Some(query_by), false).expect("query fields");
+        let (plans, _) = engine
+            .conjunction_plans(&["react".to_string()], fields, false, 0)
+            .expect("conjunction plan");
+        assert_eq!(plans.len(), 1);
+        plans[0].estimated_documents
+    };
+    assert_eq!(estimate("text"), 6);
+    assert_eq!(estimate("title"), 1);
+    assert_eq!(estimate("text,title"), 7);
+}
+
+#[test]
 fn raw_index_groups_chunks_and_highlights_matches() {
     let (_root, engine) = test_engine();
     let response = engine

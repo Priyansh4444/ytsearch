@@ -100,3 +100,39 @@ Required before cutover:
 
 The same-reader canary was stopped after the failed gate. It must not be left
 running as a non-serving replica.
+
+## Schema-eight external-builder run, 2026-09-01
+
+The first full schema-eight external build failed closed before activation.
+The exact publication phase ran for 2,422.818 seconds and exited at its bounded
+timeout. Generation 2145 remained active and durable sequence 2150 remained
+unpublished. Both isolated Machines stopped during cleanup; production was not
+modified.
+
+| Signal | Result |
+| --- | ---: |
+| Builder peak cgroup memory | 993 MB |
+| Builder peak disk use | 81% of 10 GB |
+| Builder OOM kills | 0 |
+| Reader peak cgroup memory | 1,250 MB |
+| Reader peak swap | 6 MB |
+| Baseline p50 / p95 / max | 101.7 / 585.7 / 820.2 ms |
+| Four-way build-load p50 / p95 / max | 762 / 5,001 / 5,004 ms |
+| Build-load invalid or failed responses | 899 of 5,846 |
+
+The run exposed two independent blockers. First, the old generation already
+failed the 200-ms baseline, so starting a forty-minute publication could never
+produce a passing full-run artifact. The benchmark now gates baseline
+correctness and latency before it starts the builder. Second, schema-eight
+materialization estimated every token using combined transcript and title
+frequency even for single-field profiles. It therefore admitted avoidable
+full posting reductions. Admission now estimates only the selected fields;
+runtime scoring and IDF are unchanged.
+
+The temporary broad payload spool also used an 8-MiB durability interval. It
+now retains the same flush, `sync_data`, and cache-reclaim semantics with a
+128-MiB interval, reducing barriers by up to sixteen times for that disposable
+file. Build logs now report base-index and broad-index elapsed time, plan count,
+and broad-file bytes separately. Raising the timeout alone is rejected: the
+incomplete build had already exceeded the disk gate and the evidence did not
+identify which phase should receive a larger budget.

@@ -478,12 +478,21 @@ where
     serde_json::to_writer_pretty(&mut manifest_output, &manifest)?;
     manifest_output.finish()?;
 
+    let broad_started = Instant::now();
+    let base_elapsed_ms = started.elapsed().as_millis();
     let preliminary = RawSearchEngine::open_newly_built(index_path)?;
     let broad_plans = broad_single::build_index(
         &preliminary,
         &index_path.join(broad_single::BROAD_SINGLE_FILE),
     )?;
     drop(preliminary);
+    tracing::info!(
+        base_elapsed_ms,
+        broad_elapsed_ms = broad_started.elapsed().as_millis(),
+        broad_plans,
+        broad_bytes = fs::metadata(index_path.join(broad_single::BROAD_SINGLE_FILE))?.len(),
+        "raw schema-eight build phases"
+    );
     manifest.schema_version = 8;
     manifest.files = build_manifest_files(index_path, 8)?;
     let payload_bytes = manifest
