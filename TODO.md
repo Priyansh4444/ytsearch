@@ -253,6 +253,15 @@ Raw can replace Typesense as the canonical search index.
   bounded exact ordered/proximity evidence restores relevance and the expanded
   stopword-heavy matrix passes independent concurrency rounds.
 
+- [ ] Three-or-more common terms bypassed the broad streaming path because it
+  accepted exactly two plans. Queries such as `this is the` consequently
+  materialized large posting vectors and expanded title matches before
+  grouping. The cursor intersection and grouped accumulator now accept any
+  two-or-more broad plans, with failing-before strategy coverage, three-plan
+  score/exactness parity, and `this is the` in the production case matrix.
+  Build the matching overlay and prove the full-corpus <=200-ms gate before
+  checking this item complete.
+
 - [ ] Full-corpus generation publication shares the reader's 2-vCPU/2-GB
   cgroup and causes synchronized multi-second search stalls. A clean canary
   baseline passed the 200 ms ceiling, but requests timed out above five seconds
@@ -265,6 +274,15 @@ Raw can replace Typesense as the canonical search index.
   amortized large-spool durability barriers, build-phase timing, and a
   pre-publication baseline gate are implemented locally; rebuild and rerun on
   an adequately sized isolated builder volume before promotion.
+  A second isolated build from `c68a97dfd9c` also failed closed without
+  activation: Fly stopped the bounded command after about 58 minutes 42
+  seconds with exit 130 and no OOM. The last live sample captured 729 MB and
+  58% disk; cleanup left 45% of the 10-GB volume. Because the terminal phase
+  metrics were lost with the local command handle, this is not evidence of a
+  passing resource gate. Title postings now retain one compact cursor per
+  matching video and lazily merge document IDs instead of expanding every
+  video's documents into plan-sized vectors. Remove the remaining
+  spool-to-final copy if the measured rebuild still misses its disk/time gate.
 - [x] Single-token compact-split fallback treated `react` as `re + act` and
   `fire` as `fi + re`, returning unrelated results and driving 11-13 second
   backend searches. Split recovery now runs only after exact/prefix results are

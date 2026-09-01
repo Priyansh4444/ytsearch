@@ -136,3 +136,47 @@ file. Build logs now report base-index and broad-index elapsed time, plan count,
 and broad-file bytes separately. Raising the timeout alone is rejected: the
 incomplete build had already exceeded the disk gate and the evidence did not
 identify which phase should receive a larger budget.
+
+## Field-aware rebuild, 2026-09-01
+
+Commit `c68a97dfd9c` was built into matching reader and indexer overlays over
+the same immutable corpus digest. The stopped canary and publication builder
+were reconciled to those exact images. Publication targeted generation 2145 at
+durable sequence 2150 and downloaded the mutation snapshot successfully.
+
+The build still did not activate a generation. Fly records the builder start
+at 21:15:41 PDT and the requested stop at 22:14:23 PDT, followed by exit 130;
+the Machine was not OOM-killed. The last live resource sample observed 729 MB
+of memory, zero current swap, and 58% of the 10-GB volume. A post-cleanup,
+inert-machine inspection found 45% disk use. The local command handle expired,
+so terminal phase timings and true peak resources were not captured. Those
+missing measurements are treated as a failed gate, not inferred as success.
+
+Field-aware plan admission and fewer spool durability barriers therefore did
+not make full schema-eight publication bounded enough. Title alternatives now
+retain compact per-video cursors and lazily merge their sorted document IDs,
+removing the previous title-to-document vector expansion from both runtime
+streaming and broad-index construction. The simultaneous temporary
+spool/final-payload footprint remains the next measured target if this change
+does not pass. Extending the timeout would retain the wrong cost structure and
+is not an accepted fix.
+
+## Common three-term query regression
+
+`this is the` exposed a separate runtime path error. Broad conjunction
+streaming and direct grouped accumulation were restricted to exactly two term
+plans. Three common terms fell through to materialized posting vectors, and
+title alternatives expanded matching videos into document vectors. Under the
+single 2-GB backend permit, that work also blocked unrelated requests.
+
+The general cursor intersection now supports any two-or-more broad plans. It
+advances each plan to the maximum current document ID and combines scores only
+when every cursor aligns; grouped searches write directly into bounded video
+slots. Sparse or proximity-bounded streamed results are carried into the next
+candidate stage, so the materialized exact path is not repeated. Title matches
+use a heap of per-video cursors rather than one document-sized vector per term.
+A strategy regression covers three broad terms, synthetic three-plan
+differential tests preserve document IDs, scores, exact masks, retained-token
+exactness, and mixed text/title alternatives, and `this is the` is part of the
+production latency matrix. The change remains undeployed until its exact
+overlay passes the full-corpus correctness and 200-ms canary gate.

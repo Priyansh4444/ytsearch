@@ -367,6 +367,50 @@ type HighlightGroups = Vec<Vec<String>>;
 struct CandidateSearch<'a> {
     constraints: SearchConstraints<'a>,
     initial: Option<InitialConjunction>,
+    skip_exact: bool,
+}
+
+enum BroadGroupedSearch {
+    Complete(Value),
+    Exact(InitialConjunction),
+    Sparse(Value),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BroadGroupedDisposition {
+    PreserveExact,
+    SparseFallback,
+    Complete,
+}
+
+enum FullQueryResolution {
+    Candidate(InitialConjunction),
+    Fallback(Value),
+    TokenDrop,
+}
+
+fn broad_grouped_disposition(documents: usize, found: usize) -> BroadGroupedDisposition {
+    if documents <= MAX_EXACT_PROXIMITY_MATCHES {
+        BroadGroupedDisposition::PreserveExact
+    } else if found < TYPO_RESULT_THRESHOLD {
+        BroadGroupedDisposition::SparseFallback
+    } else {
+        BroadGroupedDisposition::Complete
+    }
+}
+
+fn resolve_full_query(
+    candidate: Option<(Vec<DocMatch>, HighlightGroups)>,
+    fallback: Option<Value>,
+) -> FullQueryResolution {
+    match candidate {
+        Some((matches, highlights)) => FullQueryResolution::Candidate(InitialConjunction {
+            matches,
+            highlights,
+        }),
+        None if fallback.is_some() => FullQueryResolution::Fallback(fallback.expect("checked")),
+        None => FullQueryResolution::TokenDrop,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -614,19 +658,31 @@ impl RawSearchEngine {
         // posting list for a high-frequency token. Start with the rarest token
         // and decode later terms only for surviving document identifiers.
         let mut block_cache = BlockCache::default();
-        if filter.is_none()
+        let broad_grouped = if filter.is_none()
             && excluded_documents.is_empty()
             && self.exact_terms_are_broad(&terms)?
-            && let Some(response) =
-                self.try_stream_broad_grouped(params, &terms, fields, &mut block_cache)?
         {
+            self.try_stream_broad_grouped(params, &terms, fields, &mut block_cache)?
+        } else {
+            None
+        };
+        if let Some(BroadGroupedSearch::Complete(response)) = broad_grouped {
             return Ok(response);
         }
-        let (mut fast_matches, fast_highlights) =
-            self.exact_prefix_conjunction(&terms, fields, true, filter, &mut block_cache)?;
+        let skip_exact = matches!(broad_grouped, Some(BroadGroupedSearch::Sparse(_)));
+        let (mut fast_matches, fast_highlights, broad_sparse_fallback) = match broad_grouped {
+            Some(BroadGroupedSearch::Exact(initial)) => (initial.matches, initial.highlights, None),
+            Some(BroadGroupedSearch::Sparse(fallback)) => (Vec::new(), Vec::new(), Some(fallback)),
+            Some(BroadGroupedSearch::Complete(_)) => unreachable!("returned above"),
+            None => {
+                let (matches, highlights) =
+                    self.exact_prefix_conjunction(&terms, fields, true, filter, &mut block_cache)?;
+                (matches, highlights, None)
+            }
+        };
         retain_not_excluded(&mut fast_matches, &excluded_documents);
-        let fast_enough =
-            self.reaches_result_threshold(params, &fast_matches, TYPO_RESULT_THRESHOLD)?;
+        let fast_enough = !skip_exact
+            && self.reaches_result_threshold(params, &fast_matches, TYPO_RESULT_THRESHOLD)?;
         if fast_enough {
             self.apply_exact_proximity(&terms, fields, &mut fast_matches, &mut block_cache)?;
             return self.format_matches(params, &fast_highlights, fast_matches, &mut block_cache);
@@ -637,7 +693,7 @@ impl RawSearchEngine {
         // remain threshold-gated inside this bounded candidate progression.
         // Every expansion remains conjunctive: a document must match one
         // alternative for every retained query token.
-        if let Some((matches, highlights)) = self.best_conjunctive_candidate(
+        let full_query_candidate = self.best_conjunctive_candidate(
             params,
             &terms,
             fields,
@@ -648,10 +704,21 @@ impl RawSearchEngine {
                     matches: fast_matches,
                     highlights: fast_highlights,
                 }),
+                skip_exact,
             },
             &mut block_cache,
-        )? {
-            return self.format_matches(params, &highlights, matches, &mut block_cache);
+        )?;
+        match resolve_full_query(full_query_candidate, broad_sparse_fallback) {
+            FullQueryResolution::Candidate(candidate) => {
+                return self.format_matches(
+                    params,
+                    &candidate.highlights,
+                    candidate.matches,
+                    &mut block_cache,
+                );
+            }
+            FullQueryResolution::Fallback(fallback) => return Ok(fallback),
+            FullQueryResolution::TokenDrop => {}
         }
 
         // Match Typesense's default right_to_left progression. Prefer the longest
@@ -667,6 +734,7 @@ impl RawSearchEngine {
                 CandidateSearch {
                     constraints,
                     initial: None,
+                    skip_exact: false,
                 },
                 &mut block_cache,
             )? {
@@ -682,6 +750,7 @@ impl RawSearchEngine {
                 CandidateSearch {
                     constraints,
                     initial: None,
+                    skip_exact: false,
                 },
                 &mut block_cache,
             )? {
@@ -1041,7 +1110,11 @@ impl RawSearchEngine {
             .map(|term| bounded_typo_distance(term))
             .max()
             .unwrap_or(0);
-        for typo_distance in 0..=maximum_distance {
+        let first_distance = u8::from(search.skip_exact);
+        if first_distance > maximum_distance {
+            return Ok(None);
+        }
+        for typo_distance in first_distance..=maximum_distance {
             let (mut matches, highlight_terms) = if typo_distance == 0 {
                 match search.initial.take() {
                     Some(initial) => (initial.matches, initial.highlights),
@@ -1423,13 +1496,13 @@ impl RawSearchEngine {
         terms: &[String],
         fields: QueryFields,
         cache: &mut BlockCache,
-    ) -> Result<Option<Value>> {
-        if params.group_by.as_deref() != Some("video_id") || terms.len() != 2 {
+    ) -> Result<Option<BroadGroupedSearch>> {
+        if params.group_by.as_deref() != Some("video_id") || terms.len() < 2 {
             return Ok(None);
         }
         let (mut plans, highlights) = self.conjunction_plans(terms, fields, true, 0)?;
         plans.sort_unstable_by_key(|plan| plan.estimated_documents);
-        if !conjunction::is_broad_two_plan(&plans) {
+        if !conjunction::is_broad_plan_set(&plans) {
             return Ok(None);
         }
 
@@ -1442,8 +1515,15 @@ impl RawSearchEngine {
             });
         let mut groups = self.empty_group_slots();
         let mut documents = 0_usize;
-        self.visit_two_plan_conjunction(&plans, |candidate, record| {
+        let mut exact_matches = Vec::new();
+        self.visit_plan_conjunction(&plans, |candidate, record| {
             documents = documents.saturating_add(1);
+            if documents <= MAX_EXACT_PROXIMITY_MATCHES {
+                exact_matches.push(candidate);
+            } else if documents == MAX_EXACT_PROXIMITY_MATCHES + 1 {
+                exact_matches.clear();
+                exact_matches.shrink_to_fit();
+            }
             self.record_group_match_values(
                 &mut groups,
                 candidate,
@@ -1454,10 +1534,23 @@ impl RawSearchEngine {
             )
         })?;
         let found = groups.iter().flatten().count();
-        if documents <= MAX_EXACT_PROXIMITY_MATCHES || found < TYPO_RESULT_THRESHOLD {
-            return Ok(None);
+        match broad_grouped_disposition(documents, found) {
+            BroadGroupedDisposition::PreserveExact => {
+                return Ok(Some(BroadGroupedSearch::Exact(InitialConjunction {
+                    matches: exact_matches,
+                    highlights,
+                })));
+            }
+            BroadGroupedDisposition::SparseFallback => {
+                return self
+                    .format_group_slots(params, &highlights, groups, cache)
+                    .map(BroadGroupedSearch::Sparse)
+                    .map(Some);
+            }
+            BroadGroupedDisposition::Complete => {}
         }
         self.format_group_slots(params, &highlights, groups, cache)
+            .map(BroadGroupedSearch::Complete)
             .map(Some)
     }
 

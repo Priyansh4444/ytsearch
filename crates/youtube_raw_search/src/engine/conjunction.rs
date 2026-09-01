@@ -10,8 +10,8 @@ const MIN_POSTING_TO_TARGET_RATIO: u64 = 512;
 pub(super) const STREAMING_CONJUNCTION_MIN_DOCUMENTS: u64 = 100_000;
 const _: () = assert!(MAX_FUZZY_TERMS_PER_DISTANCE * 2 < u64::BITS as usize);
 
-pub(super) fn is_broad_two_plan(plans: &[TermPlan]) -> bool {
-    plans.len() == 2
+pub(super) fn is_broad_plan_set(plans: &[TermPlan]) -> bool {
+    plans.len() >= 2
         && plans
             .iter()
             .all(|plan| plan.estimated_documents >= STREAMING_CONJUNCTION_MIN_DOCUMENTS)
@@ -42,10 +42,21 @@ struct TextAlternativeCursor<'a> {
     idf: f32,
 }
 
+struct TitleVideoCursor<'a> {
+    documents: &'a [u32],
+    document_index: usize,
+    score: f32,
+    exact_mask: u8,
+}
+
+struct TitlePlanCursor<'a> {
+    videos: Vec<TitleVideoCursor<'a>>,
+    pending: std::collections::BinaryHeap<std::cmp::Reverse<(u32, usize)>>,
+}
+
 struct StreamingTermPlan<'a> {
     text: Vec<TextAlternativeCursor<'a>>,
-    title: Vec<DocMatch>,
-    title_index: usize,
+    title: TitlePlanCursor<'a>,
     current_document: Option<u32>,
     active_text: u64,
 }
@@ -94,8 +105,8 @@ impl RawSearchEngine {
         let (mut plans, highlights) =
             self.conjunction_plans(terms, fields, prefix_last, maximum_distance)?;
         plans.sort_unstable_by_key(|plan| plan.estimated_documents);
-        if is_broad_two_plan(&plans) {
-            let mut matches = self.stream_two_plan_conjunction(&plans)?;
+        if is_broad_plan_set(&plans) {
+            let mut matches = self.stream_plan_conjunction(&plans)?;
             self.retain_video_filter(&mut matches, filter)?;
             return Ok((matches, highlights));
         }
@@ -208,9 +219,9 @@ impl RawSearchEngine {
         Ok((plans, highlights))
     }
 
-    pub(super) fn stream_two_plan_conjunction(&self, plans: &[TermPlan]) -> Result<Vec<DocMatch>> {
+    pub(super) fn stream_plan_conjunction(&self, plans: &[TermPlan]) -> Result<Vec<DocMatch>> {
         let mut matches = Vec::new();
-        self.visit_two_plan_conjunction(plans, |candidate, _| {
+        self.visit_plan_conjunction(plans, |candidate, _| {
             matches.push(candidate);
             Ok(())
         })?;
@@ -231,48 +242,60 @@ impl RawSearchEngine {
         stream.finish()
     }
 
-    pub(super) fn visit_two_plan_conjunction<F>(
-        &self,
-        plans: &[TermPlan],
-        mut visit: F,
-    ) -> Result<()>
+    pub(super) fn visit_plan_conjunction<F>(&self, plans: &[TermPlan], mut visit: F) -> Result<()>
     where
         F: FnMut(DocMatch, SearchDocumentRecord) -> Result<()>,
     {
-        let [left_plan, right_plan] = plans else {
+        if plans.len() < 2 {
             return Err(Error::Corrupt(
-                "streaming conjunction requires exactly two plans".to_string(),
+                "streaming conjunction requires at least two plans".to_string(),
             ));
-        };
-        let mut left = StreamingTermPlan::new(self, left_plan)?;
-        let mut right = StreamingTermPlan::new(self, right_plan)?;
-        left.advance_to(0)?;
-        right.advance_to(0)?;
-        while let (Some(left_document), Some(right_document)) =
-            (left.current_document(), right.current_document())
-        {
-            let target = left_document.max(right_document);
-            left.advance_to(target)?;
-            right.advance_to(target)?;
-            let (Some(left_document), Some(right_document)) =
-                (left.current_document(), right.current_document())
-            else {
+        }
+        let mut streams = plans
+            .iter()
+            .map(|plan| StreamingTermPlan::new(self, plan))
+            .collect::<Result<Vec<_>>>()?;
+        for stream in &mut streams {
+            stream.advance_to(0)?;
+        }
+        loop {
+            let mut target = 0;
+            let mut exhausted = false;
+            for stream in &streams {
+                let Some(document) = stream.current_document() else {
+                    exhausted = true;
+                    break;
+                };
+                target = target.max(document);
+            }
+            if exhausted {
                 break;
-            };
-            if left_document != right_document {
+            }
+            for stream in &mut streams {
+                stream.advance_to(target)?;
+            }
+            if streams
+                .iter()
+                .any(|stream| stream.current_document() != Some(target))
+            {
                 continue;
             }
-            let record = self.inner.metadata.search_document(left_document)?;
-            let left_match = left.take_current(record.tokens)?;
-            let right_match = right.take_current(record.tokens)?;
-            visit(
-                combine_plan_matches(left_document, left_match, right_match),
-                record,
-            )?;
+            let record = self.inner.metadata.search_document(target)?;
+            let mut stream_matches = streams.iter_mut();
+            let mut combined = stream_matches
+                .next()
+                .ok_or_else(|| Error::Corrupt("streaming conjunction is empty".to_string()))?
+                .take_current(record.tokens)?;
+            for stream in stream_matches {
+                let next = stream.take_current(record.tokens)?;
+                combined = combine_plan_matches(target, combined, next);
+            }
+            visit(combined, record)?;
         }
 
-        left.finish()?;
-        right.finish()?;
+        for stream in &mut streams {
+            stream.finish()?;
+        }
         Ok(())
     }
 
@@ -785,36 +808,14 @@ impl<'a> TextAlternativeCursor<'a> {
 impl<'a> StreamingTermPlan<'a> {
     fn new(engine: &'a RawSearchEngine, plan: &'a TermPlan) -> Result<Self> {
         let mut text = Vec::with_capacity(plan.alternatives.len());
-        let mut title = Vec::new();
         for alternative in &plan.alternatives {
             if alternative.fields.text {
                 text.push(TextAlternativeCursor::new(engine, alternative)?);
             }
-            if alternative.fields.title {
-                let effective_frequency = engine
-                    .estimated_entry_documents(alternative.entry)
-                    .min(u64::from(engine.inner.manifest.documents));
-                let mut matches = engine.decode_title_postings(
-                    alternative.entry,
-                    inverse_document_frequency(
-                        engine.inner.manifest.documents,
-                        u32::try_from(effective_frequency)
-                            .unwrap_or(u32::MAX)
-                            .max(1),
-                    ),
-                    alternative.fields.prioritize_position,
-                    alternative.fields.exact_mask,
-                )?;
-                for candidate in &mut matches {
-                    candidate.score *= alternative.score_multiplier;
-                }
-                title.push(matches);
-            }
         }
         Ok(Self {
             text,
-            title: union_all(title),
-            title_index: 0,
+            title: TitlePlanCursor::new(engine, plan)?,
             current_document: None,
             active_text: 0,
         })
@@ -825,10 +826,7 @@ impl<'a> StreamingTermPlan<'a> {
     }
 
     fn refresh_current_document(&mut self) {
-        let mut current_document = self
-            .title
-            .get(self.title_index)
-            .map(|candidate| candidate.document());
+        let mut current_document = self.title.current_document();
         let mut active_text = 0_u64;
         for (index, cursor) in self.text.iter().enumerate() {
             let Some(document) = cursor.current_document() else {
@@ -857,13 +855,7 @@ impl<'a> StreamingTermPlan<'a> {
         for cursor in &mut self.text {
             cursor.advance_to(target)?;
         }
-        while self
-            .title
-            .get(self.title_index)
-            .is_some_and(|candidate| candidate.document() < target)
-        {
-            self.title_index += 1;
-        }
+        self.title.advance_to(target);
         self.refresh_current_document();
         Ok(())
     }
@@ -884,14 +876,9 @@ impl<'a> StreamingTermPlan<'a> {
             }
             cursor.consume_current()?;
         }
-        if self
-            .title
-            .get(self.title_index)
-            .is_some_and(|candidate| candidate.document() == document)
-        {
-            let contribution = self.title[self.title_index];
+        if self.title.current_document() == Some(document) {
+            let contribution = self.title.take_current()?;
             merge_plan_contribution(&mut combined, contribution);
-            self.title_index += 1;
         }
         self.refresh_current_document();
         combined.ok_or_else(|| Error::Corrupt("streaming plan contribution is empty".to_string()))
@@ -901,10 +888,129 @@ impl<'a> StreamingTermPlan<'a> {
         for cursor in &mut self.text {
             cursor.finish()?;
         }
-        self.title_index = self.title.len();
+        self.title.finish();
         self.current_document = None;
         self.active_text = 0;
         Ok(())
+    }
+}
+
+impl<'a> TitlePlanCursor<'a> {
+    fn new(engine: &'a RawSearchEngine, plan: &'a TermPlan) -> Result<Self> {
+        let mut videos = Vec::new();
+        for alternative in &plan.alternatives {
+            if !alternative.fields.title {
+                continue;
+            }
+            let entry = alternative.entry;
+            let bytes = engine.postings_range(entry.title_offset, entry.title_length)?;
+            let position_bytes = alternative
+                .fields
+                .prioritize_position
+                .then(|| {
+                    engine
+                        .inner
+                        .positions
+                        .range(entry.term, IndexedField::Title)
+                })
+                .transpose()?;
+            let effective_frequency = engine
+                .estimated_entry_documents(entry)
+                .min(u64::from(engine.inner.manifest.documents));
+            let idf = inverse_document_frequency(
+                engine.inner.manifest.documents,
+                u32::try_from(effective_frequency)
+                    .unwrap_or(u32::MAX)
+                    .max(1),
+            );
+            let mut cursor = 0;
+            let mut position_cursor = 0;
+            let mut video_id = 0_u32;
+            let mut postings = 0_u32;
+            while cursor < bytes.len() {
+                video_id = video_id.saturating_add(read_varint(bytes, &mut cursor, bytes.len())?);
+                let frequency = read_varint(bytes, &mut cursor, bytes.len())?;
+                let first_position = position_bytes
+                    .map(|positions| read_varint(positions, &mut position_cursor, positions.len()))
+                    .transpose()?
+                    .unwrap_or_default();
+                let video = engine.inner.videos.get(video_id as usize).ok_or_else(|| {
+                    Error::Corrupt("title posting video is out of bounds".to_string())
+                })?;
+                if !video.documents.is_empty() {
+                    videos.push(TitleVideoCursor {
+                        documents: &video.documents,
+                        document_index: 0,
+                        score: idf
+                            * TITLE_QUERY_WEIGHT
+                            * (1.0 + (frequency as f32).ln())
+                            * token_position_multiplier(
+                                first_position,
+                                alternative.fields.prioritize_position,
+                            )
+                            * alternative.score_multiplier,
+                        exact_mask: alternative.fields.exact_mask,
+                    });
+                }
+                postings = postings.saturating_add(1);
+            }
+            if postings != entry.title_frequency
+                || position_bytes.is_some_and(|positions| position_cursor != positions.len())
+            {
+                return Err(Error::Corrupt(
+                    "title posting/position count does not match lexicon".to_string(),
+                ));
+            }
+        }
+        let pending = videos
+            .iter()
+            .enumerate()
+            .map(|(index, video)| std::cmp::Reverse((video.documents[0], index)))
+            .collect();
+        Ok(Self { videos, pending })
+    }
+
+    fn current_document(&self) -> Option<u32> {
+        self.pending.peek().map(|entry| entry.0.0)
+    }
+
+    fn advance_to(&mut self, target: u32) {
+        while self
+            .current_document()
+            .is_some_and(|document| document < target)
+        {
+            let std::cmp::Reverse((_, index)) = self.pending.pop().expect("title heap entry");
+            let video = &mut self.videos[index];
+            video.document_index += video.documents[video.document_index..]
+                .partition_point(|document| *document < target);
+            if let Some(&document) = video.documents.get(video.document_index) {
+                self.pending.push(std::cmp::Reverse((document, index)));
+            }
+        }
+    }
+
+    fn take_current(&mut self) -> Result<DocMatch> {
+        let document = self
+            .current_document()
+            .ok_or_else(|| Error::Corrupt("title plan has no current document".to_string()))?;
+        let mut combined = None;
+        while self.current_document() == Some(document) {
+            let std::cmp::Reverse((_, index)) = self.pending.pop().expect("title heap entry");
+            let video = &mut self.videos[index];
+            merge_plan_contribution(
+                &mut combined,
+                DocMatch::with_exact_mask(document, video.score, false, video.exact_mask),
+            );
+            video.document_index += 1;
+            if let Some(&next) = video.documents.get(video.document_index) {
+                self.pending.push(std::cmp::Reverse((next, index)));
+            }
+        }
+        combined.ok_or_else(|| Error::Corrupt("title plan contribution is empty".to_string()))
+    }
+
+    fn finish(&mut self) {
+        self.pending.clear();
     }
 }
 
@@ -1004,5 +1110,16 @@ mod strategy_tests {
             MAX_ADAPTIVE_DOCUMENT_VALIDATE_TARGETS + 1,
             &[plan(u64::MAX)]
         ));
+    }
+
+    #[test]
+    fn broad_streaming_strategy_accepts_three_common_terms() {
+        let broad = STREAMING_CONJUNCTION_MIN_DOCUMENTS;
+        assert!(is_broad_plan_set(&[plan(broad), plan(broad), plan(broad),]));
+        assert!(!is_broad_plan_set(&[
+            plan(broad),
+            plan(broad - 1),
+            plan(broad),
+        ]));
     }
 }

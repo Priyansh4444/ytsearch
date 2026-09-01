@@ -218,6 +218,29 @@ fn streaming_text_alternative(
     }
 }
 
+fn streaming_title_alternative(
+    engine: &RawSearchEngine,
+    term: &str,
+    exact_mask: u8,
+) -> TermAlternative {
+    TermAlternative {
+        term: term.to_string(),
+        entry: engine
+            .inner
+            .lexicon
+            .lookup(term)
+            .expect("lexicon lookup")
+            .expect("term entry"),
+        fields: QueryFields {
+            text: false,
+            title: true,
+            prioritize_position: true,
+            exact_mask,
+        },
+        score_multiplier: 1.0,
+    }
+}
+
 fn grouped_query(query: &str) -> SearchParams {
     SearchParams {
         q: query.to_string(),
@@ -1543,7 +1566,7 @@ fn streaming_two_plan_conjunction_matches_materialized_scoring() {
         }
     });
     let streamed = engine
-        .stream_two_plan_conjunction(&plans)
+        .stream_plan_conjunction(&plans)
         .expect("streamed conjunction");
     let materialized = intersect_all_borrowed(
         &engine
@@ -1576,6 +1599,134 @@ fn streaming_two_plan_conjunction_matches_materialized_scoring() {
 }
 
 #[test]
+fn streaming_three_plan_conjunction_matches_materialized_scoring() {
+    let (_root, engine) = streaming_edge_engine();
+    let terms = ["search", "common", "anchor"];
+    let fields = query_fields(None, true).expect("query fields");
+    let plans = terms.map(|term| {
+        let index = terms
+            .iter()
+            .position(|candidate| *candidate == term)
+            .unwrap();
+        let entry = engine
+            .inner
+            .lexicon
+            .lookup(term)
+            .expect("lexicon lookup")
+            .expect("exact term");
+        TermPlan {
+            alternatives: vec![TermAlternative {
+                term: term.to_string(),
+                entry,
+                fields: QueryFields {
+                    exact_mask: 1 << (3 - index),
+                    ..fields
+                },
+                score_multiplier: 1.0,
+            }],
+            estimated_documents: engine.estimated_entry_documents(entry),
+        }
+    });
+    let streamed = engine
+        .stream_plan_conjunction(&plans)
+        .expect("streamed conjunction");
+    let materialized = intersect_all_borrowed(
+        &engine
+            .exact_term_matches(&terms.map(ToString::to_string), fields)
+            .expect("materialized matches"),
+    );
+
+    assert_eq!(streamed.len(), materialized.len());
+    for (streamed, materialized) in streamed.iter().zip(materialized) {
+        assert_eq!(streamed.document(), materialized.document());
+        assert_eq!(streamed.exact_mask(), materialized.exact_mask());
+        assert_eq!(streamed.matches_text(), materialized.matches_text());
+        assert_eq!(
+            streamed.all_retained_exact(),
+            materialized.all_retained_exact()
+        );
+        let tolerance = materialized.score.abs().max(1.0) * 1e-6;
+        assert!((streamed.score - materialized.score).abs() <= tolerance);
+    }
+}
+
+#[test]
+fn streaming_three_plan_conjunction_preserves_text_title_alternatives() {
+    let (_root, engine) = streaming_edge_engine();
+    let exact = streaming_text_alternative(&engine, "search", 1 << 3, 1.0);
+    let prefix = streaming_text_alternative(&engine, "searching", 0, 0.9);
+    let common = streaming_text_alternative(&engine, "common", 1 << 2, 1.0);
+    let title = streaming_title_alternative(&engine, "fixture", 1 << 1);
+    let plans = [
+        TermPlan {
+            estimated_documents: engine.estimated_entry_documents(exact.entry)
+                + engine.estimated_entry_documents(prefix.entry),
+            alternatives: vec![exact, prefix],
+        },
+        TermPlan {
+            estimated_documents: engine.estimated_entry_documents(common.entry),
+            alternatives: vec![common],
+        },
+        TermPlan {
+            estimated_documents: engine.estimated_entry_documents(title.entry),
+            alternatives: vec![title],
+        },
+    ];
+    let streamed = engine
+        .stream_plan_conjunction(&plans)
+        .expect("streamed conjunction");
+    let materialized = intersect_all_borrowed(
+        &plans
+            .iter()
+            .map(|plan| {
+                let mut alternatives = Vec::new();
+                for alternative in &plan.alternatives {
+                    let mut matches = engine
+                        .matches_for_entry(alternative.entry, alternative.fields)
+                        .expect("materialized alternative");
+                    for candidate in &mut matches {
+                        candidate.score *= alternative.score_multiplier;
+                    }
+                    alternatives.push(matches);
+                }
+                union_all(alternatives)
+            })
+            .collect::<Vec<_>>(),
+    );
+
+    assert_eq!(streamed.len(), materialized.len());
+    for (streamed, materialized) in streamed.iter().zip(materialized) {
+        assert_eq!(streamed.document(), materialized.document());
+        assert_eq!(streamed.exact_mask(), materialized.exact_mask());
+        assert_eq!(streamed.matches_text(), materialized.matches_text());
+        assert_eq!(
+            streamed.all_retained_exact(),
+            materialized.all_retained_exact()
+        );
+        let tolerance = materialized.score.abs().max(1.0) * 1e-6;
+        assert!((streamed.score - materialized.score).abs() <= tolerance);
+    }
+}
+
+#[test]
+fn sparse_broad_grouped_results_remain_an_exact_fallback() {
+    assert_eq!(
+        broad_grouped_disposition(MAX_EXACT_PROXIMITY_MATCHES + 1, 4),
+        BroadGroupedDisposition::SparseFallback
+    );
+    assert_eq!(
+        broad_grouped_disposition(MAX_EXACT_PROXIMITY_MATCHES + 1, TYPO_RESULT_THRESHOLD),
+        BroadGroupedDisposition::Complete
+    );
+    let fallback = json!({"sentinel": "exact broad response"});
+    let FullQueryResolution::Fallback(actual) = resolve_full_query(None, Some(fallback.clone()))
+    else {
+        panic!("sparse exact response must precede token dropping");
+    };
+    assert_eq!(actual, fallback);
+}
+
+#[test]
 fn streaming_plan_preserves_exactness_when_an_exact_and_prefix_alternative_match() {
     let (_root, engine) = streaming_edge_engine();
     let exact = streaming_text_alternative(&engine, "search", 1 << 3, 1.0);
@@ -1594,7 +1745,7 @@ fn streaming_plan_preserves_exactness_when_an_exact_and_prefix_alternative_match
     ];
 
     let streamed = engine
-        .stream_two_plan_conjunction(&plans)
+        .stream_plan_conjunction(&plans)
         .expect("streamed conjunction");
     let mut exact_matches = engine
         .matches_for_entry(
@@ -1647,7 +1798,7 @@ fn streaming_conjunction_rejects_a_non_intersecting_out_of_range_posting() {
     assert_eq!(malformed.entry.text_length, 3);
     malformed.entry.text_offset += 1;
     let other = streaming_text_alternative(&engine, "anchor", 1 << 2, 1.0);
-    let result = engine.stream_two_plan_conjunction(&[
+    let result = engine.stream_plan_conjunction(&[
         TermPlan {
             alternatives: vec![malformed],
             estimated_documents: 1,
@@ -1673,7 +1824,7 @@ fn streaming_conjunction_validates_a_zero_frequency_nonempty_posting_range() {
     let mut malformed = streaming_text_alternative(&engine, "middle", 1 << 3, 1.0);
     malformed.entry.text_frequency = 0;
     let other = streaming_text_alternative(&engine, "anchor", 1 << 2, 1.0);
-    let result = engine.stream_two_plan_conjunction(&[
+    let result = engine.stream_plan_conjunction(&[
         TermPlan {
             alternatives: vec![malformed],
             estimated_documents: 0,
@@ -1705,7 +1856,7 @@ fn streaming_group_accumulation_matches_materialized_response() {
     let params = grouped_query("relativity explained");
 
     let materialized = engine
-        .stream_two_plan_conjunction(&plans)
+        .stream_plan_conjunction(&plans)
         .expect("materialized stream");
     let expected = engine
         .format_matches(
@@ -1719,7 +1870,7 @@ fn streaming_group_accumulation_matches_materialized_response() {
     let hits_per_group = usize::from(params.group_limit.expect("group limit"));
     let mut groups = engine.empty_group_slots();
     engine
-        .visit_two_plan_conjunction(&plans, |candidate, record| {
+        .visit_plan_conjunction(&plans, |candidate, record| {
             engine.record_group_match_values(
                 &mut groups,
                 candidate,
