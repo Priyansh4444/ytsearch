@@ -103,6 +103,11 @@ Stage the Raw admin key plus optional YouTube/cookie inputs:
 scripts/fly-set-indexer-secrets.sh
 ```
 
+`RAW_SEARCH_API_URL` is not an app secret. Queue workers, one-shot indexers,
+and publication builders set it in their Machine configuration because each
+role may target a different reader. An app-wide secret would override those
+targets and can make an isolated publication builder contact production.
+
 `yt-dlp` is primary. `YOUTUBE_API_KEY` is an optional discovery/metadata
 fallback and cannot retrieve captions:
 

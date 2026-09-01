@@ -24,7 +24,6 @@ require_env() {
   fi
 }
 
-require_env RAW_SEARCH_API_URL
 require_env RAW_SEARCH_ADMIN_API_KEY
 require_env YTSEARCH_INDEX_QUEUE_TOKEN
 
@@ -71,12 +70,15 @@ configure_youtube_api_fallback() {
   esac
 }
 
+# The Raw URL is machine-scoped configuration. Keeping it as an app secret would
+# override the publication builder's isolated canary target at runtime.
+flyctl secrets unset --stage --app "$APP_NAME" RAW_SEARCH_API_URL >/dev/null 2>&1 || true
+
 # Values are loaded from local env files and passed directly to Fly; they are not printed.
 flyctl secrets set --stage \
   --app "$APP_NAME" \
   INDEX_QUEUE_API_BASE_URL="$INDEX_QUEUE_API_BASE_URL" \
   YTSEARCH_INDEX_QUEUE_TOKEN="$YTSEARCH_INDEX_QUEUE_TOKEN" \
-  RAW_SEARCH_API_URL="$RAW_SEARCH_API_URL" \
   RAW_SEARCH_ADMIN_API_KEY="$RAW_SEARCH_ADMIN_API_KEY"
 
 set_optional_ytdlp_secrets
