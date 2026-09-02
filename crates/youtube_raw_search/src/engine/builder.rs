@@ -442,6 +442,7 @@ where
         document_count,
         videos.len() as u32,
     )?;
+    drop(bigram_spool);
     let term_count = lexicon.len();
 
     let average_document_tokens = if document_count == 0 {
@@ -633,11 +634,25 @@ fn replay_document_bigrams(
     document_count: u32,
     output: &mut ShardSpoolWriter,
 ) -> Result<()> {
-    let documents = MappedFile::open(documents_path, DOCUMENTS_MAGIC)?;
+    #[derive(Deserialize)]
+    struct ReplayDocument<'a> {
+        #[serde(borrow)]
+        text: std::borrow::Cow<'a, str>,
+    }
+
+    let mut documents = ColdReader::open(documents_path)?;
+    let mut document_header = [0_u8; HEADER_BYTES];
+    documents.read_exact(&mut document_header)?;
+    if document_header[..8] != DOCUMENTS_MAGIC[..] {
+        return Err(Error::Corrupt(
+            "document block store has the wrong magic".to_string(),
+        ));
+    }
     let mut records = BufReader::new(ColdReader::open(records_path)?);
     let mut decoded_block_id = None;
     let mut decoded_block = Vec::new();
     let mut encoded = [0_u8; 24];
+    let mut next_block_offset = HEADER_BYTES as u64;
 
     for document in 0..document_count {
         records.read_exact(&mut encoded)?;
@@ -648,15 +663,21 @@ fn replay_document_bigrams(
             let block = blocks
                 .get(block_id as usize)
                 .ok_or_else(|| Error::Corrupt("document block is out of bounds".to_string()))?;
-            let start = block.offset as usize;
-            let end = start
-                .checked_add(block.compressed_length as usize)
+            if block.offset != next_block_offset {
+                return Err(Error::Corrupt(
+                    "document blocks are not contiguous".to_string(),
+                ));
+            }
+            let mut compressed = vec![0_u8; block.compressed_length as usize];
+            documents.read_exact(&mut compressed)?;
+            next_block_offset = next_block_offset
+                .checked_add(u64::from(block.compressed_length))
                 .ok_or_else(|| Error::Corrupt("document block range overflows".to_string()))?;
-            let compressed = documents
-                .bytes()
-                .get(start..end)
-                .ok_or_else(|| Error::Corrupt("document block is truncated".to_string()))?;
-            decoded_block = zstd::stream::decode_all(compressed)?;
+            decoded_block.clear();
+            let decoder = zstd::stream::read::Decoder::new(compressed.as_slice())?;
+            decoder
+                .take(u64::from(block.uncompressed_length) + 1)
+                .read_to_end(&mut decoded_block)?;
             if decoded_block.len() != block.uncompressed_length as usize {
                 return Err(Error::Corrupt(
                     "decoded document block length does not match metadata".to_string(),
@@ -671,7 +692,7 @@ fn replay_document_bigrams(
         let line = decoded_block
             .get(start..end)
             .ok_or_else(|| Error::Corrupt("document range is truncated".to_string()))?;
-        let source: IndexDocument = serde_json::from_slice(line)?;
+        let source: ReplayDocument<'_> = serde_json::from_slice(line)?;
         append_value_bigrams(&source.text, document, IndexedField::Text, output)?;
     }
     if records.read(&mut [0_u8; 1])? != 0 {
