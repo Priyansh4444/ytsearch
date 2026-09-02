@@ -279,9 +279,7 @@ where
     let mut position_scratch = Vec::new();
 
     let posting_spool = SpoolDirectory::create(index_path.join(POSTING_SPOOL_DIRECTORY))?;
-    let bigram_spool = SpoolDirectory::create(index_path.join(BIGRAM_SPOOL_DIRECTORY))?;
     let mut posting_spool_writer = ShardSpoolWriter::create(posting_spool.path())?;
-    let mut bigram_spool_writer = ShardSpoolWriter::create(bigram_spool.path())?;
     let mut videos = Vec::<VideoMeta>::new();
     let mut video_ids = HashMap::<String, u32>::new();
     let document_record_spool_path = index_path.join(DOCUMENT_RECORD_SPOOL_FILE);
@@ -314,12 +312,7 @@ where
             video
         } else {
             let video = videos.len() as u32;
-            let title_counts = token_counts(
-                &source.title,
-                video,
-                IndexedField::Title,
-                &mut bigram_spool_writer,
-            )?;
+            let title_counts = token_counts(&source.title)?;
             append_token_postings(
                 &mut posting_spool_writer,
                 title_counts,
@@ -348,12 +341,7 @@ where
         document_count = document_count.checked_add(1).ok_or_else(|| {
             Error::InvalidInput("corpus contains more than 4 billion documents".to_string())
         })?;
-        let text_counts = token_counts(
-            &source.text,
-            document,
-            IndexedField::Text,
-            &mut bigram_spool_writer,
-        )?;
+        let text_counts = token_counts(&source.text)?;
         let document_tokens = text_counts
             .terms
             .values()
@@ -405,7 +393,6 @@ where
     document_record_spool.finish()?;
     position_spool.finish()?;
     posting_spool_writer.finish()?;
-    bigram_spool_writer.finish()?;
 
     let mut channel_output = ColdWriter::create(&index_path.join(CHANNELS_FILE))?;
     serde_json::to_writer(&mut channel_output, &channels)?;
@@ -419,11 +406,35 @@ where
         &document_record_spool_path,
         &block_records,
     )?;
-    fs::remove_file(&document_record_spool_path)?;
     let position_spool = MappedFile::open(&position_spool_path, POSITION_SPOOL_MAGIC)?;
     let lexicon = write_postings(index_path, posting_spool.path(), &videos, &position_spool)?;
+    drop(posting_spool);
     drop(position_spool);
     fs::remove_file(&position_spool_path)?;
+
+    // Bigram records used to be emitted alongside unigram records. On the
+    // production corpus that kept a 3 GiB bigram spool alive at the same time
+    // as the 2.6 GiB posting spool. Replaying the compressed document store
+    // after the lexicon is complete makes those temporary lifetimes disjoint.
+    let bigram_spool = SpoolDirectory::create(index_path.join(BIGRAM_SPOOL_DIRECTORY))?;
+    let mut bigram_spool_writer = ShardSpoolWriter::create(bigram_spool.path())?;
+    for (video, metadata) in videos.iter().enumerate() {
+        append_value_bigrams(
+            &metadata.title,
+            video as u32,
+            IndexedField::Title,
+            &mut bigram_spool_writer,
+        )?;
+    }
+    replay_document_bigrams(
+        &documents_path,
+        &document_record_spool_path,
+        &block_records,
+        document_count,
+        &mut bigram_spool_writer,
+    )?;
+    bigram_spool_writer.finish()?;
+    fs::remove_file(&document_record_spool_path)?;
     write_bigram_indexes(
         index_path,
         bigram_spool.path(),
@@ -612,6 +623,62 @@ fn write_document_record(output: &mut impl Write, document: DocumentRecord) -> R
     output.write_all(&document.video.to_le_bytes())?;
     output.write_all(&document.tokens.to_le_bytes())?;
     output.write_all(&document.t_start_ms.to_le_bytes())?;
+    Ok(())
+}
+
+fn replay_document_bigrams(
+    documents_path: &Path,
+    records_path: &Path,
+    blocks: &[BlockRecord],
+    document_count: u32,
+    output: &mut ShardSpoolWriter,
+) -> Result<()> {
+    let documents = MappedFile::open(documents_path, DOCUMENTS_MAGIC)?;
+    let mut records = BufReader::new(ColdReader::open(records_path)?);
+    let mut decoded_block_id = None;
+    let mut decoded_block = Vec::new();
+    let mut encoded = [0_u8; 24];
+
+    for document in 0..document_count {
+        records.read_exact(&mut encoded)?;
+        let block_id = u32::from_le_bytes(encoded[0..4].try_into().expect("block id bytes"));
+        let offset = u32::from_le_bytes(encoded[4..8].try_into().expect("offset bytes"));
+        let length = u32::from_le_bytes(encoded[8..12].try_into().expect("length bytes"));
+        if decoded_block_id != Some(block_id) {
+            let block = blocks
+                .get(block_id as usize)
+                .ok_or_else(|| Error::Corrupt("document block is out of bounds".to_string()))?;
+            let start = block.offset as usize;
+            let end = start
+                .checked_add(block.compressed_length as usize)
+                .ok_or_else(|| Error::Corrupt("document block range overflows".to_string()))?;
+            let compressed = documents
+                .bytes()
+                .get(start..end)
+                .ok_or_else(|| Error::Corrupt("document block is truncated".to_string()))?;
+            decoded_block = zstd::stream::decode_all(compressed)?;
+            if decoded_block.len() != block.uncompressed_length as usize {
+                return Err(Error::Corrupt(
+                    "decoded document block length does not match metadata".to_string(),
+                ));
+            }
+            decoded_block_id = Some(block_id);
+        }
+        let start = offset as usize;
+        let end = start
+            .checked_add(length as usize)
+            .ok_or_else(|| Error::Corrupt("document range overflows".to_string()))?;
+        let line = decoded_block
+            .get(start..end)
+            .ok_or_else(|| Error::Corrupt("document range is truncated".to_string()))?;
+        let source: IndexDocument = serde_json::from_slice(line)?;
+        append_value_bigrams(&source.text, document, IndexedField::Text, output)?;
+    }
+    if records.read(&mut [0_u8; 1])? != 0 {
+        return Err(Error::Corrupt(
+            "document record spool has trailing bytes".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -1452,65 +1519,20 @@ fn write_lexicon(index_path: &Path, entries: &[LexiconBuildEntry]) -> Result<()>
     Ok(())
 }
 
-fn token_counts(
-    value: &str,
-    id: u32,
-    field: IndexedField,
-    bigrams: &mut ShardSpoolWriter,
-) -> Result<TokenCounts> {
+fn token_counts(value: &str) -> Result<TokenCounts> {
     let mut counts = TokenCounts {
         terms: HashMap::new(),
         tails: Vec::new(),
     };
-    let mut token = String::new();
-    let mut previous_token = None;
     let mut position = 0_u32;
-    for character in value.chars() {
-        if character.is_alphanumeric() {
-            token.extend(character.to_lowercase());
-            continue;
-        }
-        record_token(
-            &mut counts,
-            &mut token,
-            &mut previous_token,
-            &mut position,
-            id,
-            field,
-            bigrams,
-        )?;
-    }
-    record_token(
-        &mut counts,
-        &mut token,
-        &mut previous_token,
-        &mut position,
-        id,
-        field,
-        bigrams,
-    )?;
+    for_each_token(value, |token| {
+        record_token(&mut counts, token, &mut position)
+    })?;
     Ok(counts)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn record_token(
-    counts: &mut TokenCounts,
-    token: &mut String,
-    previous_token: &mut Option<String>,
-    position: &mut u32,
-    id: u32,
-    field: IndexedField,
-    bigrams: &mut ShardSpoolWriter,
-) -> Result<()> {
-    if token.is_empty() {
-        return Ok(());
-    }
-    let owned = std::mem::take(token);
-    if let Some(previous) = previous_token.as_deref() {
-        bigrams.append_bigram(previous, &owned, id, *position, field)?;
-    }
-    *previous_token = Some(owned.clone());
-    match counts.terms.entry(owned) {
+fn record_token(counts: &mut TokenCounts, token: String, position: &mut u32) -> Result<()> {
+    match counts.terms.entry(token) {
         std::collections::hash_map::Entry::Vacant(entry) => {
             entry.insert(TokenBuild {
                 frequency: 1,
@@ -1537,6 +1559,41 @@ fn record_token(
         .checked_add(1)
         .ok_or_else(|| Error::InvalidInput("one field exceeds 4 billion tokens".to_string()))?;
     Ok(())
+}
+
+fn for_each_token(value: &str, mut visit: impl FnMut(String) -> Result<()>) -> Result<()> {
+    let mut token = String::new();
+    for character in value.chars() {
+        if character.is_alphanumeric() {
+            token.extend(character.to_lowercase());
+        } else if !token.is_empty() {
+            visit(std::mem::take(&mut token))?;
+        }
+    }
+    if !token.is_empty() {
+        visit(token)?;
+    }
+    Ok(())
+}
+
+fn append_value_bigrams(
+    value: &str,
+    id: u32,
+    field: IndexedField,
+    output: &mut ShardSpoolWriter,
+) -> Result<()> {
+    let mut previous = None::<String>;
+    let mut position = 0_u32;
+    for_each_token(value, |token| {
+        if let Some(left) = previous.as_deref() {
+            output.append_bigram(left, &token, id, position, field)?;
+        }
+        previous = Some(token);
+        position = position
+            .checked_add(1)
+            .ok_or_else(|| Error::InvalidInput("one field exceeds 4 billion tokens".to_string()))?;
+        Ok(())
+    })
 }
 
 #[cfg(test)]
