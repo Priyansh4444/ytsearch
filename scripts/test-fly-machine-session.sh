@@ -33,7 +33,7 @@ if [[ "${0##*/}" == curl ]]; then
   done
   [[ -n "$output" && -n "$auth_header" && -n "$url" ]]
   [[ "$(stat -c '%a' "$auth_header")" == 600 ]]
-  grep -Eq '^Authorization: Bearer (test-secret-token|refreshed-test-token)$' "$auth_header"
+  grep -Fx 'Authorization: Bearer test-secret-token' "$auth_header" >/dev/null
   if [[ "$url" != */lease || "$method" == DELETE ]]; then
     [[ -n "$lease_header" && "$(stat -c '%a' "$lease_header")" == 600 ]]
     grep -Fx 'fly-machine-lease-nonce: test-lease-nonce' "$lease_header" >/dev/null
@@ -145,7 +145,6 @@ fi
 if [[ "${0##*/}" == flyctl ]]; then
   printf '%s\n' "$*" >> "$FAKE_FLY_LOG"
   case "$*" in
-    'auth token') printf 'refreshed-test-token\n'; exit 0 ;;
     'secrets sync --stage --app test-app') exit 0 ;;
     *) printf 'unexpected fake flyctl command: %s\n' "$*" >&2; exit 93 ;;
   esac
@@ -313,7 +312,7 @@ if fly_machine_session_update "$FAKE_SESSION_DIRECTORY" "$temporary_directory/co
   exit 1
 fi
 [[ "$(grep -c 'POST .*machines/0123456789abcd$' "$FAKE_CURL_LOG")" == 1 ]]
-grep -Fx 'Authorization: Bearer refreshed-test-token' \
+grep -Fx 'Authorization: Bearer test-secret-token' \
   "$FAKE_SESSION_DIRECTORY/auth.header" >/dev/null
 FAKE_MODE=normal
 export FAKE_MODE
@@ -337,12 +336,15 @@ new_session expired-auth
 acquire_session
 FAKE_MODE=expired-auth
 export FAKE_MODE
-fly_machine_session_get "$FAKE_SESSION_DIRECTORY" "$temporary_directory/refreshed-get.json"
-jq -e '.id == "0123456789abcd"' "$temporary_directory/refreshed-get.json" >/dev/null
-grep -Fx 'Authorization: Bearer refreshed-test-token' \
+if fly_machine_session_get "$FAKE_SESSION_DIRECTORY" \
+  "$temporary_directory/rejected-auth-get.json" >/dev/null 2>&1; then
+  printf 'an authentication-rejected read must require an explicit replacement token\n' >&2
+  exit 1
+fi
+grep -Fx 'Authorization: Bearer test-secret-token' \
   "$FAKE_SESSION_DIRECTORY/auth.header" >/dev/null
-[[ "$(grep -c 'GET .*machines/0123456789abcd' "$FAKE_CURL_LOG")" == 2 ]]
-[[ "$(grep -c '^auth token$' "$FAKE_FLY_LOG")" == 1 ]]
+[[ "$(grep -c 'GET .*machines/0123456789abcd' "$FAKE_CURL_LOG")" == 1 ]]
+! grep -q '^auth token$' "$FAKE_FLY_LOG"
 FAKE_MODE=normal
 export FAKE_MODE
 fly_machine_session_release "$FAKE_SESSION_DIRECTORY"

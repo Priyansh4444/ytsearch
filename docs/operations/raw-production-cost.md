@@ -12,17 +12,19 @@ egress remains usage-dependent.
 | Production Raw reader/writer | `shared-cpu-2x`, 2 GB, always started | $13.58 |
 | Temporary Raw publication canary | stopped after the failed same-reader gate; non-serving | $0 compute; up to $1.20 stopped rootfs |
 | Queue/profile API | `shared-cpu-1x`, 512 MB, always started | $3.81 |
-| All Raw, temporary, and retained Typesense volumes | 122 GB encrypted | $18.30 |
+| All Raw, temporary, and retained Typesense volumes | 132 GB encrypted | $19.80 |
 | CLI-listed snapshot recovery sizes | current logical-byte estimate after the first 10 GB free | about $9.58 before incremental-billing adjustment |
 | Stopped Machine rootfs ceiling | at most 62 GB | at most $9.30 |
-| **Current fixed allocation** | | **about $54.57/month before egress/indexer/Cloudflare** |
+| **Current fixed allocation** | | **about $56.07/month before egress/indexer/Cloudflare** |
 
 The temporary canary recorded in
 [`config/fly-production-resources.json`](../../config/fly-production-resources.json)
-is not a serving replica and was verified stopped on 2026-08-30. Its 20 GB
+is not a serving replica and was verified stopped on 2026-09-01. Its 20 GB
 volume remains provisioned. The retained on-demand SJC indexer in
 `ytsearch-indexer-raw-production` was also verified stopped and must not be
-confused with the obsolete ORD repair builder. The canary's
+confused with the obsolete ORD publication builder, whose volume was extended
+from 10 GB to 20 GB after the schema-8 build reached 77% disk utilization. The
+extra 10 GB costs $1.50/month while provisioned. The canary's
 publication proved that a same-reader full build causes requests to exceed the
 five-second timeout, so adding permanent reader capacity is not the fix.
 
@@ -74,6 +76,16 @@ per month. The intended automatic cadence is one gap pass on a four-hour wake
 and no more than two coalesced generation builds per day; approved queue work
 still wakes immediately. The queue remains durable and fails closed when the
 runtime cap is reached.
+
+The 2026-09-01 schema-8 build did not exhaust RAM: observed use stayed roughly
+724–993 MiB on the 2 GB builder and Fly reported no OOM kill. It timed out while
+holding a 2.6 GB unigram spool, 3.0 GB bigram spool, and document artifacts at
+once. The builder now completes and deletes the unigram phase before replaying
+the compressed document store into the bigram phase, then deletes the bigram
+spool before broad-query materialization. This removes the measured reason for
+a memory or CPU resize. Re-run the exact build gate before deciding whether the
+retained SJC indexer needs a 30 GB volume; resize only if a measured
+latest-schema peak reaches 80%.
 
 At current SJC pricing, the previous `performance-2x`, 4 GB Raw reader alone
 would cost about $73.92/month and violate the complete-system ceiling.

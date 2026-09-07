@@ -601,7 +601,15 @@ Raw can replace Typesense as the canonical search index.
   - [x] Enumerate accepted non-lexicon prefix keys with one post-order trie pass
     and four frequency winners per subtree, without an unbounded prefix set;
     prove a materialized plan is JSON-equal to the canonical posting reducer.
+  - [x] Make the large build phases disjoint: finish and delete the unigram
+    spool before replaying compressed documents into the bigram spool; delete
+    the bigram spool before broad-query materialization. Replay uses bounded
+    block decompression and deserializes only transcript text.
   - [ ] Measure production build duration, scratch/disk bytes, plan count,
     artifact bytes, and peak RSS before accepting the schema-8 generation.
-- [x] Refresh an expired Fly API bearer once during a leased Machine session so
-  a multi-minute integrity check cannot strand a started canary during cleanup.
+- [x] Remove deprecated `flyctl auth token` calls. Direct Machines API commands
+  require an explicit scoped `FLY_API_TOKEN`, reject expired credentials without
+  unsafe mutation replay, and document organization/deploy token setup.
+- [ ] Enforce an end-to-end production p95 below 200 ms (not search CPU alone)
+  on the latest schema for the canonical matrix, including `this is the`, with
+  zero errors and no resource crossing 80%.

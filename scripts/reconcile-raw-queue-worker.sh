@@ -229,9 +229,9 @@ if [ -z "$machine_version" ]; then
   echo "The Raw queue worker is missing the version required for a safe update." >&2
   exit 1
 fi
-fly_api_token="${FLY_API_TOKEN:-$(flyctl auth token)}"
+fly_api_token="${FLY_API_TOKEN:-}"
 if [ -z "$fly_api_token" ]; then
-  echo "Could not obtain a Fly API token." >&2
+  echo "FLY_API_TOKEN is required; create a scoped organization token as documented in docs/deploy.md" >&2
   exit 1
 fi
 token_without_line_breaks="$(printf '%s' "$fly_api_token" | tr -d '\r\n')"

@@ -18,9 +18,35 @@ current final gates.
 ## Prerequisites
 
 ```bash
+flyctl auth login
 flyctl auth whoami
 bunx wrangler whoami
 ```
+
+`flyctl auth token` is deprecated and the repository does not call it. Commands
+that use Fly's direct Machines API require an explicit, scoped token. Create an
+organization token because publication coordinates more than one app:
+
+```bash
+flyctl tokens create org --org ORG_SLUG --expiry 720h
+read -rsp 'Fly organization token: ' FLY_API_TOKEN; printf '\n'
+export FLY_API_TOKEN
+```
+
+Paste the newly created token at the hidden prompt. Do not put it in the
+repository, shell history, command arguments, or logs. A token is shown only at
+creation time; when it expires or Fly rejects it, create a replacement and
+rerun the command. For single-app CI, prefer the narrower
+`flyctl tokens create deploy --app APP --expiry 720h`. The Cloudflare Worker
+needs the multi-app token under its existing secret name:
+
+```bash
+printf '%s' "$FLY_API_TOKEN" | bunx wrangler secret put FLYIO_TOKEN
+```
+
+These commands follow Fly's current [token
+guidance](https://fly.io/docs/security/tokens/) and [CLI integration
+guidance](https://fly.io/docs/flyctl/integrating/).
 
 Generate separate 24-byte-or-longer public and admin keys. Never print existing
 production secrets or put them in `VITE_*` variables.
@@ -133,6 +159,8 @@ generation rollback remains.
 - `RAW_SEARCH_API_KEY`: Raw engine and Rust API only.
 - `RAW_SEARCH_ADMIN_API_KEY`: Raw engine and trusted indexers only.
 - `YTSEARCH_INDEX_QUEUE_TOKEN`: Rust API, indexer, and operator tools only.
-- `FLYIO_TOKEN`: Cloudflare Worker and authorized operator environment only.
+- `FLY_API_TOKEN`: operator/CI environment only; required by direct Machines
+  API scripts and never derived through deprecated `flyctl auth token`.
+- `FLYIO_TOKEN`: Cloudflare Worker only; use the scoped multi-app token above.
 - `YOUTUBE_API_KEY` and cookie files: indexer only.
 - Axiom ingest and query keys remain separate.

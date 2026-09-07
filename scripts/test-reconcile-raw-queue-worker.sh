@@ -1,6 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
+export FLY_API_TOKEN=fake-token
+
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM

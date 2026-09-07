@@ -102,24 +102,9 @@ _fly_machine_session_url() {
 }
 
 _fly_machine_session_refresh_auth() {
-  local directory="$1"
-  local token temporary_header
-
-  # Ignore a process-scoped token here: it is the credential the API just
-  # rejected. Ask flyctl for the current persisted login instead.
-  token="$(env -u FLY_API_TOKEN flyctl auth token)" || {
-    _fly_machine_session_error "could not refresh the Fly API token"
-    return 1
-  }
-  if [[ -z "$token" || "$(printf '%s' "$token" | tr -d '\r\n')" != "$token" ]]; then
-    _fly_machine_session_error "refreshed Fly API token must be one nonempty line"
-    return 1
-  fi
-
-  temporary_header="$(mktemp "$directory/auth.header.refresh.XXXXXX")" || return 1
-  chmod 600 "$temporary_header"
-  printf 'Authorization: Bearer %s\n' "$token" > "$temporary_header"
-  mv -f -- "$temporary_header" "$directory/auth.header"
+  _fly_machine_session_error \
+    "Fly rejected FLY_API_TOKEN; create a new scoped token and rerun the command"
+  return 1
 }
 
 _fly_machine_session_request() {
@@ -258,10 +243,9 @@ fly_machine_session_create() {
     return 1
   fi
   if [[ -z "$token" ]]; then
-    token="$(flyctl auth token)" || {
-      _fly_machine_session_error "could not obtain a Fly API token"
-      return 1
-    }
+    _fly_machine_session_error \
+      "FLY_API_TOKEN is required for direct Machine API calls; see docs/deploy.md"
+    return 1
   fi
   if [[ -z "$token" || "$(printf '%s' "$token" | tr -d '\r\n')" != "$token" ]]; then
     _fly_machine_session_error "Fly API token must be one nonempty line"

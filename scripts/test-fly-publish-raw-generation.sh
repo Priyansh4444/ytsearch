@@ -21,6 +21,7 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 mkdir -p "$tmp/bin"
 export FLY_PRODUCTION_INVENTORY_PATH="$SCRIPT_DIR/testdata/fly-production-resources.json"
 export RAW_RELEASE_RECOVERY_ROOT="$tmp/recovery"
+export FLY_API_TOKEN=fake-token
 
 cat > "$tmp/bin/flyctl" <<'SH'
 #!/usr/bin/env sh
