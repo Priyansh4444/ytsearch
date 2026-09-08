@@ -6,6 +6,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/fly-machine-session.sh"
 # shellcheck source=scripts/lib/fly-production-inventory.sh
 source "$SCRIPT_DIR/lib/fly-production-inventory.sh"
+# shellcheck source=scripts/lib/fly-publication-job.sh
+source "$SCRIPT_DIR/lib/fly-publication-job.sh"
 fly_production_inventory_load_raw_release
 
 # Run the external Raw generation builder on the existing on-demand indexer.
@@ -293,10 +295,8 @@ bounded_flyctl "$RAW_BUILDER_COMMAND_TIMEOUT_SECONDS" \
   ssh console --app "$RAW_BUILDER_APP" \
   --machine "$RAW_BUILDER_MACHINE_ID" \
   --command 'ytsearch init-backend --backend raw'
-bounded_flyctl "$RAW_BUILDER_PUBLICATION_COMMAND_TIMEOUT_SECONDS" \
-  ssh console --app "$RAW_BUILDER_APP" \
-  --machine "$RAW_BUILDER_MACHINE_ID" \
-  --command 'ytsearch publish --backend raw'
+publication_job="/tmp/ytsearch-publication-${temporary_directory##*.}"
+fly_publication_job_wait "$publication_job" "$temporary_directory/publication-ssh.log"
 
 mkdir -p "$(dirname -- "$RAW_BUILDER_FINAL_RESOURCE_OUTPUT")"
 final_resource_snapshot="$("$RAW_BUILDER_RESOURCE_PROBE")"

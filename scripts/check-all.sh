@@ -14,6 +14,7 @@ scripts/test-check-queue-indexers.sh
 scripts/test-reconcile-raw-queue-worker.sh
 scripts/test-reconcile-raw-publication-builder.sh
 scripts/test-fly-publish-raw-generation.sh
+scripts/test-fly-publication-job.sh
 scripts/test-check-raw-publication-protocol.sh
 scripts/test-fly-machine-resource-snapshot.sh
 scripts/test-run-raw-publication-canary.sh

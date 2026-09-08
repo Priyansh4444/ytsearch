@@ -49,11 +49,15 @@ case "$1 $2" in
         printf '%s\n%s\n' "$FAKE_PROVENANCE_SOURCE" "$FAKE_PROVENANCE_BASE"
         ;;
       *" --command ytsearch init-backend --backend raw "*) ;;
-      *" --command ytsearch publish --backend raw "*)
+      *"ytsearch bounded publication job"*)
         if [ "${FAKE_HANG_PUBLISH:-0}" = 1 ]; then
           sleep 30
         fi
-        test "${FAKE_PUBLISH_FAILURE:-0}" != 1
+        if [ "${FAKE_PUBLISH_FAILURE:-0}" = 1 ]; then
+          printf 'failed:1\n'
+        else
+          printf 'complete\n'
+        fi
         ;;
       *) echo "unexpected ssh command: $*" >&2; exit 1 ;;
     esac
@@ -194,7 +198,7 @@ test "$(jq -r '.[0].state' "$tmp/state.json")" = stopped
 jq -e '.state == "started" and .memory_peak_bytes == 1024' "$tmp/final.json" >/dev/null
 grep -q "POST .*/machines/$builder_id/start$" "$tmp/curl.log"
 grep -q -- '--command ytsearch init-backend --backend raw' "$tmp/fly.log"
-grep -q -- '--command ytsearch publish --backend raw' "$tmp/fly.log"
+grep -q -- 'ytsearch bounded publication job' "$tmp/fly.log"
 grep -q "POST .*/machines/$builder_id/stop$" "$tmp/curl.log"
 grep -q "DELETE .*/machines/$builder_id/lease$" "$tmp/curl.log"
 

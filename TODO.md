@@ -610,6 +610,24 @@ Raw can replace Typesense as the canonical search index.
 - [x] Remove deprecated `flyctl auth token` calls. Direct Machines API commands
   require an explicit scoped `FLY_API_TOKEN`, reject expired credentials without
   unsafe mutation replay, and document organization/deploy token setup.
-- [ ] Enforce an end-to-end production p95 below 200 ms (not search CPU alone)
+- [ ] Enforce the requested end-to-end 200 ms maximum on measured production requests
   on the latest schema for the canonical matrix, including `this is the`, with
   zero errors and no resource crossing 80%.
+- [x] Add common-word semantic and streaming/materialized response regressions,
+  including phrase order, exclusions, repeated words, cross-field matches,
+  prefix behavior, sorting, and moment boundaries. No stop words are discarded.
+- [x] Make publication tolerate transient SSH disconnects within a bounded run:
+  poll one remote job, preserve its completion record, and retain exact lease
+  cleanup. Test lost launch acknowledgements, failures, and timeouts locally.
+- [ ] Validate the reconnecting publication wrapper on the production-size
+  isolated build. An SSH error or requested Machine stop is not activation
+  evidence; require the manifest, current durable sequence, and final report.
+- [ ] Restore private reader connectivity before claiming queue recovery.
+  On 2026-09-07, the worker exited with code 1 during admin readiness;
+  an independent builder probe resolved private DNS but received connection
+  refused. The deployed reader binds `0.0.0.0:8108`; the target configuration
+  binds `[::]:8108`. Verify private readiness and actual queue consumption
+  after the gated release. Starting the worker alone did not repair it.
+- [ ] Complete creator outcome reconciliation. The 2026-09-07 public probe
+  reported 61 channels, 40 with count gaps, and 1,425 missing videos by profile
+  counts. These counts are observations, not classified video outcomes.
