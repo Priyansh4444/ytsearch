@@ -51,7 +51,8 @@ The snapshot number is a conservative CLI logical-size estimate; Fly Cost
 Explorer must confirm incremental billed bytes before the budget is declared
 final. The approximately $62.52 target requires deleting only the obsolete Raw
 canary Machine plus its 20 GB volume and the superseded ORD repair builder plus
-its 10 GB volume. It preserves the active reader/API, the retained on-demand SJC
+its now-20 GB volume. Removing these two 20 GB volumes reduces the current
+132 GB allocation to 92 GB. It preserves the active reader/API, the retained on-demand SJC
 indexer, and every Typesense rollback resource. Immediately after those
 deletions, retained snapshots make the conservative estimate about $63.50;
 their approximately $0.98 reduction arrives after the five-day retention
@@ -96,7 +97,7 @@ through the final retirement gates.
 ## Final Raw-only allocation after approved retirement
 
 The requested terminal state also removes the 61 GB Typesense trial volumes and
-the 30 GB temporary Raw canary/ORD repair volumes after their exact final gates.
+the now-40 GB temporary Raw canary/ORD repair volumes after their exact final gates.
 That leaves 31 GB provisioned: 20 GB reader, 1 GB API, and 10 GB on-demand
 indexer. Using the current official SJC prices, the deterministic provisioned
 floor is $17.39 reader/API compute plus $4.65 volumes, or $22.04/month. The

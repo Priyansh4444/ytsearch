@@ -122,3 +122,21 @@ claims, malformed status, and persistent transport failure. The last failed
 SSH diagnostic is printed with a 20-line limit before deadline cleanup. The existing
 publication-wrapper tests still cover lease cleanup and stop failures.
 Live transport recovery and a completed production-size build remain unproved.
+
+## Preparation handoff after local session loss
+
+A later preparation started the isolated reader at 2026-09-08 11:00:16 UTC
+using source `8336ff64b233f0385e35d8b13f9f3f63e21b841d`. It allowed a
+7,200-second publication command and held a 14,400-second reader lease.
+The last observed phase was reader startup; the builder was still stopped.
+The queue worker was independently confirmed stopped after repeated private
+readiness failures. No queue data or volumes were deleted.
+
+After the local session changed, process handle `40236`, its temporary evidence
+directory, and the temporary Fly credentials were unavailable. A fresh Fly
+read request failed with `no access token available`. The reader's final state,
+whether publication subsequently started, and cleanup are therefore unknown.
+A lease expiring does not establish that a Machine stopped. After restoring
+authentication, inspect the exact reader and builder states, lifecycle events,
+remote publication job records, and active generation before retrying. Do not
+infer success or termination from the missing local process handle.
