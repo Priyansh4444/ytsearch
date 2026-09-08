@@ -418,12 +418,18 @@ where
     // after the lexicon is complete makes those temporary lifetimes disjoint.
     let bigram_spool = SpoolDirectory::create(index_path.join(BIGRAM_SPOOL_DIRECTORY))?;
     let mut bigram_spool_writer = ShardSpoolWriter::create(bigram_spool.path())?;
+    let covered_terms = lexicon
+        .iter()
+        .filter(|entry| safe_document_frequency((0, entry)) > MIN_BIGRAM_TERM_DOCUMENTS)
+        .map(|entry| entry.term.as_str())
+        .collect::<HashSet<_>>();
     for (video, metadata) in videos.iter().enumerate() {
         append_value_bigrams(
             &metadata.title,
             video as u32,
             IndexedField::Title,
             &mut bigram_spool_writer,
+            &covered_terms,
         )?;
     }
     replay_document_bigrams(
@@ -432,6 +438,7 @@ where
         &block_records,
         document_count,
         &mut bigram_spool_writer,
+        &covered_terms,
     )?;
     bigram_spool_writer.finish()?;
     fs::remove_file(&document_record_spool_path)?;
@@ -633,6 +640,7 @@ fn replay_document_bigrams(
     blocks: &[BlockRecord],
     document_count: u32,
     output: &mut ShardSpoolWriter,
+    covered_terms: &HashSet<&str>,
 ) -> Result<()> {
     #[derive(Deserialize)]
     struct ReplayDocument<'a> {
@@ -693,7 +701,13 @@ fn replay_document_bigrams(
             .get(start..end)
             .ok_or_else(|| Error::Corrupt("document range is truncated".to_string()))?;
         let source: ReplayDocument<'_> = serde_json::from_slice(line)?;
-        append_value_bigrams(&source.text, document, IndexedField::Text, output)?;
+        append_value_bigrams(
+            &source.text,
+            document,
+            IndexedField::Text,
+            output,
+            covered_terms,
+        )?;
     }
     if records.read(&mut [0_u8; 1])? != 0 {
         return Err(Error::Corrupt(
@@ -1602,11 +1616,15 @@ fn append_value_bigrams(
     id: u32,
     field: IndexedField,
     output: &mut ShardSpoolWriter,
+    covered_terms: &HashSet<&str>,
 ) -> Result<()> {
     let mut previous = None::<String>;
     let mut position = 0_u32;
     for_each_token(value, |token| {
-        if let Some(left) = previous.as_deref() {
+        if let Some(left) = previous.as_deref()
+            && covered_terms.contains(left)
+            && covered_terms.contains(token.as_str())
+        {
             output.append_bigram(left, &token, id, position, field)?;
         }
         previous = Some(token);
@@ -1630,6 +1648,35 @@ mod tests {
             position_length: 13,
             frequency: 17,
         }
+    }
+
+    #[test]
+    fn bigram_prefilter_preserves_adjacency_and_original_offsets() {
+        let directory = tempdir().unwrap();
+        let mut spool = ShardSpoolWriter::create(directory.path()).unwrap();
+        let covered = HashSet::from(["the", "and"]);
+        append_value_bigrams(
+            "THE rare and the and",
+            7,
+            IndexedField::Text,
+            &mut spool,
+            &covered,
+        )
+        .unwrap();
+        spool.finish().unwrap();
+        let mut records = Vec::new();
+        for path in fs::read_dir(directory.path()).unwrap() {
+            let mut input = BufReader::new(File::open(path.unwrap().path()).unwrap());
+            while let Some(record) = read_spool_bigram(&mut input).unwrap() {
+                assert_eq!(record.id, 7);
+                records.push((record.key, record.earliest_end_offset));
+            }
+        }
+        records.sort_unstable();
+        assert_eq!(
+            records,
+            vec![(b"and\0the".to_vec(), 3), (b"the\0and".to_vec(), 4)]
+        );
     }
 
     #[test]
