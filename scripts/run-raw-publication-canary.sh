@@ -201,6 +201,7 @@ if [[ "$RAW_CANARY_TEST_MODE" == 0 ]]; then
     scripts/fly-raw-builder-resource-snapshot.sh
     scripts/summarize-publication-load.sh
     scripts/lib/fly-machine-session.sh
+    scripts/lib/fly-publication-job.sh
     scripts/lib/fly-production-inventory.sh
   )
   for gate_input in "${gate_inputs[@]}"; do
