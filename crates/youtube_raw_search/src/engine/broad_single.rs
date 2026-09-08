@@ -8,6 +8,7 @@ const ANSWER_HEADER_BYTES: usize = 16;
 const GROUP_RECORD_BYTES: usize = 20;
 const DOCUMENT_RECORD_BYTES: usize = 12;
 const MIN_MATERIALIZED_DOCUMENTS: u64 = 25_000;
+const MATERIALIZED_HITS_PER_VIDEO: usize = 5;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
@@ -80,6 +81,7 @@ struct DirectoryEntry {
 pub(super) struct BroadSingleIndex {
     file: MappedFile,
     entries: Vec<DirectoryEntry>,
+    retained_depth: usize,
 }
 
 pub(super) struct BroadAnswer {
@@ -115,11 +117,15 @@ impl BroadSingleIndex {
         let bytes = file.bytes();
         let count = read_u32(bytes, 8)? as usize;
         let version = read_u32(bytes, 12)?;
-        if version != 1 {
-            return Err(Error::Corrupt(format!(
-                "unsupported broad query index version {version}"
-            )));
-        }
+        let retained_depth = match version {
+            1 => usize::from(MAX_PAGE_SIZE),
+            2 => MATERIALIZED_HITS_PER_VIDEO,
+            _ => {
+                return Err(Error::Corrupt(format!(
+                    "unsupported broad query index version {version}"
+                )));
+            }
+        };
 
         let mut cursor = HEADER_BYTES;
         let mut entries = Vec::with_capacity(count);
@@ -195,7 +201,15 @@ impl BroadSingleIndex {
                 "broad query index has trailing bytes".to_string(),
             ));
         }
-        Ok(Self { file, entries })
+        Ok(Self {
+            file,
+            entries,
+            retained_depth,
+        })
+    }
+
+    pub(super) fn supports_depth(&self, requested: usize) -> bool {
+        requested <= self.retained_depth
     }
 
     pub(super) fn lookup(&self, token: &str, fields: QueryFields) -> Result<Option<BroadAnswer>> {
@@ -249,7 +263,7 @@ pub(super) fn build_index(engine: &RawSearchEngine, path: &Path) -> Result<usize
                     candidate,
                     record.video,
                     record.t_start_ms,
-                    usize::from(MAX_PAGE_SIZE),
+                    MATERIALIZED_HITS_PER_VIDEO,
                     Some(dominant_exact_mask),
                 )
             })?;
@@ -344,6 +358,7 @@ impl BroadIndexWriter {
         let mut output = ColdWriter::create(path)?;
         let mut header = Vec::new();
         write_header(&mut header, BROAD_SINGLE_MAGIC, count);
+        header[12..16].copy_from_slice(&2_u32.to_le_bytes());
         output.write_all(&header)?;
         for entry in &self.entries {
             output.write_all(&(entry.token.len() as u16).to_le_bytes())?;
@@ -595,6 +610,19 @@ mod tests {
         assert_eq!(answer.groups[0].score.to_bits(), 7.25_f32.to_bits());
         assert_eq!(answer.groups[0].documents[0].document(), 3);
         assert!(index.lookup("fire", fields).unwrap().is_none());
+        assert!(index.supports_depth(5));
+        assert!(!index.supports_depth(6));
+        drop(index);
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[12..16].copy_from_slice(&1_u32.to_le_bytes());
+        fs::write(&path, &bytes).unwrap();
+        let legacy = BroadSingleIndex::open(&path, 2, 10).unwrap();
+        assert!(legacy.supports_depth(250));
+        assert!(!legacy.supports_depth(251));
+        drop(legacy);
+        bytes[12..16].copy_from_slice(&3_u32.to_le_bytes());
+        fs::write(&path, &bytes).unwrap();
+        assert!(BroadSingleIndex::open(&path, 2, 10).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

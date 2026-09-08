@@ -1564,6 +1564,7 @@ impl RawSearchEngine {
             return Ok(None);
         }
         if let Some(index) = &self.inner.broad_single
+            && index.supports_depth(usize::from(params.group_limit.unwrap_or(5).max(1)))
             && let Some(mut answer) = index.lookup(term, fields)?
         {
             let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));

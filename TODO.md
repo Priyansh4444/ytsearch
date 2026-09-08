@@ -595,7 +595,8 @@ Raw can replace Typesense as the canonical search index.
     publication allowlists, and schema 5-7 reader fallback.
   - [x] Add the reader fast path and generic 25,000-estimated-document builder
     threshold for lexicon-token plans; retain up to the contract maximum of 250
-    documents per video.
+    documents per video in the initial version. The bounded version below
+    supersedes that retention depth for newly built artifacts.
   - [x] Spool one encoded plan at a time and compose the final immutable file
     without retaining every plan's groups or payload in builder RAM.
   - [x] Enumerate accepted non-lexicon prefix keys with one post-order trie pass
@@ -607,6 +608,12 @@ Raw can replace Typesense as the canonical search index.
     block decompression and deserializes only transcript text.
   - [ ] Measure production build duration, scratch/disk bytes, plan count,
     artifact bytes, and peak RSS before accepting the schema-8 generation.
+  - [x] Bound new broad-single materialization to five hits per video with
+    explicit file version 2. Larger requests use the full reducer; version 1
+    retains its 250-hit contract. Differential responses pass at depths
+    1, 3, 5, 6, and 250.
+  - [ ] Measure the bounded materialization on the full snapshot before
+    accepting its build-cost improvement or deploying it.
 - [x] Remove deprecated `flyctl auth token` calls. Direct Machines API commands
   require an explicit scoped `FLY_API_TOKEN`, reject expired credentials without
   unsafe mutation replay, and document organization/deploy token setup.

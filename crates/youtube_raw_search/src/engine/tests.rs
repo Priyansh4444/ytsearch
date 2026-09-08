@@ -269,26 +269,32 @@ fn materialized_broad_plan_matches_the_posting_reducer_response() {
     let index_path = root.path().join("index");
     let mut chunks = File::create(&chunks_path).expect("chunks");
     for video in 0..6 {
-        writeln!(
-            chunks,
-            "{}",
-            json!({
-                "id": format!("video-{video}-1"),
-                "video_id": format!("video-{video}"),
-                "title": if video == 0 { "React internals" } else { "Runtime internals" },
-                "text": format!("react rendering example {video}"),
-                "youtuber_handle": format!("@creator{video}"),
-                "youtuber_name": format!("Creator {video}"),
-                "t_start_ms": video * 30_000,
-            })
-        )
-        .expect("chunk");
+        for moment in 0..8 {
+            writeln!(
+                chunks,
+                "{}",
+                json!({
+                    "id": format!("video-{video}-{moment}"),
+                    "video_id": format!("video-{video}"),
+                    "title": if video == 0 { "React internals" } else { "Runtime internals" },
+                    "text": format!("{}react rendering example {video}", "filler ".repeat(7 - moment)),
+                    "youtuber_handle": format!("@creator{video}"),
+                    "youtuber_name": format!("Creator {video}"),
+                    "t_start_ms": moment * 30_000,
+                })
+            )
+            .expect("chunk");
+        }
     }
     File::create(&channels_path).expect("channels");
     build_index(&chunks_path, &channels_path, &index_path).expect("build index");
     let engine = RawSearchEngine::open(&index_path).expect("open baseline");
-    let params = grouped_query("react");
-    let expected = engine.search(&params).expect("baseline response");
+    let cases = [1, 3, 5, 6, 250].map(|limit| {
+        let mut params = grouped_query("react");
+        params.group_limit = Some(limit);
+        let expected = engine.search(&params).expect("baseline response");
+        (params, expected)
+    });
 
     let fields = query_fields(Some("text,title"), true).unwrap();
     let (plans, _) = engine
@@ -306,7 +312,7 @@ fn materialized_broad_plan_matches_the_posting_reducer_response() {
                 candidate,
                 record.video,
                 record.t_start_ms,
-                usize::from(MAX_PAGE_SIZE),
+                5,
                 Some(dominant_exact_mask),
             )
         })
@@ -328,7 +334,14 @@ fn materialized_broad_plan_matches_the_posting_reducer_response() {
     serde_json::to_writer_pretty(File::create(&manifest_path).unwrap(), &manifest).unwrap();
 
     let accelerated = RawSearchEngine::open(&index_path).expect("open accelerated index");
-    assert_eq!(accelerated.search(&params).unwrap(), expected);
+    for (params, expected) in cases {
+        assert_eq!(
+            accelerated.search(&params).unwrap(),
+            expected,
+            "depth {:?}",
+            params.group_limit
+        );
+    }
 }
 
 #[test]

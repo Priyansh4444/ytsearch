@@ -140,3 +140,34 @@ A lease expiring does not establish that a Machine stopped. After restoring
 authentication, inspect the exact reader and builder states, lifecycle events,
 remote publication job records, and active generation before retrying. Do not
 infer success or termination from the missing local process handle.
+
+Authentication was subsequently restored. Authoritative inspection found the
+canary still running generation 2145. The builder ran from 11:03:44 until a
+requested stop at 12:15:14 UTC on 2026-09-08, with no OOM flag. Brief inspection
+of its retained volume found a 9.0 GB workspace, including
+`broad-single.payloads.spool` at 7,729,086,584 bytes. The unigram and bigram
+spools were gone and their output files existed. A manifest existed, but the
+final `broad-single.bin` did not: manifest existence alone does not prove
+completion of schema-8 materialization. Temporary remote job logs did not
+survive the observed restart, so the exact interruption cause remains unknown.
+
+The next build investigation must address materialized-plan payload growth,
+not repeat the already-completed unigram/bigram optimization. Measure plan
+counts and duplicated retained documents, then bound build/artifact cost while
+preserving the generic query fallback and exact response semantics.
+
+The bounded implementation writes broad-single format version 2 and retains
+five hits per video instead of 250. This covers the frontend's three-hit
+request and the API's default five. The reader uses the full posting reducer
+for requests above five; version-1 files keep their original 250-hit coverage.
+Exact group and moment totals remain encoded independently of retained hits.
+Full-response comparisons at requested depths 1, 3, 5, 6, and 250 pass on an
+eight-moment-per-video fixture. Older readers reject format version 2 rather
+than treating partial retained hits as a complete 250-hit answer.
+Rollback to an older reader must therefore also activate a compatible retained
+generation; swapping only the binary after publishing version 2 is unsafe.
+
+This change bounds retained document payload per plan and video, not the total
+number of plans or posting visits during building. It does not establish a
+50-fold total artifact reduction, faster all-common multi-token queries, or
+sub-200-ms latency for large group limits. Those remain measured release gates.
