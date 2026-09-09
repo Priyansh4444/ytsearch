@@ -171,3 +171,25 @@ This change bounds retained document payload per plan and video, not the total
 number of plans or posting visits during building. It does not establish a
 50-fold total artifact reduction, faster all-common multi-token queries, or
 sub-200-ms latency for large group limits. Those remain measured release gates.
+
+## Release sequence and reported failures
+
+Production release remains required, after validation, not replaced by isolated
+staging. Run the canonical workload in `scripts/benchmark-search-cases.tsv`
+against the completed latest-schema canary, including publication load and
+restart checks. Require every measured request below 200 ms and zero response
+validation failures before production activation. Repeat the workload through
+the production path after activation, retaining the compatible rollback
+generation until that verification passes.
+
+The workload now also includes the reported `curspr` query scoped to
+`@cursor_ai`, standalone `the`, and spaced `create effect`. Existing rows cover
+the previously reported React, fire, coding, CSS, blackhole, compact-token,
+convex, and common-word failures. These new rows are correctness-and-latency
+checks, not recorded passing production measurements. Queue admission,
+pagination, highlights, and sorting also require their focused contract tests;
+page-one timing does not establish those behaviors.
+
+`cargo nextest` was checked but is not installed in the current environment.
+The available Cargo library suite passed 162 tests after the workload update.
+Neither runner substitutes for the deployed HTTP latency gate.

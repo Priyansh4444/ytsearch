@@ -4,6 +4,8 @@ fire_global	fire
 one_fire_global	one fire
 coding_is_dead_global	coding is dead
 this_is_the_common	this is the
+the_common	the
+cursor_typo_scoped	curspr	@cursor_ai
 css_phrase_global	css which i think is dead now
 css_phrase_t3	css which i think is dead now	@t3dotgg
 react_server_components	react server components
@@ -11,6 +13,7 @@ blackhole_global	blackhole
 blackhole_veritasium	blackhole	@veritasium
 blackhole_vsauce	blackhole	@vsauce
 create_effect_global	createEffect
+create_effect_spaced_global	create effect
 convex_global	convex
 this_that_compact	thisthat
 you_know_compact	youknow
