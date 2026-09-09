@@ -629,6 +629,9 @@ Raw can replace Typesense as the canonical search index.
 - [x] Make publication tolerate transient SSH disconnects within a bounded run:
   poll one remote job, preserve its completion record, and retain exact lease
   cleanup. Test lost launch acknowledgements, failures, and timeouts locally.
+- [x] Add receipt-bound CLI build resume, incomplete download/build retries,
+  and remotely confirmed activation cleanup with crash-safe reclamation.
+  Preserve legacy artifacts and unknown remote jobs. Verify local failure cases.
 - [ ] Validate the reconnecting publication wrapper on the production-size
   isolated build. An SSH error or requested Machine stop is not activation
   evidence; require the manifest, current durable sequence, and final report.

@@ -214,3 +214,51 @@ The regression test executes the actual remote probe against local fixture
 files, checking mismatched usage counters with zero swap, nonzero hierarchical
 swap, and missing or invalid counters. This replaces reliance on mocked final
 JSON alone for the cgroup-v1 calculation.
+
+## Bounded build outcome
+
+The `9398a34679dc` preparation reached its 7,200-second controller deadline
+after SSH certificate requests failed with a connection reset. There is no
+final controller report. Subsequent Fly inspection confirmed both isolated
+Machines stopped; production remained started.
+
+The retained builder generation does contain a schema-8 manifest with hashes
+for all files, including `broad-single.bin` at 8,208,104,746 bytes. It reports
+8,322,726 documents, 34,611 videos, and 66 channel records. The workspace is
+9.5 GB. This demonstrates completion of the engine's manifest-writing phase,
+not successful publication, activation, or an independent checksum audit.
+The channel count includes preparation state and is not proof that the 61
+requested creator profiles are complete.
+
+Do not blindly restart the staged `9398a34679dc` CLI: its startup cleanup removes
+saved job directories, and `publish_generation` always creates and builds a
+fresh generation. Validate reusable completed artifacts against the exact job,
+snapshot, compatibility, and hashes before adding safe resumability. The large
+materialized artifact still needs size/build-cost investigation; the five-hit
+retention change alone did not produce a compact index.
+
+## Publication retry protocol
+
+The updated CLI preserves existing job directories. Before downloading a new
+snapshot, it durably records the prepared job's input identity. A retry can
+remove that job's incomplete download and generation only when the input
+record matches and all top-level artifacts have recognized names and types.
+Older directories without that record remain untouched and require recovery.
+
+After `GenerationBuilder::build` returns and its sequence matches the job,
+the CLI atomically writes `verified-build.json`. The receipt binds the job ID,
+sequence, snapshot size and hash, corpus compatibility, and manifest hash.
+Resume checks those inputs and opens the engine with full integrity validation
+before uploading remaining files. A partial receipt is not completion evidence.
+
+Cleanup requires the reader's exact job status to be `Activated` and match the
+receipt. A high active sequence alone does not authorize deletion. Failed
+status lookups preserve local work and emit a warning without blocking new
+publication. The CLI renames confirmed work to `.reclaim-<job-id>` before
+removing it, so cleanup can finish after a crash even if the receipt is gone.
+
+Local checks use `cargo test -p youtube_cli` and
+`cargo clippy -p youtube_cli --all-targets -- -D warnings`. These checks do
+not establish production publication, creator completeness, or search latency.
+The retained production-size artifact has no completion receipt and is not
+automatically reusable under this protocol.

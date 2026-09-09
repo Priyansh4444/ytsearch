@@ -29,6 +29,7 @@ use youtube_ytdlp::{YtDlpTranscriptSource, YtDlpVideo};
 
 mod args;
 mod failure_ledger;
+mod publication_receipt;
 mod reconciliation_manifest;
 
 use args::*;
@@ -479,32 +480,24 @@ async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> 
         .and_then(|generation| generation.parse::<u64>().ok())
         .unwrap_or_default();
     let required_sequence = readiness.last_sequence.unwrap_or_default();
-    if required_sequence <= active {
-        println!("Raw has no pending mutations to publish");
-        return Ok(());
-    }
-
-    let base_chunks = required_publication_path("RAW_SEARCH_BASE_CHUNKS_GZIP")?;
-    let base_channels = required_publication_path("RAW_SEARCH_BASE_CHANNELS_GZIP")?;
     let work_root = std::env::var_os(RAW_PUBLICATION_WORK_DIRECTORY_ENV)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/var/lib/ytsearch/raw-generation-work"));
     validate_publication_work_root(&work_root)?;
     fs::create_dir_all(&work_root)?;
     let _work_lock = PublicationWorkLock::acquire(&work_root)?;
-    remove_stale_publication_jobs(&work_root)?;
-    let minimum_free = publication_minimum_free_bytes(
-        std::env::var(RAW_PUBLICATION_MIN_FREE_BYTES_ENV)
-            .ok()
-            .as_deref(),
-    )?;
-    let available = available_space(&work_root)?;
-    if available < minimum_free {
-        return Err(CliError::Message(format!(
-            "Raw publication builder has {available} free bytes; at least {minimum_free} are required"
-        )));
+    for job_id in publication_receipt::recover_cleanup_and_list_completed_jobs(&work_root)? {
+        publication_receipt::reconcile_cleanup(
+            &work_root,
+            search.publication_status(&job_id).await,
+        )?;
     }
-
+    if required_sequence <= active {
+        println!("Raw has no pending mutations to publish");
+        return Ok(());
+    }
+    let base_chunks = required_publication_path("RAW_SEARCH_BASE_CHUNKS_GZIP")?;
+    let base_channels = required_publication_path("RAW_SEARCH_BASE_CHANNELS_GZIP")?;
     while active < required_sequence {
         let job = search.prepare_publication().await?;
         let published =
@@ -517,6 +510,22 @@ async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> 
         active = published;
     }
     println!("Published required Raw sequence {required_sequence}");
+    Ok(())
+}
+
+fn require_publication_build_space(work_root: &Path) -> Result<(), CliError> {
+    let minimum_free = publication_minimum_free_bytes(
+        std::env::var(RAW_PUBLICATION_MIN_FREE_BYTES_ENV)
+            .ok()
+            .as_deref(),
+    )?;
+    let available = available_space(work_root)?;
+    if available < minimum_free {
+        return Err(CliError::Message(format!(
+            "Raw publication builder has {available} free bytes; at least {minimum_free} are required"
+        )));
+    }
+
     Ok(())
 }
 
@@ -544,49 +553,73 @@ async fn publish_generation(
         return Ok(job.target_sequence);
     }
 
-    let job_root = work_root.join(&job.job_id);
-    fs::create_dir(&job_root)?;
-    let snapshot_path = job_root.join("mutations.sqlite3");
-    println!(
-        "Downloading Raw mutation snapshot through sequence {}",
-        job.target_sequence
-    );
-    search
-        .download_publication_snapshot(&job, &snapshot_path)
-        .await?;
-
-    let generation_path = job_root.join("generation");
-    let compatibility = job.compatibility.clone();
-    let base_chunks = base_chunks.to_path_buf();
-    let base_channels = base_channels.to_path_buf();
-    let target = job.target_sequence;
-    let detached = tokio::task::spawn_blocking(move || {
-        let snapshot = MutationStore::open_snapshot_read_only(&snapshot_path)?;
-        GenerationBuilder::new(base_chunks, base_channels).build(
-            &snapshot,
-            &compatibility,
-            &generation_path,
-        )
-    })
-    .await
-    .map_err(|error| {
-        CliError::Message(format!("Raw publication builder task failed: {error}"))
-    })??;
-    if detached.sequence != target {
-        return Err(CliError::Message(format!(
-            "Raw detached generation sequence {} does not match job {target}",
-            detached.sequence
-        )));
+    if !is_publication_job_id(&job.job_id) {
+        return Err(CliError::Message(
+            "Raw publication returned an invalid job ID".into(),
+        ));
     }
+    let job_root = work_root.join(&job.job_id);
+    let generation_path = job_root.join("generation");
+    let manifest = if matches!(
+        publication_receipt::prepare_workspace(&job_root, &job)?,
+        publication_receipt::Workspace::Resume
+    ) {
+        let root = job_root.clone();
+        let job = job.clone();
+        let builder =
+            GenerationBuilder::new(base_chunks.to_path_buf(), base_channels.to_path_buf());
+        tokio::task::spawn_blocking(move || {
+            publication_receipt::resume_verified_build(&root, &job, &builder)
+        })
+        .await
+        .map_err(|error| CliError::Message(format!("Raw resume task failed: {error}")))??
+    } else {
+        require_publication_build_space(work_root)?;
+        let snapshot_path = job_root.join("mutations.sqlite3");
+        println!(
+            "Downloading Raw mutation snapshot through sequence {}",
+            job.target_sequence
+        );
+        search
+            .download_publication_snapshot(&job, &snapshot_path)
+            .await?;
 
-    let manifest: RawGenerationManifest = serde_json::from_reader(fs::File::open(
-        detached.path.join("manifest.json"),
-    )?)
-    .map_err(|error| {
-        CliError::Message(format!(
-            "failed to decode detached generation manifest: {error}"
-        ))
-    })?;
+        let generation_path = generation_path.clone();
+        let compatibility = job.compatibility.clone();
+        let base_chunks = base_chunks.to_path_buf();
+        let base_channels = base_channels.to_path_buf();
+        let target = job.target_sequence;
+        let detached = tokio::task::spawn_blocking(move || {
+            let snapshot = MutationStore::open_snapshot_read_only(&snapshot_path)?;
+            GenerationBuilder::new(base_chunks, base_channels).build(
+                &snapshot,
+                &compatibility,
+                &generation_path,
+            )
+        })
+        .await
+        .map_err(|error| {
+            CliError::Message(format!("Raw publication builder task failed: {error}"))
+        })??;
+        if detached.sequence != target {
+            return Err(CliError::Message(format!(
+                "Raw detached generation sequence {} does not match job {target}",
+                detached.sequence
+            )));
+        }
+
+        let manifest: RawGenerationManifest = serde_json::from_reader(fs::File::open(
+            detached.path.join("manifest.json"),
+        )?)
+        .map_err(|error| {
+            CliError::Message(format!(
+                "failed to decode detached generation manifest: {error}"
+            ))
+        })?;
+        publication_receipt::record_verified_build(&job_root, &job)?;
+        manifest
+    };
+    let target = job.target_sequence;
     let mut state = search.accept_publication_manifest(&job, manifest).await?;
     for file_name in RAW_GENERATION_FILES {
         if state.completed_files.contains(file_name) {
@@ -594,7 +627,7 @@ async fn publish_generation(
         }
         println!("Uploading Raw generation file {file_name}");
         state = search
-            .upload_publication_file(&job.job_id, file_name, &detached.path.join(file_name))
+            .upload_publication_file(&job.job_id, file_name, &generation_path.join(file_name))
             .await?;
     }
     state = search.activate_publication(&job.job_id).await?;
@@ -603,7 +636,7 @@ async fn publish_generation(
             "Raw publication activation returned an inconsistent job state".to_string(),
         ));
     }
-    fs::remove_dir_all(&job_root)?;
+    publication_receipt::cleanup_activated_build(work_root, &state)?;
     println!("Published Raw generation {target}");
     Ok(target)
 }
@@ -654,21 +687,6 @@ impl PublicationWorkLock {
         }
         Ok(Self { _file: file })
     }
-}
-
-fn remove_stale_publication_jobs(root: &Path) -> Result<(), CliError> {
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir()
-            && entry
-                .file_name()
-                .to_str()
-                .is_some_and(is_publication_job_id)
-        {
-            fs::remove_dir_all(entry.path())?;
-        }
-    }
-    Ok(())
 }
 
 fn is_publication_job_id(value: &str) -> bool {

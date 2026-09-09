@@ -27,3 +27,7 @@ youtube_sources = { path = "../youtube_sources" }
 youtube_transcribe = { path = "../youtube_transcribe" }
 youtube_search_client = { path = "../youtube_search_client" }
 youtube_ytdlp = { path = "../youtube_ytdlp" }
+
+[dev-dependencies]
+flate2 = "1"
+tempfile = "3"
