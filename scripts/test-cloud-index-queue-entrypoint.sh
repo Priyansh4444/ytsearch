@@ -94,6 +94,22 @@ TRANSCRIPT_FAILURE_RETRY_SECONDS=21600
 export CLOUD_INDEX_QUEUE_LIBRARY_ONLY INDEX_QUEUE_API_BASE_URL YTSEARCH_INDEX_QUEUE_TOKEN TRANSCRIPT_CACHE_DIR QUEUE_RETRY_STATE_FILE RAW_PENDING_PUBLICATION_FILE TRANSCRIPT_FAILURE_RETRY_SECONDS
 . "$SCRIPT_DIR/cloud-index-queue-entrypoint.sh"
 
+printf 'pending\n' > "$RAW_PENDING_PUBLICATION_FILE"
+timeout 5 env \
+  PATH="$test_dir/bin:$PATH" CLOUD_INDEX_QUEUE_LIBRARY_ONLY=0 \
+  CLOUD_INDEX_QUEUE_PREFLIGHT_ONLY=0 QUEUE_LOOP=1 \
+  IDLE_EXIT_AFTER_SECONDS=1 QUEUE_POLL_INTERVAL_SECONDS=1 \
+  RAW_SEARCH_API_URL=http://raw.invalid:8108 RAW_SEARCH_ADMIN_API_KEY=test-admin-key \
+  YOUTUBE_API_KEY_FILE="$test_dir/youtube-api-key.txt" \
+  YT_DLP_COOKIES_FILE="$test_dir/yt-dlp-cookies.txt" \
+  CREDENTIAL_PREFLIGHT_MARKER="$test_dir/daemon-preflight.ok" \
+  CREDENTIAL_PREFLIGHT_GENERATION=test-generation \
+  "$SCRIPT_DIR/cloud-index-queue-entrypoint.sh" > "$test_dir/daemon.out" 2>&1
+grep -q 'pending Raw publication failed' "$test_dir/daemon.out"
+grep -q 'idle timeout reached' "$test_dir/daemon.out"
+test "$(cat "$RAW_PENDING_PUBLICATION_FILE")" = pending
+rm "$RAW_PENDING_PUBLICATION_FILE"
+
 log_queue_event() { :; }
 set_index_activity() { :; }
 publication_log="$test_dir/publications.log"

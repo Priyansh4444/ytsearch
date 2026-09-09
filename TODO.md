@@ -635,6 +635,10 @@ Raw can replace Typesense as the canonical search index.
   refused. The deployed reader binds `0.0.0.0:8108`; the target configuration
   binds `[::]:8108`. Verify private readiness and actual queue consumption
   after the gated release. Starting the worker alone did not repair it.
+- [x] Apply the configured idle-shutdown deadline to failed pending-publication
+  retries, which previously bypassed the check. Test clean daemon exit with
+  the pending marker preserved; this bounds failed wake cost but does not fix
+  the reader connectivity failure or establish production queue recovery.
 - [ ] Complete creator outcome reconciliation. The 2026-09-07 public probe
   reported 61 channels, 40 with count gaps, and 1,425 missing videos by profile
   counts. These counts are observations, not classified video outcomes.

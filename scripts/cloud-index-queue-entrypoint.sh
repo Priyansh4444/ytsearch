@@ -110,6 +110,14 @@ validate_idle_exit() {
   esac
 }
 
+exit_if_idle_timeout_reached() {
+  idle_now="$(date +%s)"
+  if [ "$IDLE_EXIT_AFTER_SECONDS" -gt 0 ] && [ $(( idle_now - idle_since )) -ge "$IDLE_EXIT_AFTER_SECONDS" ]; then
+    echo "cloud-queue-indexer: idle timeout reached; stopping machine"
+    exit 0
+  fi
+}
+
 validate_idle_gap_fill() {
   case "$IDLE_GAP_FILL_ENABLED" in
     0|1) ;;
@@ -909,6 +917,7 @@ if [ "$QUEUE_LOOP" = "1" ]; then
       && ! publish_pending_raw_generation; then
       echo "cloud-queue-indexer: pending Raw publication failed; retrying before more work" >&2
       log_queue_event error pending_publication_retry_failed "" "" "" "$BACKENDS" "failed"
+      exit_if_idle_timeout_reached
       sleep "$QUEUE_POLL_INTERVAL_SECONDS"
       continue
     fi
@@ -950,11 +959,7 @@ if [ "$QUEUE_LOOP" = "1" ]; then
         idle_since="$(date +%s)"
       fi
     fi
-    now="$(date +%s)"
-    if [ "$IDLE_EXIT_AFTER_SECONDS" -gt 0 ] && [ $(( now - idle_since )) -ge "$IDLE_EXIT_AFTER_SECONDS" ]; then
-      echo "cloud-queue-indexer: idle timeout reached; stopping machine"
-      exit 0
-    fi
+    exit_if_idle_timeout_reached
     sleep "$QUEUE_POLL_INTERVAL_SECONDS"
   done
 fi
