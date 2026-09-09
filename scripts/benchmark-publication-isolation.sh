@@ -340,9 +340,9 @@ run_engine "$OUTPUT_DIR/baseline.jsonl" "$BASELINE_RUNS" 1
 summarize_phase baseline "$OUTPUT_DIR/baseline.jsonl" \
   | tee "$OUTPUT_DIR/baseline-summary.json"
 jq -e --argjson maximum "$MAX_ACCEPTABLE_MS" '
-  .samples > 0 and .errors == 0 and .max_ms != null and .max_ms <= $maximum
+  .samples > 0 and .errors == 0 and .max_ms != null and .max_ms < $maximum
 ' "$OUTPUT_DIR/baseline-summary.json" >/dev/null || {
-  printf 'publication baseline gate failed; required zero errors and max <= %sms\n' \
+  printf 'publication baseline gate failed; required zero errors and max < %sms\n' \
     "$MAX_ACCEPTABLE_MS" >&2
   exit 1
 }
@@ -472,9 +472,9 @@ fi
 
 jq -e --argjson maximum "$MAX_ACCEPTABLE_MS" '
   all(.[];
-    .samples > 0 and .errors == 0 and .max_ms != null and .max_ms <= $maximum)
+    .samples > 0 and .errors == 0 and .max_ms != null and .max_ms < $maximum)
 ' "$OUTPUT_DIR/summary.json" >/dev/null || {
-  printf 'publication isolation gate failed; required zero errors and max <= %sms\n' \
+  printf 'publication isolation gate failed; required zero errors and max < %sms\n' \
     "$MAX_ACCEPTABLE_MS" >&2
   exit 1
 }

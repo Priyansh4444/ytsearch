@@ -620,6 +620,9 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Enforce the requested end-to-end 200 ms maximum on measured production requests
   on the latest schema for the canonical matrix, including `this is the`, with
   zero errors and no resource crossing 80%.
+- [x] Reject exactly 200 ms as well as slower requests in the publication
+  baseline and isolation gates. Exercise the exact boundary with the real
+  benchmark script and verify rejection occurs before publication.
 - [x] Add common-word semantic and streaming/materialized response regressions,
   including phrase order, exclusions, repeated words, cross-field matches,
   prefix behavior, sorting, and moment boundaries. No stop words are discarded.

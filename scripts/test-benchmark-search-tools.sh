@@ -206,7 +206,7 @@ PATH="$tmp/publication-bin:$PATH" SEARCH_URL=http://fixture.invalid \
   "$publication_benchmark" > "$tmp/publication.stdout"
 jq -e '.workers_observed_across_publication == 2 and .peak_in_flight_requests >= 2' \
   "$tmp/publication-output/load-evidence.json" >/dev/null
-jq -e 'length == 4 and all(.[]; .errors == 0 and .max_ms <= 200)' \
+jq -e 'length == 4 and all(.[]; .errors == 0 and .max_ms < 200)' \
   "$tmp/publication-output/summary.json" >/dev/null
 jq -e '.scrape_errors == 0 and .search_error_delta == 0 and .max_rss_bytes <= 1610612736' \
   "$tmp/publication-output/resource-summary.json" >/dev/null
@@ -226,6 +226,21 @@ if PATH="$tmp/publication-bin:$PATH" SEARCH_URL=http://fixture.invalid \
 fi
 jq -e '.errors == 0 and .max_ms == 250' \
   "$tmp/publication-baseline-fail/baseline-summary.json" >/dev/null
+
+if PATH="$tmp/publication-bin:$PATH" SEARCH_URL=http://fixture.invalid \
+  SEARCH_API_KEY=fixture-search RAW_ADMIN_API_KEY=fixture-admin \
+  ALLOW_PUBLISH_BENCHMARK=1 CASES_FILE="$tmp/publication-cases.tsv" \
+  OUTPUT_DIR="$tmp/publication-boundary-fail" CONCURRENCY=2 BASELINE_RUNS=1 \
+  MOCK_PUBLICATION_SECONDS=0.200 PUBLISH_BIN=/bin/false \
+  FAKE_ACTIVE_SEQUENCE="$tmp/active-sequence" \
+  "$publication_benchmark" >/dev/null 2>"$tmp/publication-boundary.stderr"; then
+  printf 'exactly 200 ms must fail the strict latency gate\n' >&2
+  exit 1
+fi
+jq -e '.errors == 0 and .max_ms == 200' \
+  "$tmp/publication-boundary-fail/baseline-summary.json" >/dev/null
+grep -Fq 'publication baseline gate failed; required zero errors and max < 200ms' \
+  "$tmp/publication-boundary.stderr"
 
 printf '9\n' > "$tmp/active-sequence"
 if PATH="$tmp/publication-bin:$PATH" SEARCH_URL=http://fixture.invalid \
