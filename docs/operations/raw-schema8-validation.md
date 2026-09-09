@@ -193,3 +193,24 @@ page-one timing does not establish those behaviors.
 `cargo nextest` was checked but is not installed in the current environment.
 The available Cargo library suite passed 162 tests after the workload update.
 Neither runner substitutes for the deployed HTTP latency gate.
+
+## Correcting the cgroup-v1 swap probe
+
+The initial builder sample reported 86,016 swap bytes by subtracting
+`memory.usage_in_bytes` from a later `memory.memsw.usage_in_bytes` read.
+That difference is unreliable: allocations can occur between reads, and the
+kernel documents these usage counters as approximate. The probe now reads
+the hierarchical `total_swap` counter from `memory.stat` directly. Missing or
+malformed accounting still fails closed. The zero-swap threshold is unchanged.
+See the [kernel memory-controller documentation](https://docs.kernel.org/admin-guide/cgroup-v1/memory.html#stat-file).
+
+A subsequent direct sample found zero swap, 669,347,840 current memory bytes,
+11% disk utilization, and zero OOM counters. `/proc/swaps` independently showed
+zero used swap at an earlier check in the same run. These are current samples,
+not proof that swap was zero throughout the build. Preserve the initial sample
+as evidence of the old probe; do not retroactively relabel it as a valid zero.
+
+The regression test executes the actual remote probe against local fixture
+files, checking mismatched usage counters with zero swap, nonzero hierarchical
+swap, and missing or invalid counters. This replaces reliance on mocked final
+JSON alone for the cgroup-v1 calculation.

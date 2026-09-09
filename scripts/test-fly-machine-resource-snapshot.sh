@@ -11,12 +11,18 @@ cat > "$temporary_directory/bin/flyctl" <<'SH'
 set -euo pipefail
 case "$1 $2" in
   "machine list")
-    jq -n --arg state "${FAKE_MACHINE_STATE:-started}" '[{
+    jq -n --arg state "${FAKE_MACHINE_STATE:-started}" --arg mount "${FLY_RESOURCE_MOUNT_PATH:-/data/mutable}" '[{
       id:"22222222222222",state:$state,
-      config:{mounts:[{volume:"canary-volume",path:"/data/mutable"}]}
+      config:{mounts:[{volume:"canary-volume",path:$mount}]}
     }]'
     ;;
   "ssh console")
+    if [[ -n "${FAKE_CGROUP_ROOT:-}" ]]; then
+      while [[ "$1" != --command ]]; do shift; done
+      command="${2//\/sys\/fs\/cgroup/$FAKE_CGROUP_ROOT}"
+      command="${command//\/data\/mutable/$FAKE_CGROUP_ROOT}"
+      exec bash -c "$command"
+    fi
     if [[ "${FAKE_CGROUP_VERSION:-2}" == 1 ]]; then
       cat <<'EOF'
 1725000000123
@@ -134,4 +140,29 @@ jq -e '
   .machine_id == "33333333333333" and .mount_path == "/var/lib/ytsearch" and .state == "stopped"
 ' <<<"$builder_output" >/dev/null
 
+mkdir -p "$temporary_directory/cgroup/memory"
+printf '100000\n' > "$temporary_directory/cgroup/memory/memory.usage_in_bytes"
+printf '200000\n' > "$temporary_directory/cgroup/memory/memory.max_usage_in_bytes"
+printf '186016\n' > "$temporary_directory/cgroup/memory/memory.memsw.usage_in_bytes"
+printf '0\n' > "$temporary_directory/cgroup/memory/memory.failcnt"
+printf 'oom_kill 0\n' > "$temporary_directory/cgroup/memory/memory.oom_control"
+probe_fixture() {
+  PATH="$temporary_directory/bin:$PATH" \
+  FAKE_CGROUP_ROOT="$temporary_directory/cgroup" \
+  FLY_RESOURCE_APP=ytsearch-raw-production \
+  FLY_RESOURCE_MACHINE_ID=22222222222222 \
+  FLY_RESOURCE_MOUNT_PATH=/data/mutable \
+    "$SCRIPT_DIR/fly-machine-resource-snapshot.sh"
+}
+printf 'swap 0\ntotal_swap 0\n' > "$temporary_directory/cgroup/memory/memory.stat"
+probe_fixture | jq -e '.swap_current_bytes == 0 and .swap_peak_bytes == 0' >/dev/null
+printf 'swap 0\ntotal_swap 8192\n' > "$temporary_directory/cgroup/memory/memory.stat"
+probe_fixture | jq -e '.swap_current_bytes == 8192 and .swap_peak_source == "sampled_current"' >/dev/null
+for invalid in 'swap 0' 'total_swap invalid' 'total_swap -1'; do
+  printf '%s\n' "$invalid" > "$temporary_directory/cgroup/memory/memory.stat"
+  if probe_fixture >/dev/null 2>&1; then
+    printf 'missing or invalid total_swap must fail closed\n' >&2
+    exit 1
+  fi
+done
 printf 'fly_machine_resource_snapshot=ok\n'

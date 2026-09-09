@@ -86,12 +86,18 @@ elif [ -r /sys/fs/cgroup/memory/memory.usage_in_bytes ]; then
     printf "cgroup v1 memsw accounting is unavailable\n" >&2
     exit 1
   fi
-  memsw_current=$(cat /sys/fs/cgroup/memory/memory.memsw.usage_in_bytes)
-  if [ "$memsw_current" -ge "$memory_current" ]; then
-    swap_current=$((memsw_current - memory_current))
-  else
-    swap_current=0
-  fi
+  swap_current=""
+  while read -r event count; do
+    case "$event" in
+      total_swap) swap_current="$count" ;;
+    esac
+  done < /sys/fs/cgroup/memory/memory.stat
+  case "$swap_current" in
+    ""|*[!0-9]*)
+      printf "cgroup v1 total_swap accounting is unavailable or invalid\n" >&2
+      exit 1
+      ;;
+  esac
   swap_peak="$swap_current"
   swap_peak_source=sampled_current
   oom=$(cat /sys/fs/cgroup/memory/memory.failcnt)
