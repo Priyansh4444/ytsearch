@@ -653,6 +653,12 @@ the file, behavior delta is nil by construction.)
 
 ### D11 + D12 — `app.tsx`: effect/computed micro-allocs (TBT, minor)
 
+> **D12 rejected on review.** `executableSearch` must stay a memo. Effect nodes
+> are created with `_equals: false`, so an effect sourced from a plain accessor
+> re-runs on every dependency write — the lifecycle writes a fresh availability
+> object on mount, on visibilitychange, and every 60 s, so each write would abort
+> the in-flight search and refetch it. Only D11 shipped.
+
 ```tsx
 // D11 — warm effect computed (L324–333): return the boolean, not a wrapper:
 createEffect(

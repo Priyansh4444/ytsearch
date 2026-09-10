@@ -18,11 +18,19 @@ or load-bearing. `→` = the diff that changed the step.
 2.  app.tsx: searchStateFromLocation() — URL parse, 1 alloc [KEPT]
 3.  creatorFromPath() — split/filter small array, once per route [KEPT — scan
     rewrite rejected: pathname-only, cold, diminishing]
-4.  14 createSignal allocations (channels seeded from cache, query/youtuber/
+4.  16 createSignal allocations (channels seeded from cache, query/youtuber/
     page/sort/submitted/…) [KEPT — once, distinct owners]
-5.  executableSearch: memo node + === check per eval → plain accessor [REDUNDANT node → app.tsx D12]
+5.  executableSearch: memo kept [KEPT — load-bearing, NOT removed].
 6.  selectedChannel memo: normalize + linear find over C channels → one map
     build per channel-list change + O(1) lookup [REDUNDANT-SCAN → app.tsx D10]
+
+    (Why step 5 is kept: `createEffect` nodes are built with `_equals: false`
+    (`@solidjs/signals` dist, effect-node constructor), so an effect sourced from
+    a plain accessor re-runs on *every* write to its dependencies. `useAppLifecycle`
+    writes a fresh `provisionalAvailability()` object on mount, on
+    `visibilitychange`, and every 60 s; without the memo's `===` barrier each write
+    re-runs the search resource effect, aborting the in-flight request and
+    refetching the identical one. The memo is the equality barrier, not overhead.)
 7.  indexingChannel memo: same scan → same map [REDUNDANT-SCAN → app.tsx D10]
 8.  directChannel memo per keystroke: O(C) scan → O(1) map get [REDUNDANT-SCAN → app.tsx D10]
 9.  channelSuggestions memo per keystroke: full filter + 2x toLowerCase per
@@ -82,10 +90,10 @@ or load-bearing. `→` = the diff that changed the step.
 13. per row: engagementSummary filter/map/join (2 closures + 2 arrays + join)
     → one loop, same strings [REDUNDANT → video-result D9; 1.36x]
 14. per row: playerUrl new URL parse + serialize per read → string fast path
-    for the app-shaped embed URL only, with the parser kept for fragments and
-    pre-existing `autoplay=` (which `set` must overwrite); memo rejected — it
-    would parse eagerly on mount, while the plain accessor stays lazy until the
-    player opens [REDUNDANT → video-result D10]
+    fast path only for well-formed absolute embed URLs with no fragment and no
+    existing `autoplay=` (the parser still covers both, keeping `set` semantics);
+    memo rejected — it would parse eagerly on mount, while the plain accessor
+    stays lazy until the player opens [REDUNDANT → video-result D10]
 15. per row: posterThumbnail regex, engagementSummary setup-once, formatDate
     [KEPT — one tracked eval / setup-only; memo would add a node for zero re-runs]
 16. per title/hit: HighlightedText memo node + Show-per-part nodes → plain
@@ -130,7 +138,7 @@ or load-bearing. `→` = the diff that changed the step.
 | Channel scans per keystroke         | 3x O(C) with C normalize allocs each       | 2 allocs + keyed scan                               |
 | Suggestion slice/trim per keystroke | up to 5x                                   | 1x (memo)                                           |
 | Row-mount closures                  | ~5 + 3-statement hit closures              | 4 stable refs + 1-call hit closures                 |
-| Controllers per page mount          | N                                          | <= open dialogs                                     |
+| Controllers per page mount          | N                                          | <= expanded rows                                    |
 | URL parses before activation        | 0 (lazy)                                   | 0 (lazy; app-shaped embeds skip the parse entirely) |
 | Sort validation                     | rebuilds a 7-element array per route parse | module Set                                          |
 | Suggestion listbox layout           | in-flow shift (CLS)                        | in-flow [KEPT — e2e pins push-down]                 |
@@ -140,7 +148,8 @@ or load-bearing. `→` = the diff that changed the step.
 
 - Base: candidate 1 (Solid reactivity). Tie on points with candidate 2
   (10/10, candidate 3: 8); smallest behavior-identical surface — memo only on
-  multi-reader fan-out, removes elsewhere; lazy controller; hoisted handlers;
+  multi-reader fan-out (and kept where the equality barrier gates an effect:
+  `executableSearch`); lazy controller; hoisted handlers;
   one channel-key map; no new infra/props/timing changes.
 - Grafts from candidate 2: autoplayEmbedUrl fast path, restricted to the
   app-shaped embed URL (D10), sorts module Set (D6), explicit request literals

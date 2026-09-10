@@ -123,6 +123,20 @@ describe("VideoResult", () => {
     ]);
   });
 
+  test("summarises engagement counts in a stable order", () => {
+    const engaged = { ...video, view_count: 1200, like_count: 10, comment_count: 3 };
+    render(() => <VideoResult video={engaged} query="moment" rank={1} />);
+
+    expect(screen.getByText("1.2K views · 10 likes · 3 comments")).toBeInTheDocument();
+  });
+
+  test("omits the engagement line when every count is absent or zero", () => {
+    const quiet = { ...video, view_count: 0, like_count: undefined, comment_count: 0 };
+    render(() => <VideoResult video={quiet} query="moment" rank={1} />);
+
+    expect(screen.queryByText(/views|likes|comments/)).not.toBeInTheDocument();
+  });
+
   test("records feedback against the selected moment", () => {
     render(() => <VideoResult video={video} query="moment" rank={2} />);
 
