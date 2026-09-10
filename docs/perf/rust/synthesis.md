@@ -38,10 +38,10 @@ Corpus: 50,000 synthetic chunks / 2,000 videos / 73 terms, built with the real
 calling the private `matches_for_term(term, fields)` (text,title), min of 11
 iterations, `black_box`ed. Removed before commit; nothing else was instrumented.
 
-| term | postings | baseline ns/posting | patched ns/posting | speedup |
-| --- | ---: | ---: | ---: | ---: |
-| `the` | 47,886 | 16.89 / 18.63 (two runs) | 4.97 / 4.38 / 4.49 | **≈3.4–4.2×** |
-| `fable` | 2,971 | 15.02 / 17.73 | 7.24 / 5.73 / 7.34 | **≈2.2–2.6×** |
+| term    | postings |      baseline ns/posting | patched ns/posting |       speedup |
+| ------- | -------: | -----------------------: | -----------------: | ------------: |
+| `the`   |   47,886 | 16.89 / 18.63 (two runs) | 4.97 / 4.38 / 4.49 | **≈3.4–4.2×** |
+| `fable` |    2,971 |            15.02 / 17.73 | 7.24 / 5.73 / 7.34 | **≈2.2–2.6×** |
 
 Posting counts are identical before and after (47,886 / 2,971), and the crate's
 own suite is green on the patched tree: `cargo test --release -p youtube_raw_search`
@@ -98,15 +98,19 @@ L3). The production target is a **Fly `shared-cpu-2x` / 2048 MB** reader in `sjc
 — i.e. `codegen-units = 16`, `lto = false`, and the **generic x86-64** feature
 baseline (no AVX2), because no `target-cpu` is set anywhere.
 
-Everything below was re-measured with `taskset -c 0,1` (two pinned vCPUs) to match
-that machine class.
+Everything below was re-measured with `taskset -c 0,1` (two pinned vCPUs) to
+approximate that machine class. It is an approximation, not an emulation: Fly
+`shared-cpu-*` vCPUs are quota-throttled and share physical cores with other
+tenants, while `taskset` pins two dedicated cores of a 16-core laptop. The
+_relative_ before/after behaviour is what should travel; absolute ns/posting on
+the real machine will be higher and more variable.
 
-| index | term | postings | baseline ns/posting | patched ns/posting | speedup |
-| --- | --- | ---: | ---: | ---: | ---: |
-| 33 MB (50k chunks) | `the` | 47,886 | 11.42 / 13.61 | 4.45 / 3.98 | ~2.8–3.2× |
-| 33 MB | `fable` | 2,971 | 12.95 / 13.38 | 7.36 / 5.39 | ~1.8–2.5× |
-| **704 MB (500k chunks)** | `the` | 477,746 | 12.21 / 13.36 | 4.96 / 4.49 | **~2.7×** |
-| **704 MB** | `fable` | 29,148 | 11.11 / 11.86 | 6.92 / 6.84 | **~1.7×** |
+| index                    | term    | postings | baseline ns/posting | patched ns/posting |   speedup |
+| ------------------------ | ------- | -------: | ------------------: | -----------------: | --------: |
+| 33 MB (50k chunks)       | `the`   |   47,886 |       11.42 / 13.61 |        4.45 / 3.98 | ~2.8–3.2× |
+| 33 MB                    | `fable` |    2,971 |       12.95 / 13.38 |        7.36 / 5.39 | ~1.8–2.5× |
+| **704 MB (500k chunks)** | `the`   |  477,746 |       12.21 / 13.36 |        4.96 / 4.49 | **~2.7×** |
+| **704 MB**               | `fable` |   29,148 |       11.11 / 11.86 |        6.92 / 6.84 | **~1.7×** |
 
 The 704 MB index is 21× larger than the 33 MB one and far larger than the local
 24 MB L3, so it exercises the DRAM-backed regime rather than a cache-resident
@@ -114,11 +118,11 @@ one. Posting counts are identical in every configuration.
 
 ### Build-configuration experiments (both negative)
 
-| variant | `the` | `fable` | verdict |
-| --- | ---: | ---: | --- |
-| default (`cgu=16`, `lto=false`, generic x86-64) | 4.96 / 4.49 | 6.92 / 6.84 | reference |
+| variant                                           |       `the` |     `fable` | verdict     |
+| ------------------------------------------------- | ----------: | ----------: | ----------- |
+| default (`cgu=16`, `lto=false`, generic x86-64)   | 4.96 / 4.49 | 6.92 / 6.84 | reference   |
 | `-C target-cpu=x86-64-v3` (EPYC/Rome-class, AVX2) | 4.73 / 4.44 | 8.05 / 6.21 | **no gain** |
-| `lto="thin"`, `codegen-units=1` | 4.91 / 4.56 | 7.42 / 6.93 | **no gain** |
+| `lto="thin"`, `codegen-units=1`                   | 4.91 / 4.56 | 7.42 / 6.93 | **no gain** |
 
 The loop is branchy varint decoding with scalar loads; it does not vectorize, and
 `#[inline(always)]` already removed the cross-CGU calls LTO would have addressed.
