@@ -30,8 +30,12 @@ export function ovalSwarmPositions(total: number): SwarmPosition[] {
 }
 
 export function magneticOffset(deltaX: number, deltaY: number) {
-  const distance = Math.hypot(deltaX, deltaY);
-  if (distance >= 220) return { x: 0, y: 0 };
+  // Squared-distance early-out first: identical outputs (d2 >= 220^2 iff
+  // d >= 220; pull rounds to 0 at the boundary either way), no sqrt per
+  // far item per active pointer frame.
+  const d2 = deltaX * deltaX + deltaY * deltaY;
+  if (d2 >= 220 * 220) return { x: 0, y: 0 };
+  const distance = Math.sqrt(d2);
   const pull = (1 - distance / 220) ** 2 * 0.6;
   return { x: round(deltaX * pull), y: round(deltaY * pull) };
 }

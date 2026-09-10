@@ -31,4 +31,15 @@ describe("swarm magnet", () => {
     expect(magneticOffset(50, 0).x).toBeGreaterThan(0);
     expect(magneticOffset(220, 0)).toEqual({ x: 0, y: 0 });
   });
+
+  it("keeps the pull symmetric and zero at and beyond the radius", () => {
+    // Pins the squared-distance early-out: the boundary, the sign symmetry, and
+    // the far field must match the previous Math.hypot version.
+    expect(magneticOffset(0, 220)).toEqual({ x: 0, y: 0 });
+    expect(magneticOffset(-50, 0)).toEqual({ x: -magneticOffset(50, 0).x, y: 0 });
+    // At 219px the pull already rounds to zero, which is why the squared
+    // early-out cannot change any output — it only skips the sqrt.
+    expect(magneticOffset(219, 0)).toEqual({ x: 0, y: 0 });
+    expect(magneticOffset(300, 0)).toEqual({ x: 0, y: 0 });
+  });
 });

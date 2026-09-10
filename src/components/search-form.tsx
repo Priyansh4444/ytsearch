@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createSignal, flush } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, flush } from "solid-js";
 import type { Component } from "solid-js";
 import type { IndexedChannel, SearchSort } from "../types";
 import { searchSortOptions } from "../search-sorts";
@@ -20,11 +20,18 @@ export const SearchForm: Component<{
 }> = (props) => {
   const [activeSuggestion, setActiveSuggestion] = createSignal(-1);
   const [suggestionsDismissed, setSuggestionsDismissed] = createSignal(false);
-  const visibleSuggestions = () => props.channelSuggestions.slice(0, 8);
-  const suggestionsVisible = () =>
-    !suggestionsDismissed() &&
-    props.query.trim().startsWith("@") &&
-    visibleSuggestions().length > 0;
+  // Two memos replace up to 5 slice + trim-chain recomputes per keystroke:
+  // ArrowUp/Down, Enter-to-select and the ARIA reads below share one cached
+  // 8-window. Note `props.channelSuggestions` is a fresh array per keystroke, so
+  // this does NOT stabilize the `For` input identity — it only removes the
+  // repeated slicing. What keeps rows intact is the channel objects' identity.
+  const visibleSuggestions = createMemo(() => props.channelSuggestions.slice(0, 8));
+  const suggestionsVisible = createMemo(
+    () =>
+      !suggestionsDismissed() &&
+      props.query.trim().startsWith("@") &&
+      visibleSuggestions().length > 0,
+  );
 
   createEffect(
     () => props.query.trim().startsWith("@"),

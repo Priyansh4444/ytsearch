@@ -28,11 +28,12 @@ export const searchSortOptions = (engagement = engagementSortsEnabled) =>
       ] as const);
 
 export function isSearchSort(value: unknown): value is SearchSort {
-  return (
-    typeof value === "string" &&
-    ([...BASE_SORTS, ...ENGAGEMENT_SORTS] as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && ALL_SORTS.has(value);
 }
+
+// Module-scope set: membership check without rebuilding a 7-element array on
+// every route parse.
+const ALL_SORTS: ReadonlySet<string> = new Set<string>([...BASE_SORTS, ...ENGAGEMENT_SORTS]);
 
 export function isAvailableSearchSort(
   value: unknown,

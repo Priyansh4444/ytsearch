@@ -11,6 +11,11 @@
     <meta name="robots" content="index, follow" />
     <link rel="canonical" href="https://search.pronsh.dev/" />
     <link rel="icon" href="/favicon.png" type="image/png" />
+    <!-- Posters load from i.ytimg.com (cross-origin) as plain <img> no-cors
+      requests, so the preconnect must NOT carry `crossorigin` — a CORS-mode
+      connection is tracked separately and would not be reused here. The API and
+      avatars are same-origin through the Worker proxy, so they need no hint. -->
+    <link rel="preconnect" href="https://i.ytimg.com" />
 
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="YouTube Search" />

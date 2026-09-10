@@ -6,9 +6,10 @@ import { useAppLifecycle } from "./app-lifecycle";
 import { AvailabilityNotice } from "./components/availability-notice";
 import { ChannelAvatar, ChannelIdentity } from "./components/channel-profile";
 import {
+  buildChannelKeyIndex,
   channelMentionQuery,
-  channelSuggestions as findChannelSuggestions,
-  resolveChannelMention,
+  channelSuggestionsByKeys,
+  resolveChannelMentionByKeys,
 } from "./channel-query";
 import { SearchForm } from "./components/search-form";
 import { ErrorState, LoadingState, WelcomeState } from "./components/states";
@@ -92,31 +93,60 @@ const App: Component = () => {
   }>();
   const [indexingToast, setIndexingToast] = createSignal<string>();
   const [indexingChannelPreview, setIndexingChannelPreview] = createSignal<IndexedChannel>();
+  // Do NOT inline this as a plain accessor: `createEffect` nodes are built with
+  // `_equals: false`, so an effect sourced from an accessor re-runs on EVERY
+  // write to its dependencies. `useAppLifecycle` writes a fresh
+  // `provisionalAvailability()` object on mount, on visibilitychange, and every
+  // 60 s; without the memo's `===` barrier each of those writes aborts the
+  // in-flight search and refetches the identical request, flashing `LoadingState`
+  // over the results. The memo's equality check is load-bearing, not overhead.
   const executableSearch = createMemo(() =>
     availability().search_enabled ? submitted() : undefined,
   );
   const search = createSearchResource(executableSearch);
 
-  const selectedChannel = createMemo(() => {
-    const selectedHandle = normalizeHandle(youtuber());
-    return channels()?.find((channel) => normalizeHandle(channel.handle) === selectedHandle);
+  // Both lookups are built once per channel-list change (fetch/cache), never per
+  // keystroke. They key differently on purpose: `channelByKey` uses
+  // `normalizeHandle` (trim + `@`, case-preserving, first match wins — the
+  // contract the previous `channels().find(...)` calls had), while `channelKeys`
+  // lowercases for the substring scan.
+  const channelByKey = createMemo(() => {
+    const map = new Map<string, IndexedChannel>();
+    for (const channel of channels() ?? []) {
+      const key = normalizeHandle(channel.handle);
+      if (!map.has(key)) map.set(key, channel);
+    }
+    return map;
   });
-  const indexingChannel = createMemo(
-    () =>
-      channels()?.find(
-        (channel) => normalizeHandle(channel.handle) === normalizeHandle(indexingToast() ?? ""),
-      ) ?? indexingChannelPreview(),
-  );
+  const channelKeys = createMemo(() => buildChannelKeyIndex(channels() ?? []));
+
+  const selectedChannel = createMemo(() => {
+    const handle = youtuber();
+    return handle ? channelByKey().get(normalizeHandle(handle)) : undefined;
+  });
+  const indexingChannel = createMemo(() => {
+    const toast = indexingToast();
+    const exact = toast ? channelByKey().get(normalizeHandle(toast)) : undefined;
+    return exact ?? indexingChannelPreview();
+  });
   const hasChannel = () => youtuber().length > 0;
   const hasSearchSurface = () => hasChannel() || submitted() !== undefined;
   const showIndexedChannels = () =>
     !hasChannel() && query().trim().length === 0 && submitted() === undefined;
-  const directChannel = createMemo(() => {
-    const handle = normalizeHandle(query());
-    return channels()?.find((channel) => normalizeHandle(channel.handle) === handle);
+  // Only read inside `runSearch` (an untracked event handler), so this stays a
+  // plain accessor — a memo node would buy nothing here.
+  const directChannel = () => channelByKey().get(normalizeHandle(query()));
+  const channelSuggestions = createMemo(() => channelSuggestionsByKeys(channelKeys(), query()));
+  const mentionedChannel = createMemo(() => {
+    const currentQuery = query();
+    const token = currentQuery.trim().match(/^(@[^\s]+)/)?.[1];
+    if (!token) return undefined;
+    return resolveChannelMentionByKeys(
+      channelKeys(),
+      channelByKey().get(normalizeHandle(token)),
+      currentQuery,
+    );
   });
-  const channelSuggestions = createMemo(() => findChannelSuggestions(channels() ?? [], query()));
-  const mentionedChannel = createMemo(() => resolveChannelMention(channels() ?? [], query()));
   const mentionQuery = () => channelMentionQuery(query());
   const isIndexMode = () => query().trim().startsWith("@") && !mentionedChannel();
   const formMode = () => {
@@ -225,8 +255,9 @@ const App: Component = () => {
   const runSearch = (nextPage = 1) => {
     const normalizedQuery = query().trim();
     if (!normalizedQuery) return;
-    if (directChannel()) {
-      selectChannel(directChannel()!.handle);
+    const direct = directChannel();
+    if (direct) {
+      selectChannel(direct.handle);
       return;
     }
     if (mentionedChannel()) {
@@ -287,7 +318,13 @@ const App: Component = () => {
   const goToPage = (nextPage: number) => {
     const current = submitted();
     if (!current) return;
-    const request = { ...current, page: nextPage };
+    // Explicit literal: same fields, stable object shape, no spread copy.
+    const request: SearchRequest = {
+      query: current.query,
+      youtuber: current.youtuber,
+      page: nextPage,
+      sort: current.sort,
+    };
     captureSearchSubmitted(request);
     setPage(nextPage);
     setSubmitted(request);
@@ -326,12 +363,14 @@ const App: Component = () => {
       const searchQuery = mentionedChannel() ? mentionQuery() : normalizedQuery;
       const currentFormMode =
         normalizedQuery.startsWith("@") && !mentionedChannel() ? "index" : "search";
-      return {
-        shouldWarm:
-          currentFormMode === "search" && searchQuery.length >= 2 && availability().search_enabled,
-      };
+      // Plain boolean, not a `{ shouldWarm }` wrapper: the effect handler runs on
+      // every dependency notification either way (effect nodes do not compare
+      // values), so this only drops one allocation per evaluation.
+      return (
+        currentFormMode === "search" && searchQuery.length >= 2 && availability().search_enabled
+      );
     },
-    ({ shouldWarm }) => {
+    (shouldWarm) => {
       if (!shouldWarm) return;
       const timeout = window.setTimeout(() => {
         // Warm only the lazy Effect runtime. Speculative network searches become
@@ -370,7 +409,10 @@ const App: Component = () => {
       let frame: number | undefined;
       let cancelled = false;
       void prepareResultsRuntime().then(() => {
-        if (cancelled) return;
+        // Only the frame is skippable: with no hash there is nothing to scroll
+        // to. The preload above still runs so a direct `/?q=…` load does not
+        // start the lazy results chunk at render time instead of on success.
+        if (cancelled || !window.location.hash) return;
         frame = window.requestAnimationFrame(scrollToLinkedResult);
       });
       return () => {
@@ -392,11 +434,30 @@ const App: Component = () => {
       setSubmitted(undefined);
       return;
     }
-    const request: SearchRequest = { ...recent, page: 1 };
+    // Explicit literal (drops the dead `searchedAt` the spread carried).
+    const request: SearchRequest = {
+      query: recent.query,
+      youtuber: recent.youtuber,
+      page: 1,
+      sort: recent.sort,
+    };
     captureSearchSubmitted(request);
     setSubmitted(request);
     writeSearchUrl(request);
   };
+
+  // Stable handlers: these bodies are identical for every invocation, so they
+  // are created once here instead of once per JSX construction (Solid runs a
+  // component body once per mount, so the saving is one closure per mount each,
+  // not a per-update win).
+  const submitFirstPage = () => runSearch(1);
+  const handleCopySearchLink = () => void copySearchLink();
+  const handleClearRecent = () => setRecentSearches(clearRecentSearches());
+  const dismissIndexDialog = () => {
+    setPendingIndexHandle(undefined);
+    setIndexRequestError(undefined);
+  };
+  const confirmDialogRequest = () => void confirmIndexRequest();
 
   return (
     <main class="flex min-h-svh flex-col overflow-clip bg-vesper-bg text-vesper-text">
@@ -413,7 +474,7 @@ const App: Component = () => {
                 <BackButton onClick={goBack} />
                 <ChannelIdentity channel={selectedChannel()} handle={youtuber()} />
               </div>
-              <CopyLinkButton copied={copiedSearchLink()} onClick={() => void copySearchLink()} />
+              <CopyLinkButton copied={copiedSearchLink()} onClick={handleCopySearchLink} />
             </div>
           </Show>
 
@@ -437,7 +498,7 @@ const App: Component = () => {
             mode={formMode()}
             onQueryInput={setQuery}
             onSortChange={setSort}
-            onSubmit={() => runSearch(1)}
+            onSubmit={submitFirstPage}
             channelSuggestions={channelSuggestions()}
             onChannelSelect={selectChannel}
           />
@@ -447,7 +508,7 @@ const App: Component = () => {
               <RecentSearches
                 searches={recentSearches()}
                 onSelect={selectRecentSearch}
-                onClear={() => setRecentSearches(clearRecentSearches())}
+                onClear={handleClearRecent}
               />
             </Loading>
           </Show>
@@ -510,11 +571,8 @@ const App: Component = () => {
               handle={dialog.handle}
               busy={dialog.busy}
               error={dialog.error}
-              onCancel={() => {
-                setPendingIndexHandle(undefined);
-                setIndexRequestError(undefined);
-              }}
-              onConfirm={() => void confirmIndexRequest()}
+              onCancel={dismissIndexDialog}
+              onConfirm={confirmDialogRequest}
             />
           </Loading>
         )}

@@ -1,4 +1,4 @@
-import { For, Show, createSignal, onCleanup } from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import type { Component } from "solid-js";
 import { searchVideoMoments } from "../api";
 import { capture } from "../analytics";
@@ -16,16 +16,34 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
   const [showAllMoments, setShowAllMoments] = createSignal(false);
   const [momentsLoading, setMomentsLoading] = createSignal(false);
   const [momentsError, setMomentsError] = createSignal<string>();
-  const momentsController = new AbortController();
-  onCleanup(() => momentsController.abort());
-  const visibleHits = () => (showAllMoments() ? allHits() : allHits().slice(0, 3));
-  const hasHiddenMoments = () => props.video.match_count > allHits().length || allHits().length > 3;
   const [selectedHitId, setSelectedHitId] = createSignal<string>();
   const [playerActive, setPlayerActive] = createSignal(false);
-  const selectedHit = () =>
-    visibleHits().find((hit) => hit.id === selectedHitId()) ??
-    visibleHits()[0] ??
-    props.video.hits[0];
+  // N controllers were allocated per page mount, N-1 never used. Allocate on
+  // first expand only; abort-on-unmount preserved via the same cleanup.
+  let momentsController: AbortController | undefined;
+  onCleanup(() => momentsController?.abort());
+  const getMomentsController = () => (momentsController ??= new AbortController());
+  // One memo per fan-out root (read by For input, selection, badge,
+  // aria-label, youtube_url): 3 slice allocs collapse to 1, and the
+  // slice-then-find chain runs once per evaluation instead of per hit.
+  const visible = createMemo(() => (showAllMoments() ? allHits() : allHits().slice(0, 3)));
+  const selection = createMemo(() => {
+    const list = visible();
+    const id = selectedHitId();
+    if (id !== undefined) {
+      for (let i = 0; i < list.length; i++) {
+        if (list[i]!.id === id) return { hit: list[i]!, id };
+      }
+    }
+    const fallback = list[0] ?? props.video.hits[0];
+    return { hit: fallback, id: fallback?.id };
+  });
+  const selectedHit = () => selection().hit;
+  const selectedId = () => selection().id;
+  const hasHiddenMoments = () => props.video.match_count > allHits().length || allHits().length > 3;
+  // Plain accessor (not a memo): the iframe only reads this when the player
+  // branch mounts, so no URL work happens before first activation. The
+  // string fast path below removed the parse cost instead of a node.
   const playerUrl = () => autoplayEmbedUrl(selectedHit()?.embed_url ?? props.video.embed_url);
   const posterThumbnail = () =>
     (props.video.thumbnail ?? selectedHit()?.thumbnail)?.replace(
@@ -46,7 +64,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
       const response = await searchVideoMoments(
         props.query,
         props.video.video_id,
-        momentsController.signal,
+        getMomentsController().signal,
       );
       const completeVideo = response.videos.find(
         (video) => video.video_id === props.video.video_id,
@@ -75,6 +93,22 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
       // Clipboard permission can be denied; the permalink is already in the URL.
     }
     capture("result_link_copied", resultProperties(props));
+  };
+  // Stable per-row handlers: the two identical `result_opened` bodies collapse
+  // into one reference, so each row allocates one closure fewer (N per-hit
+  // closures remain). The per-hit onSelect closure is structurally unavoidable
+  // (it captures `hit`), so its body is a single call instead of three
+  // statements.
+  const openResult = () => capture("result_opened", resultProperties(props));
+  const copyLink = () => void copyResultLink();
+  const runExpand = () => void expandMoments();
+  const selectHit = (hit: SearchHit) => {
+    setSelectedHitId(hit.id);
+    activatePlayer();
+    capture("result_timestamp_selected", {
+      ...resultProperties(props),
+      match_kind: hit.match_kind,
+    });
   };
 
   return (
@@ -143,7 +177,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
                 target="_blank"
                 rel="noreferrer"
                 class="block break-words text-lg font-semibold leading-snug text-white transition-colors hover:text-vesper-yellow"
-                onClick={() => capture("result_opened", resultProperties(props))}
+                onClick={openResult}
               >
                 <HighlightedText
                   text={props.video.title}
@@ -163,17 +197,13 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
               </Show>
             </div>
             <div class="flex w-full shrink-0 items-center gap-2 sm:w-auto">
-              <CopyLinkButton
-                copied={copied()}
-                onClick={() => void copyResultLink()}
-                label="Copy result link"
-              />
+              <CopyLinkButton copied={copied()} onClick={copyLink} label="Copy result link" />
               <a
                 href={selectedHit()?.youtube_url ?? props.video.youtube_url}
                 target="_blank"
                 rel="noreferrer"
                 class="pressable inline-flex h-10 min-w-0 flex-1 items-center justify-center border border-vesper-control bg-vesper-bg px-3 text-sm font-medium text-vesper-green hover:border-vesper-green sm:flex-none"
-                onClick={() => capture("result_opened", resultProperties(props))}
+                onClick={openResult}
               >
                 Open on YouTube
               </a>
@@ -181,29 +211,22 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
           </div>
 
           <div class="grid gap-2">
-            <For each={visibleHits()}>
+            <For each={visible()}>
               {(hit) => (
                 <TranscriptExcerpt
                   hit={hit}
                   query={props.query}
                   video={props.video}
                   rank={props.rank}
-                  selected={hit.id === selectedHit()?.id}
-                  onSelect={() => {
-                    setSelectedHitId(hit.id);
-                    activatePlayer();
-                    capture("result_timestamp_selected", {
-                      ...resultProperties(props),
-                      match_kind: hit.match_kind,
-                    });
-                  }}
+                  selected={hit.id === selectedId()}
+                  onSelect={() => selectHit(hit)}
                 />
               )}
             </For>
             <Show when={!showAllMoments() && hasHiddenMoments()}>
               <button
                 type="button"
-                onClick={() => void expandMoments()}
+                onClick={runExpand}
                 disabled={momentsLoading()}
                 class="pressable inline-flex h-9 items-center justify-center gap-2 border border-vesper-control bg-vesper-bg px-3 text-sm font-medium text-vesper-muted hover:border-vesper-yellow hover:text-vesper-yellow"
               >
@@ -242,18 +265,42 @@ const compactNumber = new Intl.NumberFormat("en", {
 });
 
 function engagementSummary(video: SearchVideoResult): string | undefined {
-  const metrics = [
-    [video.view_count, "views"],
-    [video.like_count, "likes"],
-    [video.comment_count, "comments"],
-  ] as const;
-  const present = metrics
-    .filter(([value]) => typeof value === "number" && value > 0)
-    .map(([value, label]) => `${compactNumber.format(value ?? 0)} ${label}`);
-  return present.length > 0 ? present.join(" · ") : undefined;
+  // One pass, no closures, no temps: identical strings to the old
+  // filter/map/join chain (same cached formatter, same order, same join).
+  let out = "";
+  let count = 0;
+  if (typeof video.view_count === "number" && video.view_count > 0) {
+    out += `${compactNumber.format(video.view_count)} views`;
+    count++;
+  }
+  if (typeof video.like_count === "number" && video.like_count > 0) {
+    if (count > 0) out += " · ";
+    out += `${compactNumber.format(video.like_count)} likes`;
+    count++;
+  }
+  if (typeof video.comment_count === "number" && video.comment_count > 0) {
+    if (count > 0) out += " · ";
+    out += `${compactNumber.format(video.comment_count)} comments`;
+    count++;
+  }
+  return count > 0 ? out : undefined;
 }
 
 function autoplayEmbedUrl(value: string): string {
+  // Fast path only when appending is provably identical to
+  // `searchParams.set("autoplay", "1")`: an absolute embed URL with no fragment
+  // and no existing `autoplay` param to overwrite. Anything else — notably
+  // `autoplay=0` (which `set` must overwrite) or a `#t=` fragment (where a
+  // naive append would land inside the fragment) — keeps the parser, and with
+  // it the original semantics.
+  if (
+    value.startsWith("https://") &&
+    value.includes("/embed/") &&
+    !value.includes("#") &&
+    !value.includes("autoplay=")
+  ) {
+    return `${value}${value.includes("?") ? "&" : "?"}autoplay=1`;
+  }
   const url = new URL(value);
   url.searchParams.set("autoplay", "1");
   return url.toString();

@@ -133,6 +133,118 @@ describe("VideoResult", () => {
     );
   });
 
+  test("selects the clicked moment and points the player at it", async () => {
+    render(() => <VideoResult video={video} query="moment" rank={1} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Moment 3/ }));
+
+    expect(await screen.findByTitle("YouTube player for Test video")).toHaveAttribute(
+      "src",
+      "https://youtube.test/embed/video-1?start=2&autoplay=1",
+    );
+    expect(screen.getByText("0:02")).toBeInTheDocument();
+    // The selection event carries the video-level payload plus the match kind
+    // (there is no per-hit id in the payload shape).
+    expect(capture).toHaveBeenCalledWith(
+      "result_timestamp_selected",
+      expect.objectContaining({ video_id: "video-1", rank: 1, match_kind: "transcript" }),
+    );
+  });
+
+  test("falls back to the first visible moment when the selected id disappears", async () => {
+    searchVideoMoments.mockResolvedValue({
+      videos: [
+        { ...video, hits: hits.slice(3).map((entry) => ({ ...entry, id: `other-${entry.id}` })) },
+      ],
+    });
+    render(() => <VideoResult video={video} query="moment" rank={1} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Moment 2/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Show all moments" }));
+
+    // The expansion replaced every hit id, so the stale selection must resolve
+    // to the first visible hit rather than to nothing.
+    await waitFor(() =>
+      expect(screen.getAllByRole("button", { name: /Moment \d/ })).toHaveLength(4),
+    );
+    expect(screen.getByText("0:03")).toBeInTheDocument();
+  });
+
+  test("forces autoplay on when the embed URL already sets it", async () => {
+    render(() => (
+      <VideoResult
+        video={{
+          ...video,
+          // `playerUrl` prefers the selected hit's embed URL, so drop the hits
+          // to exercise the video-level URL under test.
+          hits: [],
+          match_count: 0,
+          embed_url: "https://www.youtube.com/embed/video-1?autoplay=0&rel=0",
+        }}
+        query="moment"
+        rank={1}
+      />
+    ));
+
+    fireEvent.click(screen.getByRole("button", { name: /Play Test video/ }));
+
+    expect(await screen.findByTitle("YouTube player for Test video")).toHaveAttribute(
+      "src",
+      "https://www.youtube.com/embed/video-1?autoplay=1&rel=0",
+    );
+  });
+
+  test("keeps an existing fragment after the autoplay parameter", async () => {
+    render(() => (
+      <VideoResult
+        video={{
+          ...video,
+          hits: [],
+          match_count: 0,
+          embed_url: "https://www.youtube.com/embed/video-1#t=30",
+        }}
+        query="moment"
+        rank={1}
+      />
+    ));
+
+    fireEvent.click(screen.getByRole("button", { name: /Play Test video/ }));
+
+    expect(await screen.findByTitle("YouTube player for Test video")).toHaveAttribute(
+      "src",
+      "https://www.youtube.com/embed/video-1?autoplay=1#t=30",
+    );
+  });
+
+  test("aborts an in-flight moments request when the row unmounts", async () => {
+    searchVideoMoments.mockReset();
+    let signal: AbortSignal | undefined;
+    searchVideoMoments.mockImplementation(
+      (_query: string, _videoId: string, passed: AbortSignal) => {
+        signal = passed;
+        return new Promise(() => undefined);
+      },
+    );
+    const { unmount } = render(() => <VideoResult video={video} query="moment" rank={1} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show all moments" }));
+    await waitFor(() => expect(signal).toBeDefined());
+    // The lazy controller is created on first expand; unmounting must abort it
+    // so an in-flight request cannot resolve into a disposed row.
+    expect(signal?.aborted).toBe(false);
+
+    unmount();
+    expect(signal?.aborted).toBe(true);
+  });
+
+  test("unmounts a row that never expanded without side effects", () => {
+    searchVideoMoments.mockReset();
+    const { unmount } = render(() => <VideoResult video={video} query="moment" rank={1} />);
+
+    expect(() => unmount()).not.toThrow();
+    expect(searchVideoMoments).not.toHaveBeenCalled();
+  });
+
   test("copies a permalink that points at the current search result", async () => {
     window.history.replaceState({}, "", "/?q=moment&page=2");
     render(() => <VideoResult video={video} query="moment" rank={1} />);

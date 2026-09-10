@@ -30,6 +30,7 @@ export function saveRecentSearch(
     searchedAt,
   };
   const key = recentKey(recent);
+  // Runs once per submitted search, so the declarative form wins on clarity.
   const next = [recent, ...current.filter((item) => recentKey(item) !== key)].slice(
     0,
     MAX_RECENT_SEARCHES,

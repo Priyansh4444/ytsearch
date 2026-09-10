@@ -1,5 +1,12 @@
 import { expect, test } from "vitest";
-import { channelMentionQuery, channelSuggestions, resolveChannelMention } from "./channel-query";
+import {
+  buildChannelKeyIndex,
+  channelMentionQuery,
+  channelSuggestions,
+  channelSuggestionsByKeys,
+  resolveChannelMention,
+  resolveChannelMentionByKeys,
+} from "./channel-query";
 import type { IndexedChannel } from "./types";
 
 const channels: IndexedChannel[] = [
@@ -45,4 +52,23 @@ test("uses a unique match for @channel phrase searches", () => {
 test("does not guess ambiguous or unknown channels", () => {
   expect(resolveChannelMention(channels, "@ben")).toBeUndefined();
   expect(resolveChannelMention(channels, "@missing")).toBeUndefined();
+});
+
+// The app builds the index once per channel-list change and calls the keyed
+// functions; cover that shipped path directly rather than only the wrappers
+// that build an index per call.
+test("keyed lookups match the convenience wrappers", () => {
+  const index = buildChannelKeyIndex(channels);
+  const exactOf = (token: string) =>
+    channels.find((channel) => `@${channel.handle.replace(/^@/, "")}` === token);
+
+  expect(channelSuggestionsByKeys(index, "@theo")[0]?.handle).toBe("@t3dotgg");
+  expect(channelSuggestionsByKeys(index, "no-at-prefix")).toEqual([]);
+  expect(resolveChannelMentionByKeys(index, exactOf("@t3dotgg"), "@theo shooting")?.handle).toBe(
+    "@t3dotgg",
+  );
+  expect(resolveChannelMentionByKeys(index, undefined, "@ben")).toBeUndefined();
+
+  // An explicit exact match wins without consulting the suggestion scan.
+  expect(resolveChannelMentionByKeys(index, channels[1], "@ben")?.handle).toBe("@benjicken");
 });
