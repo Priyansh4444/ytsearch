@@ -208,6 +208,26 @@ describe("VideoResult", () => {
     );
   });
 
+  test.each([
+    ["bare", "https://www.youtube.com/embed/video-1?autoplay&rel=0"],
+    ["encoded", "https://www.youtube.com/embed/video-1?%61utoplay=0&rel=0"],
+  ])("replaces a %s autoplay parameter", async (_kind, embedUrl) => {
+    render(() => (
+      <VideoResult
+        video={{ ...video, hits: [], match_count: 0, embed_url: embedUrl }}
+        query="moment"
+        rank={1}
+      />
+    ));
+
+    fireEvent.click(screen.getByRole("button", { name: /Play Test video/ }));
+
+    const src = (await screen.findByTitle("YouTube player for Test video")).getAttribute("src");
+    const url = new URL(src ?? "");
+    expect(url.searchParams.getAll("autoplay")).toEqual(["1"]);
+    expect(url.searchParams.get("rel")).toBe("0");
+  });
+
   test("keeps an existing fragment after the autoplay parameter", async () => {
     render(() => (
       <VideoResult

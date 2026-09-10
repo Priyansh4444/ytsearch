@@ -287,20 +287,6 @@ function engagementSummary(video: SearchVideoResult): string | undefined {
 }
 
 function autoplayEmbedUrl(value: string): string {
-  // Fast path only when appending is provably identical to
-  // `searchParams.set("autoplay", "1")`: an absolute embed URL with no fragment
-  // and no existing `autoplay` param to overwrite. Anything else — notably
-  // `autoplay=0` (which `set` must overwrite) or a `#t=` fragment (where a
-  // naive append would land inside the fragment) — keeps the parser, and with
-  // it the original semantics.
-  if (
-    value.startsWith("https://") &&
-    value.includes("/embed/") &&
-    !value.includes("#") &&
-    !value.includes("autoplay=")
-  ) {
-    return `${value}${value.includes("?") ? "&" : "?"}autoplay=1`;
-  }
   const url = new URL(value);
   url.searchParams.set("autoplay", "1");
   return url.toString();
