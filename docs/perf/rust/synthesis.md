@@ -13,7 +13,9 @@ rejections, and the **independent re-measurement done by the implementing agent*
   changes, two of which it measured individually.
 - **Grafted from A:** the finding that production multi-term queries go through
   `conjunction.rs`'s streaming plan rather than this batch decoder, so the win is
-  scoped to single-term, filtered, title-expanded and phrase paths. Its
+  scoped to single-term filtered, title-expanded, phrase, and materialized
+  multi-term conjunction paths (confirmed by the independent review below) — but not
+  to single-term unfiltered queries, which never enter this loop. Its
   `DocumentTable::tokens` accessor is the same idea as C's R2.
 - **Grafted from B:** the parity method — byte-identical responses (hash +
   length) rather than only "tests pass" — and `#[cold]` on the debug error paths
@@ -43,17 +45,25 @@ iterations, `black_box`ed. Removed before commit; nothing else was instrumented.
 | `the`   |   47,886 | 16.89 / 18.63 (two runs) | 4.97 / 4.38 / 4.49 | **≈3.4–4.2×** |
 | `fable` |    2,971 |            15.02 / 17.73 | 7.24 / 5.73 / 7.34 | **≈2.2–2.6×** |
 
+**Superseded.** Those baseline runs were anomalously slow. The machine-profile
+section below, plus an independent review that measured a 10.9–11.7 ns/posting
+baseline on the same hardware class, put the transferable figure at
+**≈2.3–2.8× on the decode loop**, not the 3.4–4.2× row above.
+
 Posting counts are identical before and after (47,886 / 2,971), and the crate's
 own suite is green on the patched tree: `cargo test --release -p youtube_raw_search`
-→ **162 passed, 1 ignored**, plus the CLI integration test. `cargo clippy
+→ **162 passed, 0 ignored**, plus the CLI integration test (the temporary timing
+harness was removed before commit, so nothing is ignored in the committed tree). `cargo clippy
 --workspace --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
-**Caveat.** This is a loaded 16-core laptop against a synthetic corpus, and the
-absolute ns/posting figures move with load (baseline varied 15.0–18.6 across
-runs). The direction and rough magnitude replicated across every run; the
-end-to-end `search()` effect was **not** cleanly measurable at this scale
-(single-term unfiltered queries take the `broad-single` fast path and never enter
-this loop), so no end-to-end claim is made. Confirm on production-shaped data.
+**Caveat and scope.** These were loaded 16-core laptop runs and the absolute
+ns/posting figures move with load (baseline varied 15.0–18.6 across runs), which
+is why the machine-profile section below is the one to trust. The scope is
+narrower than "all queries" and wider than "single-term queries": an independent
+review with its own harness and corpus measured the end-to-end effect as
+filtered `the` 4.49 → 2.24 ms, `the and of` 19.6 → 15.1 ms, and `"the fable"`
+4.42 → 3.35 ms, while single-term unfiltered `the` was unchanged within noise (it
+takes the `broad-single` fast path and never enters this loop).
 
 ## Deterministic evidence for `#[inline(always)]`
 
