@@ -437,10 +437,4 @@ select {
     inset-inline-start: var(--swarm-mobile-x);
     top: var(--swarm-mobile-y);
   }
-
-  .channel-swarm-hint {
-    top: 66%;
-    bottom: auto;
-    font-size: 0.6rem;
-  }
 }

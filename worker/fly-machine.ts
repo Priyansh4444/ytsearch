@@ -96,28 +96,6 @@ export const stopFlyMachineEffect = (
     "Fly machine stop",
   ).pipe(Effect.asVoid);
 
-// Promise adapters preserve the module's existing public boundary.
-export const flyMachineState = (
-  env: FlyEnvironment,
-  appName: string,
-  machineId: string,
-): Promise<FlyMachineState> => Effect.runPromise(flyMachineStateEffect(env, appName, machineId));
-
-export const flyMachines = (env: FlyEnvironment, appName: string): Promise<FlyMachine[]> =>
-  Effect.runPromise(flyMachinesEffect(env, appName));
-
-export const startFlyMachine = (
-  env: FlyEnvironment,
-  appName: string,
-  machineId: string,
-): Promise<void> => Effect.runPromise(startFlyMachineEffect(env, appName, machineId));
-
-export const stopFlyMachine = (
-  env: FlyEnvironment,
-  appName: string,
-  machineId: string,
-): Promise<void> => Effect.runPromise(stopFlyMachineEffect(env, appName, machineId));
-
 function flyFetchEffect(
   input: RequestInfo | URL,
   init: RequestInit,

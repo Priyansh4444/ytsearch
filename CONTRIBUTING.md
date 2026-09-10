@@ -41,7 +41,7 @@ or deployment details.
 | Indexing CLI | `crates/youtube_cli` | `cargo test -p youtube_cli` |
 | Raw query engine | `crates/youtube_raw_search` | `cargo test -p youtube_raw_search` |
 | Raw indexing boundary | `crates/youtube_index_store` | `cargo test -p youtube_index_store` |
-| Operations and deployment | `scripts/`, `docs/` | `sh -n scripts/changed-script.sh` |
+| Operations and deployment | `scripts/`, `docs/` | `sh -n scripts/<changed-script>.sh` |
 
 The [architecture guide](docs/architecture.md) explains how these areas fit
 together. If you are unsure where a change belongs, open an issue with the

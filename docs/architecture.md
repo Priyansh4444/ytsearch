@@ -34,7 +34,6 @@ generation.
 | `youtube_ytdlp` | Public caption and metadata extraction |
 | `youtube_transcribe` | Optional permitted local transcription fallback |
 | `youtube_time` | RFC 3339 and duration parsing |
-| `youtube_jsonl` | Queue JSONL persistence helpers |
 | `youtube_index_store` | Backend-neutral mutable search administration contract and Raw HTTP client |
 | `youtube_search_client` | Read-only Raw search client and query builder |
 | `youtube_search_service` | Authenticated search/admin HTTP transport and bounded caching |

@@ -1,6 +1,5 @@
 export const SEARCH_TIME_ZONE = "America/Los_Angeles";
 export const SEARCH_OPEN_MINUTE = 12 * 60;
-export const SEARCH_CLOSE_MINUTE = 24 * 60;
 export const SEARCH_PREWARM_MINUTE = SEARCH_OPEN_MINUTE - 15;
 
 export type SchedulePhase = "closed" | "prewarm" | "open";
