@@ -90,6 +90,7 @@ pub fn write_varint(mut value: u32, output: &mut Vec<u8>) {
     output.push(value as u8);
 }
 
+#[inline(always)]
 pub fn read_varint(bytes: &[u8], cursor: &mut usize, end: usize) -> Result<u32> {
     let available = bytes
         .get(*cursor..end)

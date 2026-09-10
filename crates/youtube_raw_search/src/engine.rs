@@ -1320,10 +1320,10 @@ impl RawSearchEngine {
                 .map(|positions| read_varint(positions, &mut position_cursor, positions.len()))
                 .transpose()?
                 .unwrap_or_default();
-            let record = self.inner.metadata.document(document)?;
+            let document_tokens = self.inner.metadata.document_tokens(document)?;
             let score = bm25(
                 frequency,
-                record.tokens,
+                document_tokens,
                 self.inner.manifest.average_document_tokens,
             ) * idf
                 * TEXT_QUERY_WEIGHT

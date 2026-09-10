@@ -272,6 +272,17 @@ impl DocumentTable {
         })
     }
 
+    #[inline]
+    pub(super) fn document_tokens(&self, id: u32) -> Result<u32> {
+        if id as usize >= self.documents {
+            return Err(Error::Corrupt(format!("document {id} is out of bounds")));
+        }
+        read_u32(
+            self.file.bytes(),
+            METADATA_PREFIX_BYTES + id as usize * DOCUMENT_RECORD_BYTES + 16,
+        )
+    }
+
     pub(super) fn search_document(&self, id: u32) -> Result<SearchDocumentRecord> {
         if id as usize >= self.documents {
             return Err(Error::Corrupt(format!("document {id} is out of bounds")));

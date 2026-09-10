@@ -346,6 +346,12 @@ pub(super) fn union_all(mut lists: Vec<Vec<DocMatch>>) -> Vec<DocMatch> {
 }
 
 pub(super) fn union_sorted_ids(left: Vec<u32>, right: Vec<u32>) -> Vec<u32> {
+    if left.is_empty() {
+        return right;
+    }
+    if right.is_empty() {
+        return left;
+    }
     let mut output = Vec::with_capacity(left.len().saturating_add(right.len()));
     let mut left = left.into_iter().peekable();
     let mut right = right.into_iter().peekable();
@@ -374,6 +380,12 @@ pub(super) fn union_sorted_ids(left: Vec<u32>, right: Vec<u32>) -> Vec<u32> {
 }
 
 pub(super) fn union_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec<DocMatch> {
+    if left.is_empty() {
+        return right;
+    }
+    if right.is_empty() {
+        return left;
+    }
     let mut output = Vec::with_capacity(left.len().saturating_add(right.len()));
     let mut left = left.into_iter().peekable();
     let mut right = right.into_iter().peekable();
