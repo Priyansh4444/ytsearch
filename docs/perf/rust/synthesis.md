@@ -98,6 +98,21 @@ already been inlined).
 2. `#[cold]` on the `read_varint`/`read_u32` error constructions (B).
 3. Title-heap removal and streaming-driver pass fusion (A, unmeasured).
 4. Exact-total vs early-exit trade for `found` (A, B) — product decision.
+5. **Page-cache policy on the reader (machine-specific, unmeasured).** The index is
+   mapped with `MmapOptions::new().map(&file)` — no `madvise` hints anywhere
+   (`format.rs`), while `memmap2` 0.9 exposes `advise_range`. The reader has 2 GB
+   of RAM, and at this change's local density (500k chunks → 704 MB) the
+   production corpus (~8.32M documents) would be roughly an order of magnitude
+   larger than RAM, so the query path is dominated by faults rather than
+   instructions: per-posting metadata reads are effectively random over the
+   document table, while posting streams are scanned sequentially, and the
+   kernel's default readahead assumes the latter everywhere. Candidate (do NOT
+   apply blind): `Advice::Random` on the metadata/document region and
+   `Advice::Sequential`/`WillNeed` on the postings streams; `MAP_POPULATE` would
+   be actively harmful for an index larger than RAM. This cannot be measured from
+   a dev box — a local file stays in page cache — and `flyctl ssh` to the reader
+   timed out from here, so it needs a measurement on the machine itself (or a
+   canary with Axiom `backend_search_ms` before/after).
 
 ## Machine profile — measured for the Fly target, not the dev laptop
 
