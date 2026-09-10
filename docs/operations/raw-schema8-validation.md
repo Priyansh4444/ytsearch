@@ -190,6 +190,23 @@ checks, not recorded passing production measurements. Queue admission,
 pagination, highlights, and sorting also require their focused contract tests;
 page-one timing does not establish those behaviors.
 
+The `f4663a4` isolated baseline on the existing generation measured 135
+requests with three ranking failures, a 104.245 ms median, 537.176 ms p95, and
+891.380 ms maximum. After the posting decoder changes in `a2e0e2c`, the same
+baseline measured three ranking failures, a 90.532 ms median, 491.278 ms p95,
+and 801.400 ms maximum. `and the`, standalone `the`, `in the`, and
+`this is the` remained over 200 ms. The reader's I/O summary recorded about
+1.1 seconds of thread CPU across about 26 seconds of query wall time in the
+first run. The decoder reduced CPU work, but the existing generation remains
+I/O-bound on the 2 GB reader.
+
+`RAW_CANARY_MIGRATION_MODE=record-old-generation` exists only to cross this
+format boundary. It records the old baseline and build-load phases, then applies
+the zero-error, sub-200 ms gate to the post-swap and warmed-new phases. A normal
+strict canary publication from the new generation is still required afterward.
+This prevents an old format from blocking construction of its replacement
+without weakening the final release gate.
+
 `cargo nextest` was checked but is not installed in the current environment.
 The available Cargo library suite passed 162 tests after the workload update.
 Neither runner substitutes for the deployed HTTP latency gate.

@@ -13,6 +13,7 @@ fly_production_inventory_load_raw_release
 : "${EXPECTED_RAW_READER_IMAGE:?set EXPECTED_RAW_READER_IMAGE from reader staging output}"
 : "${EXPECTED_RAW_BUILDER_IMAGE:?set EXPECTED_RAW_BUILDER_IMAGE from builder staging output}"
 : "${RAW_CANARY_TEST_MODE:=0}"
+: "${RAW_CANARY_MIGRATION_MODE:=strict}"
 : "${LOCAL_PORT:=18108}"
 : "${RAW_CANARY_LEASE_TTL_SECONDS:=21600}"
 : "${RAW_CANARY_STATE_POLL_ATTEMPTS:=60}"
@@ -116,6 +117,14 @@ if [[ "$RAW_CANARY_TEST_MODE" == fixture-only ]]; then
     exit 1
   fi
 fi
+case "$RAW_CANARY_MIGRATION_MODE" in
+  strict) baseline_policy=strict ;;
+  record-old-generation) baseline_policy=record-only ;;
+  *)
+    printf 'RAW_CANARY_MIGRATION_MODE must be strict or record-old-generation\n' >&2
+    exit 1
+    ;;
+esac
 
 if [[ "${ALLOW_RAW_CANARY_GATE:-}" != run-exact-isolated-canary ]]; then
   printf 'set ALLOW_RAW_CANARY_GATE=run-exact-isolated-canary\n' >&2
@@ -585,6 +594,7 @@ PUBLISH_PROCESS_TIMEOUT_SECONDS="$publisher_process_timeout" \
 PUBLISH_PROCESS_KILL_AFTER_SECONDS="$publisher_process_kill_after" \
 WARM_NEW_SECONDS="$WARM_NEW_SECONDS" \
 CASES_FILE="$CANARY_CASES_FILE" BASELINE_RUNS="$CANARY_BASELINE_RUNS" \
+BASELINE_POLICY="$baseline_policy" \
 CONCURRENCY="$CANARY_CONCURRENCY" \
 CURL_MAX_TIME="$CANARY_SEARCH_CURL_MAX_TIME" \
 MAX_ACCEPTABLE_MS="$MAX_ACCEPTABLE_MS" MAX_RSS_BYTES="$MAX_RSS_BYTES" \
@@ -746,6 +756,7 @@ jq -cn --arg source_commit "$source_commit" --arg run_id "$run_id" \
   --arg base_image_digest "$base_image_digest" \
   --arg reader_image "$reader_resolved_image" --arg builder_image "$builder_resolved_image" \
   --arg attestation_scope "$attestation_scope" \
+  --arg migration_mode "$RAW_CANARY_MIGRATION_MODE" \
   --argjson upsert_sequence "$upsert_sequence" --argjson delete_sequence "$delete_sequence" \
   --argjson maximum_ms "$MAX_ACCEPTABLE_MS" --argjson maximum_rss "$MAX_RSS_BYTES" \
   --argjson maximum_cgroup_memory "$MAX_CGROUP_MEMORY_BYTES" \
@@ -768,6 +779,7 @@ jq -cn --arg source_commit "$source_commit" --arg run_id "$run_id" \
     upsert_sequence:$upsert_sequence,
     delete_sequence:$delete_sequence,
     policy:{
+      migration_mode:$migration_mode,
       maximum_search_ms:$maximum_ms,
       maximum_process_rss_bytes:$maximum_rss,
       maximum_cgroup_memory_bytes:$maximum_cgroup_memory,

@@ -17,6 +17,7 @@ CASES_FILE="${CASES_FILE:-$SCRIPT_DIR/benchmark-search-cases.tsv}"
 OUTPUT_DIR="${OUTPUT_DIR:-.search-experiment/results/publication-$(date -u +%Y%m%dT%H%M%SZ)}"
 CONCURRENCY="${CONCURRENCY:-4}"
 BASELINE_RUNS="${BASELINE_RUNS:-3}"
+BASELINE_POLICY="${BASELINE_POLICY:-strict}"
 WARM_NEW_SECONDS="${WARM_NEW_SECONDS:-60}"
 PUBLICATION_TIMEOUT_SECONDS="${PUBLICATION_TIMEOUT_SECONDS:-2400}"
 PUBLISH_PROCESS_TIMEOUT_SECONDS="${PUBLISH_PROCESS_TIMEOUT_SECONDS:-}"
@@ -33,6 +34,14 @@ MAX_CGROUP_MEMORY_BYTES="${MAX_CGROUP_MEMORY_BYTES:-1986422374}"
 MAX_SWAP_BYTES="${MAX_SWAP_BYTES:-0}"
 MAX_DISK_PERCENT="${MAX_DISK_PERCENT:-80}"
 PUBLISH_BIN="${PUBLISH_BIN:-$SCRIPT_DIR/../target/release/ytsearch}"
+
+case "$BASELINE_POLICY" in
+  strict|record-only) ;;
+  *)
+    printf 'BASELINE_POLICY must be strict or record-only\n' >&2
+    exit 2
+    ;;
+esac
 
 for command in curl jq timeout; do
   command -v "$command" >/dev/null 2>&1 || {
@@ -339,13 +348,17 @@ curl --fail --silent --show-error --max-time 5 "${SEARCH_URL%/}/metrics" \
 run_engine "$OUTPUT_DIR/baseline.jsonl" "$BASELINE_RUNS" 1
 summarize_phase baseline "$OUTPUT_DIR/baseline.jsonl" \
   | tee "$OUTPUT_DIR/baseline-summary.json"
-jq -e --argjson maximum "$MAX_ACCEPTABLE_MS" '
-  .samples > 0 and .errors == 0 and .max_ms != null and .max_ms < $maximum
-' "$OUTPUT_DIR/baseline-summary.json" >/dev/null || {
-  printf 'publication baseline gate failed; required zero errors and max < %sms\n' \
-    "$MAX_ACCEPTABLE_MS" >&2
-  exit 1
-}
+if [[ "$BASELINE_POLICY" == strict ]]; then
+  jq -e --argjson maximum "$MAX_ACCEPTABLE_MS" '
+    .samples > 0 and .errors == 0 and .max_ms != null and .max_ms < $maximum
+  ' "$OUTPUT_DIR/baseline-summary.json" >/dev/null || {
+    printf 'publication baseline gate failed; required zero errors and max < %sms\n' \
+      "$MAX_ACCEPTABLE_MS" >&2
+    exit 1
+  }
+else
+  jq -e '.samples > 0' "$OUTPUT_DIR/baseline-summary.json" >/dev/null
+fi
 
 target_sequence="$initial_last"
 resource_worker &
@@ -470,12 +483,16 @@ fi
   summarize_phase warm_new "$OUTPUT_DIR/warm-new.jsonl"
 } | jq -s '.' | tee "$OUTPUT_DIR/summary.json"
 
-jq -e --argjson maximum "$MAX_ACCEPTABLE_MS" '
-  all(.[];
+jq -e --argjson maximum "$MAX_ACCEPTABLE_MS" --arg baseline_policy "$BASELINE_POLICY" '
+  (if $baseline_policy == "strict" then . else
+    map(select(.phase == "post_swap" or .phase == "warm_new"))
+  end) as $gated |
+  ($gated | length) > 0 and
+  all($gated[];
     .samples > 0 and .errors == 0 and .max_ms != null and .max_ms < $maximum)
 ' "$OUTPUT_DIR/summary.json" >/dev/null || {
-  printf 'publication isolation gate failed; required zero errors and max < %sms\n' \
-    "$MAX_ACCEPTABLE_MS" >&2
+  printf 'publication isolation gate failed for %s phases; required zero errors and max < %sms\n' \
+    "$BASELINE_POLICY" "$MAX_ACCEPTABLE_MS" >&2
   exit 1
 }
 

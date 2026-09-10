@@ -167,7 +167,12 @@ case "$url" in
     sleep 0.5
     body='{"found":1,"grouped_hits":[{"group_key":["fixture-video"],"hits":[{"document":{"youtuber_handle":"@fixture"},"highlights":[{"snippet":"<mark>fixture</mark>"}]}]}]}'
     if [ -n "$output" ]; then printf '%s\n' "$body" > "$output"; else printf '%s\n' "$body"; fi
-    [ -z "$write_out" ] || printf '200\t%s\t180' "${MOCK_PUBLICATION_SECONDS:-0.010}"
+    reported_seconds="${MOCK_PUBLICATION_SECONDS:-0.010}"
+    if [ -n "${MOCK_BASELINE_SECONDS:-}" ] \
+      && [ "$(cat "$FAKE_ACTIVE_SEQUENCE")" -lt 10 ]; then
+      reported_seconds="$MOCK_BASELINE_SECONDS"
+    fi
+    [ -z "$write_out" ] || printf '200\t%s\t180' "$reported_seconds"
     ;;
   *) printf 'unexpected publication fixture URL: %s\n' "$url" >&2; exit 1 ;;
 esac
@@ -241,6 +246,24 @@ jq -e '.errors == 0 and .max_ms == 200' \
   "$tmp/publication-boundary-fail/baseline-summary.json" >/dev/null
 grep -Fq 'publication baseline gate failed; required zero errors and max < 200ms' \
   "$tmp/publication-boundary.stderr"
+
+printf '9\n' > "$tmp/active-sequence"
+PATH="$tmp/publication-bin:$PATH" SEARCH_URL=http://fixture.invalid \
+  SEARCH_API_KEY=fixture-search RAW_ADMIN_API_KEY=fixture-admin \
+  ALLOW_PUBLISH_BENCHMARK=1 CASES_FILE="$tmp/publication-cases.tsv" \
+  OUTPUT_DIR="$tmp/publication-migration-output" CONCURRENCY=2 BASELINE_RUNS=1 \
+  BASELINE_POLICY=record-only MOCK_BASELINE_SECONDS=0.250 WARM_NEW_SECONDS=1 \
+  PUBLICATION_TIMEOUT_SECONDS=10 RESOURCE_SAMPLE_INTERVAL_SECONDS=1 \
+  PUBLISH_PROCESS_TIMEOUT_SECONDS=20 PUBLISH_PROCESS_KILL_AFTER_SECONDS=5 \
+  MACHINE_RESOURCE_SAMPLE_INTERVAL_SECONDS=1 \
+  MACHINE_RESOURCE_PROBE="$tmp/bin/publication-resource" \
+  BUILDER_RESOURCE_PROBE="$tmp/bin/publication-resource" \
+  PUBLISH_BIN="$tmp/bin/publication-publish" FAKE_ACTIVE_SEQUENCE="$tmp/active-sequence" \
+  "$publication_benchmark" > "$tmp/publication-migration.stdout"
+jq -e '.[0].max_ms == 250 and
+  (map(select(.phase == "post_swap" or .phase == "warm_new")) |
+    all(.[]; .errors == 0 and .max_ms < 200))' \
+  "$tmp/publication-migration-output/summary.json" >/dev/null
 
 printf '9\n' > "$tmp/active-sequence"
 if PATH="$tmp/publication-bin:$PATH" SEARCH_URL=http://fixture.invalid \

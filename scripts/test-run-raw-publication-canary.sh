@@ -209,7 +209,7 @@ SH
 cat > "$tmp/bin/publication-benchmark" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-printf 'benchmark\n' >> "$FAKE_COMPONENT_LOG"
+printf 'benchmark:%s\n' "$BASELINE_POLICY" >> "$FAKE_COMPONENT_LOG"
 [[ "$CONCURRENCY" == 4 ]]
 (( PUBLISH_PROCESS_TIMEOUT_SECONDS > PUBLICATION_TIMEOUT_SECONDS ))
 (( PUBLISH_PROCESS_KILL_AFTER_SECONDS > 30 ))
@@ -309,8 +309,15 @@ fi
 [[ "$(grep -c 'POST .*/start$' "$tmp/curl.log")" == 3 ]]
 [[ "$(grep -c 'POST .*/stop$' "$tmp/curl.log")" == 3 ]]
 [[ "$(grep -c '^protocol$' "$tmp/components.log")" == 1 ]]
-[[ "$(grep -c '^benchmark$' "$tmp/components.log")" == 1 ]]
+[[ "$(grep -c '^benchmark:strict$' "$tmp/components.log")" == 1 ]]
 [[ "$(grep -c '^publisher$' "$tmp/components.log")" == 1 ]]
+
+reset_state
+env "${common_env[@]}" RAW_CANARY_MIGRATION_MODE=record-old-generation \
+  CANARY_RUN_ID=migration-run OUTPUT_DIR="$tmp/migration" "$runner" >/dev/null
+jq -e '.policy.migration_mode == "record-old-generation"' \
+  "$tmp/migration/test-result.json" >/dev/null
+[[ "$(grep -c '^benchmark:record-only$' "$tmp/components.log")" == 1 ]]
 
 reset_state
 short_expiry="$(( $(date +%s) + 60 ))"

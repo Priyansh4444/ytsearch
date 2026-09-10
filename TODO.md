@@ -620,6 +620,9 @@ Raw can replace Typesense as the canonical search index.
     mode and record the warm CPU regression alongside byte savings.
   - [ ] Validate full-corpus Zstd build size/cost, cold startup, allocations,
     and the strict HTTP latency matrix before accepting the prototype.
+  - [x] Add an explicit old-generation migration mode that records failing
+    pre-swap phases but keeps post-swap and warmed-new correctness/latency
+    strict. Require a second strict publication run on the new format.
 - [x] Remove deprecated `flyctl auth token` calls. Direct Machines API commands
   require an explicit scoped `FLY_API_TOKEN`, reject expired credentials without
   unsafe mutation replay, and document organization/deploy token setup.
