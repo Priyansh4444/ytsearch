@@ -48,6 +48,10 @@ jq -e '
   and .env.RAW_SEARCH_API_URL == "http://ytsearch-raw-production.internal:8108"
   and .env.QUEUE_ONE_REQUEST_PER_PASS == "0"
   and .env.LIMIT == "1000"
+  and .env.DAILY_UPDATE_ENABLED == "1"
+  and .env.DAILY_UPDATE_INTERVAL_SECONDS == "86400"
+  and .env.DAILY_UPDATE_INITIAL_DELAY_SECONDS == "0"
+  and .env.DAILY_UPDATE_STATE_FILE == "/var/lib/ytsearch/daily-update.last-completed"
   and .env.IDLE_GAP_FILL_ENABLED == "1"
   and ((.env.IDLE_GAP_FILL_MAX_PASSES | tonumber) > 0)
   and .env.IDLE_GAP_FILL_BATCH_PASSES == "4"

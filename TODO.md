@@ -635,6 +635,15 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Validate the reconnecting publication wrapper on the production-size
   isolated build. An SSH error or requested Machine stop is not activation
   evidence; require the manifest, current durable sequence, and final report.
+- [x] Enable the persisted daily refresh in reconciled worker configuration
+  and reject disabled daily settings in deployment checks. Treat missing creator
+  lists as failures. Add `scripts/doctor.sh --indexer` and the concise
+  [agent handoff](docs/operations/agent-handoff.md).
+- [ ] Verify daily indexing in production: restore private connectivity,
+  deploy the tested worker configuration, observe a new completion timestamp,
+  and verify a newly released video's transcript is searchable. On 2026-09-10,
+  the live worker had daily refresh disabled, no completion timestamp, and a
+  pending publication marker.
 - [ ] Restore private reader connectivity before claiming queue recovery.
   On 2026-09-07, the worker exited with code 1 during admin readiness;
   an independent builder probe resolved private DNS but received connection

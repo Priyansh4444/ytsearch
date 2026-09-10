@@ -44,4 +44,18 @@ if SNAPSHOT_FILE="$tmp/worker.json" "$SCRIPT_DIR/doctor.sh" > "$tmp/output"; the
 fi
 grep -F 'FAIL queue worker state missing' "$tmp/output" >/dev/null
 
+mkdir "$tmp/scripts"
+cp "$SCRIPT_DIR/doctor.sh" "$tmp/scripts/doctor.sh"
+printf '#!/bin/sh\necho queue_configuration_checked\nexit "${FIXTURE_CHECK_EXIT:-0}"\n' > "$tmp/scripts/check-queue-indexers.sh"
+printf '#!/bin/sh\necho recent_indexer_logs_checked\n' > "$tmp/scripts/summarize-indexer-logs.sh"
+chmod +x "$tmp/scripts/"*.sh
+"$tmp/scripts/doctor.sh" --indexer > "$tmp/output"
+grep -F 'queue_configuration_checked' "$tmp/output" >/dev/null
+grep -F 'recent_indexer_logs_checked' "$tmp/output" >/dev/null
+if FIXTURE_CHECK_EXIT=1 "$tmp/scripts/doctor.sh" --indexer > "$tmp/output"; then
+  echo "indexer doctor must preserve failed configuration checks" >&2
+  exit 1
+fi
+grep -F 'recent_indexer_logs_checked' "$tmp/output" >/dev/null
+
 echo "doctor_tests=ok"

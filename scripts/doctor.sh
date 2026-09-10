@@ -2,6 +2,17 @@
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+case "${1:-}" in
+  --indexer)
+    result=0
+    "$SCRIPT_DIR/check-queue-indexers.sh" || result=1
+    "$SCRIPT_DIR/summarize-indexer-logs.sh" || result=1
+    echo "NOTE configuration and recent logs do not prove a completed daily refresh"
+    exit "$result"
+    ;;
+  "") ;;
+  *) echo "usage: $0 [--indexer]" >&2; exit 2 ;;
+esac
 SNAPSHOT_FILE="${SNAPSHOT_FILE:-}"
 STATE_FILE="${DOCTOR_STATE_FILE:-${TMPDIR:-/tmp}/ytsearch-doctor-state.json}"
 STALL_MINUTES="${STALL_MINUTES:-30}"

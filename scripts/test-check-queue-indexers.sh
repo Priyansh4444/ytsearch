@@ -25,6 +25,10 @@ fixture() {
         YTSEARCH_MACHINE_ROLE:"queue-indexer",
         QUEUE_TARGET_BACKEND:"raw",
         QUEUE_LOOP:"1",
+        DAILY_UPDATE_ENABLED:"1",
+        DAILY_UPDATE_INTERVAL_SECONDS:"86400",
+        DAILY_UPDATE_INITIAL_DELAY_SECONDS:"0",
+        DAILY_UPDATE_STATE_FILE:"/var/lib/ytsearch/daily-update.last-completed",
         QUEUE_ONE_REQUEST_PER_PASS:"0",
         LIMIT:"1000",
         IDLE_EXIT_AFTER_SECONDS:$idle,
@@ -151,5 +155,13 @@ jq '. + [{
   }
 }]' "$tmp/healthy.json" >"$tmp/repair.json"
 MACHINES_JSON_FILE="$tmp/repair.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null
+
+for field in DAILY_UPDATE_ENABLED DAILY_UPDATE_INTERVAL_SECONDS DAILY_UPDATE_INITIAL_DELAY_SECONDS DAILY_UPDATE_STATE_FILE; do
+  jq --arg field "$field" '.[0].config.env[$field] = "invalid"' "$tmp/healthy.json" > "$tmp/invalid-daily.json"
+  if MACHINES_JSON_FILE="$tmp/invalid-daily.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then
+    echo "invalid daily setting $field must fail" >&2
+    exit 1
+  fi
+done
 
 echo "queue_indexer_checks=ok"

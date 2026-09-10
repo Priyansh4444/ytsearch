@@ -195,7 +195,10 @@ write_reconciled_config() {
       IDLE_GAP_FILL_MAX_PASSES: $max_passes,
       IDLE_GAP_FILL_BATCH_PASSES: "4",
       IDLE_GAP_FILL_MAX_NEW_VIDEOS: $max_new_videos,
-      DAILY_UPDATE_ENABLED: "0",
+      DAILY_UPDATE_ENABLED: "1",
+      DAILY_UPDATE_INTERVAL_SECONDS: "86400",
+      DAILY_UPDATE_INITIAL_DELAY_SECONDS: "0",
+      DAILY_UPDATE_STATE_FILE: "/var/lib/ytsearch/daily-update.last-completed",
       DAILY_UPDATE_LIST_FILE: "/tmp/daily-indexed-channels.txt",
       QUEUE_PRIORITY_LIST_FILE: "/tmp/daily-indexed-channels.txt"
     }

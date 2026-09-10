@@ -108,6 +108,17 @@ if [ -s "$index_log" ] || [ -s "$publication_log" ]; then
 fi
 
 DAILY_UPDATE_LIST_FILE="$test_dir/daily-list"
+if index_daily_update_for_backends; then
+  echo "a missing creator list must not count as a completed daily update" >&2
+  exit 1
+fi
+for contents in '' '# no creators'; do
+  printf '%s\n' "$contents" > "$DAILY_UPDATE_LIST_FILE"
+  if index_daily_update_for_backends; then
+    echo "an empty or comment-only creator list must not count as completion" >&2
+    exit 1
+  fi
+done
 printf '%s\n' '@alpha | Alpha' > "$DAILY_UPDATE_LIST_FILE"
 RAW_SEARCH_API_URL="http://raw.invalid"
 RAW_SEARCH_ADMIN_API_KEY="test-key"

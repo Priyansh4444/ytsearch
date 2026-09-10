@@ -648,8 +648,15 @@ index_list_backend() {
 
 index_daily_update_for_backends() {
   if [ ! -f "$DAILY_UPDATE_LIST_FILE" ]; then
-    echo "cloud-queue-indexer: daily update skipped; list file not found: $DAILY_UPDATE_LIST_FILE" >&2
-    return 0
+    echo "cloud-queue-indexer: daily update failed; list file not found: $DAILY_UPDATE_LIST_FILE" >&2
+    return 1
+  fi
+  if ! awk -F '|' '
+    { gsub(/[[:space:]]/, "", $1); if ($1 != "" && $1 !~ /^#/) found = 1 }
+    END { exit !found }
+  ' "$DAILY_UPDATE_LIST_FILE"; then
+    echo "cloud-queue-indexer: daily update failed; creator list has no usable entries" >&2
+    return 1
   fi
 
   failed=0
