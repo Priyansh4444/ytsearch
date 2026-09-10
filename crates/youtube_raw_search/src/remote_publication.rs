@@ -666,6 +666,7 @@ fn validate_persisted_job(job: &PersistedJob) -> Result<(), IndexStoreError> {
     let (schema_version, generation_files): (u8, &[&str]) =
         match job.compatibility.generation_format.as_str() {
             crate::RAW_GENERATION_FORMAT => (GENERATION_SCHEMA_VERSION, &RAW_GENERATION_FILES),
+            "raw-index-schema-8-v1" => (8, &RAW_GENERATION_FILES),
             LEGACY_SCHEMA_SEVEN_V1_FORMAT => (7, &LEGACY_SCHEMA_SEVEN_FILES),
             "raw-index-schema-6-v1" => (6, &LEGACY_SCHEMA_SIX_FILES),
             _ => {

@@ -1,27 +1,16 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const ignoredPrefixes = [".git/", ".local-notes/", "node_modules/", "target/"];
-const markdownFiles: string[] = [];
-
-function collectMarkdownFiles(directory: string, relativeDirectory = ""): void {
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const relativePath = join(relativeDirectory, entry.name);
-    const normalizedPath = relativePath.replaceAll("\\", "/");
-    if (
-      entry.isDirectory() &&
-      !ignoredPrefixes.some((prefix) => `${normalizedPath}/`.startsWith(prefix))
-    ) {
-      collectMarkdownFiles(join(directory, entry.name), relativePath);
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
-      markdownFiles.push(normalizedPath);
-    }
-  }
-}
-
-collectMarkdownFiles(root);
+const markdownFiles = execFileSync(
+  "git",
+  ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.md"],
+  { cwd: root, encoding: "utf8" },
+)
+  .split("\0")
+  .filter((path) => path.endsWith(".md") && existsSync(resolve(root, path)));
 
 const failures: string[] = [];
 const linkPattern = /!?\[[^\]]*\]\(([^)]+)\)/g;

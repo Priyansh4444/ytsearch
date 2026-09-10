@@ -1,6 +1,9 @@
 use super::*;
 use std::{cmp::Ordering, io::BufReader, ops::Range};
 
+mod codec;
+use codec::PayloadEncoding;
+
 pub(super) const BROAD_SINGLE_FILE: &str = "broad-single.bin";
 const BROAD_SINGLE_MAGIC: &[u8; 8] = b"RAWBRD01";
 const DIRECTORY_FIXED_BYTES: usize = 20;
@@ -82,6 +85,8 @@ pub(super) struct BroadSingleIndex {
     file: MappedFile,
     entries: Vec<DirectoryEntry>,
     retained_depth: usize,
+    encoding: PayloadEncoding,
+    maximum_answer_bytes: usize,
 }
 
 pub(super) struct BroadAnswer {
@@ -117,15 +122,20 @@ impl BroadSingleIndex {
         let bytes = file.bytes();
         let count = read_u32(bytes, 8)? as usize;
         let version = read_u32(bytes, 12)?;
-        let retained_depth = match version {
-            1 => usize::from(MAX_PAGE_SIZE),
-            2 => MATERIALIZED_HITS_PER_VIDEO,
+        let (retained_depth, encoding) = match version {
+            1 => (usize::from(MAX_PAGE_SIZE), PayloadEncoding::Raw),
+            2 => (MATERIALIZED_HITS_PER_VIDEO, PayloadEncoding::Raw),
+            3 => (MATERIALIZED_HITS_PER_VIDEO, PayloadEncoding::Zstd),
             _ => {
                 return Err(Error::Corrupt(format!(
                     "unsupported broad query index version {version}"
                 )));
             }
         };
+        let maximum_answer_bytes = videos
+            .checked_mul(GROUP_RECORD_BYTES + DOCUMENT_RECORD_BYTES * retained_depth)
+            .and_then(|bytes| bytes.checked_add(ANSWER_HEADER_BYTES))
+            .ok_or_else(|| Error::Corrupt("broad answer bounds overflow".into()))?;
 
         let mut cursor = HEADER_BYTES;
         let mut entries = Vec::with_capacity(count);
@@ -193,7 +203,18 @@ impl BroadSingleIndex {
                     "broad payloads are not contiguous".to_string(),
                 ));
             }
-            validate_answer(bytes, &entry.payload, videos, documents)?;
+            let payload = codec::decode(
+                &bytes[entry.payload.clone()],
+                encoding,
+                maximum_answer_bytes,
+            )?;
+            validate_answer(
+                &payload,
+                &(0..payload.len()),
+                videos,
+                documents,
+                retained_depth,
+            )?;
             expected_payload_start = entry.payload.end;
         }
         if expected_payload_start != bytes.len() {
@@ -205,6 +226,8 @@ impl BroadSingleIndex {
             file,
             entries,
             retained_depth,
+            encoding,
+            maximum_answer_bytes,
         })
     }
 
@@ -223,7 +246,12 @@ impl BroadSingleIndex {
         let Ok(index) = found else {
             return Ok(None);
         };
-        decode_answer(bytes, &self.entries[index].payload).map(Some)
+        let payload = codec::decode(
+            &bytes[self.entries[index].payload.clone()],
+            self.encoding,
+            self.maximum_answer_bytes,
+        )?;
+        decode_answer(&payload, &(0..payload.len())).map(Some)
     }
 }
 
@@ -330,7 +358,7 @@ impl BroadIndexWriter {
                 "broad build plans are not strictly ordered".to_string(),
             ));
         }
-        let payload = encode_answer(groups)?;
+        let payload = codec::encode(&encode_answer(groups)?)?;
         let payload_length = payload.len() as u64;
         self.payload.write_all(&payload)?;
         self.entries.push(BuildEntry {
@@ -358,7 +386,7 @@ impl BroadIndexWriter {
         let mut output = ColdWriter::create(path)?;
         let mut header = Vec::new();
         write_header(&mut header, BROAD_SINGLE_MAGIC, count);
-        header[12..16].copy_from_slice(&2_u32.to_le_bytes());
+        header[12..16].copy_from_slice(&3_u32.to_le_bytes());
         output.write_all(&header)?;
         for entry in &self.entries {
             output.write_all(&(entry.token.len() as u16).to_le_bytes())?;
@@ -412,6 +440,7 @@ fn validate_answer(
     range: &Range<usize>,
     videos: usize,
     documents: u32,
+    retained_depth: usize,
 ) -> Result<()> {
     let answer = decode_answer(bytes, range)?;
     if answer.found != answer.groups.len() || answer.groups.len() > videos {
@@ -439,7 +468,7 @@ fn validate_answer(
                 "broad answer video IDs are invalid".to_string(),
             ));
         }
-        if !group.score.is_finite() || group.documents.len() > usize::from(MAX_PAGE_SIZE) {
+        if !group.score.is_finite() || group.documents.len() > retained_depth {
             return Err(Error::Corrupt("broad answer rank is invalid".to_string()));
         }
         for document in &group.documents {
@@ -480,6 +509,11 @@ fn decode_answer(bytes: &[u8], range: &Range<usize>) -> Result<BroadAnswer> {
             "broad answer found count does not match groups".to_string(),
         ));
     }
+    if group_count > (payload.len() - ANSWER_HEADER_BYTES) / GROUP_RECORD_BYTES {
+        return Err(Error::Corrupt(
+            "broad group count exceeds payload bytes".into(),
+        ));
+    }
     let mut cursor = ANSWER_HEADER_BYTES;
     let mut groups = Vec::with_capacity(group_count);
     for _ in 0..group_count {
@@ -510,6 +544,11 @@ fn decode_answer(bytes: &[u8], range: &Range<usize>) -> Result<BroadAnswer> {
         let moments = read_u32(payload, cursor + 12)? as usize;
         let document_count = read_u16(payload, cursor + 16)? as usize;
         cursor = end;
+        if document_count > (payload.len() - cursor) / DOCUMENT_RECORD_BYTES {
+            return Err(Error::Corrupt(
+                "broad document count exceeds payload bytes".into(),
+            ));
+        }
         let mut group_documents = SmallVec::with_capacity(document_count);
         for _ in 0..document_count {
             let end = cursor
@@ -614,13 +653,33 @@ mod tests {
         assert!(!index.supports_depth(6));
         drop(index);
         let mut bytes = fs::read(&path).unwrap();
+        let payload_start = read_u64(&bytes, HEADER_BYTES + 4).unwrap() as usize;
+        let raw_payload = codec::decode(&bytes[payload_start..], PayloadEncoding::Zstd, 176)
+            .unwrap()
+            .into_owned();
+        bytes.truncate(payload_start);
+        bytes[HEADER_BYTES + 12..HEADER_BYTES + 20]
+            .copy_from_slice(&(raw_payload.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&raw_payload);
         bytes[12..16].copy_from_slice(&1_u32.to_le_bytes());
         fs::write(&path, &bytes).unwrap();
         let legacy = BroadSingleIndex::open(&path, 2, 10).unwrap();
         assert!(legacy.supports_depth(250));
         assert!(!legacy.supports_depth(251));
         drop(legacy);
-        bytes[12..16].copy_from_slice(&3_u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&2_u32.to_le_bytes());
+        fs::write(&path, &bytes).unwrap();
+        let bounded = BroadSingleIndex::open(&path, 2, 10).unwrap();
+        assert!(bounded.supports_depth(5));
+        assert!(!bounded.supports_depth(6));
+        assert_eq!(
+            bounded.lookup("react", fields).unwrap().unwrap().groups[0]
+                .score
+                .to_bits(),
+            7.25_f32.to_bits()
+        );
+        drop(bounded);
+        bytes[12..16].copy_from_slice(&4_u32.to_le_bytes());
         fs::write(&path, &bytes).unwrap();
         assert!(BroadSingleIndex::open(&path, 2, 10).is_err());
         fs::remove_dir_all(root).unwrap();

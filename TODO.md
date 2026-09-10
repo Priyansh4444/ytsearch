@@ -614,6 +614,12 @@ Raw can replace Typesense as the canonical search index.
     1, 3, 5, 6, and 250.
   - [ ] Measure the bounded materialization on the full snapshot before
     accepting its build-cost improvement or deploying it.
+  - [x] Add independently compressed Zstd answer payloads with old-format
+    reads, a distinct publication compatibility ID, bounded allocation, and
+    corruption/response tests. Measure the largest retained answer in release
+    mode and record the warm CPU regression alongside byte savings.
+  - [ ] Validate full-corpus Zstd build size/cost, cold startup, allocations,
+    and the strict HTTP latency matrix before accepting the prototype.
 - [x] Remove deprecated `flyctl auth token` calls. Direct Machines API commands
   require an explicit scoped `FLY_API_TOKEN`, reject expired credentials without
   unsafe mutation replay, and document organization/deploy token setup.

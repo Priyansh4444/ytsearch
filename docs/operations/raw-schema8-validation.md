@@ -262,3 +262,39 @@ Local checks use `cargo test -p youtube_cli` and
 not establish production publication, creator completeness, or search latency.
 The retained production-size artifact has no completion receipt and is not
 automatically reusable under this protocol.
+
+## Compressed payload prototype
+
+The retained 8,208,104,746-byte file contains 14,024 plans. A read-only full
+scan took 487.669 seconds on the shared2/2 GB builder. Zlib level 1 compressed
+its payloads to 3,061,243,735 bytes. SHA-256 payload identity found 12,481 unique
+answers totaling 7,813,851,868 uncompressed bytes. Deduplication alone therefore
+saves much less space than compression. These numbers describe storage, not
+query latency or a validated activated generation.
+
+The Zstd prototype reuses Raw's existing dependency. A release-mode local
+benchmark used the largest retained answer, with BLAKE3
+`7aa510e945658178ebd14b809071d69c03db341e076b9cb6cf57f98b9b14bf72`.
+
+| Measurement | Raw | Zstd level 1 |
+| --- | ---: | ---: |
+| Payload bytes | 2,751,900 | 1,453,679 |
+| Warm decode and parse median, 100 samples | 2.436 ms | 4.681 ms |
+| Warm decode and parse maximum | 5.058 ms | 14.419 ms |
+
+Encoding took 21.118 ms. Setup and byte-equality assertions are outside the
+decode timer. The local CPU, warm data, and single largest answer do not prove
+performance on the 2 GB Fly reader. Full-corpus Zstd size, build cost, cold
+startup, peak allocation, and HTTP latency remain release gates.
+
+Run the ignored diagnostic with an absolute `RAW_BROAD_PAYLOAD_FILE` path:
+`cargo test --release -p youtube_raw_search --lib measure_retained_payload -- --ignored --nocapture`.
+Normal tests cover both legacy payload versions, compressed roundtrips,
+malformed frame lengths, forged allocation counts, and full-response parity.
+
+After adding rejection of trailing Zstd frames, a repeat on the same payload
+measured 2.419 ms raw and 4.674 ms compressed median decode and parse time.
+Maximums were 5.427 ms and 8.774 ms; encoding took 21.351 ms. The encoded
+size was unchanged. The final release-mode library suite passed 166 tests
+with the one diagnostic test ignored. This does not validate production
+latency or daily indexing.

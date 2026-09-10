@@ -8,6 +8,7 @@ bun run test:e2e
 scripts/check-rust-dependency-policy.sh
 scripts/test-setup-dev.sh
 scripts/test-doctor.sh
+bash scripts/test-check-markdown-links.sh
 scripts/test-check-staging-machines.sh
 scripts/test-check-raw-creator-reconciliation.sh
 scripts/test-check-queue-indexers.sh

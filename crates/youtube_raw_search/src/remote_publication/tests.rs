@@ -278,109 +278,115 @@ async fn corrupted_upload_is_removed_and_restart_preserves_n_plus_one() {
 
 #[tokio::test]
 async fn restart_retires_a_schema_seven_v1_prepared_job_and_prepares_v2() {
-    let fixture = fixture();
-    let sequence = replace(
-        &fixture.store,
-        "video-migration",
-        "migrationtoken",
-        "operation-migration",
-    );
-    fixture.publication.prepare().await.unwrap();
-    let state_path = fixture.publication.state_path();
-    let mut legacy: PersistedJob =
-        serde_json::from_reader(File::open(&state_path).unwrap()).unwrap();
-    let old_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
-    legacy.compatibility.generation_format = "raw-index-schema-7-v1".to_string();
-    legacy.job_id = job_id(
-        legacy.target_sequence,
-        &legacy.snapshot_blake3,
-        &legacy.compatibility,
-    );
-    let legacy_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
-    fs::rename(&old_directory, &legacy_directory).unwrap();
-    serde_json::to_writer_pretty(File::create(&state_path).unwrap(), &legacy).unwrap();
+    for legacy_format in ["raw-index-schema-7-v1", "raw-index-schema-8-v1"] {
+        let fixture = fixture();
+        let sequence = replace(
+            &fixture.store,
+            "video-migration",
+            "migrationtoken",
+            "operation-migration",
+        );
+        fixture.publication.prepare().await.unwrap();
+        let state_path = fixture.publication.state_path();
+        let mut legacy: PersistedJob =
+            serde_json::from_reader(File::open(&state_path).unwrap()).unwrap();
+        let old_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
+        legacy.compatibility.generation_format = legacy_format.to_string();
+        legacy.job_id = job_id(
+            legacy.target_sequence,
+            &legacy.snapshot_blake3,
+            &legacy.compatibility,
+        );
+        let legacy_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
+        fs::rename(&old_directory, &legacy_directory).unwrap();
+        serde_json::to_writer_pretty(File::create(&state_path).unwrap(), &legacy).unwrap();
 
-    let restarted = RemotePublication::new(
-        Arc::clone(&fixture.engine),
-        Arc::clone(&fixture.store),
-        Arc::clone(&fixture.publisher),
-    )
-    .unwrap();
-    assert!(!legacy_directory.exists());
-    assert!(!state_path.exists());
-    assert_eq!(
-        fixture
-            .store
-            .operation("operation-migration")
-            .unwrap()
-            .state,
-        IndexOperationState::Durable
-    );
+        let restarted = RemotePublication::new(
+            Arc::clone(&fixture.engine),
+            Arc::clone(&fixture.store),
+            Arc::clone(&fixture.publisher),
+        )
+        .unwrap();
+        assert!(!legacy_directory.exists());
+        assert!(!state_path.exists());
+        assert_eq!(
+            fixture
+                .store
+                .operation("operation-migration")
+                .unwrap()
+                .state,
+            IndexOperationState::Durable
+        );
 
-    let fresh = restarted.prepare().await.unwrap();
-    assert_eq!(fresh.target_sequence, sequence);
-    assert_eq!(
-        fresh.compatibility.generation_format,
-        crate::RAW_GENERATION_FORMAT
-    );
-    assert_ne!(fresh.job_id, legacy.job_id);
-    assert!(
-        restarted
-            .job_directory(&fresh.job_id)
-            .unwrap()
-            .join(SNAPSHOT_FILE)
-            .is_file()
-    );
+        let fresh = restarted.prepare().await.unwrap();
+        assert_eq!(fresh.target_sequence, sequence);
+        assert_eq!(
+            fresh.compatibility.generation_format,
+            crate::RAW_GENERATION_FORMAT
+        );
+        assert_ne!(fresh.job_id, legacy.job_id);
+        assert!(
+            restarted
+                .job_directory(&fresh.job_id)
+                .unwrap()
+                .join(SNAPSHOT_FILE)
+                .is_file()
+        );
+    }
 }
 
 #[tokio::test]
 async fn restart_retires_a_schema_seven_v1_manifest_accepted_job() {
-    let fixture = fixture();
-    replace(
-        &fixture.store,
-        "video-v1-accepted",
-        "v1acceptedtoken",
-        "operation-v1-accepted",
-    );
-    let prepared = fixture.publication.prepare().await.unwrap();
-    let (_generation, manifest) = detached_for_job(&fixture, &prepared);
+    for (legacy_format, schema) in [("raw-index-schema-7-v1", 7), ("raw-index-schema-8-v1", 8)] {
+        let fixture = fixture();
+        replace(
+            &fixture.store,
+            "video-v1-accepted",
+            "v1acceptedtoken",
+            "operation-v1-accepted",
+        );
+        let prepared = fixture.publication.prepare().await.unwrap();
+        let (_generation, manifest) = detached_for_job(&fixture, &prepared);
 
-    let state_path = fixture.publication.state_path();
-    let mut legacy: PersistedJob =
-        serde_json::from_reader(File::open(&state_path).unwrap()).unwrap();
-    let old_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
-    legacy.compatibility.generation_format = "raw-index-schema-7-v1".to_string();
-    legacy.job_id = job_id(
-        legacy.target_sequence,
-        &legacy.snapshot_blake3,
-        &legacy.compatibility,
-    );
-    legacy.status = RemoteJobStatus::ManifestAccepted;
-    let mut manifest = manifest;
-    manifest.schema_version = 7;
-    manifest.files.remove("broad-single.bin");
-    legacy.manifest = Some(manifest);
-    legacy.completed_files.insert("channels.json".to_string());
-    let legacy_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
-    fs::rename(&old_directory, &legacy_directory).unwrap();
-    serde_json::to_writer_pretty(File::create(&state_path).unwrap(), &legacy).unwrap();
+        let state_path = fixture.publication.state_path();
+        let mut legacy: PersistedJob =
+            serde_json::from_reader(File::open(&state_path).unwrap()).unwrap();
+        let old_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
+        legacy.compatibility.generation_format = legacy_format.to_string();
+        legacy.job_id = job_id(
+            legacy.target_sequence,
+            &legacy.snapshot_blake3,
+            &legacy.compatibility,
+        );
+        legacy.status = RemoteJobStatus::ManifestAccepted;
+        let mut manifest = manifest;
+        manifest.schema_version = schema;
+        if schema == 7 {
+            manifest.files.remove("broad-single.bin");
+        }
+        legacy.manifest = Some(manifest);
+        legacy.completed_files.insert("channels.json".to_string());
+        let legacy_directory = fixture.publication.job_directory(&legacy.job_id).unwrap();
+        fs::rename(&old_directory, &legacy_directory).unwrap();
+        serde_json::to_writer_pretty(File::create(&state_path).unwrap(), &legacy).unwrap();
 
-    RemotePublication::new(
-        Arc::clone(&fixture.engine),
-        Arc::clone(&fixture.store),
-        Arc::clone(&fixture.publisher),
-    )
-    .unwrap();
-    assert!(!legacy_directory.exists());
-    assert!(!state_path.exists());
-    assert_eq!(
-        fixture
-            .store
-            .operation("operation-v1-accepted")
-            .unwrap()
-            .state,
-        IndexOperationState::Durable
-    );
+        RemotePublication::new(
+            Arc::clone(&fixture.engine),
+            Arc::clone(&fixture.store),
+            Arc::clone(&fixture.publisher),
+        )
+        .unwrap();
+        assert!(!legacy_directory.exists());
+        assert!(!state_path.exists());
+        assert_eq!(
+            fixture
+                .store
+                .operation("operation-v1-accepted")
+                .unwrap()
+                .state,
+            IndexOperationState::Durable
+        );
+    }
 }
 
 #[tokio::test]
