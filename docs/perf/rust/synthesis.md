@@ -88,3 +88,51 @@ already been inlined).
 2. `#[cold]` on the `read_varint`/`read_u32` error constructions (B).
 3. Title-heap removal and streaming-driver pass fusion (A, unmeasured).
 4. Exact-total vs early-exit trade for `found` (A, B) — product decision.
+
+## Machine profile — measured for the Fly target, not the dev laptop
+
+The first numbers above came from a 16-core laptop (Intel Core Ultra 7 255H, 24 MB
+L3). The production target is a **Fly `shared-cpu-2x` / 2048 MB** reader in `sjc`
+(`flyctl machines list -a ytsearch-raw-production`), built by
+`cargo build --locked --release` with **no `RUSTFLAGS` and no profile overrides**
+— i.e. `codegen-units = 16`, `lto = false`, and the **generic x86-64** feature
+baseline (no AVX2), because no `target-cpu` is set anywhere.
+
+Everything below was re-measured with `taskset -c 0,1` (two pinned vCPUs) to match
+that machine class.
+
+| index | term | postings | baseline ns/posting | patched ns/posting | speedup |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 33 MB (50k chunks) | `the` | 47,886 | 11.42 / 13.61 | 4.45 / 3.98 | ~2.8–3.2× |
+| 33 MB | `fable` | 2,971 | 12.95 / 13.38 | 7.36 / 5.39 | ~1.8–2.5× |
+| **704 MB (500k chunks)** | `the` | 477,746 | 12.21 / 13.36 | 4.96 / 4.49 | **~2.7×** |
+| **704 MB** | `fable` | 29,148 | 11.11 / 11.86 | 6.92 / 6.84 | **~1.7×** |
+
+The 704 MB index is 21× larger than the 33 MB one and far larger than the local
+24 MB L3, so it exercises the DRAM-backed regime rather than a cache-resident
+one. Posting counts are identical in every configuration.
+
+### Build-configuration experiments (both negative)
+
+| variant | `the` | `fable` | verdict |
+| --- | ---: | ---: | --- |
+| default (`cgu=16`, `lto=false`, generic x86-64) | 4.96 / 4.49 | 6.92 / 6.84 | reference |
+| `-C target-cpu=x86-64-v3` (EPYC/Rome-class, AVX2) | 4.73 / 4.44 | 8.05 / 6.21 | **no gain** |
+| `lto="thin"`, `codegen-units=1` | 4.91 / 4.56 | 7.42 / 6.93 | **no gain** |
+
+The loop is branchy varint decoding with scalar loads; it does not vectorize, and
+`#[inline(always)]` already removed the cross-CGU calls LTO would have addressed.
+**Recommendation: change nothing in the build configuration.** Widening
+`target-cpu` would add a real `SIGILL` risk if the image were ever scheduled onto
+a host without those features, for no measured benefit.
+
+### What this profile still cannot prove
+
+The production reader carries ~8.32 M documents on a 2 GB machine, so the real
+index is far larger than RAM and a query walks pages that must be faulted in from
+the volume. That cold regime is not reproducible with a local 704 MB file that
+stays in page cache, and its cost is dominated by fault latency rather than
+instructions — so the percentage win there is bounded by the fault cost, not by
+this table. The instruction-count reduction is still real work removed, but the
+end-to-end effect on production should be confirmed from Axiom `search_query`
+(`backend_search_ms`, `duration_ms`) before/after a canary deploy.
