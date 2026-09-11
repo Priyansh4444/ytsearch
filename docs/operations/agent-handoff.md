@@ -22,7 +22,9 @@ Poll the same live job after a timeout. Do not restart it because a log is quiet
 Cloudflare's hourly cron sends a wake message. The worker's persisted daily
 timer owns the refresh. The reconciled configuration enables a 24-hour interval
 with no first-run delay. A successful pass discovers recent uploads for the
-creator list, defers publication across creators, and publishes once.
+62-creator list in one `index-youtubers` process, defers publication across
+creators, and publishes once. One process also gives every discovery manifest
+the same catalog-run ID required by the reconciliation checker.
 
 `/var/lib/ytsearch/daily-update.last-completed` records successful completion.
 A running Machine, enabled timer, or successful wake is not completion proof.

@@ -171,6 +171,13 @@ The worker checks approved rows before daily/gap repair, exits after an idle
 window, and is restarted by another durable wake. A failed row remains visible
 and does not block later work.
 
+The daily refresh passes the complete embedded creator list to one
+`ytsearch index-youtubers` process. That process assigns one catalog-run ID,
+runs creators sequentially within the worker's memory budget, defers each
+creator's mutations, and publishes once after the list finishes. Running one
+`index-youtuber` process per creator does not produce a coherent catalog-run
+identity and cannot satisfy the whole-catalog reconciliation check.
+
 ## Fetch reliability
 
 Caption requests are process-wide paced. Timeouts, connection failures, 429,

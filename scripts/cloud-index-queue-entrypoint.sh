@@ -627,23 +627,36 @@ publish_pending_raw_generation() {
   rm -f "$RAW_PENDING_PUBLICATION_FILE"
 }
 
-index_list_backend() {
+index_catalog_backend() {
   label="$1"
   backend="$2"
   jobs="$3"
   shift 3
 
-  failed=0
-  while IFS='|' read -r raw_handle _; do
-    handle="$(printf '%s' "$raw_handle" | tr -d '[:space:]')"
-    case "$handle" in ''|'#'*) continue ;; esac
-    set_index_activity "$handle" || true
-    if ! index_one_backend "$label" "$backend" "$jobs" "$handle" \
-      --stop-after-existing "$EXISTING_TAIL" --defer-publish "$@"; then
-      failed=1
-    fi
-  done < "$DAILY_UPDATE_LIST_FILE"
-  return "$failed"
+  extra_args=""
+  if [ -n "${MAX_VIDEOS_PER_PASS:-}" ] && [ "$MAX_VIDEOS_PER_PASS" -gt 0 ] 2>/dev/null; then
+    extra_args="--max-videos $MAX_VIDEOS_PER_PASS"
+  fi
+
+  set_index_activity "catalog:$label" || true
+  echo "cloud-queue-indexer: indexing catalog backend=$label jobs=$jobs list=$DAILY_UPDATE_LIST_FILE"
+  # One process owns one catalog run ID, one complete set of creator manifests,
+  # and one deferred publication boundary. Per-creator processes cannot prove
+  # that their discovery results describe the same catalog pass.
+  # shellcheck disable=SC2086
+  ytsearch index-youtubers "$DAILY_UPDATE_LIST_FILE" \
+    --backend "$backend" \
+    --mode update \
+    --collection "$COLLECTION" \
+    --jobs "$jobs" \
+    --channel-jobs 1 \
+    --video-timeout-seconds "$VIDEO_TIMEOUT_SECONDS" \
+    --stop-after-existing "$EXISTING_TAIL" \
+    --transcript-cache-dir "$TRANSCRIPT_CACHE_DIR" \
+    --transcript-failure-retry-seconds "$TRANSCRIPT_FAILURE_RETRY_SECONDS" \
+    --defer-publish \
+    $extra_args \
+    "$@"
 }
 
 index_daily_update_for_backends() {
@@ -671,7 +684,7 @@ index_daily_update_for_backends() {
         log_queue_event error daily_update_marker_failed "" "" "" "raw" "failed"
         return 1
       fi
-      if ! index_list_backend raw raw "$raw_jobs"; then
+      if ! index_catalog_backend raw raw "$raw_jobs"; then
         failed=1
         log_queue_event error daily_update_backend_failed "" "" "" "raw" "failed"
       fi

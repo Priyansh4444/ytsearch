@@ -122,7 +122,21 @@ done
 printf '%s\n' '@alpha | Alpha' > "$DAILY_UPDATE_LIST_FILE"
 RAW_SEARCH_API_URL="http://raw.invalid"
 RAW_SEARCH_ADMIN_API_KEY="test-key"
-index_list_backend() { printf 'daily-index\n' >> "$index_log"; }
+catalog_command_log="$test_dir/catalog-command.log"
+ytsearch() { printf '%s\n' "$*" >> "$catalog_command_log"; }
+index_catalog_backend raw raw 3
+[ "$(wc -l < "$catalog_command_log" | tr -d ' ')" -eq 1 ]
+grep -F "index-youtubers $DAILY_UPDATE_LIST_FILE --backend raw --mode update" \
+  "$catalog_command_log" >/dev/null
+grep -F -- '--jobs 3 --channel-jobs 1' "$catalog_command_log" >/dev/null
+grep -F -- '--defer-publish' "$catalog_command_log" >/dev/null
+index_list_backend() {
+  echo "daily refresh must use one catalog-scoped index-youtubers process" >&2
+  return 1
+}
+index_catalog_backend() {
+  printf 'daily-catalog %s\n' "$*" >> "$index_log"
+}
 if index_daily_update_for_backends; then
   echo "an unwritable publication marker must fail the daily update" >&2
   exit 1
@@ -132,6 +146,26 @@ if [ -s "$index_log" ] || [ -s "$publication_log" ]; then
   exit 1
 fi
 RAW_PENDING_PUBLICATION_FILE="$safe_pending_file"
+: > "$index_log"
+: > "$publication_log"
+if ! index_daily_update_for_backends; then
+  echo "a valid daily catalog refresh must succeed" >&2
+  exit 1
+fi
+[ "$(grep -c '^daily-catalog raw raw ' "$index_log")" -eq 1 ] || {
+  echo "daily refresh must run one Raw catalog process" >&2
+  exit 1
+}
+[ "$(wc -l < "$publication_log" | tr -d ' ')" -eq 1 ] || {
+  echo "daily refresh must publish exactly one generation" >&2
+  exit 1
+}
+[ ! -f "$RAW_PENDING_PUBLICATION_FILE" ] || {
+  echo "successful daily publication must clear its durable marker" >&2
+  exit 1
+}
+: > "$index_log"
+: > "$publication_log"
 printf '%s\n' @alpha @bravo > "$gap_handles"
 
 process_idle_gap_batch 4
