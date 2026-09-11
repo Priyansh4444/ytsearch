@@ -70,12 +70,33 @@ pub(super) fn begin_catalog_run(transcript_cache_directory: &Path) -> std::io::R
     let run_id = reconciliation_run_id()?;
     let directory = transcript_cache_directory.join(".reconciliation");
     fs::create_dir_all(&directory)?;
+    remove_prior_creator_manifests(&directory)?;
     write_atomic(
         &directory,
         &directory.join("active-run-id"),
         run_id.as_bytes(),
     )?;
     Ok(run_id)
+}
+
+fn remove_prior_creator_manifests(directory: &Path) -> std::io::Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(stem) = file_name
+            .to_str()
+            .and_then(|name| name.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        if stem.len() == 64 && stem.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 fn reconciliation_run_id() -> std::io::Result<String> {
@@ -210,6 +231,27 @@ mod tests {
                 .unwrap()
                 .any(|_| true)
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn catalog_run_removes_only_prior_creator_manifests() {
+        let root = temporary_directory("catalog-cleanup");
+        let directory = root.join(".reconciliation");
+        fs::create_dir_all(&directory).unwrap();
+        let stale_manifest = directory.join(format!("{}.json", "a".repeat(64)));
+        let operator_file = directory.join("operator-notes.json");
+        let unrelated_directory = directory.join(format!("{}.json", "b".repeat(64)));
+        fs::write(&stale_manifest, b"stale").unwrap();
+        fs::write(&operator_file, b"preserve").unwrap();
+        fs::create_dir(&unrelated_directory).unwrap();
+
+        begin_catalog_run(&root).unwrap();
+
+        assert!(!stale_manifest.exists());
+        assert_eq!(fs::read(&operator_file).unwrap(), b"preserve");
+        assert!(unrelated_directory.is_dir());
+        assert!(directory.join("active-run-id").is_file());
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -247,7 +247,9 @@ scripts/check-raw-creator-reconciliation.sh
 The checker derives the expected creator count and handles from
 `scripts/indexed-channels.txt`; it does not embed a second list or a fixed
 count. One `index-youtubers` process assigns a catalog-run ID and atomically
-persists each creator's complete discovered video-ID set. The checker compares
+removes only prior creator manifests whose names are 64-hex content keys, then
+persists each creator's complete discovered video-ID set. Operator files,
+temporary files, and directories remain untouched. The checker compares
 those sets with one authenticated, generation-pinned Raw catalog snapshot and
 the exact records in the durable failure report. The admin snapshot contains
 the channel documents and video IDs from one immutable engine clone; mutation

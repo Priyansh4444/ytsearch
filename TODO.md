@@ -655,6 +655,9 @@ Raw can replace Typesense as the canonical search index.
 - [x] Run the daily 62-creator refresh through one catalog-scoped
   `index-youtubers` process with one reconciliation run ID and one deferred
   publication, instead of 62 independent single-creator processes.
+- [x] Remove stale content-keyed creator manifests when a catalog run begins
+  while preserving operator files, temporary files, and directories, so a
+  removed creator cannot poison the next exact reconciliation gate.
 - [ ] Verify daily indexing in production: restore private connectivity,
   deploy the tested worker configuration, observe a new completion timestamp,
   and verify a newly released video's transcript is searchable. On 2026-09-10,
