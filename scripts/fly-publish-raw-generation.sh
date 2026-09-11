@@ -8,7 +8,10 @@ source "$SCRIPT_DIR/lib/fly-machine-session.sh"
 source "$SCRIPT_DIR/lib/fly-production-inventory.sh"
 # shellcheck source=scripts/lib/fly-publication-job.sh
 source "$SCRIPT_DIR/lib/fly-publication-job.sh"
+# shellcheck source=scripts/lib/raw-publication-builder-profile.sh
+source "$SCRIPT_DIR/lib/raw-publication-builder-profile.sh"
 fly_production_inventory_load_raw_release
+raw_publication_builder_profile_load
 
 # Run the external Raw generation builder on the existing on-demand indexer.
 # The narrow argument contract lets this script plug directly into
@@ -156,6 +159,10 @@ machine_is_safe() {
   --arg base "$RAW_PUBLICATION_BASE_IMAGE_DIGEST" \
   --arg image "$expected_builder_image" \
   --arg expected_resolved_image "$RAW_BUILDER_EXPECTED_IMAGE" \
+  --arg builder_profile "$RAW_PUBLICATION_BUILDER_PROFILE" \
+  --arg cpu_kind "$RAW_PUBLICATION_BUILDER_CPU_KIND" \
+  --argjson cpus "$RAW_PUBLICATION_BUILDER_CPUS" \
+  --argjson memory_mb "$RAW_PUBLICATION_BUILDER_MEMORY_MB" \
   --arg volume "$RAW_BUILDER_VOLUME_ID" '
   .state == "stopped" and
   (.config.image == $image or (.config.image | startswith($image + "@sha256:"))) and
@@ -177,12 +184,13 @@ machine_is_safe() {
   .config.metadata.lifecycle == "on-demand-publication-builder" and
   .config.metadata.source_commit == $source and
   .config.metadata.base_image_digest == $base and
+  .config.metadata.builder_profile == $builder_profile and
   .config.metadata.target_machine == $target_machine and
   .config.restart.policy == "no" and
   .config.dns.skip_registration == true and
-  .config.guest.cpu_kind == "shared" and
-  .config.guest.cpus == 2 and
-  .config.guest.memory_mb == 2048 and
+  .config.guest.cpu_kind == $cpu_kind and
+  .config.guest.cpus == $cpus and
+  .config.guest.memory_mb == $memory_mb and
   ((.config.services // []) | length) == 0 and
   ((.config.checks // {}) | length) == 0 and
   ((.config.files // []) | length) == 0 and

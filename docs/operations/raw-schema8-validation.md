@@ -207,6 +207,31 @@ strict canary publication from the new generation is still required afterward.
 This prevents an old format from blocking construction of its replacement
 without weakening the final release gate.
 
+The publication builder now has two checked profiles. `shared-2x` remains the
+default and keeps the 2,400-second publication deadline. The one-time full
+schema migration uses `performance-1x`, still with 2 GB of memory, because the
+previous shared-volume scan alone took 487.669 seconds and the controller timed
+out before it could verify and activate the result. The performance profile
+sets a 10,800-second publication deadline and a 43,200-second reader lease. The
+lease covers both publication processes in the canary protocol plus cleanup;
+it does not keep the builder running after the scripts stop it. Machine staging,
+publication, and the canary runner all verify the named profile, CPU kind, CPU
+count, memory, and metadata before starting either Machine.
+
+Use the performance profile only for the measured migration and strict
+latest-format confirmation:
+
+```bash
+BASE_IMAGE='registry.fly.io/ytsearch-raw-production:base@sha256:<digest>' \
+RAW_PUBLICATION_BUILDER_PROFILE=performance-1x \
+  rtk scripts/reconcile-raw-publication-builder.sh
+```
+
+The reconciliation command is a dry run unless
+`APPLY_RAW_PUBLICATION_BUILDER=configure-exact-inert-builder` is also set. After
+each run, verify Fly reports the builder stopped. The production reader stays
+on `shared-2x` with 2 GB throughout this experiment.
+
 `cargo nextest` was checked but is not installed in the current environment.
 The available Cargo library suite passed 162 tests after the workload update.
 Neither runner substitutes for the deployed HTTP latency gate.

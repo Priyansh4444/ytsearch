@@ -127,9 +127,16 @@ chmod +x "$tmp/bin/resource-probe"
 
 write_machine() {
   role="$1"
+  profile="${2:-shared-2x}"
+  case "$profile" in
+    shared-2x) cpu_kind=shared; cpus=2 ;;
+    performance-1x) cpu_kind=performance; cpus=1 ;;
+    *) return 1 ;;
+  esac
   jq -n --arg role "$role" --arg source "$source_commit" \
     --arg base "$base_digest" --arg target "$target_url" \
-    --arg target_id "$target_id" --arg image "$builder_image" '[{
+    --arg target_id "$target_id" --arg image "$builder_image" \
+    --arg profile "$profile" --arg cpu_kind "$cpu_kind" --argjson cpus "$cpus" '[{
     id:"33333333333333",
     instance_id:"builder-version-1",
     state:"stopped",
@@ -143,11 +150,12 @@ write_machine() {
       },
       image:$image,
       init:{entrypoint:["/usr/bin/sleep"],cmd:["infinity"],swap_size_mb:512},
-      guest:{cpu_kind:"shared",cpus:2,memory_mb:2048},
+      guest:{cpu_kind:$cpu_kind,cpus:$cpus,memory_mb:2048},
       metadata:{
         lifecycle:"on-demand-publication-builder",
         source_commit:$source,
         base_image_digest:$base,
+        builder_profile:$profile,
         target_machine:$target_id
       },
       mounts:[{volume:"vol_2222222222222222",path:"/var/lib/ytsearch"}],
@@ -183,24 +191,32 @@ RAW_BUILDER_FINAL_RESOURCE_OUTPUT="$tmp/rejected-final.json" \
 fi
 ! grep -q '/start$' "$tmp/curl.log"
 
-write_machine publication-builder > "$tmp/state.json"
-: > "$tmp/fly.log"
-: > "$tmp/curl.log"
-PATH="$tmp/bin:$PATH" FAKE_FLY_STATE="$tmp/state.json" FAKE_TARGET_STATE="$tmp/target-state.json" FAKE_FLY_LOG="$tmp/fly.log" \
-FAKE_CURL_LOG="$tmp/curl.log" \
-RAW_PUBLICATION_TARGET_URL="$target_url" \
-RAW_PUBLICATION_SOURCE_COMMIT="$source_commit" \
-RAW_PUBLICATION_BASE_IMAGE_DIGEST="$base_digest" \
-RAW_BUILDER_RESOURCE_PROBE="$tmp/bin/resource-probe" \
-RAW_BUILDER_FINAL_RESOURCE_OUTPUT="$tmp/final.json" \
-"$SCRIPT_DIR/fly-publish-raw-generation.sh" publish --backend raw >/dev/null
-test "$(jq -r '.[0].state' "$tmp/state.json")" = stopped
-jq -e '.state == "started" and .memory_peak_bytes == 1024' "$tmp/final.json" >/dev/null
-grep -q "POST .*/machines/$builder_id/start$" "$tmp/curl.log"
-grep -q -- '--command ytsearch init-backend --backend raw' "$tmp/fly.log"
-grep -q -- 'ytsearch bounded publication job' "$tmp/fly.log"
-grep -q "POST .*/machines/$builder_id/stop$" "$tmp/curl.log"
-grep -q "DELETE .*/machines/$builder_id/lease$" "$tmp/curl.log"
+run_successful_publication() {
+  profile="$1"
+  final_output="$2"
+  write_machine publication-builder "$profile" > "$tmp/state.json"
+  : > "$tmp/fly.log"
+  : > "$tmp/curl.log"
+  PATH="$tmp/bin:$PATH" FAKE_FLY_STATE="$tmp/state.json" \
+    FAKE_TARGET_STATE="$tmp/target-state.json" FAKE_FLY_LOG="$tmp/fly.log" \
+    FAKE_CURL_LOG="$tmp/curl.log" RAW_PUBLICATION_TARGET_URL="$target_url" \
+    RAW_PUBLICATION_SOURCE_COMMIT="$source_commit" \
+    RAW_PUBLICATION_BASE_IMAGE_DIGEST="$base_digest" \
+    RAW_PUBLICATION_BUILDER_PROFILE="$profile" \
+    RAW_BUILDER_RESOURCE_PROBE="$tmp/bin/resource-probe" \
+    RAW_BUILDER_FINAL_RESOURCE_OUTPUT="$final_output" \
+    "$SCRIPT_DIR/fly-publish-raw-generation.sh" publish --backend raw >/dev/null
+  test "$(jq -r '.[0].state' "$tmp/state.json")" = stopped
+  jq -e '.state == "started" and .memory_peak_bytes == 1024' "$final_output" >/dev/null
+  grep -q "POST .*/machines/$builder_id/start$" "$tmp/curl.log"
+  grep -q -- '--command ytsearch init-backend --backend raw' "$tmp/fly.log"
+  grep -q -- 'ytsearch bounded publication job' "$tmp/fly.log"
+  grep -q "POST .*/machines/$builder_id/stop$" "$tmp/curl.log"
+  grep -q "DELETE .*/machines/$builder_id/lease$" "$tmp/curl.log"
+}
+
+run_successful_publication shared-2x "$tmp/final.json"
+run_successful_publication performance-1x "$tmp/performance-final.json"
 
 write_machine publication-builder > "$tmp/state.json"
 : > "$tmp/fly.log"

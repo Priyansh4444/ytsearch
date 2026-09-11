@@ -7,7 +7,10 @@ REPOSITORY_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/fly-machine-session.sh"
 # shellcheck source=scripts/lib/fly-production-inventory.sh
 source "$SCRIPT_DIR/lib/fly-production-inventory.sh"
+# shellcheck source=scripts/lib/raw-publication-builder-profile.sh
+source "$SCRIPT_DIR/lib/raw-publication-builder-profile.sh"
 fly_production_inventory_load_raw_release
+raw_publication_builder_profile_load
 : "${SEARCH_API_KEY:?set SEARCH_API_KEY to the isolated canary search key}"
 : "${RAW_ADMIN_API_KEY:?set RAW_ADMIN_API_KEY}"
 : "${EXPECTED_RAW_READER_IMAGE:?set EXPECTED_RAW_READER_IMAGE from reader staging output}"
@@ -63,7 +66,6 @@ case "$RAW_CANARY_TEST_MODE" in
     MAX_DISK_PERCENT=80
     MAX_ACCEPTABLE_MS=200
     MAX_RSS_BYTES=1610612736
-    PUBLICATION_TIMEOUT_SECONDS=2400
     WARM_NEW_SECONDS=60
     CANARY_CASES_FILE="$SCRIPT_DIR/benchmark-search-cases.tsv"
     CANARY_BASELINE_RUNS=3
@@ -90,6 +92,7 @@ case "$RAW_CANARY_TEST_MODE" in
     CANARY_PUBLISH_BIN="$SCRIPT_DIR/fly-publish-raw-generation.sh"
     CANARY_READER_RESOURCE_PROBE="$SCRIPT_DIR/fly-raw-canary-resource-snapshot.sh"
     CANARY_BUILDER_RESOURCE_PROBE="$SCRIPT_DIR/fly-raw-builder-resource-snapshot.sh"
+    raw_publication_builder_profile_apply_production_budgets
     expected_production_inventory="$REPOSITORY_ROOT/config/fly-production-resources.json"
     if [[ "$FLY_PRODUCTION_INVENTORY_RESOLVED_PATH" != "$expected_production_inventory" ]]; then
       printf 'production canaries require the committed production inventory\n' >&2
@@ -212,6 +215,7 @@ if [[ "$RAW_CANARY_TEST_MODE" == 0 ]]; then
     scripts/lib/fly-machine-session.sh
     scripts/lib/fly-publication-job.sh
     scripts/lib/fly-production-inventory.sh
+    scripts/lib/raw-publication-builder-profile.sh
   )
   for gate_input in "${gate_inputs[@]}"; do
     git -C "$REPOSITORY_ROOT" ls-files --error-unmatch "$gate_input" >/dev/null 2>&1 || {
@@ -366,7 +370,11 @@ builder="$(flyctl machine list --app "$RAW_BUILDER_APP" --json |
   ')"
 if ! jq -e --arg source "$source_commit" --arg target "$private_target" \
   --arg target_machine "$RAW_CANARY_MACHINE_ID" --arg volume "$RAW_BUILDER_VOLUME_ID" \
-  --arg base_image_digest "$base_image_digest" '
+  --arg base_image_digest "$base_image_digest" \
+  --arg builder_profile "$RAW_PUBLICATION_BUILDER_PROFILE" \
+  --arg cpu_kind "$RAW_PUBLICATION_BUILDER_CPU_KIND" \
+  --argjson cpus "$RAW_PUBLICATION_BUILDER_CPUS" \
+  --argjson memory_mb "$RAW_PUBLICATION_BUILDER_MEMORY_MB" '
     .state == "stopped" and
     .config.env.YTSEARCH_MACHINE_ROLE == "publication-builder" and
     .config.env.RAW_SEARCH_API_URL == $target and
@@ -376,11 +384,12 @@ if ! jq -e --arg source "$source_commit" --arg target "$private_target" \
     .config.metadata.source_commit == $source and
     .config.metadata.target_machine == $target_machine and
     .config.metadata.base_image_digest == $base_image_digest and
+    .config.metadata.builder_profile == $builder_profile and
     (.image_ref.digest | test("^sha256:[0-9a-f]{64}$")) and
     .config.restart.policy == "no" and
-    .config.guest.cpu_kind == "shared" and
-    .config.guest.cpus == 2 and
-    .config.guest.memory_mb == 2048 and
+    .config.guest.cpu_kind == $cpu_kind and
+    .config.guest.cpus == $cpus and
+    .config.guest.memory_mb == $memory_mb and
     ((.config.services // []) | length) == 0 and
     ((.config.checks // {}) | length) == 0 and
     ((.config.files // []) | length) == 0 and
@@ -571,6 +580,7 @@ RAW_TARGET_APP="$RAW_APP" RAW_PUBLICATION_TARGET_MACHINE_ID="$RAW_CANARY_MACHINE
 RAW_PUBLICATION_TARGET_URL="$private_target" RAW_PUBLICATION_SOURCE_COMMIT="$source_commit" \
 RAW_PUBLICATION_BASE_IMAGE_DIGEST="$base_image_digest" \
 RAW_BUILDER_EXPECTED_IMAGE="$EXPECTED_RAW_BUILDER_IMAGE" \
+RAW_PUBLICATION_BUILDER_PROFILE="$RAW_PUBLICATION_BUILDER_PROFILE" \
 RAW_BUILDER_LEASE_TTL_SECONDS="$RAW_CANARY_LEASE_TTL_SECONDS" \
 RAW_BUILDER_MIN_LEASE_REMAINING_SECONDS="$builder_leased_execution_budget" \
 RAW_BUILDER_COMMAND_TIMEOUT_SECONDS="$RAW_BUILDER_COMMAND_TIMEOUT_SECONDS" \
@@ -757,9 +767,12 @@ jq -cn --arg source_commit "$source_commit" --arg run_id "$run_id" \
   --arg reader_image "$reader_resolved_image" --arg builder_image "$builder_resolved_image" \
   --arg attestation_scope "$attestation_scope" \
   --arg migration_mode "$RAW_CANARY_MIGRATION_MODE" \
+  --arg builder_profile "$RAW_PUBLICATION_BUILDER_PROFILE" \
   --argjson upsert_sequence "$upsert_sequence" --argjson delete_sequence "$delete_sequence" \
   --argjson maximum_ms "$MAX_ACCEPTABLE_MS" --argjson maximum_rss "$MAX_RSS_BYTES" \
   --argjson maximum_cgroup_memory "$MAX_CGROUP_MEMORY_BYTES" \
+  --argjson publication_timeout_seconds "$PUBLICATION_TIMEOUT_SECONDS" \
+  --argjson lease_ttl_seconds "$RAW_CANARY_LEASE_TTL_SECONDS" \
   --argjson required_concurrency "$CANARY_CONCURRENCY" \
   --slurpfile load "$output_directory/publication/load-evidence.json" \
   --slurpfile upsert_restart "$output_directory/readiness-after-upsert-restart.json" \
@@ -780,10 +793,13 @@ jq -cn --arg source_commit "$source_commit" --arg run_id "$run_id" \
     delete_sequence:$delete_sequence,
     policy:{
       migration_mode:$migration_mode,
+      builder_profile:$builder_profile,
       maximum_search_ms:$maximum_ms,
       maximum_process_rss_bytes:$maximum_rss,
       maximum_cgroup_memory_bytes:$maximum_cgroup_memory,
       machine_memory_mb:2048,
+      publication_timeout_seconds:$publication_timeout_seconds,
+      lease_ttl_seconds:$lease_ttl_seconds,
       publication_search_concurrency:$required_concurrency
     },
     publication_under_load:(

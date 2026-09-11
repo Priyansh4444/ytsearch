@@ -623,6 +623,10 @@ Raw can replace Typesense as the canonical search index.
   - [x] Add an explicit old-generation migration mode that records failing
     pre-swap phases but keeps post-swap and warmed-new correctness/latency
     strict. Require a second strict publication run on the new format.
+  - [x] Encode and verify named publication-builder resource profiles across
+    staging, publication, and canary execution. Keep the default at shared2/2 GB;
+    use a temporary performance1/2 GB profile with a bounded three-hour build
+    deadline and twelve-hour lease for the full schema migration.
 - [x] Remove deprecated `flyctl auth token` calls. Direct Machines API commands
   require an explicit scoped `FLY_API_TOKEN`, reject expired credentials without
   unsafe mutation replay, and document organization/deploy token setup.

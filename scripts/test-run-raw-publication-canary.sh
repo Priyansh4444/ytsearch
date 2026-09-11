@@ -54,7 +54,8 @@ jq -n --arg source "$source_commit" --arg base "$base_digest" \
       guest:{cpu_kind:"shared",cpus:2,memory_mb:2048},
       metadata:{
         lifecycle:"on-demand-publication-builder",source_commit:$source,
-        base_image_digest:$base,target_machine:"22222222222222"
+        base_image_digest:$base,builder_profile:"shared-2x",
+        target_machine:"22222222222222"
       },
       mounts:[{volume:"vol_2222222222222222",path:"/var/lib/ytsearch"}],
       restart:{policy:"no"},dns:{skip_registration:true},services:[],checks:{},files:[]
@@ -255,6 +256,18 @@ reset_state() {
   : > "$tmp/components.log"
 }
 
+set_builder_profile() {
+  local profile="$1"
+  local cpu_kind="$2"
+  local cpus="$3"
+  jq --arg profile "$profile" --arg cpu_kind "$cpu_kind" --argjson cpus "$cpus" '
+    .[0].config.metadata.builder_profile = $profile |
+    .[0].config.guest.cpu_kind = $cpu_kind |
+    .[0].config.guest.cpus = $cpus
+  ' "$tmp/builder-list.json" > "$tmp/builder-list.next.json"
+  mv "$tmp/builder-list.next.json" "$tmp/builder-list.json"
+}
+
 common_env=(
   PATH="$tmp/bin:$PATH"
   FLY_API_TOKEN=fake-token
@@ -295,6 +308,9 @@ env "${common_env[@]}" CONCURRENCY=1 CANARY_RUN_ID=success-run OUTPUT_DIR="$tmp/
   "$runner" > "$tmp/success.stdout"
 jq -e '
   .publication_under_load and .deleted_channel_absent and
+  .policy.builder_profile == "shared-2x" and
+  .policy.publication_timeout_seconds == 10 and
+  .policy.lease_ttl_seconds == 21600 and
   .policy.publication_search_concurrency == 4 and
   (.reader_image | test("@sha256:[0-9a-f]{64}$")) and
   (.builder_image | test("@sha256:[0-9a-f]{64}$"))
@@ -318,6 +334,17 @@ env "${common_env[@]}" RAW_CANARY_MIGRATION_MODE=record-old-generation \
 jq -e '.policy.migration_mode == "record-old-generation"' \
   "$tmp/migration/test-result.json" >/dev/null
 [[ "$(grep -c '^benchmark:record-only$' "$tmp/components.log")" == 1 ]]
+
+set_builder_profile performance-1x performance 1
+reset_state
+env "${common_env[@]}" RAW_PUBLICATION_BUILDER_PROFILE=performance-1x \
+  CANARY_RUN_ID=performance-builder OUTPUT_DIR="$tmp/performance-builder" \
+  "$runner" >/dev/null
+jq -e '
+  .policy.builder_profile == "performance-1x" and
+  .policy.machine_memory_mb == 2048
+' "$tmp/performance-builder/test-result.json" >/dev/null
+set_builder_profile shared-2x shared 2
 
 reset_state
 short_expiry="$(( $(date +%s) + 60 ))"

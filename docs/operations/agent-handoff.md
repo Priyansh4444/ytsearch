@@ -44,6 +44,13 @@ Production promotion still requires the full-snapshot publication and strict
 sub-200 ms correctness/workload gates. Keep Typesense resources until the final
 retirement gates pass. Preserve unrelated user edits, including deleted docs.
 
+For the one-time schema build, stage the existing stopped builder with
+`RAW_PUBLICATION_BUILDER_PROFILE=performance-1x`. The profile keeps memory at
+2 GB, raises storage throughput through Fly's performance CPU class, and gives
+the build 10,800 seconds. The canary lease becomes 43,200 seconds so both
+publication processes and cleanup fit. The scripts stop the builder after each
+process. Do not resize the always-on reader.
+
 Fly's scoped token may need renewal after 24 hours. Follow `docs/deploy.md`;
 do not use deprecated `flyctl auth token`. Private credential files must remain
 ignored and must never appear in handoff text or command output.

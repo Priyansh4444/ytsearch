@@ -7,7 +7,10 @@ REPOSITORY_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/fly-machine-session.sh"
 # shellcheck source=scripts/lib/fly-production-inventory.sh
 source "$SCRIPT_DIR/lib/fly-production-inventory.sh"
+# shellcheck source=scripts/lib/raw-publication-builder-profile.sh
+source "$SCRIPT_DIR/lib/raw-publication-builder-profile.sh"
 fly_production_inventory_load_raw_release
+raw_publication_builder_profile_load
 : "${BASE_IMAGE:?set BASE_IMAGE to the immutable Raw corpus image used by the overlay}"
 
 for command in curl flyctl git jq; do
@@ -92,7 +95,16 @@ if [[ "${APPLY_RAW_PUBLICATION_BUILDER:-}" != "configure-exact-inert-builder" ]]
     --arg image "$indexer_image" \
     --arg target "$RAW_PUBLICATION_TARGET_URL" \
     --arg target_machine "$target_machine_id" \
-    '{apply:false,machine:$machine,volume:$volume,image:$image,target:$target,target_machine:$target_machine}'
+    --arg builder_profile "$RAW_PUBLICATION_BUILDER_PROFILE" \
+    '{
+      apply:false,
+      machine:$machine,
+      volume:$volume,
+      image:$image,
+      target:$target,
+      target_machine:$target_machine,
+      builder_profile:$builder_profile
+    }'
   exit 0
 fi
 
@@ -146,6 +158,10 @@ jq -n \
   --arg source "$source_commit" \
   --arg target_machine "$target_machine_id" \
   --arg base_digest "sha256:$base_digest" \
+  --arg builder_profile "$RAW_PUBLICATION_BUILDER_PROFILE" \
+  --arg cpu_kind "$RAW_PUBLICATION_BUILDER_CPU_KIND" \
+  --argjson cpus "$RAW_PUBLICATION_BUILDER_CPUS" \
+  --argjson memory_mb "$RAW_PUBLICATION_BUILDER_MEMORY_MB" \
   --arg volume "$RAW_BUILDER_VOLUME_ID" '{
     image:$image,
     env:{
@@ -159,14 +175,15 @@ jq -n \
       cmd:["infinity"],
       swap_size_mb:512
     },
-    guest:{cpu_kind:"shared",cpus:2,memory_mb:2048},
+    guest:{cpu_kind:$cpu_kind,cpus:$cpus,memory_mb:$memory_mb},
     metadata:{
       lifecycle:"on-demand-publication-builder",
       source_commit:$source,
       base_image_digest:$base_digest,
+      builder_profile:$builder_profile,
       target_machine:$target_machine
     },
-  mounts:[{volume:$volume,path:$mount_path}],
+    mounts:[{volume:$volume,path:$mount_path}],
     restart:{policy:"no"},
     dns:{skip_registration:true},
     services:[],
@@ -193,6 +210,10 @@ if ! jq -e \
   --arg target "$RAW_PUBLICATION_TARGET_URL" \
   --arg target_machine "$target_machine_id" \
   --arg base "sha256:$base_digest" \
+  --arg builder_profile "$RAW_PUBLICATION_BUILDER_PROFILE" \
+  --arg cpu_kind "$RAW_PUBLICATION_BUILDER_CPU_KIND" \
+  --argjson cpus "$RAW_PUBLICATION_BUILDER_CPUS" \
+  --argjson memory_mb "$RAW_PUBLICATION_BUILDER_MEMORY_MB" \
   --arg volume "$RAW_BUILDER_VOLUME_ID" '
   .state == "stopped" and
   (.config.image == $image or (.config.image | startswith($image + "@sha256:"))) and
@@ -207,11 +228,12 @@ if ! jq -e \
   .config.metadata.lifecycle == "on-demand-publication-builder" and
   .config.metadata.source_commit == $source and
   .config.metadata.base_image_digest == $base and
+  .config.metadata.builder_profile == $builder_profile and
   .config.metadata.target_machine == $target_machine and
   .config.restart.policy == "no" and
-  .config.guest.cpu_kind == "shared" and
-  .config.guest.cpus == 2 and
-  .config.guest.memory_mb == 2048 and
+  .config.guest.cpu_kind == $cpu_kind and
+  .config.guest.cpus == $cpus and
+  .config.guest.memory_mb == $memory_mb and
   ((.config.services // []) | length) == 0 and
   ((.config.checks // {}) | length) == 0 and
   ((.config.files // []) | length) == 0 and
@@ -236,12 +258,14 @@ jq -c \
   --arg source_commit "$source_commit" \
   --arg base_image "$BASE_IMAGE" \
   --arg image "$indexer_image" \
+  --arg builder_profile "$RAW_PUBLICATION_BUILDER_PROFILE" \
   --arg target "$RAW_PUBLICATION_TARGET_URL" '
   {
     schema_version:1,
     kind:"raw-publication-builder",
     source_commit:$source_commit,
     base_image:$base_image,
+    builder_profile:$builder_profile,
     target:$target,
     machine_id:.id,
     volume_id:.config.mounts[0].volume,
