@@ -7,6 +7,33 @@ This file tracks the current requested work and end-to-end verification. Mark an
 Checked items are implemented and verified. Unchecked items are required before
 Raw can replace Typesense as the canonical search index.
 
+### Lazy exact schema-9 pivot (active; production remains generation 2145)
+
+- [x] Finish and verify the bounded-publication/4-GB-builder release gate.
+- [x] Arena three structurally distinct lazy exact designs and cross-judge them.
+- [x] Select Lucene/PISA as the base, with byte-budgeted high-DF bitmaps and
+  typed adaptive-Roaring derived/facet sets as bounded grafts.
+- [x] Write the usage-first type, API, on-disk, session, and module sketch.
+- [ ] Prototype phrase bitmap-vs-skip candidates on a production-shaped corpus.
+- [ ] Prototype bitmap-vs-skip exact counting and derive the bitmap byte budget.
+- [ ] Prove exact query-dependent 20-second moment totals under 200 ms for the
+  broadest canonical queries; do not substitute static buckets or approximation.
+- [ ] Prototype scalar-vs-batched Tier-1 fast-field histograms.
+- [ ] Prototype BMW-vs-block-priority grouped ranking with complete rank bounds
+  and a retained frontier that does not rescore prior pages.
+- [ ] Prototype delta-varint-vs-SIMD-BP128/Stream-VByte blocks at 64/128/256.
+- [ ] Prototype pinned in-memory sessions, honest expiry, and generation advance.
+- [ ] Build the 300-query exhaustive differential oracle for membership, score
+  bits, every page, totals, summaries, fallback modes, highlights, and sorts.
+- [ ] Add schema-9 structural writer/reader only after prototype gates choose the
+  representation; assert artifact size is independent of observed query plans.
+- [ ] Prove footer-only cold open reads under 200 MB, RSS under 1.5 GiB, zero
+  swap/OOM, and worst-case exact page-one + totals + Tier 0 under 200 ms on 2 GB.
+- [ ] Exercise every documented website/API regression constraint against the
+  cursor/generation extensions while retaining initial JavaScript below 30 KB.
+- [ ] Request explicit approval before any schema-9 deploy, production switch,
+  destructive cleanup, or removal of the retained schema-8 artifact.
+
 ### Completed foundation
 
 - [x] Build and serve an immutable Raw index snapshot.
