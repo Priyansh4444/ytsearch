@@ -231,12 +231,12 @@ result="$(jq -cn \
   ) | with_entries(.value |= record_counts)) as $creator_counts_from_records |
   (($failures.totals // {}) == $counts_from_records) as $aggregate_matches_records |
   (($failures.by_creator // {}) == $creator_counts_from_records) as $creators_match_records |
-  ([$failures.records[]? | .video_id] | unique | length) ==
-    ([$failures.records[]? | .video_id] | length) as $failure_video_ids_unique |
-  ($all_discovered_video_ids | unique | length) ==
-    ($all_discovered_video_ids | length) as $discovered_video_ids_unique |
-  ($all_indexed_video_ids | unique | length) ==
-    ($all_indexed_video_ids | length) as $indexed_video_ids_unique |
+  (([$failures.records[]? | .video_id] | unique | length) ==
+    ([$failures.records[]? | .video_id] | length)) as $failure_video_ids_unique |
+  (($all_discovered_video_ids | unique | length) ==
+    ($all_discovered_video_ids | length)) as $discovered_video_ids_unique |
+  (($all_indexed_video_ids | unique | length) ==
+    ($all_indexed_video_ids | length)) as $indexed_video_ids_unique |
   (($failures.records | type) == "array" and all($failures.records[]?;
     (.video_id | type) == "string" and (.video_id | length) > 0 and
     (.creator_id | type) == "string" and (.creator_id | length) > 0 and
