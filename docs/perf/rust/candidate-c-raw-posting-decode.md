@@ -30,7 +30,7 @@ prefix/split/fuzzy alternatives, early-exit at `reaches_result_threshold`
 ([youtube_search_service/src/lib.rs:31](worktree://bf320e23-94fa-426e-8da1-a17c0dc9edbf/crates/youtube_search_service/src/lib.rs#L31)): four concurrent large posting scans once
 exceeded a 2 GiB Machine, so this loop's transient `Vec<DocMatch>` is a production memory limit.
 Documented gate: 200 ms search ceiling; measured public p95 254–366 ms, 812 MiB cgroup RSS
-([raw-production-cost.md](../operations/raw-production-cost.md)). Index: 8.32 M documents.
+([raw-production-cost.md](../../operations/raw-production-cost.md)). Index: 8.32 M documents.
 
 **Build profile.** `.cargo/config.toml` is exactly `[profile.release] strip = true`; no
 workspace override, so release uses defaults (`opt-level=3, lto=false, codegen-units=16`).
@@ -190,7 +190,7 @@ remove ~2.7–2.9 ms from that shape; confirm on production-shaped data.
 - **Plain `#[inline]` on `read_varint`** — rejected by measurement: the regenerated `.s` is
   structurally identical (31 call sites, 0 inlined ladders, outlined symbol present) and timing did
   not move. LLVM declines a decoder with five `format!` error paths even when available cross-CGU.
-- **Thin LTO / profile changes** — [rust-performance-record.md](../rust-performance-record.md) already
+- **Thin LTO / profile changes** — [rust-performance-record.md](../../rust-performance-record.md) already
   rejected Thin LTO (3.2x slower clean build, larger artifacts); not re-tested here.
 - **`-C target-cpu=native`** — not tested: it must be baked at image build time and Fly's fleet is
   not homogeneous, so a `native` image is not deployable evidence.
