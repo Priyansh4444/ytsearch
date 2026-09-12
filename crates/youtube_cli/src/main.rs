@@ -41,6 +41,13 @@ const MAX_RAW_PUBLICATION_TIMEOUT_SECONDS: u64 = 2 * 60 * 60;
 const RAW_PUBLICATION_TIMEOUT_ENV: &str = "RAW_PUBLICATION_TIMEOUT_SECONDS";
 const RAW_PUBLICATION_WORK_DIRECTORY_ENV: &str = "RAW_PUBLICATION_WORK_DIRECTORY";
 const RAW_PUBLICATION_MIN_FREE_BYTES_ENV: &str = "RAW_PUBLICATION_MIN_FREE_BYTES";
+const RAW_PUBLICATION_ACTIVATION_READY_FILE_ENV: &str = "RAW_PUBLICATION_ACTIVATION_READY_FILE";
+const RAW_PUBLICATION_ACTIVATION_CONTINUE_FILE_ENV: &str =
+    "RAW_PUBLICATION_ACTIVATION_CONTINUE_FILE";
+const RAW_PUBLICATION_ACTIVATION_STARTED_FILE_ENV: &str = "RAW_PUBLICATION_ACTIVATION_STARTED_FILE";
+const RAW_PUBLICATION_ACTIVATION_FINISHED_FILE_ENV: &str =
+    "RAW_PUBLICATION_ACTIVATION_FINISHED_FILE";
+const RAW_PUBLICATION_ACTIVATION_WAIT_SECONDS: u64 = 300;
 const DEFAULT_RAW_PUBLICATION_MIN_FREE_BYTES: u64 = 8_000_000_000;
 
 #[derive(Debug, Error)]
@@ -630,7 +637,16 @@ async fn publish_generation(
             .upload_publication_file(&job.job_id, file_name, &generation_path.join(file_name))
             .await?;
     }
+    let activation_gate = PublicationActivationGate::from_environment()?;
+    if let Some(gate) = &activation_gate {
+        gate.wait(Duration::from_secs(RAW_PUBLICATION_ACTIVATION_WAIT_SECONDS))
+            .await?;
+        gate.record_started()?;
+    }
     state = search.activate_publication(&job.job_id).await?;
+    if let Some(gate) = &activation_gate {
+        gate.record_finished()?;
+    }
     if state.status != RawPublicationStatus::Activated || state.target_sequence != target {
         return Err(CliError::Message(
             "Raw publication activation returned an inconsistent job state".to_string(),
@@ -639,6 +655,83 @@ async fn publish_generation(
     publication_receipt::cleanup_activated_build(work_root, &state)?;
     println!("Published Raw generation {target}");
     Ok(target)
+}
+
+#[derive(Debug)]
+struct PublicationActivationGate {
+    ready: PathBuf,
+    proceed: PathBuf,
+    started: PathBuf,
+    finished: PathBuf,
+}
+
+impl PublicationActivationGate {
+    fn from_environment() -> Result<Option<Self>, CliError> {
+        Self::from_paths([
+            std::env::var_os(RAW_PUBLICATION_ACTIVATION_READY_FILE_ENV).map(PathBuf::from),
+            std::env::var_os(RAW_PUBLICATION_ACTIVATION_CONTINUE_FILE_ENV).map(PathBuf::from),
+            std::env::var_os(RAW_PUBLICATION_ACTIVATION_STARTED_FILE_ENV).map(PathBuf::from),
+            std::env::var_os(RAW_PUBLICATION_ACTIVATION_FINISHED_FILE_ENV).map(PathBuf::from),
+        ])
+    }
+
+    fn from_paths(paths: [Option<PathBuf>; 4]) -> Result<Option<Self>, CliError> {
+        if paths.iter().all(Option::is_none) {
+            return Ok(None);
+        }
+        let [Some(ready), Some(proceed), Some(started), Some(finished)] = paths else {
+            return Err(CliError::Message(
+                "all Raw publication activation handshake paths must be set together".to_string(),
+            ));
+        };
+        if [&ready, &proceed, &started, &finished]
+            .iter()
+            .any(|path| !path.is_absolute())
+        {
+            return Err(CliError::Message(
+                "Raw publication activation handshake paths must be absolute".to_string(),
+            ));
+        }
+        Ok(Some(Self {
+            ready,
+            proceed,
+            started,
+            finished,
+        }))
+    }
+
+    async fn wait(&self, maximum: Duration) -> Result<(), CliError> {
+        fs::write(&self.ready, b"ready\n")?;
+        let deadline = Instant::now() + maximum;
+        while !self.proceed.is_file() {
+            if Instant::now() >= deadline {
+                return Err(CliError::Message(
+                    "Raw publication activation handshake timed out".to_string(),
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        Ok(())
+    }
+
+    fn record_started(&self) -> Result<(), CliError> {
+        self.record_timestamp(&self.started)
+    }
+
+    fn record_finished(&self) -> Result<(), CliError> {
+        self.record_timestamp(&self.finished)
+    }
+
+    fn record_timestamp(&self, path: &Path) -> Result<(), CliError> {
+        let milliseconds = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(|error| {
+                CliError::Message(format!("system clock precedes Unix epoch: {error}"))
+            })?
+            .as_millis();
+        fs::write(path, format!("{milliseconds}\n"))?;
+        Ok(())
+    }
 }
 
 async fn publish_command(command: PublishCommand) -> Result<(), CliError> {
@@ -2407,6 +2500,37 @@ fn print_validated_youtuber(youtuber: &ValidatedYoutuber) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn publication_activation_gate_validates_and_unblocks() {
+        assert!(
+            PublicationActivationGate::from_paths([None, None, None, None])
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            PublicationActivationGate::from_paths([Some(PathBuf::from("ready")), None, None, None])
+                .is_err()
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let gate = PublicationActivationGate::from_paths([
+            Some(directory.path().join("ready")),
+            Some(directory.path().join("continue")),
+            Some(directory.path().join("started")),
+            Some(directory.path().join("finished")),
+        ])
+        .unwrap()
+        .unwrap();
+        assert!(gate.wait(Duration::from_millis(20)).await.is_err());
+        fs::write(&gate.proceed, b"continue\n").unwrap();
+        gate.wait(Duration::from_secs(1)).await.unwrap();
+        gate.record_started().unwrap();
+        gate.record_finished().unwrap();
+        assert!(gate.ready.is_file());
+        assert!(gate.started.is_file());
+        assert!(gate.finished.is_file());
+    }
 
     fn video(id: &str) -> DiscoveredVideo {
         DiscoveredVideo {

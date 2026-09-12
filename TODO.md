@@ -99,11 +99,12 @@ Raw can replace Typesense as the canonical search index.
     sequence published, and leave later mutations durable for the next batch.
   - [x] Add one fail-closed isolated-canary command that binds reader and builder
     images to the exact source/base digests, rejects publication-protocol drift
-    without consuming a sequence, proves mutation idempotency, continuously
-    samples both 2-GB cgroups, and verifies upsert/delete across publication and
-    restart. Execution against the full corpus remains the next unchecked gate.
-  - [ ] Pass the full-corpus 2-GB indexer disk/RSS gate and the continuous
-    search-load gate before deploying the external builder.
+    without consuming a sequence, proves mutation idempotency, samples the 2-GB
+    reader and profile-specific builder cgroups, and verifies upsert/delete
+    across publication and restart. Execution against the full corpus remains
+    the next unchecked gate.
+  - [ ] Pass the full-corpus 4-GB migration-builder disk/RSS gate, the bounded
+    build-load gate, and the activation-handshake load gate before deployment.
   - [ ] Fail closed on local reader-side builds in production after the remote
     builder passes crash, disk-full, upload-resume, and live latency gates.
 - [ ] Upload checksummed versioned artifacts to private R2 once R2 is enabled.
@@ -178,6 +179,10 @@ Raw can replace Typesense as the canonical search index.
     keeping the four exact legacy Machines stopped and all seven verified
     volumes preserved. After those gates pass, destroy only the exact reviewed
     retirement set and verify that it is absent.
+  - [x] Bound the schema-publication search overlap to 120 seconds while
+    retaining full-run resource sampling; split the 80% cgroup memory gates between
+    the 2 GB reader and temporary 4 GB performance builder after the measured
+    2 GB builder peaked at 1,944,870,912 bytes and used swap.
   - [ ] Publish the durable sequence-2950 mutation, add Brodie Robertson as the
     62nd active profile, and rerun every creator. The 2026-08-29 checkpoint has
     61 active profiles, 40 reported count gaps totaling 1,425 videos, and 868
@@ -625,7 +630,7 @@ Raw can replace Typesense as the canonical search index.
     strict. Require a second strict publication run on the new format.
   - [x] Encode and verify named publication-builder resource profiles across
     staging, publication, and canary execution. Keep the default at shared2/2 GB;
-    use a temporary performance1/2 GB profile with a bounded three-hour build
+    use a temporary performance1/4 GB profile with a bounded three-hour build
     deadline and twelve-hour lease for the full schema migration.
 - [x] Remove deprecated `flyctl auth token` calls. Direct Machines API commands
   require an explicit scoped `FLY_API_TOKEN`, reject expired credentials without

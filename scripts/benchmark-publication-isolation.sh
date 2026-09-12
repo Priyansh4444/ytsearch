@@ -16,6 +16,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CASES_FILE="${CASES_FILE:-$SCRIPT_DIR/benchmark-search-cases.tsv}"
 OUTPUT_DIR="${OUTPUT_DIR:-.search-experiment/results/publication-$(date -u +%Y%m%dT%H%M%SZ)}"
 CONCURRENCY="${CONCURRENCY:-4}"
+PUBLICATION_LOAD_SECONDS="${PUBLICATION_LOAD_SECONDS:-120}"
+ACTIVATION_LOAD_SECONDS="${ACTIVATION_LOAD_SECONDS:-10}"
+PUBLICATION_LOAD_MIN_COVERAGE_PERCENT="${PUBLICATION_LOAD_MIN_COVERAGE_PERCENT:-80}"
 BASELINE_RUNS="${BASELINE_RUNS:-3}"
 BASELINE_POLICY="${BASELINE_POLICY:-strict}"
 WARM_NEW_SECONDS="${WARM_NEW_SECONDS:-60}"
@@ -31,6 +34,7 @@ MACHINE_RESOURCE_SAMPLE_INTERVAL_SECONDS="${MACHINE_RESOURCE_SAMPLE_INTERVAL_SEC
 MACHINE_RESOURCE_PROBE_TIMEOUT_SECONDS="${MACHINE_RESOURCE_PROBE_TIMEOUT_SECONDS:-20}"
 MAX_MACHINE_RESOURCE_SAMPLE_GAP_MS="${MAX_MACHINE_RESOURCE_SAMPLE_GAP_MS:-6000}"
 MAX_CGROUP_MEMORY_BYTES="${MAX_CGROUP_MEMORY_BYTES:-1986422374}"
+MAX_BUILDER_CGROUP_MEMORY_BYTES="${MAX_BUILDER_CGROUP_MEMORY_BYTES:-$MAX_CGROUP_MEMORY_BYTES}"
 MAX_SWAP_BYTES="${MAX_SWAP_BYTES:-0}"
 MAX_DISK_PERCENT="${MAX_DISK_PERCENT:-80}"
 PUBLISH_BIN="${PUBLISH_BIN:-$SCRIPT_DIR/../target/release/ytsearch}"
@@ -50,12 +54,17 @@ for command in curl jq timeout; do
   }
 done
 [[ "$CONCURRENCY" =~ ^[1-9][0-9]*$ ]]
+[[ "$PUBLICATION_LOAD_SECONDS" =~ ^[1-9][0-9]*$ ]]
+[[ "$ACTIVATION_LOAD_SECONDS" =~ ^[1-9][0-9]*$ ]]
+[[ "$PUBLICATION_LOAD_MIN_COVERAGE_PERCENT" =~ ^[1-9][0-9]*$ ]]
+(( PUBLICATION_LOAD_MIN_COVERAGE_PERCENT <= 100 ))
 [[ "$MAX_RSS_BYTES" =~ ^[1-9][0-9]*$ ]]
 [[ "$RESOURCE_SAMPLE_INTERVAL_SECONDS" =~ ^[1-9][0-9]*$ ]]
 [[ "$MACHINE_RESOURCE_SAMPLE_INTERVAL_SECONDS" =~ ^[1-9][0-9]*$ ]]
 [[ "$MACHINE_RESOURCE_PROBE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]
 [[ "$MAX_MACHINE_RESOURCE_SAMPLE_GAP_MS" =~ ^[1-9][0-9]*$ ]]
 [[ "$MAX_CGROUP_MEMORY_BYTES" =~ ^[1-9][0-9]*$ ]]
+[[ "$MAX_BUILDER_CGROUP_MEMORY_BYTES" =~ ^[1-9][0-9]*$ ]]
 [[ "$MAX_SWAP_BYTES" =~ ^[0-9]+$ ]]
 [[ "$MAX_DISK_PERCENT" =~ ^[1-9][0-9]*$ ]]
 [[ "$WARM_NEW_SECONDS" =~ ^[1-9][0-9]*$ ]]
@@ -86,6 +95,7 @@ if [[ -n "$BUILDER_RESOURCE_PROBE" && ! -x "$BUILDER_RESOURCE_PROBE" ]]; then
 fi
 
 mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR="$(cd -- "$OUTPUT_DIR" && pwd)"
 : > "$OUTPUT_DIR/build.jsonl"
 : > "$OUTPUT_DIR/rounds.jsonl"
 : > "$OUTPUT_DIR/resources.jsonl"
@@ -99,6 +109,8 @@ mkdir -p "$LOAD_READY_DIRECTORY"
 load_pids=()
 load_outputs=()
 resource_pids=()
+load_deadline_pid=""
+publish_pid=""
 secret_directory="$(mktemp -d)"
 chmod 700 "$secret_directory"
 admin_header="$secret_directory/admin.header"
@@ -111,6 +123,11 @@ chmod 600 "$admin_header"
 
 stop_load_workers() {
   touch "$LOAD_STOP_FILE"
+  if [[ -n "$load_deadline_pid" ]]; then
+    kill "$load_deadline_pid" 2>/dev/null || true
+    wait "$load_deadline_pid" 2>/dev/null || true
+    load_deadline_pid=""
+  fi
   worker_failed=0
   for pid in "${load_pids[@]}"; do
     if ! wait "$pid"; then
@@ -134,6 +151,11 @@ stop_resource_workers() {
 }
 
 cleanup() {
+  if [[ -n "$publish_pid" ]]; then
+    kill "$publish_pid" 2>/dev/null || true
+    wait "$publish_pid" 2>/dev/null || true
+    publish_pid=""
+  fi
   stop_load_workers 2>/dev/null || true
   stop_resource_workers 2>/dev/null || true
   rm -rf "$secret_directory"
@@ -198,6 +220,45 @@ load_worker() {
       touch "$LOAD_READY_DIRECTORY/$worker_number"
       first_sweep=0
     fi
+  done
+}
+
+start_load_workers() {
+  phase="$1"
+  rm -f "$LOAD_STOP_FILE"
+  find "$LOAD_READY_DIRECTORY" -mindepth 1 -maxdepth 1 -type f -delete
+  load_pids=()
+  load_outputs=()
+  for ((worker = 1; worker <= CONCURRENCY; worker += 1)); do
+    worker_output="$OUTPUT_DIR/$phase-worker-$worker.jsonl"
+    load_outputs+=("$worker_output")
+    load_worker "$worker_output" "$worker" &
+    load_pids+=("$!")
+  done
+  for attempt in {1..120}; do
+    ready_count="$(find "$LOAD_READY_DIRECTORY" -mindepth 1 -maxdepth 1 -type f | wc -l)"
+    live_count=0
+    for pid in "${load_pids[@]}"; do
+      kill -0 "$pid" 2>/dev/null && ((live_count += 1))
+    done
+    if (( ready_count == CONCURRENCY && live_count == CONCURRENCY )); then
+      return 0
+    fi
+    if (( live_count != CONCURRENCY )); then
+      break
+    fi
+    sleep 1
+  done
+  printf '%s load workers did not complete their ready sweeps\n' "$phase" >&2
+  return 1
+}
+
+collect_load_outputs() {
+  destination="$1"
+  : > "$destination"
+  for worker_index in "${!load_outputs[@]}"; do
+    jq -c --argjson worker "$(( worker_index + 1 ))" '. + {worker:$worker}' \
+      "${load_outputs[$worker_index]}" >> "$destination"
   done
 }
 
@@ -278,8 +339,9 @@ summarize_machine_resources() {
 gate_machine_resources() {
   label="$1"
   summary="$2"
+  maximum_memory="$3"
   jq -e \
-    --argjson maximum_memory "$MAX_CGROUP_MEMORY_BYTES" \
+    --argjson maximum_memory "$maximum_memory" \
     --argjson maximum_swap "$MAX_SWAP_BYTES" \
     --argjson maximum_disk "$MAX_DISK_PERCENT" \
     --argjson maximum_sample_gap "$MAX_MACHINE_RESOURCE_SAMPLE_GAP_MS" '
@@ -320,13 +382,20 @@ gate_machine_resources() {
 summarize_phase() {
   phase="$1"
   file="$2"
-  jq -sc --arg phase "$phase" '
+  contract_policy="${3:-strict}"
+  jq -sc --arg phase "$phase" --arg contract_policy "$contract_policy" '
     . as $rows |
-    [$rows[] | select(.ok) | .seconds * 1000] | sort as $times |
+    [$rows[] | select(
+      if $contract_policy == "record-only" then (.request_ok // .ok) else .ok end
+    )] as $successful |
+    [$successful[] | .seconds * 1000] | sort as $times |
     {
       phase:$phase,
       samples:($rows | length),
-      errors:([$rows[] | select(.ok | not)] | length),
+      errors:(($rows | length) - ($successful | length)),
+      contract_mismatches:([$rows[] | select(
+        (.request_ok // .ok) == true and ((.contract_valid // .ok) != true)
+      )] | length),
       p50_ms:(if ($times|length)==0 then null else $times[((($times|length)*0.50|ceil)-1)] end),
       p95_ms:(if ($times|length)==0 then null else $times[((($times|length)*0.95|ceil)-1)] end),
       p99_ms:(if ($times|length)==0 then null else $times[((($times|length)*0.99|ceil)-1)] end),
@@ -346,7 +415,7 @@ fi
 curl --fail --silent --show-error --max-time 5 "${SEARCH_URL%/}/metrics" \
   > "$OUTPUT_DIR/metrics-before.json"
 run_engine "$OUTPUT_DIR/baseline.jsonl" "$BASELINE_RUNS" 1
-summarize_phase baseline "$OUTPUT_DIR/baseline.jsonl" \
+summarize_phase baseline "$OUTPUT_DIR/baseline.jsonl" "$BASELINE_POLICY" \
   | tee "$OUTPUT_DIR/baseline-summary.json"
 if [[ "$BASELINE_POLICY" == strict ]]; then
   jq -e --argjson maximum "$MAX_ACCEPTABLE_MS" '
@@ -371,62 +440,116 @@ if [[ -n "$BUILDER_RESOURCE_PROBE" ]]; then
   machine_resource_worker "$BUILDER_RESOURCE_PROBE" "$OUTPUT_DIR/builder-resources.jsonl" &
   resource_pids+=("$!")
 fi
-for ((worker = 1; worker <= CONCURRENCY; worker += 1)); do
-  worker_output="$OUTPUT_DIR/build-worker-$worker.jsonl"
-  load_outputs+=("$worker_output")
-  load_worker "$worker_output" "$worker" &
-  load_pids+=("$!")
-done
-load_ready=0
-for attempt in {1..120}; do
-  ready_count="$(find "$LOAD_READY_DIRECTORY" -mindepth 1 -maxdepth 1 -type f | wc -l)"
-  live_count=0
-  for pid in "${load_pids[@]}"; do
-    kill -0 "$pid" 2>/dev/null && ((live_count += 1))
-  done
-  if (( ready_count == CONCURRENCY && live_count == CONCURRENCY )); then
-    load_ready=1
-    break
-  fi
-  if (( live_count != CONCURRENCY )); then
-    break
-  fi
-  sleep 1
-done
-if (( load_ready == 0 )); then
-  printf 'publication load workers did not complete their ready sweeps\n' >&2
-  exit 1
-fi
+start_load_workers build
 publication_started_ms="$(date +%s%3N)"
-set +e
+(sleep "$PUBLICATION_LOAD_SECONDS"; touch "$LOAD_STOP_FILE") &
+load_deadline_pid="$!"
+activation_ready_file="$OUTPUT_DIR/activation-ready"
+activation_continue_file="$OUTPUT_DIR/activation-continue"
+activation_started_file="$OUTPUT_DIR/activation-started"
+activation_finished_file="$OUTPUT_DIR/activation-finished"
+rm -f "$activation_ready_file" "$activation_continue_file" \
+  "$activation_started_file" "$activation_finished_file"
 RAW_SEARCH_API_URL="$SEARCH_URL" RAW_SEARCH_ADMIN_API_KEY="$RAW_ADMIN_API_KEY" \
   RAW_BUILDER_RESOURCE_PROBE="$BUILDER_RESOURCE_PROBE" \
   RAW_BUILDER_FINAL_RESOURCE_OUTPUT="$OUTPUT_DIR/builder-final-resource.json" \
+  RAW_PUBLICATION_ACTIVATION_READY_FILE="$activation_ready_file" \
+  RAW_PUBLICATION_ACTIVATION_CONTINUE_FILE="$activation_continue_file" \
+  RAW_PUBLICATION_ACTIVATION_STARTED_FILE="$activation_started_file" \
+  RAW_PUBLICATION_ACTIVATION_FINISHED_FILE="$activation_finished_file" \
   timeout --signal=TERM --kill-after="$PUBLISH_PROCESS_KILL_AFTER_SECONDS" \
     "$PUBLISH_PROCESS_TIMEOUT_SECONDS" \
     "$PUBLISH_BIN" publish --backend raw \
-  > "$OUTPUT_DIR/publish.log" 2>&1
-publish_exit=$?
-set -e
-publication_ended_ms="$(date +%s%3N)"
+  > "$OUTPUT_DIR/publish.log" 2>&1 &
+publish_pid="$!"
+
+wait "$load_deadline_pid"
+load_deadline_pid=""
+build_load_ended_ms="$(date +%s%3N)"
 if ! stop_load_workers; then
-  printf 'one or more publication load workers failed\n' >&2
+  printf 'one or more build load workers failed\n' >&2
   exit 1
 fi
-for worker_index in "${!load_outputs[@]}"; do
-  jq -c --argjson worker "$(( worker_index + 1 ))" '. + {worker:$worker}' \
-    "${load_outputs[$worker_index]}" >> "$OUTPUT_DIR/build.jsonl"
+collect_load_outputs "$OUTPUT_DIR/build.jsonl"
+"$SCRIPT_DIR/summarize-publication-load.sh" "$OUTPUT_DIR/build.jsonl" \
+  "$publication_started_ms" "$build_load_ended_ms" "$CONCURRENCY" \
+  "$BASELINE_POLICY" \
+  | tee "$OUTPUT_DIR/build-load-evidence.json"
+jq -e --argjson minimum_ms \
+  "$(( PUBLICATION_LOAD_SECONDS * 1000 * PUBLICATION_LOAD_MIN_COVERAGE_PERCENT / 100 ))" '
+  .minimum_worker_covered_ms >= $minimum_ms and
+  .required_concurrency_covered_ms >= $minimum_ms
+' "$OUTPUT_DIR/build-load-evidence.json" >/dev/null || {
+  printf 'build load did not meet %s%% coverage across %ss at concurrency %s\n' \
+    "$PUBLICATION_LOAD_MIN_COVERAGE_PERCENT" "$PUBLICATION_LOAD_SECONDS" \
+    "$CONCURRENCY" >&2
+  exit 1
+}
+
+activation_wait_deadline=$(( SECONDS + PUBLICATION_TIMEOUT_SECONDS ))
+while [[ ! -e "$activation_ready_file" ]]; do
+  if ! kill -0 "$publish_pid" 2>/dev/null; then
+    set +e
+    wait "$publish_pid"
+    publish_exit=$?
+    publish_pid=""
+    set -e
+    printf 'external publication exited before the activation handshake with %s; see %s\n' \
+      "$publish_exit" "$OUTPUT_DIR/publish.log" >&2
+    exit 1
+  fi
+  if (( SECONDS >= activation_wait_deadline )); then
+    printf 'external publication did not reach its activation handshake\n' >&2
+    exit 1
+  fi
+  sleep 1
 done
-jq -cn --argjson started_ms "$publication_started_ms" \
-  --argjson ended_ms "$publication_ended_ms" --argjson exit "$publish_exit" \
-  --argjson target "$target_sequence" \
-  '{phase:"external_publication",started_ms:$started_ms,ended_ms:$ended_ms,exit:$exit,target_sequence:$target}' \
-  >> "$OUTPUT_DIR/rounds.jsonl"
+activation_ready_ms="$(date +%s%3N)"
+start_load_workers activation
+activation_load_started_ms="$(date +%s%3N)"
+touch "$activation_continue_file"
+activation_continue_ms="$(date +%s%3N)"
+set +e
+wait "$publish_pid"
+publish_exit=$?
+publish_pid=""
+set -e
+publication_ended_ms="$(date +%s%3N)"
 if (( publish_exit != 0 )); then
   printf 'external publication failed with exit %s; see %s\n' \
     "$publish_exit" "$OUTPUT_DIR/publish.log" >&2
   exit 1
 fi
+activation_started_ms="$(cat "$activation_started_file")"
+activation_finished_ms="$(cat "$activation_finished_file")"
+if [[ ! "$activation_started_ms" =~ ^[0-9]+$ \
+  || ! "$activation_finished_ms" =~ ^[0-9]+$ \
+  || activation_finished_ms -lt activation_started_ms ]]; then
+  printf 'publisher returned invalid activation interval markers\n' >&2
+  exit 1
+fi
+activation_load_deadline_ms=$(( activation_load_started_ms + ACTIVATION_LOAD_SECONDS * 1000 ))
+while (( $(date +%s%3N) < activation_load_deadline_ms )); do sleep 1; done
+activation_load_ended_ms="$(date +%s%3N)"
+if ! stop_load_workers; then
+  printf 'one or more activation load workers failed\n' >&2
+  exit 1
+fi
+collect_load_outputs "$OUTPUT_DIR/activation.jsonl"
+jq -cn --argjson activation_ready_ms "$activation_ready_ms" \
+  --argjson activation_continue_ms "$activation_continue_ms" \
+  --argjson activation_started_ms "$activation_started_ms" \
+  --argjson activation_finished_ms "$activation_finished_ms" \
+  --argjson publication_ended_ms "$publication_ended_ms" \
+  '{activation_ready_ms:$activation_ready_ms,activation_continue_ms:$activation_continue_ms,
+    activation_started_ms:$activation_started_ms,activation_finished_ms:$activation_finished_ms,
+    publication_ended_ms:$publication_ended_ms}' \
+  > "$OUTPUT_DIR/activation-evidence.json"
+jq -cn --argjson started_ms "$publication_started_ms" \
+  --argjson ended_ms "$publication_ended_ms" --argjson exit "$publish_exit" \
+  --argjson target "$target_sequence" \
+  '{phase:"external_publication",started_ms:$started_ms,ended_ms:$ended_ms,exit:$exit,target_sequence:$target}' \
+  >> "$OUTPUT_DIR/rounds.jsonl"
 if [[ -n "$BUILDER_RESOURCE_PROBE" ]]; then
   if ! jq -ce '. + {ok:true}' "$OUTPUT_DIR/builder-final-resource.json" \
     >> "$OUTPUT_DIR/builder-resources.jsonl"; then
@@ -435,9 +558,30 @@ if [[ -n "$BUILDER_RESOURCE_PROBE" ]]; then
   fi
 fi
 
-"$SCRIPT_DIR/summarize-publication-load.sh" "$OUTPUT_DIR/build.jsonl" \
-  "$publication_started_ms" "$publication_ended_ms" "$CONCURRENCY" \
-  | tee "$OUTPUT_DIR/load-evidence.json"
+"$SCRIPT_DIR/summarize-publication-load.sh" "$OUTPUT_DIR/activation.jsonl" \
+  "$activation_load_started_ms" "$activation_load_ended_ms" "$CONCURRENCY" \
+  "$BASELINE_POLICY" \
+  | tee "$OUTPUT_DIR/activation-load-evidence.json"
+jq -e --argjson minimum_ms \
+  "$(( ACTIVATION_LOAD_SECONDS * 1000 * PUBLICATION_LOAD_MIN_COVERAGE_PERCENT / 100 ))" '
+  .minimum_worker_covered_ms >= $minimum_ms and
+  .required_concurrency_covered_ms >= $minimum_ms
+' "$OUTPUT_DIR/activation-load-evidence.json" >/dev/null || {
+  printf 'activation load did not meet %s%% coverage across %ss at concurrency %s\n' \
+    "$PUBLICATION_LOAD_MIN_COVERAGE_PERCENT" "$ACTIVATION_LOAD_SECONDS" \
+    "$CONCURRENCY" >&2
+  exit 1
+}
+"$SCRIPT_DIR/summarize-publication-load.sh" "$OUTPUT_DIR/activation.jsonl" \
+  "$activation_started_ms" "$activation_finished_ms" "$CONCURRENCY" \
+  "$BASELINE_POLICY" | tee "$OUTPUT_DIR/activation-call-evidence.json"
+jq -n --slurpfile build "$OUTPUT_DIR/build-load-evidence.json" \
+  --slurpfile activation "$OUTPUT_DIR/activation-load-evidence.json" \
+  --slurpfile activation_call "$OUTPUT_DIR/activation-call-evidence.json" \
+  --slurpfile handshake "$OUTPUT_DIR/activation-evidence.json" \
+  '{build:$build[0],activation:$activation[0],activation_call:$activation_call[0],
+    handshake:$handshake[0]}' \
+  > "$OUTPUT_DIR/load-evidence.json"
 
 final_active="$(active_sequence)"
 if (( final_active != target_sequence )); then
@@ -477,8 +621,9 @@ if [[ -n "$BUILDER_RESOURCE_PROBE" ]]; then
 fi
 
 {
-  summarize_phase baseline "$OUTPUT_DIR/baseline.jsonl"
-  summarize_phase build "$OUTPUT_DIR/build.jsonl"
+  summarize_phase baseline "$OUTPUT_DIR/baseline.jsonl" "$BASELINE_POLICY"
+  summarize_phase build "$OUTPUT_DIR/build.jsonl" "$BASELINE_POLICY"
+  summarize_phase activation "$OUTPUT_DIR/activation.jsonl" "$BASELINE_POLICY"
   summarize_phase post_swap "$OUTPUT_DIR/post-swap.jsonl"
   summarize_phase warm_new "$OUTPUT_DIR/warm-new.jsonl"
 } | jq -s '.' | tee "$OUTPUT_DIR/summary.json"
@@ -509,10 +654,12 @@ jq -e --argjson maximum "$MAX_RSS_BYTES" '
 }
 
 if [[ -n "$MACHINE_RESOURCE_PROBE" ]]; then
-  gate_machine_resources reader "$OUTPUT_DIR/machine-resource-summary.json"
+  gate_machine_resources reader "$OUTPUT_DIR/machine-resource-summary.json" \
+    "$MAX_CGROUP_MEMORY_BYTES"
 fi
 if [[ -n "$BUILDER_RESOURCE_PROBE" ]]; then
-  gate_machine_resources builder "$OUTPUT_DIR/builder-resource-summary.json"
+  gate_machine_resources builder "$OUTPUT_DIR/builder-resource-summary.json" \
+    "$MAX_BUILDER_CGROUP_MEMORY_BYTES"
 fi
 
 printf 'publication isolation gate passed: target=%s max_rss_bytes=%s results=%s\n' \

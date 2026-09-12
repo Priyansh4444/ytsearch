@@ -209,21 +209,25 @@ without weakening the final release gate.
 
 The publication builder now has two checked profiles. `shared-2x` remains the
 default and keeps the 2,400-second publication deadline. The one-time full
-schema migration uses `performance-1x`, still with 2 GB of memory, because the
-previous shared-volume scan alone took 487.669 seconds and the controller timed
-out before it could verify and activate the result. The performance profile
+schema migration uses `performance-1x-4gb`. The 2 GB performance run peaked at
+1,944,870,912 cgroup bytes and touched swap, exceeding the 80% resource policy;
+the 4 GB profile raises that fail-closed ceiling to 3,435,973,836 bytes. The performance profile
 sets a 10,800-second publication deadline and a 43,200-second reader lease. The
 lease covers both publication processes in the canary protocol plus cleanup;
 it does not keep the builder running after the scripts stop it. Machine staging,
 publication, and the canary runner all verify the named profile, CPU kind, CPU
-count, memory, and metadata before starting either Machine.
+count, memory, and metadata before starting either Machine. Four search workers
+overlap the build for 120 seconds. The publisher then stops at an activation
+handshake, starts a second ten-second concurrency-four window, and permits the
+swap only after all workers are ready. Resource sampling spans the complete
+publication.
 
 Use the performance profile only for the measured migration and strict
 latest-format confirmation:
 
 ```bash
 BASE_IMAGE='registry.fly.io/ytsearch-raw-production:base@sha256:<digest>' \
-RAW_PUBLICATION_BUILDER_PROFILE=performance-1x \
+RAW_PUBLICATION_BUILDER_PROFILE=performance-1x-4gb \
   rtk scripts/reconcile-raw-publication-builder.sh
 ```
 

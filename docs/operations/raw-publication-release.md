@@ -20,8 +20,10 @@ jq '.resources | {raw_reader_canary, raw_publication_builder}' \
 The reader must remain stopped, have no services or checks, skip DNS
 registration, use restart policy `no`, and have exactly 2 shared CPUs and 2 GB
 of memory. The builder must remain an inert `sleep infinity` Machine with no
-services and restart policy `no`. The scripts reject any drift from these
-identities and shapes.
+services and restart policy `no`. Its checked profile controls its CPU and
+memory shape. Full schema migration uses one performance CPU and 4 GB; the
+default incremental profile uses two shared CPUs and 2 GB. The scripts reject
+any drift from these identities and shapes.
 
 ## Build immutable overlays
 
@@ -143,7 +145,7 @@ ALLOW_RAW_CANARY_GATE=run-exact-isolated-canary \
 The one command performs these checks in order:
 
 1. Revalidates the exact stopped reader, builder, volumes, source commit,
-   images, private target, isolation, and 2-GB shapes.
+   images, private target, isolation, and profile-specific shapes.
 2. Starts only the isolated reader and connects to its exact private IPv6
    address through a local Fly proxy.
 3. Requires publication protocol v1 and the exact compiled source commit.
@@ -151,13 +153,19 @@ The one command performs these checks in order:
    consuming a mutation sequence.
 5. Writes the same valid channel mutation twice and requires one durable
    operation and one sequence advance.
-6. Publishes with the detached builder while continuously running the canonical
-   mixed-query workload at concurrency four.
-7. Requires every request to complete in at most 200 ms with zero HTTP, JSON,
-   metrics, or search errors.
-8. Requires reader process RSS at or below 1.5 GiB. For both 2-GB Machines it
-   also requires observed cgroup memory at or below 1.85 GiB, observed swap of
-   zero, no OOM event, and volume utilization below 80%. Cgroup v2 uses kernel
+6. Runs the canonical mixed-query workload at concurrency four for 120 seconds
+   during the build. Before activation, an explicit handshake starts a second
+   ten-second load window and blocks the swap until all workers are ready.
+   The builder records the exact remote activation start and finish timestamps;
+   the gate requires concurrency-four requests across that interval.
+7. Requires every direct Raw request on the private Fly path to complete in
+   under 200 ms with zero HTTP, JSON, metrics, or search errors. Browser and
+   Cloudflare transit time remain a separate production check.
+8. Requires reader process RSS at or below 1.5 GiB. It requires reader cgroup
+   memory at or below 1.6 GiB and temporary 4-GB builder cgroup memory at or
+   below 3.2 GiB. It also requires observed swap of zero, no OOM event, and
+   volume utilization below 80%. These gates measure memory and disk, not CPU
+   utilization. Cgroup v2 uses kernel
    peak counters. Fly's current cgroup v1 reports an unusable zero peak, so the
    gate records that limitation, requires v1 memory-plus-swap accounting, and
    fails if consecutive accepted samples are more than six seconds apart. It

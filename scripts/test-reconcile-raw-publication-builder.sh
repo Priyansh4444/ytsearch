@@ -135,8 +135,8 @@ case "$method:$url" in
       (.config.services | length) == 0 and
       (.config.checks | length) == 0 and
       (.config.files | length) == 0 and
-      .config.guest == {cpu_kind:"performance",cpus:1,memory_mb:2048} and
-      .config.metadata.builder_profile == "performance-1x"
+      .config.guest == {cpu_kind:"performance",cpus:1,memory_mb:4096} and
+      .config.metadata.builder_profile == "performance-1x-4gb"
     ' "$request" >/dev/null
     jq --slurpfile request "$request" --arg digest "$FAKE_RESOLVED_DIGEST" '
       .[0].config = $request[0].config |
@@ -175,7 +175,7 @@ common_env=(
   FLY_PRODUCTION_INVENTORY_PATH="$SCRIPT_DIR/testdata/fly-production-resources.json"
   BASE_IMAGE="registry.fly.io/ytsearch-raw-production:base@sha256:$base_digest"
   INDEXER_IMAGE="$image"
-  RAW_PUBLICATION_BUILDER_PROFILE=performance-1x
+  RAW_PUBLICATION_BUILDER_PROFILE=performance-1x-4gb
 )
 
 : > "$tmp/fly.log"
@@ -184,7 +184,7 @@ env "${common_env[@]}" "$SCRIPT_DIR/reconcile-raw-publication-builder.sh" \
   > "$tmp/dry-run.json"
 jq -e --arg machine "$builder_id" '
   .apply == false and .machine == $machine and
-  .builder_profile == "performance-1x"
+  .builder_profile == "performance-1x-4gb"
 ' \
   "$tmp/dry-run.json" >/dev/null
 [[ ! -s "$tmp/curl.log" ]]
@@ -194,8 +194,8 @@ env "${common_env[@]}" \
   "$SCRIPT_DIR/reconcile-raw-publication-builder.sh" > "$tmp/applied.json"
 jq -e --arg image "$image@sha256:$resolved_digest" '
   .kind == "raw-publication-builder" and .resolved_image == $image and
-  .state == "stopped" and .memory_mb == 2048 and .cpus == 1 and
-  .builder_profile == "performance-1x"
+  .state == "stopped" and .memory_mb == 4096 and .cpus == 1 and
+  .builder_profile == "performance-1x-4gb"
 ' "$tmp/applied.json" >/dev/null
 jq -e '
   .[0].state == "stopped" and
@@ -203,8 +203,8 @@ jq -e '
   (.[0].config.services | length) == 0 and
   (.[0].config.env | has("STALE_QUEUE_MODE") | not) and
   (.[0].config.env | keys | length) == 4 and
-  .[0].config.guest == {cpu_kind:"performance",cpus:1,memory_mb:2048} and
-  .[0].config.metadata.builder_profile == "performance-1x" and
+  .[0].config.guest == {cpu_kind:"performance",cpus:1,memory_mb:4096} and
+  .[0].config.metadata.builder_profile == "performance-1x-4gb" and
   .[0].config.dns.skip_registration == true
 ' "$tmp/state.json" >/dev/null
 if grep -Eq 'fake-token|fake-nonce' "$tmp/curl.log"; then
@@ -231,7 +231,7 @@ if env "${common_env[@]}" RAW_PUBLICATION_BUILDER_PROFILE=performance-2x \
   exit 1
 fi
 
-RAW_PUBLICATION_BUILDER_PROFILE=performance-1x
+RAW_PUBLICATION_BUILDER_PROFILE=performance-1x-4gb
 source "$SCRIPT_DIR/lib/raw-publication-builder-profile.sh"
 raw_publication_builder_profile_load
 raw_publication_builder_profile_apply_production_budgets

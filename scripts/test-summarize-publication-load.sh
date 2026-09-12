@@ -14,8 +14,22 @@ done
   > "$tmp/concurrent-summary.json"
 jq -e '
   .samples == 4 and .errors == 0 and .workers == 4 and
-  .workers_observed_across_publication == 4 and .peak_in_flight_requests == 4
+  .workers_observed_across_publication == 4 and .peak_in_flight_requests == 4 and
+  .minimum_worker_covered_ms == 80 and .required_concurrency_covered_ms == 80
 ' "$tmp/concurrent-summary.json" >/dev/null
+
+for worker in 1 2 3 4; do
+  jq -cn --argjson worker "$worker" \
+    '{worker:$worker,started_ms:0,ended_ms:1,ok:true},
+     {worker:$worker,started_ms:119999,ended_ms:120000,ok:true}' \
+    >> "$tmp/discontinuous.jsonl"
+done
+"$SCRIPT_DIR/summarize-publication-load.sh" "$tmp/discontinuous.jsonl" 0 120000 4 \
+  > "$tmp/discontinuous-summary.json"
+jq -e '
+  .minimum_worker_covered_ms == 2 and
+  .required_concurrency_covered_ms == 2
+' "$tmp/discontinuous-summary.json" >/dev/null
 
 for worker in 1 2 3 4; do
   start=$(( worker * 100 ))
@@ -58,6 +72,21 @@ if "$SCRIPT_DIR/summarize-publication-load.sh" "$tmp/pre-publication-peak.jsonl"
   printf 'concurrency before publication must not satisfy the publication-window gate\n' >&2
   exit 1
 fi
+
+for worker in 1 2 3 4; do
+  jq -cn --argjson worker "$worker" \
+    '{worker:$worker,started_ms:100,ended_ms:200,request_ok:true,
+      contract_valid:false,ok:false}' >> "$tmp/old-contract.jsonl"
+done
+if "$SCRIPT_DIR/summarize-publication-load.sh" "$tmp/old-contract.jsonl" 100 200 4 strict \
+  >/dev/null 2>&1; then
+  printf 'strict load must reject a relevance-contract mismatch\n' >&2
+  exit 1
+fi
+"$SCRIPT_DIR/summarize-publication-load.sh" "$tmp/old-contract.jsonl" 100 200 4 record-only \
+  > "$tmp/old-contract-summary.json"
+jq -e '.errors == 0 and .contract_mismatches == 4' \
+  "$tmp/old-contract-summary.json" >/dev/null
 
 jq -cn '{worker:1,started_ms:100,ended_ms:200,ok:false}' > "$tmp/error.jsonl"
 if "$SCRIPT_DIR/summarize-publication-load.sh" "$tmp/error.jsonl" 110 190 1 \

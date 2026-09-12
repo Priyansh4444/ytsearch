@@ -124,16 +124,21 @@ for index in "${!queries[@]}"; do
     bytes="$(printf '%s' "$timing" | cut -f3)"
     [[ -n "$seconds" ]] || seconds="$CURL_MAX_TIME"
     [[ -n "$bytes" ]] || bytes=0
-    valid=false
+    response_valid=false
+    contract_valid=false
     if (( curl_exit == 0 )) && [[ "$http" == 200 ]] && jq -e \
-      --arg label "${labels[$index]}" --arg creator "${creators[$index]}" \
-      --slurpfile contract "$CONTRACT_FILE" '
+      --arg creator "${creators[$index]}" '
       (.found | type == "number") and .found > 0 and
       (.grouped_hits | type == "array") and (.grouped_hits | length) > 0 and
       (if $creator == "" then true else
         all(.grouped_hits[].hits[].document.youtuber_handle;
           ascii_downcase == ($creator | ascii_downcase))
-      end) and
+      end)
+    ' "$response_file" >/dev/null 2>&1; then
+      response_valid=true
+    fi
+    if [[ "$response_valid" == true ]] && jq -e \
+      --arg label "${labels[$index]}" --slurpfile contract "$CONTRACT_FILE" '
       (($contract[0].cases[$label] // null) as $rule |
         if $rule == null then true else
           .grouped_hits[0].group_key[0] == $rule.top_video_id and
@@ -143,14 +148,15 @@ for index in "${!queries[@]}"; do
             all($rule.required_highlight_tokens[]; . as $token | $snippets | contains($token)))
         end)
     ' "$response_file" >/dev/null 2>&1; then
-      valid=true
+      contract_valid=true
     fi
     ended_ms="$(date +%s%3N)"
     jq -cn --arg label "${labels[$index]}" --arg query "${queries[$index]}" \
       --arg creator "${creators[$index]}" --argjson run "$run" --argjson seconds "$seconds" \
       --argjson curl_exit "$curl_exit" --argjson http "${http:-0}" --argjson bytes "$bytes" \
-      --argjson valid "$valid" --argjson started_ms "$started_ms" --argjson ended_ms "$ended_ms" \
-      '{label:$label,query:$query,creator:(if $creator == "" then null else $creator end),run:$run,started_ms:$started_ms,ended_ms:$ended_ms,seconds:$seconds,http:$http,curl_exit:$curl_exit,bytes:$bytes,valid:$valid,ok:($curl_exit == 0 and $http == 200 and $valid)}' >> "$OUTPUT"
+      --argjson response_valid "$response_valid" --argjson contract_valid "$contract_valid" \
+      --argjson started_ms "$started_ms" --argjson ended_ms "$ended_ms" \
+      '{label:$label,query:$query,creator:(if $creator == "" then null else $creator end),run:$run,started_ms:$started_ms,ended_ms:$ended_ms,seconds:$seconds,http:$http,curl_exit:$curl_exit,bytes:$bytes,response_valid:$response_valid,contract_valid:$contract_valid,valid:($response_valid and $contract_valid),request_ok:($curl_exit == 0 and $http == 200 and $response_valid),ok:($curl_exit == 0 and $http == 200 and $response_valid and $contract_valid)}' >> "$OUTPUT"
     ((run += 1))
   done
 done

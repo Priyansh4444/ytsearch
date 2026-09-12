@@ -127,12 +127,14 @@ PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=rawvalid MOCK_RAW_VIDEO_ID=fixture0001 \
   SEARCH_URL=https://fixture.invalid CASES_FILE="$tmp/contract-cases.tsv" \
   CONTRACT_FILE="$tmp/contract.json" RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 \
   OUTPUT="$tmp/contract-pass.jsonl" "$SCRIPT_DIR/benchmark-search-engine.sh" >/dev/null
-jq -se 'all(.[]; .ok == true)' "$tmp/contract-pass.jsonl" >/dev/null
+jq -se 'all(.[]; .request_ok == true and .contract_valid == true and .ok == true)' \
+  "$tmp/contract-pass.jsonl" >/dev/null
 PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=rawvalid MOCK_RAW_VIDEO_ID=wrongvideo1 \
   SEARCH_URL=https://fixture.invalid CASES_FILE="$tmp/contract-cases.tsv" \
   CONTRACT_FILE="$tmp/contract.json" RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 \
   OUTPUT="$tmp/contract-fail.jsonl" "$SCRIPT_DIR/benchmark-search-engine.sh" >/dev/null
-jq -se 'all(.[]; .ok == false)' "$tmp/contract-fail.jsonl" >/dev/null
+jq -se 'all(.[]; .request_ok == true and .contract_valid == false and .ok == false)' \
+  "$tmp/contract-fail.jsonl" >/dev/null
 
 publication_benchmark="$SCRIPT_DIR/benchmark-publication-isolation.sh"
 printf 'fixture\tfixture query\t\n' > "$tmp/publication-cases.tsv"
@@ -183,8 +185,17 @@ set -eu
 [ "$*" = 'publish --backend raw' ]
 [ "$PUBLISH_PROCESS_TIMEOUT_SECONDS" = 20 ]
 [ "$PUBLISH_PROCESS_KILL_AFTER_SECONDS" = 5 ]
-sleep 2
+[ -n "$RAW_PUBLICATION_ACTIVATION_READY_FILE" ]
+[ -n "$RAW_PUBLICATION_ACTIVATION_CONTINUE_FILE" ]
+[ -n "$RAW_PUBLICATION_ACTIVATION_STARTED_FILE" ]
+[ -n "$RAW_PUBLICATION_ACTIVATION_FINISHED_FILE" ]
+sleep 3
+touch "$RAW_PUBLICATION_ACTIVATION_READY_FILE"
+while [ ! -f "$RAW_PUBLICATION_ACTIVATION_CONTINUE_FILE" ]; do sleep 0.1; done
+date +%s%3N > "$RAW_PUBLICATION_ACTIVATION_STARTED_FILE"
+sleep 0.2
 printf '10\n' > "$FAKE_ACTIVE_SEQUENCE"
+date +%s%3N > "$RAW_PUBLICATION_ACTIVATION_FINISHED_FILE"
 mkdir -p "$(dirname -- "$RAW_BUILDER_FINAL_RESOURCE_OUTPUT")"
 printf '{"state":"started","sampled_at_ms":%s,"memory_peak_bytes":2048,"swap_peak_bytes":0,"disk_percent":1,"oom":0,"oom_kill":0,"cgroup_version":1,"memory_peak_source":"sampled_current","swap_peak_source":"sampled_current"}\n' \
   "$(date +%s%3N)" > "$RAW_BUILDER_FINAL_RESOURCE_OUTPUT"
@@ -194,24 +205,48 @@ cat > "$tmp/bin/publication-resource" <<'EOF'
 set -eu
 printf '{"state":"started","sampled_at_ms":%s,"memory_peak_bytes":2048,"swap_peak_bytes":0,"disk_percent":1,"oom":0,"oom_kill":0,"cgroup_version":1,"memory_peak_source":"sampled_current","swap_peak_source":"sampled_current"}\n' "$(date +%s%3N)"
 EOF
+cat > "$tmp/bin/publication-builder-resource" <<'EOF'
+#!/usr/bin/env sh
+set -eu
+printf '{"state":"started","sampled_at_ms":%s,"memory_peak_bytes":2000000000,"swap_peak_bytes":0,"disk_percent":1,"oom":0,"oom_kill":0,"cgroup_version":1,"memory_peak_source":"sampled_current","swap_peak_source":"sampled_current"}\n' "$(date +%s%3N)"
+EOF
 chmod +x "$tmp/bin/publication-curl" "$tmp/bin/publication-publish" \
-  "$tmp/bin/publication-resource"
+  "$tmp/bin/publication-resource" "$tmp/bin/publication-builder-resource"
 mkdir -p "$tmp/publication-bin"
 ln -s "$tmp/bin/publication-curl" "$tmp/publication-bin/curl"
+mkdir -p "$tmp/publication-output"
+touch "$tmp/publication-output/activation-ready" \
+  "$tmp/publication-output/activation-continue"
 PATH="$tmp/publication-bin:$PATH" SEARCH_URL=http://fixture.invalid \
   SEARCH_API_KEY=fixture-search RAW_ADMIN_API_KEY=fixture-admin \
   ALLOW_PUBLISH_BENCHMARK=1 CASES_FILE="$tmp/publication-cases.tsv" \
   OUTPUT_DIR="$tmp/publication-output" CONCURRENCY=2 BASELINE_RUNS=1 WARM_NEW_SECONDS=1 \
   PUBLICATION_TIMEOUT_SECONDS=10 RESOURCE_SAMPLE_INTERVAL_SECONDS=1 \
+  PUBLICATION_LOAD_SECONDS=5 \
+  ACTIVATION_LOAD_SECONDS=2 \
   PUBLISH_PROCESS_TIMEOUT_SECONDS=20 PUBLISH_PROCESS_KILL_AFTER_SECONDS=5 \
   MACHINE_RESOURCE_SAMPLE_INTERVAL_SECONDS=1 \
+  MAX_CGROUP_MEMORY_BYTES=1717986918 MAX_BUILDER_CGROUP_MEMORY_BYTES=3435973836 \
   MACHINE_RESOURCE_PROBE="$tmp/bin/publication-resource" \
-  BUILDER_RESOURCE_PROBE="$tmp/bin/publication-resource" \
+  BUILDER_RESOURCE_PROBE="$tmp/bin/publication-builder-resource" \
   PUBLISH_BIN="$tmp/bin/publication-publish" FAKE_ACTIVE_SEQUENCE="$tmp/active-sequence" \
   "$publication_benchmark" > "$tmp/publication.stdout"
 jq -e '.workers_observed_across_publication == 2 and .peak_in_flight_requests >= 2' \
-  "$tmp/publication-output/load-evidence.json" >/dev/null
-jq -e 'length == 4 and all(.[]; .errors == 0 and .max_ms < 200)' \
+  "$tmp/publication-output/build-load-evidence.json" >/dev/null
+jq -e '
+  .workers_observed_across_publication == 2 and
+  .peak_in_flight_requests >= 2 and
+  .minimum_worker_covered_ms >= 800 and .required_concurrency_covered_ms >= 800
+' "$tmp/publication-output/activation-load-evidence.json" >/dev/null
+jq -e '
+  .activation_ready_ms < .activation_continue_ms and
+  .activation_continue_ms <= .activation_started_ms and
+  .activation_started_ms <= .activation_finished_ms and
+  .activation_finished_ms <= .publication_ended_ms
+' "$tmp/publication-output/activation-evidence.json" >/dev/null
+jq -e '.errors == 0 and .peak_in_flight_requests >= 2' \
+  "$tmp/publication-output/activation-call-evidence.json" >/dev/null
+jq -e 'length == 5 and all(.[]; .errors == 0 and .max_ms < 200)' \
   "$tmp/publication-output/summary.json" >/dev/null
 jq -e '.scrape_errors == 0 and .search_error_delta == 0 and .max_rss_bytes <= 1610612736' \
   "$tmp/publication-output/resource-summary.json" >/dev/null
@@ -253,7 +288,9 @@ PATH="$tmp/publication-bin:$PATH" SEARCH_URL=http://fixture.invalid \
   ALLOW_PUBLISH_BENCHMARK=1 CASES_FILE="$tmp/publication-cases.tsv" \
   OUTPUT_DIR="$tmp/publication-migration-output" CONCURRENCY=2 BASELINE_RUNS=1 \
   BASELINE_POLICY=record-only MOCK_BASELINE_SECONDS=0.250 WARM_NEW_SECONDS=1 \
-  PUBLICATION_TIMEOUT_SECONDS=10 RESOURCE_SAMPLE_INTERVAL_SECONDS=1 \
+  PUBLICATION_TIMEOUT_SECONDS=15 PUBLICATION_LOAD_SECONDS=5 \
+  ACTIVATION_LOAD_SECONDS=2 \
+  RESOURCE_SAMPLE_INTERVAL_SECONDS=1 \
   PUBLISH_PROCESS_TIMEOUT_SECONDS=20 PUBLISH_PROCESS_KILL_AFTER_SECONDS=5 \
   MACHINE_RESOURCE_SAMPLE_INTERVAL_SECONDS=1 \
   MACHINE_RESOURCE_PROBE="$tmp/bin/publication-resource" \
@@ -270,7 +307,8 @@ if PATH="$tmp/publication-bin:$PATH" SEARCH_URL=http://fixture.invalid \
   SEARCH_API_KEY=fixture-search RAW_ADMIN_API_KEY=fixture-admin \
   ALLOW_PUBLISH_BENCHMARK=1 CASES_FILE="$tmp/publication-cases.tsv" \
   OUTPUT_DIR="$tmp/publication-gap-output" CONCURRENCY=2 BASELINE_RUNS=1 \
-  WARM_NEW_SECONDS=1 PUBLICATION_TIMEOUT_SECONDS=10 \
+  WARM_NEW_SECONDS=1 PUBLICATION_TIMEOUT_SECONDS=15 PUBLICATION_LOAD_SECONDS=5 \
+  ACTIVATION_LOAD_SECONDS=2 \
   PUBLISH_PROCESS_TIMEOUT_SECONDS=20 PUBLISH_PROCESS_KILL_AFTER_SECONDS=5 \
   RESOURCE_SAMPLE_INTERVAL_SECONDS=1 MACHINE_RESOURCE_SAMPLE_INTERVAL_SECONDS=2 \
   MAX_MACHINE_RESOURCE_SAMPLE_GAP_MS=1 \

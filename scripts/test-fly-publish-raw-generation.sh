@@ -130,7 +130,7 @@ write_machine() {
   profile="${2:-shared-2x}"
   case "$profile" in
     shared-2x) cpu_kind=shared; cpus=2 ;;
-    performance-1x) cpu_kind=performance; cpus=1 ;;
+    performance-1x-4gb) cpu_kind=performance; cpus=1 ;;
     *) return 1 ;;
   esac
   jq -n --arg role "$role" --arg source "$source_commit" \
@@ -150,7 +150,7 @@ write_machine() {
       },
       image:$image,
       init:{entrypoint:["/usr/bin/sleep"],cmd:["infinity"],swap_size_mb:512},
-      guest:{cpu_kind:$cpu_kind,cpus:$cpus,memory_mb:2048},
+      guest:{cpu_kind:$cpu_kind,cpus:$cpus,memory_mb:(if $profile == "performance-1x-4gb" then 4096 else 2048 end)},
       metadata:{
         lifecycle:"on-demand-publication-builder",
         source_commit:$source,
@@ -216,7 +216,15 @@ run_successful_publication() {
 }
 
 run_successful_publication shared-2x "$tmp/final.json"
-run_successful_publication performance-1x "$tmp/performance-final.json"
+run_successful_publication performance-1x-4gb "$tmp/performance-final.json"
+
+# shellcheck source=scripts/lib/fly-publication-job.sh
+. "$SCRIPT_DIR/lib/fly-publication-job.sh"
+handshake_command="$(fly_publication_job_command \
+  /tmp/ytsearch-publication-handshake 60 5 1)"
+printf '%s' "$handshake_command" | grep -q 'RAW_PUBLICATION_ACTIVATION_READY_FILE'
+printf '%s' "$handshake_command" | grep -q 'activation-ready'
+printf '%s' "$handshake_command" | grep -q 'activation-finished'
 
 write_machine publication-builder > "$tmp/state.json"
 : > "$tmp/fly.log"
@@ -329,5 +337,52 @@ if grep -q '/lease$' "$tmp/curl.log"; then
   echo "unsafe builder config must be rejected before lease acquisition" >&2
   exit 1
 fi
+
+cat > "$tmp/bin/ytsearch" <<'SH'
+#!/usr/bin/env sh
+set -eu
+[ "$*" = 'publish --backend raw' ]
+printf 'ready\n' > "$RAW_PUBLICATION_ACTIVATION_READY_FILE"
+while [ ! -f "$RAW_PUBLICATION_ACTIVATION_CONTINUE_FILE" ]; do sleep 0.01; done
+date +%s%3N > "$RAW_PUBLICATION_ACTIVATION_STARTED_FILE"
+sleep 0.1
+date +%s%3N > "$RAW_PUBLICATION_ACTIVATION_FINISHED_FILE"
+SH
+chmod +x "$tmp/bin/ytsearch"
+bounded_flyctl() {
+  shift
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = --command ]; then
+      PATH="$tmp/bin:$PATH" sh -c "$2"
+      return
+    fi
+    shift
+  done
+  return 1
+}
+RAW_BUILDER_PUBLICATION_COMMAND_TIMEOUT_SECONDS=30
+RAW_BUILDER_COMMAND_KILL_AFTER_SECONDS=2
+RAW_BUILDER_COMMAND_TIMEOUT_SECONDS=5
+RAW_BUILDER_APP=fixture-builder
+RAW_BUILDER_MACHINE_ID=33333333333333
+RAW_PUBLICATION_ACTIVATION_READY_FILE="$tmp/local-ready"
+RAW_PUBLICATION_ACTIVATION_CONTINUE_FILE="$tmp/local-continue"
+RAW_PUBLICATION_ACTIVATION_STARTED_FILE="$tmp/local-started"
+RAW_PUBLICATION_ACTIVATION_FINISHED_FILE="$tmp/local-finished"
+export RAW_PUBLICATION_ACTIVATION_READY_FILE RAW_PUBLICATION_ACTIVATION_CONTINUE_FILE
+export RAW_PUBLICATION_ACTIVATION_STARTED_FILE RAW_PUBLICATION_ACTIVATION_FINISHED_FILE
+handshake_job="/tmp/ytsearch-publication-${tmp##*.}"
+fly_publication_job_wait "$handshake_job" "$tmp/handshake-diagnostics" &
+handshake_waiter=$!
+for _ in $(seq 1 100); do
+  [ -f "$RAW_PUBLICATION_ACTIVATION_READY_FILE" ] && break
+  sleep 0.1
+done
+test -f "$RAW_PUBLICATION_ACTIVATION_READY_FILE"
+touch "$RAW_PUBLICATION_ACTIVATION_CONTINUE_FILE"
+wait "$handshake_waiter"
+test -s "$RAW_PUBLICATION_ACTIVATION_STARTED_FILE"
+test -s "$RAW_PUBLICATION_ACTIVATION_FINISHED_FILE"
+rm -rf "$handshake_job"
 
 echo "raw_publication_builder_wrapper=ok"

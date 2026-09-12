@@ -23,12 +23,16 @@ raw_publication_builder_profile_load
 : "${RAW_CANARY_STATE_POLL_INTERVAL_SECONDS:=2}"
 : "${RAW_CANARY_STOP_RETRIES:=3}"
 : "${RAW_CANARY_STOP_POLL_ATTEMPTS:=10}"
-: "${MAX_CGROUP_MEMORY_BYTES:=1986422374}"
+: "${MAX_CGROUP_MEMORY_BYTES:=1717986918}"
+: "${MAX_BUILDER_CGROUP_MEMORY_BYTES:=$(( RAW_PUBLICATION_BUILDER_MEMORY_MB * 1048576 * 80 / 100 ))}"
 : "${MAX_SWAP_BYTES:=0}"
 : "${MAX_DISK_PERCENT:=80}"
 : "${MAX_ACCEPTABLE_MS:=200}"
 : "${MAX_RSS_BYTES:=1610612736}"
 : "${PUBLICATION_TIMEOUT_SECONDS:=2400}"
+: "${PUBLICATION_LOAD_SECONDS:=120}"
+: "${ACTIVATION_LOAD_SECONDS:=10}"
+: "${PUBLICATION_LOAD_MIN_COVERAGE_PERCENT:=80}"
 : "${WARM_NEW_SECONDS:=60}"
 : "${CANARY_CASES_FILE:=$SCRIPT_DIR/benchmark-search-cases.tsv}"
 : "${CANARY_BASELINE_RUNS:=3}"
@@ -61,12 +65,16 @@ case "$RAW_CANARY_TEST_MODE" in
     RAW_CANARY_STATE_POLL_INTERVAL_SECONDS=2
     RAW_CANARY_STOP_RETRIES=3
     RAW_CANARY_STOP_POLL_ATTEMPTS=10
-    MAX_CGROUP_MEMORY_BYTES=1986422374
+    MAX_CGROUP_MEMORY_BYTES=1717986918
+    MAX_BUILDER_CGROUP_MEMORY_BYTES=$(( RAW_PUBLICATION_BUILDER_MEMORY_MB * 1048576 * 80 / 100 ))
     MAX_SWAP_BYTES=0
     MAX_DISK_PERCENT=80
     MAX_ACCEPTABLE_MS=200
     MAX_RSS_BYTES=1610612736
     WARM_NEW_SECONDS=60
+    PUBLICATION_LOAD_SECONDS=120
+    ACTIVATION_LOAD_SECONDS=10
+    PUBLICATION_LOAD_MIN_COVERAGE_PERCENT=80
     CANARY_CASES_FILE="$SCRIPT_DIR/benchmark-search-cases.tsv"
     CANARY_BASELINE_RUNS=3
     CANARY_CONCURRENCY=4
@@ -153,6 +161,9 @@ if [[ ! "$RAW_CANARY_LEASE_TTL_SECONDS" =~ ^[1-9][0-9]*$ ]] \
   || [[ ! "$RAW_CANARY_STOP_RETRIES" =~ ^[1-9][0-9]*$ ]] \
   || [[ ! "$RAW_CANARY_STOP_POLL_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] \
   || [[ ! "$PUBLICATION_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] \
+  || [[ ! "$PUBLICATION_LOAD_SECONDS" =~ ^[1-9][0-9]*$ ]] \
+  || [[ ! "$ACTIVATION_LOAD_SECONDS" =~ ^[1-9][0-9]*$ ]] \
+  || [[ ! "$PUBLICATION_LOAD_MIN_COVERAGE_PERCENT" =~ ^[1-9][0-9]*$ ]] \
   || [[ ! "$WARM_NEW_SECONDS" =~ ^[1-9][0-9]*$ ]] \
   || [[ ! "$CANARY_BASELINE_RUNS" =~ ^[1-9][0-9]*$ ]] \
   || [[ ! "$CANARY_CONCURRENCY" =~ ^[1-9][0-9]*$ ]] \
@@ -170,7 +181,8 @@ if [[ ! "$RAW_CANARY_LEASE_TTL_SECONDS" =~ ^[1-9][0-9]*$ ]] \
   || [[ ! "$RAW_BUILDER_SSH_READY_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] \
   || [[ ! "$RAW_BUILDER_SSH_READY_INTERVAL_SECONDS" =~ ^[0-9]+$ ]] \
   || [[ ! "$MAX_ACCEPTABLE_MS" =~ ^[1-9][0-9]*$ ]] \
-  || [[ ! "$MAX_RSS_BYTES" =~ ^[1-9][0-9]*$ ]]; then
+  || [[ ! "$MAX_RSS_BYTES" =~ ^[1-9][0-9]*$ ]] \
+  || (( PUBLICATION_LOAD_MIN_COVERAGE_PERCENT > 100 )); then
   printf 'canary lease and polling settings must be valid integers\n' >&2
   exit 1
 fi
@@ -599,7 +611,12 @@ MACHINE_RESOURCE_PROBE="$CANARY_READER_RESOURCE_PROBE" \
 BUILDER_RESOURCE_PROBE="$CANARY_BUILDER_RESOURCE_PROBE" \
 MACHINE_RESOURCE_SAMPLE_INTERVAL_SECONDS="$CANARY_MACHINE_RESOURCE_SAMPLE_INTERVAL_SECONDS" \
 MAX_MACHINE_RESOURCE_SAMPLE_GAP_MS="$CANARY_MAX_MACHINE_RESOURCE_SAMPLE_GAP_MS" \
+MAX_CGROUP_MEMORY_BYTES="$MAX_CGROUP_MEMORY_BYTES" \
+MAX_BUILDER_CGROUP_MEMORY_BYTES="$MAX_BUILDER_CGROUP_MEMORY_BYTES" \
 PUBLICATION_TIMEOUT_SECONDS="$PUBLICATION_TIMEOUT_SECONDS" \
+PUBLICATION_LOAD_SECONDS="$PUBLICATION_LOAD_SECONDS" \
+ACTIVATION_LOAD_SECONDS="$ACTIVATION_LOAD_SECONDS" \
+PUBLICATION_LOAD_MIN_COVERAGE_PERCENT="$PUBLICATION_LOAD_MIN_COVERAGE_PERCENT" \
 PUBLISH_PROCESS_TIMEOUT_SECONDS="$publisher_process_timeout" \
 PUBLISH_PROCESS_KILL_AFTER_SECONDS="$publisher_process_kill_after" \
 WARM_NEW_SECONDS="$WARM_NEW_SECONDS" \
@@ -647,7 +664,8 @@ verify_channel_visible() {
 verify_resource_snapshot() {
   label="$1"
   resource_file="$2"
-  jq -e --argjson maximum_memory "$MAX_CGROUP_MEMORY_BYTES" \
+  maximum_memory="$3"
+  jq -e --argjson maximum_memory "$maximum_memory" \
     --argjson maximum_swap "$MAX_SWAP_BYTES" \
     --argjson maximum_disk "$MAX_DISK_PERCENT" '
     .state == "started" and
@@ -660,7 +678,8 @@ verify_resource_snapshot() {
     .oom == 0 and
     .oom_kill == 0
   ' "$resource_file" >/dev/null || {
-    printf '%s resource snapshot failed its 2GB canary gate\n' "$label" >&2
+    printf '%s resource snapshot failed its memory gate (%s bytes)\n' \
+      "$label" "$maximum_memory" >&2
     return 1
   }
 }
@@ -668,7 +687,7 @@ verify_resource_snapshot() {
 capture_reader_resources() {
   resource_file="$1"
   "$CANARY_READER_RESOURCE_PROBE" > "$resource_file"
-  verify_resource_snapshot reader "$resource_file"
+  verify_resource_snapshot reader "$resource_file" "$MAX_CGROUP_MEMORY_BYTES"
 }
 
 verify_published_operation "$upsert_operation" "$upsert_sequence" \
@@ -732,7 +751,8 @@ PUBLISH_PROCESS_KILL_AFTER_SECONDS="$publisher_process_kill_after" \
   "$publisher_process_timeout" \
   "$CANARY_PUBLISH_BIN" publish --backend raw \
   > "$output_directory/delete-publish.log" 2>&1
-verify_resource_snapshot builder "$output_directory/builder-after-delete.json"
+verify_resource_snapshot builder "$output_directory/builder-after-delete.json" \
+  "$MAX_BUILDER_CGROUP_MEMORY_BYTES"
 verify_published_operation "$delete_operation" "$delete_sequence" \
   "$output_directory/readiness-after-delete.json"
 
@@ -771,10 +791,20 @@ jq -cn --arg source_commit "$source_commit" --arg run_id "$run_id" \
   --argjson upsert_sequence "$upsert_sequence" --argjson delete_sequence "$delete_sequence" \
   --argjson maximum_ms "$MAX_ACCEPTABLE_MS" --argjson maximum_rss "$MAX_RSS_BYTES" \
   --argjson maximum_cgroup_memory "$MAX_CGROUP_MEMORY_BYTES" \
+  --argjson maximum_builder_cgroup_memory "$MAX_BUILDER_CGROUP_MEMORY_BYTES" \
+  --argjson reader_memory_mb 2048 \
+  --argjson builder_memory_mb "$RAW_PUBLICATION_BUILDER_MEMORY_MB" \
   --argjson publication_timeout_seconds "$PUBLICATION_TIMEOUT_SECONDS" \
+  --argjson publication_load_seconds "$PUBLICATION_LOAD_SECONDS" \
+  --argjson activation_load_seconds "$ACTIVATION_LOAD_SECONDS" \
+  --argjson load_minimum_coverage_percent "$PUBLICATION_LOAD_MIN_COVERAGE_PERCENT" \
   --argjson lease_ttl_seconds "$RAW_CANARY_LEASE_TTL_SECONDS" \
   --argjson required_concurrency "$CANARY_CONCURRENCY" \
   --slurpfile load "$output_directory/publication/load-evidence.json" \
+  --slurpfile latency "$output_directory/publication/summary.json" \
+  --slurpfile process_resource "$output_directory/publication/resource-summary.json" \
+  --slurpfile reader_resource "$output_directory/publication/machine-resource-summary.json" \
+  --slurpfile builder_resource "$output_directory/publication/builder-resource-summary.json" \
   --slurpfile upsert_restart "$output_directory/readiness-after-upsert-restart.json" \
   --slurpfile delete_restart "$output_directory/readiness-after-delete-restart.json" \
   --slurpfile deleted_channel "$channel_after_delete_file" \
@@ -797,16 +827,45 @@ jq -cn --arg source_commit "$source_commit" --arg run_id "$run_id" \
       maximum_search_ms:$maximum_ms,
       maximum_process_rss_bytes:$maximum_rss,
       maximum_cgroup_memory_bytes:$maximum_cgroup_memory,
-      machine_memory_mb:2048,
+      maximum_builder_cgroup_memory_bytes:$maximum_builder_cgroup_memory,
+      reader_memory_mb:$reader_memory_mb,
+      builder_memory_mb:$builder_memory_mb,
       publication_timeout_seconds:$publication_timeout_seconds,
+      publication_load_seconds:$publication_load_seconds,
+      activation_load_seconds:$activation_load_seconds,
+      load_minimum_coverage_percent:$load_minimum_coverage_percent,
       lease_ttl_seconds:$lease_ttl_seconds,
       publication_search_concurrency:$required_concurrency
     },
+    evidence:{
+      load:$load[0],
+      latency:$latency[0],
+      process_resource:$process_resource[0],
+      reader_resource:$reader_resource[0],
+      builder_resource:$builder_resource[0]
+    },
     publication_under_load:(
-      $load[0].errors == 0 and
-      $load[0].workers == $required_concurrency and
-      $load[0].workers_observed_across_publication == $required_concurrency and
-      $load[0].peak_in_flight_requests >= $required_concurrency
+      (($publication_load_seconds * 1000 * $load_minimum_coverage_percent / 100) | floor) as $build_ms |
+      (($activation_load_seconds * 1000 * $load_minimum_coverage_percent / 100) | floor) as $activation_ms |
+      $load[0].build.errors == 0 and
+      $load[0].build.workers == $required_concurrency and
+      $load[0].build.workers_observed_across_publication == $required_concurrency and
+      $load[0].build.peak_in_flight_requests >= $required_concurrency and
+      $load[0].build.minimum_worker_covered_ms >= $build_ms and
+      $load[0].build.required_concurrency_covered_ms >= $build_ms and
+      $load[0].activation.errors == 0 and
+      $load[0].activation.workers == $required_concurrency and
+      $load[0].activation.workers_observed_across_publication == $required_concurrency and
+      $load[0].activation.peak_in_flight_requests >= $required_concurrency and
+      $load[0].activation.minimum_worker_covered_ms >= $activation_ms and
+      $load[0].activation.required_concurrency_covered_ms >= $activation_ms and
+      $load[0].activation_call.errors == 0 and
+      $load[0].activation_call.workers == $required_concurrency and
+      $load[0].activation_call.peak_in_flight_requests >= $required_concurrency and
+      $load[0].handshake.activation_ready_ms < $load[0].handshake.activation_continue_ms and
+      $load[0].handshake.activation_continue_ms <= $load[0].handshake.activation_started_ms and
+      $load[0].handshake.activation_started_ms <= $load[0].handshake.activation_finished_ms and
+      $load[0].handshake.activation_finished_ms <= $load[0].handshake.publication_ended_ms
     ),
     restart_after_upsert:(
       ($upsert_restart[0].generation | tonumber) == $upsert_sequence and

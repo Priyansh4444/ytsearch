@@ -218,13 +218,29 @@ printf '10\n' > "$FAKE_ACTIVE_SEQUENCE"
 mkdir -p "$OUTPUT_DIR"
 printf '{"ok":true}\n' > "$OUTPUT_DIR/fake-benchmark.json"
 jq -cn --argjson concurrency "$CONCURRENCY" '{
-  samples:$concurrency,
-  errors:0,
-  workers:$concurrency,
-  workers_observed_across_publication:$concurrency,
-  requests_overlapping_publication:$concurrency,
-  peak_in_flight_requests:$concurrency
+  build:{samples:$concurrency,errors:0,workers:$concurrency,
+    workers_observed_across_publication:$concurrency,
+    requests_overlapping_publication:$concurrency,peak_in_flight_requests:$concurrency,
+    minimum_worker_covered_ms:120000,required_concurrency_covered_ms:120000},
+  activation:{samples:$concurrency,errors:0,workers:$concurrency,
+    workers_observed_across_publication:$concurrency,
+    requests_overlapping_publication:$concurrency,peak_in_flight_requests:$concurrency,
+    minimum_worker_covered_ms:10000,required_concurrency_covered_ms:10000},
+  activation_call:{samples:$concurrency,errors:0,workers:$concurrency,
+    workers_observed_across_publication:$concurrency,
+    requests_overlapping_publication:$concurrency,peak_in_flight_requests:$concurrency,
+    minimum_worker_covered_ms:50,required_concurrency_covered_ms:50},
+  handshake:{activation_ready_ms:100,activation_continue_ms:200,
+    activation_started_ms:210,activation_finished_ms:260,publication_ended_ms:300}
 }' > "$OUTPUT_DIR/load-evidence.json"
+printf '[{"phase":"build","samples":4,"errors":0,"max_ms":10}]\n' \
+  > "$OUTPUT_DIR/summary.json"
+printf '{"samples":1,"scrape_errors":0,"max_rss_bytes":1024,"search_error_delta":0}\n' \
+  > "$OUTPUT_DIR/resource-summary.json"
+printf '{"samples":1,"probe_errors":0,"max_memory_peak_bytes":1024}\n' \
+  > "$OUTPUT_DIR/machine-resource-summary.json"
+printf '{"samples":1,"probe_errors":0,"max_memory_peak_bytes":2048}\n' \
+  > "$OUTPUT_DIR/builder-resource-summary.json"
 SH
 cat > "$tmp/bin/publisher" <<'SH'
 #!/usr/bin/env bash
@@ -260,10 +276,13 @@ set_builder_profile() {
   local profile="$1"
   local cpu_kind="$2"
   local cpus="$3"
-  jq --arg profile "$profile" --arg cpu_kind "$cpu_kind" --argjson cpus "$cpus" '
+  local memory_mb="${4:-2048}"
+  jq --arg profile "$profile" --arg cpu_kind "$cpu_kind" --argjson cpus "$cpus" \
+    --argjson memory_mb "$memory_mb" '
     .[0].config.metadata.builder_profile = $profile |
     .[0].config.guest.cpu_kind = $cpu_kind |
-    .[0].config.guest.cpus = $cpus
+    .[0].config.guest.cpus = $cpus |
+    .[0].config.guest.memory_mb = $memory_mb
   ' "$tmp/builder-list.json" > "$tmp/builder-list.next.json"
   mv "$tmp/builder-list.next.json" "$tmp/builder-list.json"
 }
@@ -310,6 +329,15 @@ jq -e '
   .publication_under_load and .deleted_channel_absent and
   .policy.builder_profile == "shared-2x" and
   .policy.publication_timeout_seconds == 10 and
+  .policy.publication_load_seconds == 120 and
+  .policy.activation_load_seconds == 10 and
+  .policy.load_minimum_coverage_percent == 80 and
+  .policy.maximum_cgroup_memory_bytes == 1717986918 and
+  .policy.maximum_builder_cgroup_memory_bytes == 1717986918 and
+  .policy.reader_memory_mb == 2048 and .policy.builder_memory_mb == 2048 and
+  .evidence.latency[0].max_ms == 10 and
+  .evidence.reader_resource.max_memory_peak_bytes == 1024 and
+  .evidence.builder_resource.max_memory_peak_bytes == 2048 and
   .policy.lease_ttl_seconds == 21600 and
   .policy.publication_search_concurrency == 4 and
   (.reader_image | test("@sha256:[0-9a-f]{64}$")) and
@@ -335,14 +363,16 @@ jq -e '.policy.migration_mode == "record-old-generation"' \
   "$tmp/migration/test-result.json" >/dev/null
 [[ "$(grep -c '^benchmark:record-only$' "$tmp/components.log")" == 1 ]]
 
-set_builder_profile performance-1x performance 1
+set_builder_profile performance-1x-4gb performance 1 4096
 reset_state
-env "${common_env[@]}" RAW_PUBLICATION_BUILDER_PROFILE=performance-1x \
+env "${common_env[@]}" RAW_PUBLICATION_BUILDER_PROFILE=performance-1x-4gb \
   CANARY_RUN_ID=performance-builder OUTPUT_DIR="$tmp/performance-builder" \
   "$runner" >/dev/null
 jq -e '
-  .policy.builder_profile == "performance-1x" and
-  .policy.machine_memory_mb == 2048
+  .policy.builder_profile == "performance-1x-4gb" and
+  .policy.reader_memory_mb == 2048 and
+  .policy.builder_memory_mb == 4096 and
+  .policy.maximum_builder_cgroup_memory_bytes == 3435973836
 ' "$tmp/performance-builder/test-result.json" >/dev/null
 set_builder_profile shared-2x shared 2
 
