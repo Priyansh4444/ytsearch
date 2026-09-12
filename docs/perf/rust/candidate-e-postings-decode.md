@@ -397,4 +397,3 @@ RawSearchEngine::open, best-of-N timing of matches_for_entry
 group_by=video_id and filter_by=youtuber_handle:=@one, plus the
 stage_exact_best_us / stage_union_best_us block comparing the decode
 stage against the full request.
-
