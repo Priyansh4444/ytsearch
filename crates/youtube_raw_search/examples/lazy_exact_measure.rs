@@ -12,6 +12,10 @@ const DEFAULT_ROUNDS: usize = 9;
 const DOCUMENTS_PER_VIDEO: u32 = 240;
 const MOMENT_WINDOW_MS: u32 = 20_000;
 const PARTS_PER_MILLION: u64 = 1_000_000;
+const REPORT_SCHEMA_VERSION: u8 = 2;
+const HARNESS_VERSION: &str = "lazy-exact-structural-forks-v2";
+const GENERATOR_VERSION: &str = "splitmix64-corpus-v2";
+const DEFAULT_SEED: u64 = 0x6c8e_9cf5_7093_2bd5;
 const DF_BANDS_PPM: [u32; 7] = [0, 1_000, 10_000, 100_000, 500_000, 900_000, 1_000_000];
 
 #[derive(Clone, Copy)]
@@ -22,16 +26,59 @@ struct Config {
 
 #[derive(Serialize)]
 struct Report {
-    format_version: u8,
-    outcome: &'static str,
+    schema_version: u8,
+    outcome: RunOutcome,
     throwaway_schema9_prototype: bool,
-    prototype_base_commit: &'static str,
-    prototype: &'static str,
+    run_identity: RunIdentity,
     corpus: CorpusReport,
     rounds: usize,
     exact_set_count: Vec<SetCountReport>,
     exact_moment_aggregation: Vec<MomentReport>,
     phrase_candidates: Vec<PhraseReport>,
+    semantic_contracts: Vec<SemanticContractReport>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum RunOutcome {
+    Complete,
+    CompleteWithExclusions,
+    Failed,
+}
+
+#[derive(Serialize)]
+struct RunIdentity {
+    report_schema_version: u8,
+    harness_version: &'static str,
+    prototype_base_commit: &'static str,
+    generator_version: &'static str,
+    seed: u64,
+    documents: u32,
+    rounds: usize,
+    df_bands_ppm: [u32; DF_BANDS_PPM.len()],
+    identity_digest: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum CaseOutcome {
+    Eligible,
+    Ineligible { reason: CaseExclusion },
+    Failed { reason: CaseFailure },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CaseExclusion {
+    EmptyInputNegativeControl,
+    NoPhraseCandidates,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CaseFailure {
+    OracleMismatch,
+    MeasurementFailure,
 }
 
 #[derive(Serialize)]
@@ -45,45 +92,55 @@ struct CorpusReport {
 
 #[derive(Serialize)]
 struct SetCountReport {
-    timing_eligible: bool,
-    exclusion_reason: Option<&'static str>,
+    case_id: String,
+    outcome: CaseOutcome,
     target_df_ppm: u32,
     left_documents: usize,
     right_documents: usize,
     exact_intersection: u64,
     bitmap_bytes: usize,
     sparse_bytes: usize,
-    bitmap_construction: Timing,
-    sparse_construction: Timing,
+    construction_source_bytes: usize,
+    bitmap_construction: Option<Timing>,
+    sparse_construction: Option<Timing>,
     bitmap_query_scratch_bytes: usize,
     sparse_query_scratch_bytes: usize,
-    bitmap_and_popcount: Timing,
-    sparse_skip_leapfrog: Timing,
+    bitmap_and_popcount: Option<Timing>,
+    sparse_skip_leapfrog: Option<Timing>,
 }
 
 #[derive(Serialize)]
 struct MomentReport {
-    timing_eligible: bool,
-    exclusion_reason: Option<&'static str>,
+    case_id: String,
+    outcome: CaseOutcome,
     target_df_ppm: u32,
     matching_documents: usize,
     matching_videos: u64,
     exact_moments: u64,
     bitmap_bytes: usize,
     sparse_bytes: usize,
-    dense_set_bit_scan: Timing,
-    sparse_posting_scan: Timing,
+    title_matching_videos: usize,
+    dense_set_bit_scan: Option<Timing>,
+    sparse_posting_scan: Option<Timing>,
 }
 
 #[derive(Serialize)]
 struct PhraseReport {
-    timing_eligible: bool,
-    exclusion_reason: Option<&'static str>,
+    case_id: String,
+    outcome: CaseOutcome,
     target_df_ppm: u32,
     exact_candidates: u64,
     exact_phrase_matches: u64,
-    bitmap_intersect_then_positions: Timing,
-    skip_intersect_then_positions: Timing,
+    bitmap_intersect_then_positions: Option<Timing>,
+    skip_intersect_then_positions: Option<Timing>,
+}
+
+#[derive(Serialize)]
+struct SemanticContractReport {
+    case_id: &'static str,
+    outcome: CaseOutcome,
+    expected: u64,
+    actual: u64,
 }
 
 #[derive(Serialize)]
@@ -103,9 +160,23 @@ struct Corpus {
     right_position: Vec<u16>,
 }
 
-struct ExactSet {
+struct DocSet {
     sparse: Vec<DocId>,
     bitmap: DenseBitmap,
+}
+
+struct VideoSet {
+    bitmap: DenseBitmap,
+}
+
+struct MatchSet<'a> {
+    transcript_documents: &'a DocSet,
+    title_videos: &'a VideoSet,
+}
+
+struct FieldPositions {
+    text: Vec<u16>,
+    title: Vec<u16>,
 }
 
 struct DenseBitmap {
@@ -134,7 +205,7 @@ fn main() -> ExitCode {
         },
         Err(error) => {
             let failure = serde_json::json!({
-                "format_version": 1,
+                "schema_version": REPORT_SCHEMA_VERSION,
                 "outcome": "failed",
                 "throwaway_schema9_prototype": true,
                 "reason": error,
@@ -185,8 +256,8 @@ fn run(config: Config) -> Result<Report, String> {
     let mut phrase_candidates = Vec::with_capacity(DF_BANDS_PPM.len());
 
     for target_df_ppm in DF_BANDS_PPM {
-        let left = ExactSet::new(config.documents, target_df_ppm, 0x93a7_6f1d_45bc_2191);
-        let right = ExactSet::new(config.documents, target_df_ppm, 0x17e3_81ba_a62c_f405);
+        let left = DocSet::new(config.documents, target_df_ppm, 0x93a7_6f1d_45bc_2191);
+        let right = DocSet::new(config.documents, target_df_ppm, 0x17e3_81ba_a62c_f405);
 
         exact_set_count.push(measure_set_count(
             target_df_ppm,
@@ -209,12 +280,30 @@ fn run(config: Config) -> Result<Report, String> {
         )?);
     }
 
+    let semantic_contracts = semantic_contracts();
+    let outcomes = exact_set_count
+        .iter()
+        .map(|case| &case.outcome)
+        .chain(exact_moment_aggregation.iter().map(|case| &case.outcome))
+        .chain(phrase_candidates.iter().map(|case| &case.outcome))
+        .chain(semantic_contracts.iter().map(|case| &case.outcome));
+    let (mut has_exclusion, mut has_failure) = (false, false);
+    for outcome in outcomes {
+        has_exclusion |= matches!(outcome, CaseOutcome::Ineligible { .. });
+        has_failure |= matches!(outcome, CaseOutcome::Failed { .. });
+    }
+    let outcome = if has_failure {
+        RunOutcome::Failed
+    } else if has_exclusion {
+        RunOutcome::CompleteWithExclusions
+    } else {
+        RunOutcome::Complete
+    };
     Ok(Report {
-        format_version: 1,
-        outcome: "ok",
+        schema_version: REPORT_SCHEMA_VERSION,
+        outcome,
         throwaway_schema9_prototype: true,
-        prototype_base_commit: "1b1092e262d9fcd0586f6236c0e945da431095b4",
-        prototype: "lazy_exact_structural_forks_v1",
+        run_identity: run_identity(config),
         corpus: CorpusReport {
             documents: config.documents,
             videos,
@@ -226,130 +315,269 @@ fn run(config: Config) -> Result<Report, String> {
         exact_set_count,
         exact_moment_aggregation,
         phrase_candidates,
+        semantic_contracts,
     })
+}
+
+fn semantic_contracts() -> Vec<SemanticContractReport> {
+    let corpus = Corpus::new(DOCUMENTS_PER_VIDEO * 2);
+    let mut title_videos = VideoSet::new(2);
+    title_videos.insert(VideoId(0));
+    title_videos.insert(VideoId(1));
+    let mut documents = DocSet::new(DOCUMENTS_PER_VIDEO * 2, 0, 1);
+    documents.sparse.push(DocId(0));
+    documents.bitmap.insert(DocId(0));
+    let title_actual = moments_with_title_matches(
+        MatchSet {
+            transcript_documents: &documents,
+            title_videos: &title_videos,
+        },
+        &corpus,
+    );
+    let left = FieldPositions {
+        text: vec![2, 8],
+        title: vec![],
+    };
+    let right = FieldPositions {
+        text: vec![3, 12],
+        title: vec![],
+    };
+    let phrase_actual = u64::from(phrase_matches_document(&left, &right));
+    [
+        (
+            "title-only-and-mixed-moments",
+            (2_u64 << 32) | 2,
+            title_actual,
+        ),
+        ("multiple-position-phrase", 1, phrase_actual),
+    ]
+    .into_iter()
+    .map(|(case_id, expected, actual)| SemanticContractReport {
+        case_id,
+        outcome: parity_outcome(actual, actual, expected, || CaseOutcome::Eligible),
+        expected,
+        actual,
+    })
+    .collect()
+}
+
+fn run_identity(config: Config) -> RunIdentity {
+    let identity = format!(
+        "{REPORT_SCHEMA_VERSION}:{HARNESS_VERSION}:{GENERATOR_VERSION}:{DEFAULT_SEED}:{}:{}:{DF_BANDS_PPM:?}",
+        config.documents, config.rounds
+    );
+    RunIdentity {
+        report_schema_version: REPORT_SCHEMA_VERSION,
+        harness_version: HARNESS_VERSION,
+        prototype_base_commit: "1b1092e262d9fcd0586f6236c0e945da431095b4",
+        generator_version: GENERATOR_VERSION,
+        seed: DEFAULT_SEED,
+        documents: config.documents,
+        rounds: config.rounds,
+        df_bands_ppm: DF_BANDS_PPM,
+        identity_digest: format!("blake3:{}", blake3::hash(identity.as_bytes()).to_hex()),
+    }
 }
 
 fn measure_set_count(
     target_df_ppm: u32,
-    left: &ExactSet,
-    right: &ExactSet,
+    left: &DocSet,
+    right: &DocSet,
     rounds: usize,
 ) -> Result<SetCountReport, String> {
     let bitmap_answer = bitmap_intersection_count(&left.bitmap, &right.bitmap);
     let skip_answer = skip_intersection_count(&left.sparse, &right.sparse);
-    require_equal("set intersection", bitmap_answer, skip_answer)?;
-    require_equal(
-        "set intersection exhaustive oracle",
-        bitmap_answer,
-        reference_intersection_count(&left.sparse, &right.sparse),
-    )?;
+    let oracle_answer = reference_intersection_count(&left.sparse, &right.sparse);
+    let outcome = parity_outcome(bitmap_answer, skip_answer, oracle_answer, || {
+        if left.sparse.is_empty() || right.sparse.is_empty() {
+            CaseOutcome::Ineligible {
+                reason: CaseExclusion::EmptyInputNegativeControl,
+            }
+        } else {
+            CaseOutcome::Eligible
+        }
+    });
+    let (outcome, bitmap_construction, sparse_construction) = measure_pair(
+        outcome,
+        rounds,
+        || {
+            let left =
+                DenseBitmap::from_documents(black_box(&left.sparse), left.bitmap.words.len());
+            let right =
+                DenseBitmap::from_documents(black_box(&right.sparse), right.bitmap.words.len());
+            left.checksum() ^ right.checksum()
+        },
+        || {
+            let left = black_box(left.sparse.clone());
+            let right = black_box(right.sparse.clone());
+            (left.len() + right.len()) as u64
+        },
+    );
+    let (outcome, bitmap_and_popcount, sparse_skip_leapfrog) = measure_pair(
+        outcome,
+        rounds,
+        || bitmap_intersection_count(black_box(&left.bitmap), black_box(&right.bitmap)),
+        || skip_intersection_count(black_box(&left.sparse), black_box(&right.sparse)),
+    );
 
     Ok(SetCountReport {
-        timing_eligible: !left.sparse.is_empty() && !right.sparse.is_empty(),
-        exclusion_reason: (left.sparse.is_empty() || right.sparse.is_empty())
-            .then_some("empty_input_negative_control"),
+        case_id: format!("set-count-df-{target_df_ppm}"),
+        outcome,
         target_df_ppm,
         left_documents: left.sparse.len(),
         right_documents: right.sparse.len(),
         exact_intersection: bitmap_answer,
         bitmap_bytes: left.bitmap.byte_len() + right.bitmap.byte_len(),
         sparse_bytes: (left.sparse.len() + right.sparse.len()) * size_of::<DocId>(),
-        bitmap_construction: measure(rounds, || {
-            DenseBitmap::from_documents(black_box(&left.sparse), left.bitmap.words.len()).checksum()
-        }),
-        sparse_construction: measure(rounds, || black_box(left.sparse.clone()).len() as u64),
+        construction_source_bytes: (left.sparse.len() + right.sparse.len()) * size_of::<DocId>(),
+        bitmap_construction,
+        sparse_construction,
         bitmap_query_scratch_bytes: 0,
         sparse_query_scratch_bytes: 0,
-        bitmap_and_popcount: measure(rounds, || {
-            bitmap_intersection_count(black_box(&left.bitmap), black_box(&right.bitmap))
-        }),
-        sparse_skip_leapfrog: measure(rounds, || {
-            skip_intersection_count(black_box(&left.sparse), black_box(&right.sparse))
-        }),
+        bitmap_and_popcount,
+        sparse_skip_leapfrog,
     })
+}
+
+fn parity_outcome(
+    left: u64,
+    right: u64,
+    oracle: u64,
+    otherwise: impl FnOnce() -> CaseOutcome,
+) -> CaseOutcome {
+    if left != right || left != oracle {
+        CaseOutcome::Failed {
+            reason: CaseFailure::OracleMismatch,
+        }
+    } else {
+        otherwise()
+    }
+}
+
+fn measure_pair<L, R>(
+    outcome: CaseOutcome,
+    rounds: usize,
+    left: L,
+    right: R,
+) -> (CaseOutcome, Option<Timing>, Option<Timing>)
+where
+    L: FnMut() -> u64,
+    R: FnMut() -> u64,
+{
+    if outcome != CaseOutcome::Eligible {
+        return (outcome, None, None);
+    }
+    let (left, right) = (
+        measure_checked(rounds, left),
+        measure_checked(rounds, right),
+    );
+    match (left, right) {
+        (Ok(left), Ok(right)) => (outcome, Some(left), Some(right)),
+        _ => (
+            CaseOutcome::Failed {
+                reason: CaseFailure::MeasurementFailure,
+            },
+            None,
+            None,
+        ),
+    }
+}
+
+fn measure_checked(rounds: usize, operation: impl FnMut() -> u64) -> Result<Timing, CaseFailure> {
+    if rounds == 0 {
+        Err(CaseFailure::MeasurementFailure)
+    } else {
+        Ok(measure(rounds, operation))
+    }
 }
 
 fn measure_moments(
     target_df_ppm: u32,
-    set: &ExactSet,
+    set: &DocSet,
     corpus: &Corpus,
     rounds: usize,
 ) -> Result<MomentReport, String> {
     let dense_answer = moments_from_bitmap(&set.bitmap, corpus);
     let sparse_answer = moments_from_sparse(&set.sparse, corpus);
-    require_equal("20-second moment aggregation", dense_answer, sparse_answer)?;
-    require_equal(
-        "20-second moment exhaustive oracle",
-        dense_answer,
-        reference_moments(&set.sparse, corpus),
-    )?;
+    let oracle_answer = reference_moments(&set.sparse, corpus);
+    let outcome = parity_outcome(dense_answer, sparse_answer, oracle_answer, || {
+        if set.sparse.is_empty() {
+            CaseOutcome::Ineligible {
+                reason: CaseExclusion::EmptyInputNegativeControl,
+            }
+        } else {
+            CaseOutcome::Eligible
+        }
+    });
+    let (outcome, dense_set_bit_scan, sparse_posting_scan) = measure_pair(
+        outcome,
+        rounds,
+        || moments_from_bitmap(black_box(&set.bitmap), black_box(corpus)),
+        || moments_from_sparse(black_box(&set.sparse), black_box(corpus)),
+    );
 
     Ok(MomentReport {
-        timing_eligible: !set.sparse.is_empty(),
-        exclusion_reason: set
-            .sparse
-            .is_empty()
-            .then_some("empty_input_negative_control"),
+        case_id: format!("moment-df-{target_df_ppm}"),
+        outcome,
         target_df_ppm,
         matching_documents: set.sparse.len(),
         matching_videos: dense_answer >> 32,
         exact_moments: dense_answer & u64::from(u32::MAX),
         bitmap_bytes: set.bitmap.byte_len(),
         sparse_bytes: set.sparse.len() * size_of::<DocId>(),
-        dense_set_bit_scan: measure(rounds, || {
-            moments_from_bitmap(black_box(&set.bitmap), black_box(corpus))
-        }),
-        sparse_posting_scan: measure(rounds, || {
-            moments_from_sparse(black_box(&set.sparse), black_box(corpus))
-        }),
+        title_matching_videos: 0,
+        dense_set_bit_scan,
+        sparse_posting_scan,
     })
 }
 
 fn measure_phrase(
     target_df_ppm: u32,
-    left: &ExactSet,
-    right: &ExactSet,
+    left: &DocSet,
+    right: &DocSet,
     corpus: &Corpus,
     rounds: usize,
 ) -> Result<PhraseReport, String> {
     let bitmap_answer = phrase_from_bitmap(&left.bitmap, &right.bitmap, corpus);
     let skip_answer = phrase_from_skip(&left.sparse, &right.sparse, corpus);
-    require_equal("phrase candidate verification", bitmap_answer, skip_answer)?;
-    require_equal(
-        "phrase exhaustive oracle",
-        bitmap_answer,
-        reference_phrase(left, right, corpus),
-    )?;
-
-    Ok(PhraseReport {
-        timing_eligible: bitmap_answer >> 32 != 0,
-        exclusion_reason: (bitmap_answer >> 32 == 0).then_some("no_phrase_candidates"),
-        target_df_ppm,
-        exact_candidates: bitmap_answer >> 32,
-        exact_phrase_matches: bitmap_answer & u64::from(u32::MAX),
-        bitmap_intersect_then_positions: measure(rounds, || {
+    let oracle_answer = reference_phrase(left, right, corpus);
+    let outcome = parity_outcome(bitmap_answer, skip_answer, oracle_answer, || {
+        if bitmap_answer >> 32 == 0 {
+            CaseOutcome::Ineligible {
+                reason: CaseExclusion::NoPhraseCandidates,
+            }
+        } else {
+            CaseOutcome::Eligible
+        }
+    });
+    let (outcome, bitmap_intersect_then_positions, skip_intersect_then_positions) = measure_pair(
+        outcome,
+        rounds,
+        || {
             phrase_from_bitmap(
                 black_box(&left.bitmap),
                 black_box(&right.bitmap),
                 black_box(corpus),
             )
-        }),
-        skip_intersect_then_positions: measure(rounds, || {
+        },
+        || {
             phrase_from_skip(
                 black_box(&left.sparse),
                 black_box(&right.sparse),
                 black_box(corpus),
             )
-        }),
-    })
-}
+        },
+    );
 
-fn require_equal(label: &str, left: u64, right: u64) -> Result<(), String> {
-    if left == right {
-        Ok(())
-    } else {
-        Err(format!("{label} parity failed: {left} != {right}"))
-    }
+    Ok(PhraseReport {
+        case_id: format!("phrase-df-{target_df_ppm}"),
+        outcome,
+        target_df_ppm,
+        exact_candidates: bitmap_answer >> 32,
+        exact_phrase_matches: bitmap_answer & u64::from(u32::MAX),
+        bitmap_intersect_then_positions,
+        skip_intersect_then_positions,
+    })
 }
 
 fn measure(mut rounds: usize, mut operation: impl FnMut() -> u64) -> Timing {
@@ -401,7 +629,7 @@ impl Corpus {
     }
 }
 
-impl ExactSet {
+impl DocSet {
     fn new(documents: u32, df_ppm: u32, seed: u64) -> Self {
         let mut sparse = Vec::with_capacity(
             (u64::from(documents) * u64::from(df_ppm) / PARTS_PER_MILLION) as usize,
@@ -417,6 +645,26 @@ impl ExactSet {
             }
         }
         Self { sparse, bitmap }
+    }
+}
+
+impl VideoSet {
+    fn new(videos: u32) -> Self {
+        Self {
+            bitmap: DenseBitmap::new(videos),
+        }
+    }
+
+    fn insert(&mut self, video: VideoId) {
+        self.bitmap.insert(DocId(video.0));
+    }
+
+    fn contains(&self, video: VideoId) -> bool {
+        let index = video.0 as usize;
+        self.bitmap
+            .words
+            .get(index / u64::BITS as usize)
+            .is_some_and(|word| word & (1 << (index % u64::BITS as usize)) != 0)
     }
 }
 
@@ -524,6 +772,29 @@ fn moments_from_sparse(set: &[DocId], corpus: &Corpus) -> u64 {
     counter.packed()
 }
 
+fn moments_with_title_matches(matches: MatchSet<'_>, corpus: &Corpus) -> u64 {
+    let transcript = moments_from_sparse(&matches.transcript_documents.sparse, corpus);
+    let mut videos = (transcript >> 32) as u32;
+    let mut moments = transcript as u32;
+    let mut transcript_videos = VideoSet::new(
+        corpus
+            .document_video
+            .len()
+            .div_ceil(DOCUMENTS_PER_VIDEO as usize) as u32,
+    );
+    for &document in &matches.transcript_documents.sparse {
+        transcript_videos.insert(corpus.document_video[document.0 as usize]);
+    }
+    for video in 0..matches.title_videos.bitmap.words.len() * u64::BITS as usize {
+        let video = VideoId(video as u32);
+        if matches.title_videos.contains(video) && !transcript_videos.contains(video) {
+            videos += 1;
+            moments += 1;
+        }
+    }
+    (u64::from(videos) << 32) | u64::from(moments)
+}
+
 fn reference_moments(set: &[DocId], corpus: &Corpus) -> u64 {
     let mut by_video = std::collections::BTreeMap::<VideoId, Vec<u32>>::new();
     for &document in set {
@@ -584,8 +855,10 @@ fn phrase_from_bitmap(left: &DenseBitmap, right: &DenseBitmap, corpus: &Corpus) 
             let bit = remaining.trailing_zeros() as usize;
             let document = word_index * u64::BITS as usize + bit;
             candidates += 1;
-            matches +=
-                u32::from(corpus.right_position[document] == corpus.left_position[document] + 1);
+            matches += u32::from(phrase_matches_positions(
+                &[corpus.left_position[document]],
+                &[corpus.right_position[document]],
+            ));
             remaining &= remaining - 1;
         }
     }
@@ -598,12 +871,15 @@ fn phrase_from_skip(left: &[DocId], right: &[DocId], corpus: &Corpus) -> u64 {
     visit_skip_intersection(left, right, |document| {
         let document = document.0 as usize;
         candidates += 1;
-        matches += u32::from(corpus.right_position[document] == corpus.left_position[document] + 1);
+        matches += u32::from(phrase_matches_positions(
+            &[corpus.left_position[document]],
+            &[corpus.right_position[document]],
+        ));
     });
     (u64::from(candidates) << 32) | u64::from(matches)
 }
 
-fn reference_phrase(left: &ExactSet, right: &ExactSet, corpus: &Corpus) -> u64 {
+fn reference_phrase(left: &DocSet, right: &DocSet, corpus: &Corpus) -> u64 {
     let mut candidates = 0_u32;
     let mut matches = 0_u32;
     for &document in &left.sparse {
@@ -612,9 +888,25 @@ fn reference_phrase(left: &ExactSet, right: &ExactSet, corpus: &Corpus) -> u64 {
         }
         candidates += 1;
         let index = document.0 as usize;
-        matches += u32::from(corpus.right_position[index] == corpus.left_position[index] + 1);
+        matches += u32::from(phrase_matches_positions(
+            &[corpus.left_position[index]],
+            &[corpus.right_position[index]],
+        ));
     }
     (u64::from(candidates) << 32) | u64::from(matches)
+}
+
+fn phrase_matches_positions(left: &[u16], right: &[u16]) -> bool {
+    left.iter().any(|position| {
+        position
+            .checked_add(1)
+            .is_some_and(|adjacent| right.binary_search(&adjacent).is_ok())
+    })
+}
+
+fn phrase_matches_document(left: &FieldPositions, right: &FieldPositions) -> bool {
+    phrase_matches_positions(&left.text, &right.text)
+        || phrase_matches_positions(&left.title, &right.title)
 }
 
 fn splitmix64(mut value: u64) -> u64 {
@@ -631,8 +923,8 @@ mod tests {
     #[test]
     fn exact_set_counts_match_at_every_df_band() {
         for df_ppm in DF_BANDS_PPM {
-            let left = ExactSet::new(20_003, df_ppm, 11);
-            let right = ExactSet::new(20_003, df_ppm, 29);
+            let left = DocSet::new(20_003, df_ppm, 11);
+            let right = DocSet::new(20_003, df_ppm, 29);
             assert_eq!(
                 bitmap_intersection_count(&left.bitmap, &right.bitmap),
                 skip_intersection_count(&left.sparse, &right.sparse)
@@ -644,7 +936,7 @@ mod tests {
     fn exact_moment_aggregations_match_at_every_df_band() {
         let corpus = Corpus::new(20_003);
         for df_ppm in DF_BANDS_PPM {
-            let set = ExactSet::new(20_003, df_ppm, 41);
+            let set = DocSet::new(20_003, df_ppm, 41);
             assert_eq!(
                 moments_from_bitmap(&set.bitmap, &corpus),
                 moments_from_sparse(&set.sparse, &corpus)
@@ -705,8 +997,8 @@ mod tests {
     fn phrase_candidates_and_position_results_match() {
         let corpus = Corpus::new(20_003);
         for df_ppm in DF_BANDS_PPM {
-            let left = ExactSet::new(20_003, df_ppm, 43);
-            let right = ExactSet::new(20_003, df_ppm, 47);
+            let left = DocSet::new(20_003, df_ppm, 43);
+            let right = DocSet::new(20_003, df_ppm, 47);
             assert_eq!(
                 phrase_from_bitmap(&left.bitmap, &right.bitmap, &corpus),
                 phrase_from_skip(&left.sparse, &right.sparse, &corpus)
@@ -716,11 +1008,16 @@ mod tests {
 
     #[test]
     fn oracle_rejects_wrong_count_and_unverified_phrase_candidates() {
-        assert!(require_equal("wrong count", 4, 5).is_err());
+        assert_eq!(
+            parity_outcome(4, 5, 4, || CaseOutcome::Eligible),
+            CaseOutcome::Failed {
+                reason: CaseFailure::OracleMismatch,
+            }
+        );
 
         let corpus = Corpus::new(20_003);
-        let left = ExactSet::new(20_003, 500_000, 43);
-        let right = ExactSet::new(20_003, 500_000, 47);
+        let left = DocSet::new(20_003, 500_000, 43);
+        let right = DocSet::new(20_003, 500_000, 47);
         let phrase = reference_phrase(&left, &right, &corpus);
         let candidates = phrase >> 32;
         let matches = phrase & u64::from(u32::MAX);
@@ -736,5 +1033,112 @@ mod tests {
                 values.partition_point(|value| *value < DocId(target))
             );
         }
+    }
+
+    #[test]
+    fn parity_failures_are_typed_and_do_not_remove_the_case() {
+        assert_eq!(
+            parity_outcome(4, 5, 4, || CaseOutcome::Eligible),
+            CaseOutcome::Failed {
+                reason: CaseFailure::OracleMismatch,
+            }
+        );
+        let report = run(Config {
+            documents: 101,
+            rounds: 1,
+        })
+        .unwrap();
+        assert_eq!(report.exact_set_count.len(), DF_BANDS_PPM.len());
+        assert!(matches!(
+            report.exact_set_count[0].outcome,
+            CaseOutcome::Ineligible {
+                reason: CaseExclusion::EmptyInputNegativeControl
+            }
+        ));
+        let measurement_failure = CaseOutcome::Failed {
+            reason: CaseFailure::MeasurementFailure,
+        };
+        assert_eq!(
+            serde_json::to_value(&measurement_failure).unwrap()["reason"],
+            "measurement_failure"
+        );
+        let (outcome, left, right) = measure_pair(CaseOutcome::Eligible, 0, || 1, || 1);
+        assert_eq!(outcome, measurement_failure);
+        assert!(left.is_none() && right.is_none());
+    }
+
+    #[test]
+    fn run_identity_is_stable_and_changes_with_effective_config() {
+        let config = Config {
+            documents: 101,
+            rounds: 2,
+        };
+        assert_eq!(
+            run_identity(config).identity_digest,
+            run_identity(config).identity_digest
+        );
+        assert_ne!(
+            run_identity(config).identity_digest,
+            run_identity(Config {
+                rounds: 3,
+                ..config
+            })
+            .identity_digest
+        );
+        let json = serde_json::to_value(run(config).unwrap()).unwrap();
+        assert_eq!(json["schema_version"], REPORT_SCHEMA_VERSION);
+        assert_eq!(
+            json["run_identity"]["report_schema_version"],
+            REPORT_SCHEMA_VERSION
+        );
+        assert_eq!(json["exact_set_count"].as_array().unwrap().len(), 7);
+    }
+
+    #[test]
+    fn phrase_semantics_cover_repetition_occurrences_order_and_fields() {
+        assert!(phrase_matches_positions(&[2, 8], &[3, 12]));
+        assert!(!phrase_matches_positions(&[2, 8], &[4, 12]));
+        assert!(!phrase_matches_positions(&[3], &[2]));
+        assert!(phrase_matches_positions(&[2, 3], &[2, 3]));
+        assert!(!phrase_matches_positions(&[2], &[2]));
+
+        let left = FieldPositions {
+            text: vec![2],
+            title: vec![],
+        };
+        let cross_field_right = FieldPositions {
+            text: vec![],
+            title: vec![3],
+        };
+        assert!(!phrase_matches_document(&left, &cross_field_right));
+        let multiple = FieldPositions {
+            text: vec![1, 3, 10],
+            title: vec![],
+        };
+        let right = FieldPositions {
+            text: vec![4, 20],
+            title: vec![],
+        };
+        assert!(phrase_matches_document(&multiple, &right));
+    }
+
+    #[test]
+    fn title_only_adds_one_moment_but_mixed_does_not_add_a_phantom() {
+        let corpus = Corpus::new(DOCUMENTS_PER_VIDEO * 2);
+        let mut title_videos = VideoSet::new(2);
+        title_videos.insert(VideoId(0));
+        title_videos.insert(VideoId(1));
+
+        let mut documents = DocSet::new(DOCUMENTS_PER_VIDEO * 2, 0, 1);
+        documents.sparse.push(DocId(0));
+        documents.bitmap.insert(DocId(0));
+        let answer = moments_with_title_matches(
+            MatchSet {
+                transcript_documents: &documents,
+                title_videos: &title_videos,
+            },
+            &corpus,
+        );
+        assert_eq!((answer >> 32, answer & u64::from(u32::MAX)), (2, 2));
     }
 }
