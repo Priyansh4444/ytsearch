@@ -24,16 +24,28 @@ sets `ALLOW_NON_TEMP_PROTOTYPE_OUTPUT=1`.
 | Bitmap versus sparse skip intersection counting | `exact_set_count[].exact_intersection`, `bitmap_and_popcount`, `sparse_skip_leapfrog` |
 | Dense set-bit versus sparse posting moment scan | `exact_moment_aggregation[].matching_videos`, `exact_moments`, `dense_set_bit_scan`, `sparse_posting_scan` |
 | Bitmap versus skip phrase candidate intersection | `phrase_candidates[].exact_candidates`, `exact_phrase_matches`, and both timing fields |
-| Representation construction and owned bytes | `bitmap_construction`, `sparse_construction`, `bitmap_bytes`, `sparse_bytes` |
+| Representation construction and owned bytes | `construction_source_bytes`, `bitmap_construction`, `sparse_construction`, `bitmap_bytes`, `sparse_bytes` |
 
 Every timed answer is checked outside the timing region against the competing
-implementation and a deliberately simple exhaustive oracle. Empty/no-candidate
-negative controls remain in the output but have `timing_eligible: false`, so
-zero work cannot win a comparison. Query scratch is reported explicitly; these
-forks use no query-owned allocation.
+implementation and a deliberately simple exhaustive oracle. Every attempted
+case remains in its section's array, including failures and negative controls.
+`outcome` is a tagged `eligible`, `ineligible { reason }`, or
+`failed { reason }` value; an oracle mismatch becomes a failed
+`oracle_mismatch` and its timing fields are `null`. Measurement failures have a
+separate `measurement_failure` reason. Thus an
+incorrect or zero-work fork remains in the denominator and cannot win by
+disappearing. Query scratch is reported explicitly; these forks use no
+query-owned allocation.
 
-The deterministic generator uses dense document IDs, distinct `DocId` and
-`VideoId` types, about 240 transcript documents per video, ordered skewed
+The top-level `schema_version` is 2. `run_identity` binds the effective document
+count, round count, ordered DF bands, fixed seed, generator version, harness
+version, and prototype base commit into a deterministic digest. The fixture
+test proves identical effective inputs have identical semantic output and that
+changing an effective input changes the identity. This is a report schema, not
+a Raw runtime or on-disk index schema.
+
+The deterministic generator uses dense document IDs and distinct `DocId`,
+`VideoId`, `DocSet`, and `VideoSet` types, about 240 transcript documents per video, ordered skewed
 timestamps, and fixed SplitMix64 seeds. Density bands span absent through
 universal. The moment oracle copies Raw's anchored, non-transitive rule: a match
 stays in its current moment at exactly 20 seconds and starts a new one only
@@ -69,10 +81,13 @@ the 0.1% case had no candidates and is explicitly ineligible.
 - Timing is warm and in one process. No result is labeled cold; fresh-process
   physical I/O, peak RSS, independent repetitions, and stability gates remain
   unmeasured.
-- The harness does not yet cover overlap matrices, OR/NOT trees, title-only
-  moments, Tier-1 histograms, codecs, ranking frontiers, or sessions.
-- The phrase fork uses one stored position per term. Multiple/repeated/cross-
-  field position cases remain a later prototype before a format decision.
+- The harness does not yet cover overlap matrices, OR/NOT trees, Tier-1
+  histograms, codecs, ranking frontiers, or sessions.
+- The timed phrase corpus still stores one position per term, but adversarial
+  oracle fixtures cover repeated terms, multiple occurrences, reverse and
+  non-adjacent positions, and prohibit cross-field phrases. Title-only and
+  mixed title/transcript moment fixtures implement the response contract:
+  title-only contributes one moment, while a mixed match adds no phantom one.
 
 Those limits prevent selecting a schema or claiming the 2 GB / 200 ms release
 gate from this evidence alone.
