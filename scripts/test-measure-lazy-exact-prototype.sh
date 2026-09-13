@@ -9,6 +9,7 @@ for run in a b; do
   "$script_dir/measure-lazy-exact-prototype.sh" \
     "$scratch/$run.jsonl" --documents 20003 --rounds 2 >/dev/null
   jq -S '
+    del(.resources) |
     walk(
       if type == "object" and has("samples_ns") then
         {scope, warmup_runs}
@@ -32,12 +33,16 @@ jq -e '
   (.run_identity.rustc_target | length > 0) and
   .run_identity.build_profile == "release" and
   (.run_identity.environment | length > 0) and
-  .counters == {attempted: 23, eligible: 19, excluded: 4, failed: 0} and
+  .counters == {attempted: 24, eligible: 20, excluded: 4, failed: 0} and
+  (.resources.final_peak_rss_bytes > 0 or .resources.rss_unavailable_reason != null) and
+  (.resources.proc_io_read_bytes_delta != null or .resources.proc_io_unavailable_reason != null) and
   (.exact_set_count | length == 7) and
   (.exact_moment_aggregation | length == 7) and
   (.phrase_candidates | length == 7) and
-  (.semantic_contracts | length == 2) and
+  (.semantic_contracts | length == 3) and
   (.semantic_contracts | all(.outcome.status == "eligible" and .actual == .expected)) and
+  (.semantic_contracts | all(.measurement.p95_ns >= .measurement.median_ns)) and
+  ([.exact_set_count[].construction_measurement_order] | unique | length == 2) and
   ([.exact_set_count[], .exact_moment_aggregation[], .phrase_candidates[]]
     | length == 21) and
   ([.exact_set_count[], .exact_moment_aggregation[], .phrase_candidates[]]
@@ -62,7 +67,7 @@ for failure in oracle measurement; do
     --inject-failure "$failure" >/dev/null
   jq -e --arg failure "${failure}_mismatch" '
     .outcome == "complete_with_failures" and
-    .counters == {attempted: 23, eligible: 18, excluded: 4, failed: 1} and
+    .counters == {attempted: 24, eligible: 19, excluded: 4, failed: 1} and
     (.exact_set_count[]
       | select(.case_id == "set-count-df-1000")
       | .outcome.status == "failed" and

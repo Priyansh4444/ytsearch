@@ -5,7 +5,7 @@
 //! JSON, and can be deleted once the schema-9 choices are made.
 
 use serde::Serialize;
-use std::{env, hint::black_box, process::ExitCode, time::Instant};
+use std::{env, fs, hint::black_box, process::ExitCode, time::Instant};
 
 const DEFAULT_DOCUMENTS: u32 = 1_000_000;
 const DEFAULT_ROUNDS: usize = 9;
@@ -39,6 +39,7 @@ struct Report {
     throwaway_schema9_prototype: bool,
     run_identity: RunIdentity,
     counters: OutcomeCounters,
+    resources: ResourceReport,
     corpus: CorpusReport,
     rounds: usize,
     exact_set_count: Vec<SetCountReport>,
@@ -83,6 +84,23 @@ struct OutcomeCounters {
     failed: usize,
 }
 
+#[derive(Serialize)]
+struct ResourceReport {
+    baseline_peak_rss_bytes: Option<u64>,
+    final_peak_rss_bytes: Option<u64>,
+    peak_rss_increment_bytes: Option<u64>,
+    rss_unavailable_reason: Option<&'static str>,
+    proc_io_read_bytes_delta: Option<u64>,
+    proc_io_write_bytes_delta: Option<u64>,
+    proc_io_unavailable_reason: Option<&'static str>,
+}
+
+#[derive(Clone, Copy)]
+struct ResourceSnapshot {
+    peak_rss_bytes: Option<u64>,
+    io: Option<(u64, u64)>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 enum CaseOutcome {
@@ -125,6 +143,8 @@ struct SetCountReport {
     bitmap_bytes: usize,
     sparse_bytes: usize,
     construction_source_bytes: usize,
+    construction_measurement_order: &'static str,
+    query_measurement_order: &'static str,
     bitmap_construction: Option<Timing>,
     sparse_construction: Option<Timing>,
     bitmap_query_scratch_bytes: usize,
@@ -144,6 +164,7 @@ struct MomentReport {
     bitmap_bytes: usize,
     sparse_bytes: usize,
     title_matching_videos: usize,
+    measurement_order: &'static str,
     dense_set_bit_scan: Option<Timing>,
     sparse_posting_scan: Option<Timing>,
 }
@@ -155,6 +176,7 @@ struct PhraseReport {
     target_df_ppm: u32,
     exact_candidates: u64,
     exact_phrase_matches: u64,
+    measurement_order: &'static str,
     bitmap_intersect_then_positions: Option<Timing>,
     skip_intersect_then_positions: Option<Timing>,
 }
@@ -165,6 +187,7 @@ struct SemanticContractReport {
     outcome: CaseOutcome,
     expected: u64,
     actual: u64,
+    measurement: Option<Timing>,
 }
 
 #[derive(Serialize)]
@@ -174,7 +197,10 @@ struct Timing {
     samples_ns: Vec<u128>,
     min_ns: u128,
     median_ns: u128,
+    p95_ns: u128,
     max_ns: u128,
+    process_cpu_samples_ns: Option<Vec<u128>>,
+    process_cpu_unavailable_reason: Option<&'static str>,
 }
 
 struct Corpus {
@@ -288,6 +314,7 @@ fn parse_value<T: std::str::FromStr>(
 }
 
 fn run(config: Config) -> Result<Report, String> {
+    let resources_before = resource_snapshot();
     let corpus = Corpus::new(config.documents);
     let videos = config.documents.div_ceil(DOCUMENTS_PER_VIDEO);
     let mut exact_set_count = Vec::with_capacity(DF_BANDS_PPM.len());
@@ -322,7 +349,7 @@ fn run(config: Config) -> Result<Report, String> {
         )?);
     }
 
-    let semantic_contracts = semantic_contracts();
+    let semantic_contracts = semantic_contracts(config.rounds);
     let outcomes = exact_set_count
         .iter()
         .map(|case| &case.outcome)
@@ -349,12 +376,14 @@ fn run(config: Config) -> Result<Report, String> {
             .chain(phrase_candidates.iter().map(|case| &case.outcome))
             .chain(semantic_contracts.iter().map(|case| &case.outcome)),
     );
+    let resources = resource_report(resources_before, resource_snapshot());
     Ok(Report {
         schema_version: REPORT_SCHEMA_VERSION,
         outcome,
         throwaway_schema9_prototype: true,
         run_identity: run_identity(config),
         counters,
+        resources,
         corpus: CorpusReport {
             documents: config.documents,
             videos,
@@ -388,7 +417,7 @@ fn outcome_counters<'a>(outcomes: impl Iterator<Item = &'a CaseOutcome>) -> Outc
     counters
 }
 
-fn semantic_contracts() -> Vec<SemanticContractReport> {
+fn semantic_contracts(rounds: usize) -> Vec<SemanticContractReport> {
     let corpus = Corpus::new(DOCUMENTS_PER_VIDEO * 2);
     let mut title_videos = VideoSet::new(2);
     title_videos.insert(VideoId(0));
@@ -396,38 +425,79 @@ fn semantic_contracts() -> Vec<SemanticContractReport> {
     let mut documents = DocSet::new(DOCUMENTS_PER_VIDEO * 2, 0, 1);
     documents.sparse.push(DocId(0));
     documents.bitmap.insert(DocId(0));
-    let title_actual = moments_with_title_matches(
+    let matches = MatchSet {
+        transcript_documents: &documents,
+        title_videos: &title_videos,
+    };
+    let title_actual = moments_with_title_matches(matches, &corpus);
+    let title_expected = reference_moments_with_titles(
         MatchSet {
             transcript_documents: &documents,
             title_videos: &title_videos,
         },
         &corpus,
     );
-    let left = FieldPositions {
-        text: vec![2, 8],
-        title: vec![],
-    };
-    let right = FieldPositions {
-        text: vec![3, 12],
-        title: vec![],
-    };
-    let phrase_actual = u64::from(phrase_matches_document(&left, &right));
-    [
-        (
-            "title-only-and-mixed-moments",
-            (2_u64 << 32) | 2,
-            title_actual,
-        ),
-        ("multiple-position-phrase", 1, phrase_actual),
-    ]
-    .into_iter()
-    .map(|(case_id, expected, actual)| SemanticContractReport {
+    let mut reports = vec![SemanticContractReport {
+        case_id: "title-only-and-mixed-moments",
+        outcome: parity_outcome(title_actual, title_actual, title_expected, || {
+            CaseOutcome::Eligible
+        }),
+        expected: title_expected,
+        actual: title_actual,
+        measurement: Some(measure(rounds, || {
+            moments_with_title_matches(
+                MatchSet {
+                    transcript_documents: black_box(&documents),
+                    title_videos: black_box(&title_videos),
+                },
+                black_box(&corpus),
+            )
+        })),
+    }];
+    reports.push(measured_phrase_contract(
+        "multiple-position-phrase",
+        FieldPositions {
+            text: vec![2, 8],
+            title: vec![],
+        },
+        FieldPositions {
+            text: vec![3, 12],
+            title: vec![],
+        },
+        rounds,
+    ));
+    reports.push(measured_phrase_contract(
+        "repeated-term-phrase",
+        FieldPositions {
+            text: vec![2, 3],
+            title: vec![],
+        },
+        FieldPositions {
+            text: vec![2, 3],
+            title: vec![],
+        },
+        rounds,
+    ));
+    reports
+}
+
+fn measured_phrase_contract(
+    case_id: &'static str,
+    left: FieldPositions,
+    right: FieldPositions,
+    rounds: usize,
+) -> SemanticContractReport {
+    let actual = u64::from(phrase_matches_document(&left, &right));
+    let expected = u64::from(reference_phrase_matches_document(&left, &right));
+    SemanticContractReport {
         case_id,
         outcome: parity_outcome(actual, actual, expected, || CaseOutcome::Eligible),
         expected,
         actual,
-    })
-    .collect()
+        measurement: Some(measure(rounds, || {
+            u64::from(phrase_matches_document(black_box(&left), black_box(&right)))
+        })),
+    }
 }
 
 fn run_identity(config: Config) -> RunIdentity {
@@ -485,6 +555,7 @@ fn measure_set_count(
             CaseOutcome::Eligible
         }
     });
+    let left_first = counterbalance_left_first(target_df_ppm);
     let (outcome, bitmap_construction, sparse_construction) = measure_pair(
         outcome,
         if inject_failure == Some(FailureInjection::Measurement) {
@@ -492,6 +563,7 @@ fn measure_set_count(
         } else {
             rounds
         },
+        left_first,
         || {
             let left =
                 DenseBitmap::from_documents(black_box(&left.sparse), left.bitmap.words.len());
@@ -508,6 +580,7 @@ fn measure_set_count(
     let (outcome, bitmap_and_popcount, sparse_skip_leapfrog) = measure_pair(
         outcome,
         rounds,
+        !left_first,
         || bitmap_intersection_count(black_box(&left.bitmap), black_box(&right.bitmap)),
         || skip_intersection_count(black_box(&left.sparse), black_box(&right.sparse)),
     );
@@ -522,6 +595,16 @@ fn measure_set_count(
         bitmap_bytes: left.bitmap.byte_len() + right.bitmap.byte_len(),
         sparse_bytes: (left.sparse.len() + right.sparse.len()) * size_of::<DocId>(),
         construction_source_bytes: (left.sparse.len() + right.sparse.len()) * size_of::<DocId>(),
+        construction_measurement_order: if left_first {
+            "bitmap_then_sparse"
+        } else {
+            "sparse_then_bitmap"
+        },
+        query_measurement_order: if left_first {
+            "sparse_then_bitmap"
+        } else {
+            "bitmap_then_sparse"
+        },
         bitmap_construction,
         sparse_construction,
         bitmap_query_scratch_bytes: 0,
@@ -549,8 +632,9 @@ fn parity_outcome(
 fn measure_pair<L, R>(
     outcome: CaseOutcome,
     rounds: usize,
-    left: L,
-    right: R,
+    left_first: bool,
+    mut left: L,
+    mut right: R,
 ) -> (CaseOutcome, Option<Timing>, Option<Timing>)
 where
     L: FnMut() -> u64,
@@ -559,10 +643,16 @@ where
     if outcome != CaseOutcome::Eligible {
         return (outcome, None, None);
     }
-    let (left, right) = (
-        measure_checked(rounds, left),
-        measure_checked(rounds, right),
-    );
+    let (left, right) = if left_first {
+        (
+            measure_checked(rounds, &mut left),
+            measure_checked(rounds, &mut right),
+        )
+    } else {
+        let right_timing = measure_checked(rounds, &mut right);
+        let left_timing = measure_checked(rounds, &mut left);
+        (left_timing, right_timing)
+    };
     match (left, right) {
         (Ok(left), Ok(right)) => (outcome, Some(left), Some(right)),
         _ => (
@@ -573,6 +663,13 @@ where
             None,
         ),
     }
+}
+
+fn counterbalance_left_first(target_df_ppm: u32) -> bool {
+    DF_BANDS_PPM
+        .iter()
+        .position(|value| *value == target_df_ppm)
+        .is_none_or(|index| index.is_multiple_of(2))
 }
 
 fn measure_checked(rounds: usize, operation: impl FnMut() -> u64) -> Result<Timing, CaseFailure> {
@@ -604,6 +701,7 @@ fn measure_moments(
     let (outcome, dense_set_bit_scan, sparse_posting_scan) = measure_pair(
         outcome,
         rounds,
+        counterbalance_left_first(target_df_ppm),
         || moments_from_bitmap(black_box(&set.bitmap), black_box(corpus)),
         || moments_from_sparse(black_box(&set.sparse), black_box(corpus)),
     );
@@ -618,6 +716,11 @@ fn measure_moments(
         bitmap_bytes: set.bitmap.byte_len(),
         sparse_bytes: set.sparse.len() * size_of::<DocId>(),
         title_matching_videos: 0,
+        measurement_order: if counterbalance_left_first(target_df_ppm) {
+            "bitmap_then_sparse"
+        } else {
+            "sparse_then_bitmap"
+        },
         dense_set_bit_scan,
         sparse_posting_scan,
     })
@@ -645,6 +748,7 @@ fn measure_phrase(
     let (outcome, bitmap_intersect_then_positions, skip_intersect_then_positions) = measure_pair(
         outcome,
         rounds,
+        counterbalance_left_first(target_df_ppm),
         || {
             phrase_from_bitmap(
                 black_box(&left.bitmap),
@@ -667,6 +771,11 @@ fn measure_phrase(
         target_df_ppm,
         exact_candidates: bitmap_answer >> 32,
         exact_phrase_matches: bitmap_answer & u64::from(u32::MAX),
+        measurement_order: if counterbalance_left_first(target_df_ppm) {
+            "bitmap_then_skip"
+        } else {
+            "skip_then_bitmap"
+        },
         bitmap_intersect_then_positions,
         skip_intersect_then_positions,
     })
@@ -675,20 +784,97 @@ fn measure_phrase(
 fn measure(mut rounds: usize, mut operation: impl FnMut() -> u64) -> Timing {
     black_box(operation());
     let mut elapsed = Vec::with_capacity(rounds);
+    let mut cpu_elapsed = Vec::with_capacity(rounds);
     while rounds > 0 {
+        let cpu_started = process_cpu_ns();
         let started = Instant::now();
         black_box(operation());
         elapsed.push(started.elapsed().as_nanos());
+        if let (Some(started), Some(ended)) = (cpu_started, process_cpu_ns()) {
+            cpu_elapsed.push(ended.saturating_sub(started));
+        }
         rounds -= 1;
     }
     elapsed.sort_unstable();
+    cpu_elapsed.sort_unstable();
+    let p95_index = (elapsed.len() * 95).div_ceil(100).saturating_sub(1);
+    let cpu_available = cpu_elapsed.len() == elapsed.len();
     Timing {
         scope: "steady_state_in_process_os_cache_warm",
         warmup_runs: 1,
         samples_ns: elapsed.clone(),
         min_ns: elapsed[0],
         median_ns: elapsed[elapsed.len() / 2],
+        p95_ns: elapsed[p95_index],
         max_ns: elapsed[elapsed.len() - 1],
+        process_cpu_samples_ns: cpu_available.then_some(cpu_elapsed),
+        process_cpu_unavailable_reason: (!cpu_available).then_some("process_cpu_clock_unavailable"),
+    }
+}
+
+fn process_cpu_ns() -> Option<u128> {
+    let mut value = std::mem::MaybeUninit::<libc::timespec>::uninit();
+    // SAFETY: clock_gettime initializes the provided timespec when it returns zero.
+    let status = unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, value.as_mut_ptr()) };
+    if status != 0 {
+        return None;
+    }
+    // SAFETY: a zero return from clock_gettime guarantees initialization.
+    let value = unsafe { value.assume_init() };
+    Some((value.tv_sec as u128) * 1_000_000_000 + value.tv_nsec as u128)
+}
+
+fn resource_snapshot() -> ResourceSnapshot {
+    ResourceSnapshot {
+        peak_rss_bytes: peak_rss_bytes(),
+        io: proc_io_bytes(),
+    }
+}
+
+fn peak_rss_bytes() -> Option<u64> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    // SAFETY: getrusage initializes the provided structure when it returns zero.
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: a zero return from getrusage guarantees initialization.
+    let usage = unsafe { usage.assume_init() };
+    #[cfg(target_os = "macos")]
+    return u64::try_from(usage.ru_maxrss).ok();
+    #[cfg(not(target_os = "macos"))]
+    u64::try_from(usage.ru_maxrss).ok()?.checked_mul(1024)
+}
+
+fn proc_io_bytes() -> Option<(u64, u64)> {
+    let contents = fs::read_to_string("/proc/self/io").ok()?;
+    let value = |name: &str| {
+        contents.lines().find_map(|line| {
+            line.strip_prefix(name)
+                .and_then(|value| value.trim().parse::<u64>().ok())
+        })
+    };
+    Some((value("read_bytes:")?, value("write_bytes:")?))
+}
+
+fn resource_report(before: ResourceSnapshot, after: ResourceSnapshot) -> ResourceReport {
+    let io_delta = before.io.zip(after.io).map(|(before, after)| {
+        (
+            after.0.saturating_sub(before.0),
+            after.1.saturating_sub(before.1),
+        )
+    });
+    ResourceReport {
+        baseline_peak_rss_bytes: before.peak_rss_bytes,
+        final_peak_rss_bytes: after.peak_rss_bytes,
+        peak_rss_increment_bytes: before
+            .peak_rss_bytes
+            .zip(after.peak_rss_bytes)
+            .map(|(before, after)| after.saturating_sub(before)),
+        rss_unavailable_reason: (before.peak_rss_bytes.is_none() || after.peak_rss_bytes.is_none())
+            .then_some("getrusage_unavailable"),
+        proc_io_read_bytes_delta: io_delta.map(|value| value.0),
+        proc_io_write_bytes_delta: io_delta.map(|value| value.1),
+        proc_io_unavailable_reason: io_delta.is_none().then_some("proc_self_io_unavailable"),
     }
 }
 
@@ -910,6 +1096,36 @@ fn reference_moments(set: &[DocId], corpus: &Corpus) -> u64 {
     (u64::try_from(by_video.len()).unwrap() << 32) | u64::from(moments)
 }
 
+fn reference_moments_with_titles(matches: MatchSet<'_>, corpus: &Corpus) -> u64 {
+    let mut timestamps = std::collections::BTreeMap::<VideoId, Vec<u32>>::new();
+    for &document in &matches.transcript_documents.sparse {
+        let index = document.0 as usize;
+        timestamps
+            .entry(corpus.document_video[index])
+            .or_default()
+            .push(corpus.start_ms[index]);
+    }
+    let mut result_videos = std::collections::BTreeSet::new();
+    let mut moments = 0_u32;
+    for (video, starts) in &timestamps {
+        result_videos.insert(*video);
+        let mut anchor = None;
+        for &start in starts {
+            if anchor.is_none_or(|value| start.saturating_sub(value) > MOMENT_WINDOW_MS) {
+                moments += 1;
+                anchor = Some(start);
+            }
+        }
+    }
+    for video in 0..matches.title_videos.bitmap.words.len() * u64::BITS as usize {
+        let video = VideoId(video as u32);
+        if matches.title_videos.contains(video) && result_videos.insert(video) {
+            moments += 1;
+        }
+    }
+    (u64::try_from(result_videos.len()).unwrap() << 32) | u64::from(moments)
+}
+
 #[derive(Default)]
 struct MomentCounter {
     current_video: Option<VideoId>,
@@ -980,10 +1196,11 @@ fn reference_phrase(left: &DocSet, right: &DocSet, corpus: &Corpus) -> u64 {
         }
         candidates += 1;
         let index = document.0 as usize;
-        matches += u32::from(phrase_matches_positions(
-            &[corpus.left_position[index]],
-            &[corpus.right_position[index]],
-        ));
+        matches += u32::from(
+            corpus.left_position[index]
+                .checked_add(1)
+                .is_some_and(|position| position == corpus.right_position[index]),
+        );
     }
     (u64::from(candidates) << 32) | u64::from(matches)
 }
@@ -999,6 +1216,25 @@ fn phrase_matches_positions(left: &[u16], right: &[u16]) -> bool {
 fn phrase_matches_document(left: &FieldPositions, right: &FieldPositions) -> bool {
     phrase_matches_positions(&left.text, &right.text)
         || phrase_matches_positions(&left.title, &right.title)
+}
+
+fn reference_phrase_matches_document(left: &FieldPositions, right: &FieldPositions) -> bool {
+    fn adjacent(left: &[u16], right: &[u16]) -> bool {
+        for &left_position in left {
+            for &right_position in right {
+                if left_position.checked_add(1) == Some(right_position) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    adjacent(&left.text, &right.text) || adjacent(&left.title, &right.title)
+}
+
+#[cfg(test)]
+fn bad_phrase_without_positions(left: &DocSet, right: &DocSet) -> u64 {
+    skip_intersection_count(&left.sparse, &right.sparse)
 }
 
 fn splitmix64(mut value: u64) -> u64 {
@@ -1114,6 +1350,18 @@ mod tests {
         let candidates = phrase >> 32;
         let matches = phrase & u64::from(u32::MAX);
         assert_ne!(candidates, matches);
+        assert_ne!(bad_phrase_without_positions(&left, &right), matches);
+        assert_eq!(
+            parity_outcome(
+                bad_phrase_without_positions(&left, &right),
+                matches,
+                matches,
+                || CaseOutcome::Eligible,
+            ),
+            CaseOutcome::Failed {
+                reason: CaseFailure::OracleMismatch,
+            }
+        );
     }
 
     #[test]
@@ -1156,7 +1404,7 @@ mod tests {
             serde_json::to_value(&measurement_failure).unwrap()["reason"],
             "measurement_failure"
         );
-        let (outcome, left, right) = measure_pair(CaseOutcome::Eligible, 0, || 1, || 1);
+        let (outcome, left, right) = measure_pair(CaseOutcome::Eligible, 0, true, || 1, || 1);
         assert_eq!(outcome, measurement_failure);
         assert!(left.is_none() && right.is_none());
     }
@@ -1235,6 +1483,14 @@ mod tests {
             },
             &corpus,
         );
+        let reference = reference_moments_with_titles(
+            MatchSet {
+                transcript_documents: &documents,
+                title_videos: &title_videos,
+            },
+            &corpus,
+        );
         assert_eq!((answer >> 32, answer & u64::from(u32::MAX)), (2, 2));
+        assert_eq!(answer, reference);
     }
 }
