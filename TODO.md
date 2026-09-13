@@ -23,6 +23,11 @@ Raw can replace Typesense as the canonical search index.
   and a retained frontier that does not rescore prior pages.
 - [ ] Prototype delta-varint-vs-SIMD-BP128/Stream-VByte blocks at 64/128/256.
 - [ ] Prototype pinned in-memory sessions, honest expiry, and generation advance.
+  - [x] Verify the existing reader snapshot retains exact pages/counts across
+    activation and releases the retired reader after its final lease drops;
+    see [foundation evidence](docs/experiments/search/generation-pin-foundation.md).
+  - [ ] Add session admission/expiry and cleanup protection; measure retained
+    generations on the 2-GB profile (the reader lease test does not prove these).
 - [ ] Build the 300-query exhaustive differential oracle for membership, score
   bits, every page, totals, summaries, fallback modes, highlights, and sorts.
 - [ ] Add schema-9 structural writer/reader only after prototype gates choose the
