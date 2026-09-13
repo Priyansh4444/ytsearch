@@ -14,6 +14,11 @@ Raw can replace Typesense as the canonical search index.
 - [x] Select Lucene/PISA as the base, with byte-budgeted high-DF bitmaps and
   typed adaptive-Roaring derived/facet sets as bounded grafts.
 - [x] Write the usage-first type, API, on-disk, session, and module sketch.
+- [x] Add synthetic counting/phrase/moment measurement forks with independent
+  oracles, retained failures, provenance, paired sampling, and CI regression checks.
+  This is measurement infrastructure, not production-corpus or latency proof.
+- [ ] Remove the throwaway measurement harness once production structural
+  differential/performance lanes supersede it; preserve its experiment evidence.
 - [ ] Prototype phrase bitmap-vs-skip candidates on a production-shaped corpus.
 - [ ] Prototype bitmap-vs-skip exact counting and derive the bitmap byte budget.
 - [ ] Prove exact query-dependent 20-second moment totals under 200 ms for the

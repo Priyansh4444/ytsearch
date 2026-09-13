@@ -4,6 +4,8 @@ set -eu
 bun run check:precommit
 scripts/check-rust-packages.sh
 cargo test --workspace
+cargo test -p youtube_raw_search --example lazy_exact_measure
+scripts/test-measure-lazy-exact-prototype.sh
 bun run test:e2e
 scripts/check-rust-dependency-policy.sh
 scripts/test-setup-dev.sh

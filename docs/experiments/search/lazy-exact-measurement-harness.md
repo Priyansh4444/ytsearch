@@ -96,6 +96,36 @@ The recorded values suggested density-sensitive counting behavior, but the
 timing-order confound prevents using that suggestion as a decision. The 0.1%
 phrase case had no candidates and was explicitly ineligible.
 
+## Corrected local observation (2026-09-13)
+
+[Raw report with samples and provenance](evidence/lazy-exact-92a2760-r1.jsonl).
+Source `92a2760aad88a01fc533e4298475340db6310b59`, clean tree, harness v4,
+release profile, one million synthetic documents, ten alternating paired
+samples per case after warmup. This is an uncontrolled local Linux host, not
+the Fly 2-GB profile. The outcome contains 24 attempted cases: 20 eligible,
+four explicit exclusions, zero failures. Absence/zero-candidate controls remain
+in the report rather than disappearing from the denominator.
+
+| Target DF | Bitmap count median | Skip count median | Dense moment median | Sparse moment median |
+| ---: | ---: | ---: | ---: | ---: |
+| 0.1% | 21.44 us | 5.74 us | 15.95 us | 2.78 us |
+| 1% | 22.17 us | 158.72 us | 200.79 us | 93.90 us |
+| 10% | 23.40 us | 2.22 ms | 1.00 ms | 650.18 us |
+| 50% | 28.66 us | 7.08 ms | 3.19 ms | 2.64 ms |
+| 90% | 28.66 us | 4.40 ms | 4.58 ms | 3.93 ms |
+| 100% | 13.35 us | 557.53 us | 4.32 ms | 3.59 ms |
+
+This corrected observation supports retaining both representations for the
+next corpus experiment. It does not establish a production DF threshold or
+bitmap byte budget. Sparse moment enumeration remained faster in these fixtures;
+bitmap cardinality alone does not replace the timestamp scan for exact moments.
+
+The process reported peak RSS 57,364,480 bytes at both resource snapshots and
+zero physical read-byte delta. The zero peak increment does **not** mean zero
+allocation: the baseline is a process high-water mark after fixture setup.
+No index was opened, so this says nothing about mmap cold-open I/O. No
+end-to-end latency, whole-set summary, or Typesense speedup is claimed.
+
 ## Limits that remain open
 
 - The synthetic distribution is corpus-shaped, not a production snapshot.

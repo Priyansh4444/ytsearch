@@ -20,7 +20,12 @@ for run in a b; do
   ' "$scratch/$run.jsonl" > "$scratch/$run.semantic.json"
 done
 
-cmp "$scratch/a.semantic.json" "$scratch/b.semantic.json"
+if ! cmp "$scratch/a.semantic.json" "$scratch/b.semantic.json"; then
+  printf 'prototype semantic repeatability failed; source/provenance must remain unchanged during the test\n' >&2
+  diff -u <(jq '.run_identity' "$scratch/a.jsonl") \
+    <(jq '.run_identity' "$scratch/b.jsonl") >&2 || true
+  exit 1
+fi
 jq -e '
   .schema_version == 3 and
   .outcome == "complete_with_exclusions" and
