@@ -13,7 +13,7 @@ const DOCUMENTS_PER_VIDEO: u32 = 240;
 const MOMENT_WINDOW_MS: u32 = 20_000;
 const PARTS_PER_MILLION: u64 = 1_000_000;
 const REPORT_SCHEMA_VERSION: u8 = 3;
-const HARNESS_VERSION: &str = "lazy-exact-structural-forks-v3";
+const HARNESS_VERSION: &str = "lazy-exact-structural-forks-v4";
 const GENERATOR_VERSION: &str = "splitmix64-corpus-v2";
 const DEFAULT_SEED: u64 = 0x6c8e_9cf5_7093_2bd5;
 const DF_BANDS_PPM: [u32; 7] = [0, 1_000, 10_000, 100_000, 500_000, 900_000, 1_000_000];
@@ -26,7 +26,8 @@ struct Config {
     inject_failure: Option<FailureInjection>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 enum FailureInjection {
     Oracle,
     Measurement,
@@ -58,6 +59,7 @@ enum RunOutcome {
 
 #[derive(Serialize)]
 struct RunIdentity {
+    injected_failure: Option<FailureInjection>,
     report_schema_version: u8,
     harness_version: &'static str,
     prototype_base_commit: &'static str,
@@ -444,15 +446,17 @@ fn semantic_contracts(rounds: usize) -> Vec<SemanticContractReport> {
         }),
         expected: title_expected,
         actual: title_actual,
-        measurement: Some(measure(rounds, || {
-            moments_with_title_matches(
-                MatchSet {
-                    transcript_documents: black_box(&documents),
-                    title_videos: black_box(&title_videos),
-                },
-                black_box(&corpus),
-            )
-        })),
+        measurement: (title_actual == title_expected).then(|| {
+            measure(rounds, || {
+                moments_with_title_matches(
+                    MatchSet {
+                        transcript_documents: black_box(&documents),
+                        title_videos: black_box(&title_videos),
+                    },
+                    black_box(&corpus),
+                )
+            })
+        }),
     }];
     reports.push(measured_phrase_contract(
         "multiple-position-phrase",
@@ -494,9 +498,11 @@ fn measured_phrase_contract(
         outcome: parity_outcome(actual, actual, expected, || CaseOutcome::Eligible),
         expected,
         actual,
-        measurement: Some(measure(rounds, || {
-            u64::from(phrase_matches_document(black_box(&left), black_box(&right)))
-        })),
+        measurement: (actual == expected).then(|| {
+            measure(rounds, || {
+                u64::from(phrase_matches_document(black_box(&left), black_box(&right)))
+            })
+        }),
     }
 }
 
@@ -508,10 +514,11 @@ fn run_identity(config: Config) -> RunIdentity {
     let build_profile = provenance("YTSEARCH_PROTOTYPE_BUILD_PROFILE");
     let environment = provenance("YTSEARCH_PROTOTYPE_ENVIRONMENT");
     let identity = format!(
-        "{REPORT_SCHEMA_VERSION}:{HARNESS_VERSION}:{GENERATOR_VERSION}:{DEFAULT_SEED}:{}:{}:{}:{DF_BANDS_PPM:?}:{source_commit}:{source_dirty}:{rustc_version}:{rustc_target}:{build_profile}:{environment}",
-        config.documents, config.rounds, config.repetition
+        "{REPORT_SCHEMA_VERSION}:{HARNESS_VERSION}:{GENERATOR_VERSION}:{DEFAULT_SEED}:{}:{}:{}:{:?}:{DF_BANDS_PPM:?}:{source_commit}:{source_dirty}:{rustc_version}:{rustc_target}:{build_profile}:{environment}",
+        config.documents, config.rounds, config.repetition, config.inject_failure
     );
     RunIdentity {
+        injected_failure: config.inject_failure,
         report_schema_version: REPORT_SCHEMA_VERSION,
         harness_version: HARNESS_VERSION,
         prototype_base_commit: "1b1092e262d9fcd0586f6236c0e945da431095b4",
@@ -569,12 +576,14 @@ fn measure_set_count(
                 DenseBitmap::from_documents(black_box(&left.sparse), left.bitmap.words.len());
             let right =
                 DenseBitmap::from_documents(black_box(&right.sparse), right.bitmap.words.len());
-            left.checksum() ^ right.checksum()
+            black_box((left, right));
+            0
         },
         || {
             let left = black_box(left.sparse.clone());
             let right = black_box(right.sparse.clone());
-            (left.len() + right.len()) as u64
+            black_box((left, right));
+            0
         },
     );
     let (outcome, bitmap_and_popcount, sparse_skip_leapfrog) = measure_pair(
@@ -643,26 +652,33 @@ where
     if outcome != CaseOutcome::Eligible {
         return (outcome, None, None);
     }
-    let (left, right) = if left_first {
-        (
-            measure_checked(rounds, &mut left),
-            measure_checked(rounds, &mut right),
-        )
-    } else {
-        let right_timing = measure_checked(rounds, &mut right);
-        let left_timing = measure_checked(rounds, &mut left);
-        (left_timing, right_timing)
-    };
-    match (left, right) {
-        (Ok(left), Ok(right)) => (outcome, Some(left), Some(right)),
-        _ => (
+    if rounds == 0 {
+        return (
             CaseOutcome::Failed {
                 reason: CaseFailure::MeasurementFailure,
             },
             None,
             None,
-        ),
+        );
     }
+    black_box(left());
+    black_box(right());
+    let mut left_samples = Vec::with_capacity(rounds);
+    let mut right_samples = Vec::with_capacity(rounds);
+    for round in 0..rounds {
+        if left_first == round.is_multiple_of(2) {
+            left_samples.push(measure_sample(&mut left));
+            right_samples.push(measure_sample(&mut right));
+        } else {
+            right_samples.push(measure_sample(&mut right));
+            left_samples.push(measure_sample(&mut left));
+        }
+    }
+    (
+        outcome,
+        Some(timing_from_samples(left_samples)),
+        Some(timing_from_samples(right_samples)),
+    )
 }
 
 fn counterbalance_left_first(target_df_ppm: u32) -> bool {
@@ -670,14 +686,6 @@ fn counterbalance_left_first(target_df_ppm: u32) -> bool {
         .iter()
         .position(|value| *value == target_df_ppm)
         .is_none_or(|index| index.is_multiple_of(2))
-}
-
-fn measure_checked(rounds: usize, operation: impl FnMut() -> u64) -> Result<Timing, CaseFailure> {
-    if rounds == 0 {
-        Err(CaseFailure::MeasurementFailure)
-    } else {
-        Ok(measure(rounds, operation))
-    }
 }
 
 fn measure_moments(
@@ -781,20 +789,29 @@ fn measure_phrase(
     })
 }
 
-fn measure(mut rounds: usize, mut operation: impl FnMut() -> u64) -> Timing {
+fn measure(rounds: usize, mut operation: impl FnMut() -> u64) -> Timing {
     black_box(operation());
-    let mut elapsed = Vec::with_capacity(rounds);
-    let mut cpu_elapsed = Vec::with_capacity(rounds);
-    while rounds > 0 {
-        let cpu_started = process_cpu_ns();
-        let started = Instant::now();
-        black_box(operation());
-        elapsed.push(started.elapsed().as_nanos());
-        if let (Some(started), Some(ended)) = (cpu_started, process_cpu_ns()) {
-            cpu_elapsed.push(ended.saturating_sub(started));
-        }
-        rounds -= 1;
-    }
+    timing_from_samples(
+        (0..rounds)
+            .map(|_| measure_sample(&mut operation))
+            .collect(),
+    )
+}
+
+fn measure_sample(operation: &mut impl FnMut() -> u64) -> (u128, Option<u128>) {
+    let cpu_started = process_cpu_ns();
+    let started = Instant::now();
+    black_box(operation());
+    let elapsed = started.elapsed().as_nanos();
+    let cpu = cpu_started
+        .zip(process_cpu_ns())
+        .map(|(start, end)| end.saturating_sub(start));
+    (elapsed, cpu)
+}
+
+fn timing_from_samples(samples: Vec<(u128, Option<u128>)>) -> Timing {
+    let mut elapsed: Vec<_> = samples.iter().map(|sample| sample.0).collect();
+    let mut cpu_elapsed: Vec<_> = samples.iter().filter_map(|sample| sample.1).collect();
     elapsed.sort_unstable();
     cpu_elapsed.sort_unstable();
     let p95_index = (elapsed.len() * 95).div_ceil(100).saturating_sub(1);
@@ -966,10 +983,6 @@ impl DenseBitmap {
             bitmap.insert(document);
         }
         bitmap
-    }
-
-    fn checksum(&self) -> u64 {
-        self.words.iter().fold(0, |checksum, word| checksum ^ word)
     }
 
     fn byte_len(&self) -> usize {
@@ -1247,6 +1260,69 @@ fn splitmix64(mut value: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_semantic_case_has_no_measurement() {
+        let report = measured_phrase_contract(
+            "unsorted-negative-control",
+            FieldPositions {
+                text: vec![2],
+                title: vec![],
+            },
+            FieldPositions {
+                text: vec![3, 1],
+                title: vec![],
+            },
+            2,
+        );
+        assert!(matches!(report.outcome, CaseOutcome::Failed { .. }));
+        assert!(report.measurement.is_none());
+        let serialized = serde_json::to_value(&report).unwrap();
+        assert_eq!(serialized["outcome"]["status"], "failed");
+        assert!(serialized["measurement"].is_null());
+        let counters = outcome_counters(std::iter::once(&report.outcome));
+        assert_eq!((counters.attempted, counters.failed), (1, 1));
+    }
+
+    #[test]
+    fn injected_mode_changes_identity() {
+        let config = Config {
+            documents: 101,
+            rounds: 2,
+            repetition: 0,
+            inject_failure: None,
+        };
+        assert_ne!(
+            run_identity(config).identity_digest,
+            run_identity(Config {
+                inject_failure: Some(FailureInjection::Oracle),
+                ..config
+            })
+            .identity_digest
+        );
+    }
+
+    #[test]
+    fn paired_samples_alternate_order_within_case() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        measure_pair(
+            CaseOutcome::Eligible,
+            4,
+            true,
+            || {
+                calls.borrow_mut().push('L');
+                1
+            },
+            || {
+                calls.borrow_mut().push('R');
+                1
+            },
+        );
+        assert_eq!(
+            *calls.borrow(),
+            vec!['L', 'R', 'L', 'R', 'R', 'L', 'L', 'R', 'R', 'L']
+        );
+    }
 
     #[test]
     fn exact_set_counts_match_at_every_df_band() {

@@ -40,7 +40,7 @@ query-owned allocation.
 The top-level `schema_version` is 3. `run_identity` binds the effective document
 count, round count, repetition, ordered DF bands, fixed seed, generator version,
 harness version, actual source HEAD and dirty flag, Rust compiler and target,
-build profile, and host environment into a BLAKE3 digest. The wrapper supplies
+build profile, injected-failure mode, and host environment into a BLAKE3 digest. The wrapper supplies
 these values from the process that performs the run rather than embedding an
 old commit in the binary. The fixture
 test proves identical effective inputs have identical semantic output and that
@@ -58,8 +58,11 @@ incomplete run rather than a report.
 
 Each timing includes wall-clock raw samples, median, p95, min/max, and process
 CPU samples when the OS clock is available (otherwise a reason). Competing A/B
-fork order alternates across DF cases, and construction/query order is inverted
-within a set-count case. The report captures baseline/final process peak RSS and
+fork order alternates between samples within each DF case; order fields record
+the first sample's order. Construction/query starting order is inverted
+within a set-count case. Both construction forks consume their resulting
+collections through the same optimization barrier, without an extra checksum
+traversal. The report captures baseline/final process peak RSS and
 `/proc/self/io` deltas, or an explicit unavailable reason on unsupported hosts.
 
 The deterministic generator uses dense document IDs and distinct `DocId`,
@@ -69,7 +72,12 @@ universal. The moment oracle copies Raw's anchored, non-transitive rule: a match
 stays in its current moment at exactly 20 seconds and starts a new one only
 after 20 seconds.
 
-## First local observation
+## Historical local observation — superseded
+
+These measurements predate the review fixes for asymmetric construction work
+and per-case timing order. They are retained as trial history only. They do not
+support a crossover threshold or a representation choice; collect a fresh run
+with the corrected harness before making either decision.
 
 Environment: release profile, 1,000,000 synthetic documents, 4,167 videos,
 nine in-process samples after one warmup. These are
@@ -84,12 +92,9 @@ independent-process measurements.
 | 50% | 13.2 us | 7.17 ms | 2.67 ms | 2.28 ms |
 | 90% | 12.8 us | 4.60 ms | 4.68 ms | 4.12 ms |
 
-This run supports a density-aware counting representation: sparse skip wins at
-the rarest measured band while bitmap popcount wins by roughly 1% DF. It does
-not show a dense-bit iteration win for moment aggregation; both paths still
-perform the required timestamp gathers, and sparse IDs were modestly faster at
-every measured non-empty band. Bitmap phrase candidates won from 1% upward;
-the 0.1% case had no candidates and is explicitly ineligible.
+The recorded values suggested density-sensitive counting behavior, but the
+timing-order confound prevents using that suggestion as a decision. The 0.1%
+phrase case had no candidates and was explicitly ineligible.
 
 ## Limits that remain open
 
