@@ -37,12 +37,30 @@ incorrect or zero-work fork remains in the denominator and cannot win by
 disappearing. Query scratch is reported explicitly; these forks use no
 query-owned allocation.
 
-The top-level `schema_version` is 2. `run_identity` binds the effective document
-count, round count, ordered DF bands, fixed seed, generator version, harness
-version, and prototype base commit into a deterministic digest. The fixture
+The top-level `schema_version` is 3. `run_identity` binds the effective document
+count, round count, repetition, ordered DF bands, fixed seed, generator version,
+harness version, actual source HEAD and dirty flag, Rust compiler and target,
+build profile, and host environment into a BLAKE3 digest. The wrapper supplies
+these values from the process that performs the run rather than embedding an
+old commit in the binary. The fixture
 test proves identical effective inputs have identical semantic output and that
 changing an effective input changes the identity. This is a report schema, not
 a Raw runtime or on-disk index schema.
+
+`counters` states attempted, eligible, excluded, and failed denominators. The
+explicit prototype-only `--inject-failure oracle|measurement` control proves
+end to end that a bad case remains serialized, all of its timing fields are
+null, the failed denominator increments, and the top-level outcome becomes
+`complete_with_failures`. This retention covers failures observed inside the
+running harness. A subprocess crash cannot be converted into a typed row; the
+wrapper honestly leaves `<output>.partial`, and callers must treat it as an
+incomplete run rather than a report.
+
+Each timing includes wall-clock raw samples, median, p95, min/max, and process
+CPU samples when the OS clock is available (otherwise a reason). Competing A/B
+fork order alternates across DF cases, and construction/query order is inverted
+within a set-count case. The report captures baseline/final process peak RSS and
+`/proc/self/io` deltas, or an explicit unavailable reason on unsupported hosts.
 
 The deterministic generator uses dense document IDs and distinct `DocId`,
 `VideoId`, `DocSet`, and `VideoSet` types, about 240 transcript documents per video, ordered skewed
@@ -83,9 +101,10 @@ the 0.1% case had no candidates and is explicitly ineligible.
   unmeasured.
 - The harness does not yet cover overlap matrices, OR/NOT trees, Tier-1
   histograms, codecs, ranking frontiers, or sessions.
-- The timed phrase corpus still stores one position per term, but adversarial
-  oracle fixtures cover repeated terms, multiple occurrences, reverse and
-  non-adjacent positions, and prohibit cross-field phrases. Title-only and
+- The DF-band phrase corpus still stores one position per term. Separate timed
+  exact semantic rows exercise repeated terms and multiple occurrences;
+  adversarial oracle fixtures also cover reverse and non-adjacent positions and
+  prohibit cross-field phrases. Title-only and
   mixed title/transcript moment fixtures implement the response contract:
   title-only contributes one moment, while a mixed match adds no phantom one.
 
