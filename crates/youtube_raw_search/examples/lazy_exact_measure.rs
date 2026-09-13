@@ -12,8 +12,8 @@ const DEFAULT_ROUNDS: usize = 9;
 const DOCUMENTS_PER_VIDEO: u32 = 240;
 const MOMENT_WINDOW_MS: u32 = 20_000;
 const PARTS_PER_MILLION: u64 = 1_000_000;
-const REPORT_SCHEMA_VERSION: u8 = 2;
-const HARNESS_VERSION: &str = "lazy-exact-structural-forks-v2";
+const REPORT_SCHEMA_VERSION: u8 = 3;
+const HARNESS_VERSION: &str = "lazy-exact-structural-forks-v3";
 const GENERATOR_VERSION: &str = "splitmix64-corpus-v2";
 const DEFAULT_SEED: u64 = 0x6c8e_9cf5_7093_2bd5;
 const DF_BANDS_PPM: [u32; 7] = [0, 1_000, 10_000, 100_000, 500_000, 900_000, 1_000_000];
@@ -22,6 +22,14 @@ const DF_BANDS_PPM: [u32; 7] = [0, 1_000, 10_000, 100_000, 500_000, 900_000, 1_0
 struct Config {
     documents: u32,
     rounds: usize,
+    repetition: u32,
+    inject_failure: Option<FailureInjection>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FailureInjection {
+    Oracle,
+    Measurement,
 }
 
 #[derive(Serialize)]
@@ -30,6 +38,7 @@ struct Report {
     outcome: RunOutcome,
     throwaway_schema9_prototype: bool,
     run_identity: RunIdentity,
+    counters: OutcomeCounters,
     corpus: CorpusReport,
     rounds: usize,
     exact_set_count: Vec<SetCountReport>,
@@ -43,7 +52,7 @@ struct Report {
 enum RunOutcome {
     Complete,
     CompleteWithExclusions,
-    Failed,
+    CompleteWithFailures,
 }
 
 #[derive(Serialize)]
@@ -55,8 +64,23 @@ struct RunIdentity {
     seed: u64,
     documents: u32,
     rounds: usize,
+    repetition: u32,
     df_bands_ppm: [u32; DF_BANDS_PPM.len()],
+    source_commit: String,
+    source_dirty: bool,
+    rustc_version: String,
+    rustc_target: String,
+    build_profile: String,
+    environment: String,
     identity_digest: String,
+}
+
+#[derive(Serialize)]
+struct OutcomeCounters {
+    attempted: usize,
+    eligible: usize,
+    excluded: usize,
+    failed: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -219,14 +243,24 @@ fn main() -> ExitCode {
 fn parse_config() -> Result<Config, String> {
     let mut documents = DEFAULT_DOCUMENTS;
     let mut rounds = DEFAULT_ROUNDS;
+    let mut repetition = 0;
+    let mut inject_failure = None;
     let mut args = env::args().skip(1);
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--documents" => documents = parse_value(&mut args, "--documents")?,
             "--rounds" => rounds = parse_value(&mut args, "--rounds")?,
+            "--repetition" => repetition = parse_value(&mut args, "--repetition")?,
+            "--inject-failure" => {
+                inject_failure = Some(match args.next().as_deref() {
+                    Some("oracle") => FailureInjection::Oracle,
+                    Some("measurement") => FailureInjection::Measurement,
+                    _ => return Err("--inject-failure requires oracle or measurement".to_string()),
+                });
+            }
             "--help" | "-h" => {
                 return Err(
-                    "usage: lazy_exact_measure [--documents <u32>] [--rounds <usize>]".to_string(),
+                    "usage: lazy_exact_measure [--documents <u32>] [--rounds <usize>] [--repetition <u32>] [--inject-failure oracle|measurement]".to_string(),
                 );
             }
             _ => return Err(format!("unknown argument: {argument}")),
@@ -235,7 +269,12 @@ fn parse_config() -> Result<Config, String> {
     if documents == 0 || rounds == 0 {
         return Err("documents and rounds must both be positive".to_string());
     }
-    Ok(Config { documents, rounds })
+    Ok(Config {
+        documents,
+        rounds,
+        repetition,
+        inject_failure,
+    })
 }
 
 fn parse_value<T: std::str::FromStr>(
@@ -264,6 +303,9 @@ fn run(config: Config) -> Result<Report, String> {
             &left,
             &right,
             config.rounds,
+            (target_df_ppm == 1_000)
+                .then_some(config.inject_failure)
+                .flatten(),
         )?);
         exact_moment_aggregation.push(measure_moments(
             target_df_ppm,
@@ -293,17 +335,26 @@ fn run(config: Config) -> Result<Report, String> {
         has_failure |= matches!(outcome, CaseOutcome::Failed { .. });
     }
     let outcome = if has_failure {
-        RunOutcome::Failed
+        RunOutcome::CompleteWithFailures
     } else if has_exclusion {
         RunOutcome::CompleteWithExclusions
     } else {
         RunOutcome::Complete
     };
+    let counters = outcome_counters(
+        exact_set_count
+            .iter()
+            .map(|case| &case.outcome)
+            .chain(exact_moment_aggregation.iter().map(|case| &case.outcome))
+            .chain(phrase_candidates.iter().map(|case| &case.outcome))
+            .chain(semantic_contracts.iter().map(|case| &case.outcome)),
+    );
     Ok(Report {
         schema_version: REPORT_SCHEMA_VERSION,
         outcome,
         throwaway_schema9_prototype: true,
         run_identity: run_identity(config),
+        counters,
         corpus: CorpusReport {
             documents: config.documents,
             videos,
@@ -317,6 +368,24 @@ fn run(config: Config) -> Result<Report, String> {
         phrase_candidates,
         semantic_contracts,
     })
+}
+
+fn outcome_counters<'a>(outcomes: impl Iterator<Item = &'a CaseOutcome>) -> OutcomeCounters {
+    let mut counters = OutcomeCounters {
+        attempted: 0,
+        eligible: 0,
+        excluded: 0,
+        failed: 0,
+    };
+    for outcome in outcomes {
+        counters.attempted += 1;
+        match outcome {
+            CaseOutcome::Eligible => counters.eligible += 1,
+            CaseOutcome::Ineligible { .. } => counters.excluded += 1,
+            CaseOutcome::Failed { .. } => counters.failed += 1,
+        }
+    }
+    counters
 }
 
 fn semantic_contracts() -> Vec<SemanticContractReport> {
@@ -362,9 +431,15 @@ fn semantic_contracts() -> Vec<SemanticContractReport> {
 }
 
 fn run_identity(config: Config) -> RunIdentity {
+    let source_commit = provenance("YTSEARCH_PROTOTYPE_GIT_COMMIT");
+    let source_dirty = provenance("YTSEARCH_PROTOTYPE_GIT_DIRTY") == "true";
+    let rustc_version = provenance("YTSEARCH_PROTOTYPE_RUSTC_VERSION");
+    let rustc_target = provenance("YTSEARCH_PROTOTYPE_RUSTC_TARGET");
+    let build_profile = provenance("YTSEARCH_PROTOTYPE_BUILD_PROFILE");
+    let environment = provenance("YTSEARCH_PROTOTYPE_ENVIRONMENT");
     let identity = format!(
-        "{REPORT_SCHEMA_VERSION}:{HARNESS_VERSION}:{GENERATOR_VERSION}:{DEFAULT_SEED}:{}:{}:{DF_BANDS_PPM:?}",
-        config.documents, config.rounds
+        "{REPORT_SCHEMA_VERSION}:{HARNESS_VERSION}:{GENERATOR_VERSION}:{DEFAULT_SEED}:{}:{}:{}:{DF_BANDS_PPM:?}:{source_commit}:{source_dirty}:{rustc_version}:{rustc_target}:{build_profile}:{environment}",
+        config.documents, config.rounds, config.repetition
     );
     RunIdentity {
         report_schema_version: REPORT_SCHEMA_VERSION,
@@ -374,9 +449,20 @@ fn run_identity(config: Config) -> RunIdentity {
         seed: DEFAULT_SEED,
         documents: config.documents,
         rounds: config.rounds,
+        repetition: config.repetition,
         df_bands_ppm: DF_BANDS_PPM,
+        source_commit,
+        source_dirty,
+        rustc_version,
+        rustc_target,
+        build_profile,
+        environment,
         identity_digest: format!("blake3:{}", blake3::hash(identity.as_bytes()).to_hex()),
     }
+}
+
+fn provenance(name: &str) -> String {
+    env::var(name).unwrap_or_else(|_| "unwrapped-test-process".to_string())
 }
 
 fn measure_set_count(
@@ -384,9 +470,11 @@ fn measure_set_count(
     left: &DocSet,
     right: &DocSet,
     rounds: usize,
+    inject_failure: Option<FailureInjection>,
 ) -> Result<SetCountReport, String> {
     let bitmap_answer = bitmap_intersection_count(&left.bitmap, &right.bitmap);
-    let skip_answer = skip_intersection_count(&left.sparse, &right.sparse);
+    let skip_answer = skip_intersection_count(&left.sparse, &right.sparse)
+        + u64::from(inject_failure == Some(FailureInjection::Oracle));
     let oracle_answer = reference_intersection_count(&left.sparse, &right.sparse);
     let outcome = parity_outcome(bitmap_answer, skip_answer, oracle_answer, || {
         if left.sparse.is_empty() || right.sparse.is_empty() {
@@ -399,7 +487,11 @@ fn measure_set_count(
     });
     let (outcome, bitmap_construction, sparse_construction) = measure_pair(
         outcome,
-        rounds,
+        if inject_failure == Some(FailureInjection::Measurement) {
+            0
+        } else {
+            rounds
+        },
         || {
             let left =
                 DenseBitmap::from_documents(black_box(&left.sparse), left.bitmap.words.len());
@@ -1046,6 +1138,8 @@ mod tests {
         let report = run(Config {
             documents: 101,
             rounds: 1,
+            repetition: 0,
+            inject_failure: None,
         })
         .unwrap();
         assert_eq!(report.exact_set_count.len(), DF_BANDS_PPM.len());
@@ -1072,6 +1166,8 @@ mod tests {
         let config = Config {
             documents: 101,
             rounds: 2,
+            repetition: 0,
+            inject_failure: None,
         };
         assert_eq!(
             run_identity(config).identity_digest,

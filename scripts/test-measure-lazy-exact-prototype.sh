@@ -21,11 +21,18 @@ done
 
 cmp "$scratch/a.semantic.json" "$scratch/b.semantic.json"
 jq -e '
-  .schema_version == 2 and
+  .schema_version == 3 and
   .outcome == "complete_with_exclusions" and
   .throwaway_schema9_prototype and
-  .run_identity.report_schema_version == 2 and
+  .run_identity.report_schema_version == 3 and
   (.run_identity.identity_digest | test("^blake3:[0-9a-f]{64}$")) and
+  (.run_identity.source_commit | test("^[0-9a-f]{40}$")) and
+  (.run_identity.source_dirty | type == "boolean") and
+  (.run_identity.rustc_version | startswith("rustc ")) and
+  (.run_identity.rustc_target | length > 0) and
+  .run_identity.build_profile == "release" and
+  (.run_identity.environment | length > 0) and
+  .counters == {attempted: 23, eligible: 19, excluded: 4, failed: 0} and
   (.exact_set_count | length == 7) and
   (.exact_moment_aggregation | length == 7) and
   (.phrase_candidates | length == 7) and
@@ -48,6 +55,26 @@ then
   exit 1
 fi
 
+
+for failure in oracle measurement; do
+  "$script_dir/measure-lazy-exact-prototype.sh" \
+    "$scratch/$failure.jsonl" --documents 20003 --rounds 2 \
+    --inject-failure "$failure" >/dev/null
+  jq -e --arg failure "${failure}_mismatch" '
+    .outcome == "complete_with_failures" and
+    .counters == {attempted: 23, eligible: 18, excluded: 4, failed: 1} and
+    (.exact_set_count[]
+      | select(.case_id == "set-count-df-1000")
+      | .outcome.status == "failed" and
+        (.outcome.reason == $failure or
+         ($failure == "measurement_mismatch" and .outcome.reason == "measurement_failure")) and
+        .bitmap_construction == null and
+        .sparse_construction == null and
+        .bitmap_and_popcount == null and
+        .sparse_skip_leapfrog == null)
+  ' "$scratch/$failure.jsonl" >/dev/null
+done
+
 if "$script_dir/measure-lazy-exact-prototype.sh" \
   "$scratch/invalid.jsonl" --documents 0 --rounds 1 >/dev/null 2>&1
 then
@@ -55,7 +82,7 @@ then
   exit 1
 fi
 jq -e '
-  .schema_version == 2 and
+  .schema_version == 3 and
   .outcome == "failed" and
   .throwaway_schema9_prototype and
   (.reason | contains("positive"))

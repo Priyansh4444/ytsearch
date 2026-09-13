@@ -32,8 +32,24 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 partial="$output.partial"
 cd "$repo_root"
 
+source_commit=$(git rev-parse HEAD)
+if git diff --quiet --ignore-submodules -- && git diff --cached --quiet --ignore-submodules --; then
+  source_dirty=false
+else
+  source_dirty=true
+fi
+rustc_version=$(rustc --version)
+rustc_target=$(rustc -vV | sed -n 's/^host: //p')
+environment="$(uname -srm):$(uname -m)"
+
 # A failed run deliberately leaves *.partial behind instead of presenting an
 # incomplete observation as a successful report.
+YTSEARCH_PROTOTYPE_GIT_COMMIT="$source_commit" \
+YTSEARCH_PROTOTYPE_GIT_DIRTY="$source_dirty" \
+YTSEARCH_PROTOTYPE_RUSTC_VERSION="$rustc_version" \
+YTSEARCH_PROTOTYPE_RUSTC_TARGET="$rustc_target" \
+YTSEARCH_PROTOTYPE_BUILD_PROFILE=release \
+YTSEARCH_PROTOTYPE_ENVIRONMENT="$environment" \
 cargo run --quiet -p youtube_raw_search --release \
   --example lazy_exact_measure -- "$@" > "$partial"
 mv -- "$partial" "$output"
