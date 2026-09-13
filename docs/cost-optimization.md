@@ -7,8 +7,9 @@ Concrete scale-to-zero, practical economy, warm concurrent, and three-node HA
 budgets are in
 [cold-warm-concurrency-costs-2026-07-17.md](cold-warm-concurrency-costs-2026-07-17.md).
 
-The current high-impact RAM reduction and guarded display-field migration are
-documented in [Typesense memory optimization](typesense-memory-optimization.md).
+The Typesense-era RAM reduction and display-field migration records were retired
+with the engine that needed them; recover them from git history
+(`git log -- docs/typesense-memory-optimization.md`) if they are ever relevant.
 
 ## Current Production Shape
 

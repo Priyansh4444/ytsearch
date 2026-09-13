@@ -110,9 +110,6 @@ export const rawSearchHealthyEffect = (env: AvailabilityEnvironment): Effect.Eff
     Effect.catch(() => Effect.succeed(false)),
   );
 
-export const rawSearchHealthy = (env: AvailabilityEnvironment): Promise<boolean> =>
-  Effect.runPromise(rawSearchHealthyEffect(env));
-
 function availability(
   status: SearchAvailabilityStatus,
   searchEnabled: boolean,

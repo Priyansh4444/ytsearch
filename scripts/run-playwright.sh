@@ -44,8 +44,7 @@ if [ -z "${PLAYWRIGHT_BASE_URL:-}" ]; then
   vite_ready=0
   while [ "$start_attempt" -le 2 ]; do
     : >"$vite_log"
-    VITE_SEMANTIC_SEARCH_ENABLED=true \
-      "$node_bin" ./node_modules/vite/bin/vite.js \
+    "$node_bin" ./node_modules/vite/bin/vite.js \
       --host 127.0.0.1 --port "$port" --strictPort \
       </dev/null >"$vite_log" 2>&1 &
     vite_pid="$!"

@@ -1,21 +1,31 @@
 # Agent Handoff: ytsearch
 
-This repo is an experimental YouTube transcript search system. Treat it as a small production staging system, not a toy demo: changes can affect live Fly machines, Cloudflare Pages previews, search quality, indexing cost, and creator data already indexed in Typesense.
+This repo is an experimental YouTube transcript search system. Treat it as a small production staging system, not a toy demo: changes can affect live Fly machines, Cloudflare Pages previews, search quality, indexing cost, and creator data already indexed in the Raw search engine.
 
 ## Current Shape
 
 `ytsearch` indexes YouTube creator captions into search backends and serves timestamped transcript search through a Solid frontend.
 
-Active staging paths:
+Active paths (production):
 
 | Surface | URL / App | Notes |
 | --- | --- | --- |
 | Frontend | `https://search.pronsh.dev` | Canonical Cloudflare Worker frontend and same-origin API proxy. |
-| Typesense Fly API | `ytsearch-api-typesense-fly-staging` / `https://ytsearch-api-typesense-fly-staging.fly.dev` | Rust `youtube_api`, backend `typesense`. |
-| Typesense engine | `ytsearch-typesense-staging` | Self-hosted Typesense on Fly. |
-| Cloud indexer | `ytsearch-indexer-staging` | One on-demand Typesense queue worker, woken through Cloudflare Queue. |
+| Raw API | `ytsearch-api-raw-production` / `https://ytsearch-api-raw-production.fly.dev` | Rust `youtube_api` plus the authoritative JSONL request queue. Always running. |
+| Raw engine | `ytsearch-raw-production` | Reloadable inverted index and mutation publisher. Scheduled. |
+| Raw indexer | `ytsearch-indexer-raw-production` | One on-demand queue worker, woken through Cloudflare Queue. |
 
-Managed Typesense Cloud is intentionally removed from active staging. Do not reintroduce it unless the user explicitly asks.
+`raw` is the only accepted backend id (`scripts/fly-run-queue-indexer.sh` rejects
+anything else; `.env.example` ships `YTSEARCH_SEARCH_BACKEND=raw`).
+
+The Typesense-era units (`ytsearch-api-typesense-fly-staging`,
+`ytsearch-typesense-staging`, `ytsearch-indexer-staging`) are suspended and listed
+in the retirement set in `config/fly-production-resources.json`. Their teardown
+tooling (`scripts/deprecate-typesense-fly.sh`,
+`scripts/destroy-deprecated-typesense-fly.sh`) is still exercised by
+`scripts/check-all.sh`. Managed Typesense Cloud is intentionally removed. Do not
+reintroduce Typesense, and do not tear the suspended units down, unless the user
+explicitly asks.
 
 ## Read This First
 
@@ -39,14 +49,23 @@ Frontend:
 
 Rust crates:
 
-- `crates/youtube_api`: Axum API used by frontends. Search quality, result grouping, rate limit, queue API client fields, Axiom search logs.
+- `crates/youtube_api`: Axum API used by frontends. Search quality, result grouping, sorting, rate limit, queue API, Axiom search logs.
 - `crates/youtube_cli`: operator CLI for validation, indexing, refresh counts, search, benchmarks.
 - `crates/youtube_ingest`: core chunking/domain traits.
-- `crates/youtube_search`: shared search trait/query types used by API and backends.
-- `crates/youtube_typesense`: active Typesense admin/search implementation.
-- `crates/youtube_sources`: YouTube metadata source.
+- `crates/youtube_search_service`: the `SearchBackend` trait and shared query/result types.
+- `crates/youtube_search_client`: the client the API uses to call the search backend.
+- `crates/youtube_raw_search`: the active Raw search engine (mutable inverted index, publication, admin surface).
+- `crates/youtube_index_store`: publication/receipt bookkeeping for the Raw index.
+- `crates/youtube_client`: YouTube metadata client.
+- `crates/youtube_sources`: YouTube metadata source used by ingestion.
+- `crates/youtube_time`: shared timestamp helpers used by ingest and sources.
+
+Experiment-only crates, NOT part of any shipped path: `crates/youtube_semantic`
+and `crates/youtube_serialization_bench`. They exist to be run by the
+`autoresearch/` harness (`autoresearch/program.md`); nothing in the API, CLI, or
+indexer depends on them.
 - `crates/youtube_ytdlp`: caption extraction via `yt-dlp`.
-- `crates/youtube_transcribe`: optional local audio transcription through `voxtype`; cloud indexer does not have Voxtype by default.
+- `crates/youtube_transcribe`: optional local audio transcription through `voxtype`; the cloud indexer does not have Voxtype by default.
 
 Scripts:
 
@@ -71,13 +90,13 @@ Search:
 - Very low-signal queries, such as `I`, should not enforce all terms and should use newest-for-filter ordering.
 - Do not switch to strict “must contain every term” matching unless the user explicitly asks. The desired behavior is best match.
 - For queries like `fable on high`, stopwords such as `on` should not dominate snippet choice. Prefer stronger terms/highlighted title/transcript matches.
-- Typesense sorts low-signal queries with the numeric `published_at_timestamp` field.
+- Result ordering/sorting is applied by the API layer (`SearchSort` in `crates/youtube_api`), not by the search backend.
 
 Indexing:
 
 - `update` means add missing videos and preserve existing chunks.
 - `rewipe` deletes a creator's chunks before rebuilding and requires explicit destructive acknowledgement. Prefer `update` when possible.
-- Heavy indexing should default conservative: `JOBS=1` while staging uses one Typesense writer.
+- Heavy indexing should default conservative: `JOBS=1 CHANNEL_JOBS=1`, because one Raw writer publishes at a time (see `docs/indexing-operations-guide.md`).
 - Count refresh matters. After indexing, run `refresh-youtuber-counts(-list)` or the wrapper scripts so frontend channel cards match backend chunks. Use `refresh-youtuber(s)` only when profile metadata/public counts/avatars also need YouTube enrichment.
 - `scripts/indexed-channels.txt` is the active creator list for bulk update/daily queue update.
 
@@ -85,7 +104,7 @@ Queue:
 
 - Frontends can submit an index request for a handle. The queue API stores JSONL on a Fly volume.
 - Only one configured queue daemon may use the JSONL queue. It normally remains stopped while idle and Cloudflare wakes it after an approved request; multiple machines can race.
-- The active queue indexer processes `typesense-fly`.
+- The active queue indexer processes `raw`.
 - Queue failures should log and not permanently block the queue. The queue daemon emits structured stderr logs and best-effort Axiom ingestion when Axiom env vars are present.
 - Current daemon command pattern:
 
@@ -94,7 +113,8 @@ ON_DEMAND=1 \
 QUEUE_DAEMON=1 \
 DAILY_UPDATE_ENABLED=0 \
 ACK_FAILED_REQUESTS=0 \
-BACKENDS="typesense-fly" \
+QUEUE_TARGET_BACKEND=raw \
+BACKENDS="raw" \
 JOBS=1 \
 scripts/fly-run-queue-indexer.sh
 ```
@@ -120,8 +140,9 @@ Do not inspect or print secrets unless the user explicitly asks. Prefer loading 
 Common env names:
 
 - YouTube: `YOUTUBE_API_KEY`
-- Typesense Fly: `TYPESENSE_SELFHOST_API_URL`, `TYPESENSE_SELFHOST_API_KEY`, `TYPESENSE_API_URL`, `TYPESENSE_ADMIN_API_KEY`, `TYPESENSE_SEARCH_API_KEY`
-- API backend selector: `YTSEARCH_SEARCH_BACKEND=typesense`
+- Raw search: `RAW_SEARCH_API_URL`, `RAW_SEARCH_ADMIN_API_KEY`, `RAW_SEARCH_API_KEY`, `RAW_SEARCH_COLLECTION`, `RAW_SEARCH_APP_NAME`
+- API backend selector: `YTSEARCH_SEARCH_BACKEND=raw`
+- Raw indexer/queue machine: `QUEUE_TARGET_BACKEND=raw`, `INDEXER_APP_NAME`, `INDEXER_VOLUME_NAME`, `INDEXER_IMAGE`
 - Queue: `INDEX_QUEUE_API_BASE_URL`, `YTSEARCH_INDEX_QUEUE_TOKEN`
 - Axiom: `AXIOM_TOKEN` or `AXIOM_API_KEY`, `AXIOM_DATASET`, optional `AXIOM_URL`/`AXIOM_EDGE_URL`/`AXIOM_DOMAIN`
 - Cloudflare: `CLOUDFLARE_API_TOKEN` or logged-in `bunx wrangler`
@@ -133,7 +154,7 @@ Use `scripts/load-env.sh` indirectly through wrappers. If appending missing env 
 Rust API deploys:
 
 ```bash
-flyctl deploy --config fly.typesense-api.toml --app ytsearch-api-typesense-fly-staging --primary-region sjc
+flyctl deploy --config fly.raw-api.toml --app ytsearch-api-raw-production --primary-region sjc
 ```
 
 Frontend Worker:
@@ -152,8 +173,8 @@ scripts/fly-run-queue-indexers.sh
 Before replacing the queue daemon, confirm it is idle:
 
 ```bash
-flyctl machines list -a ytsearch-indexer-staging
-flyctl logs --app ytsearch-indexer-staging --machine MACHINE_ID --no-tail
+flyctl machines list -a ytsearch-indexer-raw-production
+flyctl logs --app ytsearch-indexer-raw-production --machine MACHINE_ID --no-tail
 ```
 
 ## Verification Commands
@@ -162,7 +183,7 @@ Run these before declaring work done:
 
 ```bash
 cargo fmt --check
-cargo test -p youtube_api -p youtube_typesense -p youtube_search
+cargo test --workspace
 bun run build
 scripts/check-frontend-backends.sh
 sh -n scripts/cloud-index-queue-entrypoint.sh scripts/fly-run-queue-indexer.sh
@@ -177,8 +198,8 @@ bun run frontend:check
 For live search quality checks:
 
 ```bash
-curl -fsS 'https://ytsearch-api-typesense-fly-staging.fly.dev/api/search?q=fable%20on%20high&youtuber=%40t3dotgg&per_page=10' | jq '.videos[0:5] | map({title,published_at,title_highlight,hit_count:(.hits|length), first:.hits[0].text_highlight})'
-curl -fsS 'https://ytsearch-api-typesense-fly-staging.fly.dev/api/search?q=I&youtuber=%40t3dotgg&per_page=10' | jq '.videos[0:5] | map({title,published_at})'
+curl -fsS 'https://ytsearch-api-raw-production.fly.dev/api/search?q=fable%20on%20high&youtuber=%40t3dotgg&per_page=10' | jq '.videos[0:5] | map({title,published_at,title_highlight,hit_count:(.hits|length), first:.hits[0].text_highlight})'
+curl -fsS 'https://ytsearch-api-raw-production.fly.dev/api/search?q=I&youtuber=%40t3dotgg&per_page=10' | jq '.videos[0:5] | map({title,published_at})'
 ```
 
 Expected current behavior:
@@ -196,13 +217,12 @@ For machines/cost sanity:
 
 ```bash
 scripts/check-staging-machines.sh
-flyctl machines list -a ytsearch-indexer-staging
+flyctl machines list -a ytsearch-indexer-raw-production
 ```
 
 ## Current Known Sharp Edges
 
-- Typesense Fly needs `published_at_timestamp` on old chunks for newest ordering on low-signal queries. Backfill it through non-destructive update ingestion.
-- Typesense can become unavailable under concurrent writes. Keep indexing concurrency conservative.
+- Publisher-based index swaps: one Raw writer publishes at a time. Keep indexing concurrency conservative.
 - The queue API uses JSONL on one Fly volume. Do not scale it horizontally without replacing storage/locking.
 - Cloud indexing cannot run Voxtype unless the image is extended. Use public captions, cookies, or uploaded transcript cache.
 - `yt-dlp` may need cookies for age-restricted or bot-challenged videos.
@@ -210,7 +230,7 @@ flyctl machines list -a ytsearch-indexer-staging
 
 ## Working Rules For Future Agents
 
-- Prefer existing abstractions over new ones: `youtube_search::TranscriptSearchBackend`, `youtube_ingest` traits, backend crates, then API/CLI wiring.
+- Prefer existing abstractions over new ones: `youtube_search_service::SearchBackend`, `youtube_ingest` traits, backend crates, then API/CLI wiring.
 - Keep admin/indexing operations out of `youtube_api`; API should use search-only keys for public search.
 - Keep frontend env limited to public API URLs and queue URL. Never expose admin keys.
 - Use `rg` first for code search.
@@ -228,7 +248,7 @@ flyctl machines list -a ytsearch-indexer-staging
 
 ```bash
 git status --short
-rg -n "TODO|FIXME|typesense cloud|TYPESENSE_CLOUD|require_all_terms|matchingStrategy"
+rg -n "TODO|FIXME|raw|require_all_terms|matchingStrategy"
 scripts/agent-status.sh
 scripts/summarize-indexer-logs.sh
 ```
@@ -237,7 +257,7 @@ Then read the relevant doc listed in "Read This First" before editing.
 
 
 CURRENTLY The queue has one backend-specific row per request and one on-demand
-Typesense worker. Cloudflare wakes the stopped worker after approval; it exits
+Raw worker. Cloudflare wakes the stopped worker after approval; it exits
 after five idle minutes. `yt-dlp` is the primary discovery/transcript source.
 When staged, `YOUTUBE_API_KEY_FILE_B64` is loaded only inside the indexer and
 the Data API is appended as metadata/discovery fallback; it cannot supply
