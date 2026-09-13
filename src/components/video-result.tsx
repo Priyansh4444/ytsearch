@@ -287,6 +287,19 @@ function engagementSummary(video: SearchVideoResult): string | undefined {
 }
 
 function autoplayEmbedUrl(value: string): string {
+  // Fast path only when appending is provably identical to
+  // `searchParams.set("autoplay", "1")`: an absolute embed URL with no fragment
+  // and no query or fragment. Query keys can be bare, percent-encoded, or
+  // repeated, so substring checks cannot prove that `autoplay` is absent.
+  // Anything ambiguous keeps the parser and its `URLSearchParams.set` semantics.
+  if (
+    value.startsWith("https://") &&
+    value.includes("/embed/") &&
+    !value.includes("?") &&
+    !value.includes("#")
+  ) {
+    return `${value}${value.includes("?") ? "&" : "?"}autoplay=1`;
+  }
   const url = new URL(value);
   url.searchParams.set("autoplay", "1");
   return url.toString();
