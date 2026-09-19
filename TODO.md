@@ -40,6 +40,10 @@ Raw can replace Typesense as the canonical search index.
     validated missing-value/video metadata, phrase/negation/scope semantics,
     anchored moment totals, deterministic pagination, and fail-closed
     expansion modes. Full matrix coverage remains required above.
+  - [x] Extend that independent oracle with complete typed per-field prefix and
+    fuzzy expansion, Unicode-scalar thresholds, decimal exactness, canonical
+    alternative ordering/additive scoring, and expansion-safe negation. Split
+    and token-drop semantics remain explicitly unsupported and unclosed.
   - [ ] Re-run the public performance lane without crossing the edge rate limit.
     The first 480-request attempt produced 360 expected HTTP 429 responses and
     a 490.436 ms `react` outlier; retain this failed attempt in P00 evidence.

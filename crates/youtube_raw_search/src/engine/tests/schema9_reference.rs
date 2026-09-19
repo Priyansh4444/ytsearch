@@ -5,9 +5,13 @@
 //! scans every fixture document, constructs the complete result, and paginates
 //! only after deterministic ordering.
 
-use std::{cmp::Ordering, collections::BTreeMap};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use serde::Deserialize;
+use unicode_categories::UnicodeCategories;
 use unicode_normalization::UnicodeNormalization;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -110,6 +114,16 @@ impl FixtureCorpus {
         }
         Ok(Self { documents })
     }
+
+    fn lexicon(&self, field: IndexedField) -> BTreeSet<String> {
+        self.documents
+            .iter()
+            .flat_map(|document| match field {
+                IndexedField::Text => tokenize(&document.text),
+                IndexedField::Title => tokenize(&document.title),
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -132,12 +146,67 @@ enum Sort {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EnabledFields {
+    Text,
+    Title,
+    TextAndTitle,
+}
+
+impl EnabledFields {
+    fn contains(self, field: IndexedField) -> bool {
+        matches!(
+            (self, field),
+            (Self::Text, IndexedField::Text)
+                | (Self::Title, IndexedField::Title)
+                | (Self::TextAndTitle, _)
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExpansionPolicy {
     ExactOnly,
-    Prefix,
-    Fuzzy,
-    Split,
+    Prefix(EnabledFields),
+    Fuzzy(EnabledFields),
+    Split(EnabledFields),
     TokenDrop,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum IndexedField {
+    Text,
+    Title,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ExpansionKind {
+    Exact,
+    Prefix,
+    TypoOne,
+    TypoTwo,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TermAlternative {
+    term: String,
+    field: IndexedField,
+    kind: ExpansionKind,
+    distance: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TermPlan {
+    alternatives: Vec<TermAlternative>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ExpansionPlan {
+    Exact(Query),
+    ExpandedTerms {
+        query: Query,
+        fields: EnabledFields,
+        terms: BTreeMap<String, TermPlan>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -189,26 +258,277 @@ struct DocumentMatch<'a> {
     provenance: Provenance,
 }
 
-fn evaluate_exhaustively(
+fn build_expansion_plan(
     corpus: &FixtureCorpus,
-    request: &OracleRequest,
-) -> Result<OracleResult, OracleError> {
-    match request.expansion {
-        ExpansionPolicy::ExactOnly => {}
-        ExpansionPolicy::Prefix => {
-            return Err(OracleError::UnsupportedReferenceSemantics("prefix"));
-        }
-        ExpansionPolicy::Fuzzy => {
-            return Err(OracleError::UnsupportedReferenceSemantics("fuzzy"));
-        }
-        ExpansionPolicy::Split => {
+    query: Query,
+    policy: ExpansionPolicy,
+) -> Result<ExpansionPlan, OracleError> {
+    let fields = match policy {
+        ExpansionPolicy::ExactOnly => return Ok(ExpansionPlan::Exact(query)),
+        ExpansionPolicy::Prefix(fields) | ExpansionPolicy::Fuzzy(fields) => fields,
+        ExpansionPolicy::Split(_) => {
             return Err(OracleError::UnsupportedReferenceSemantics("split"));
         }
         ExpansionPolicy::TokenDrop => {
             return Err(OracleError::UnsupportedReferenceSemantics("token_drop"));
         }
+    };
+    let terms = positive_terms(&query);
+    let final_term = terms.last().copied();
+    let mut plans = BTreeMap::new();
+    for term in terms {
+        let mut alternatives = Vec::new();
+        for field in [IndexedField::Text, IndexedField::Title] {
+            if !fields.contains(field) {
+                continue;
+            }
+            alternatives.push(TermAlternative {
+                term: term.to_string(),
+                field,
+                kind: ExpansionKind::Exact,
+                distance: 0,
+            });
+            match policy {
+                ExpansionPolicy::Prefix(_) if Some(term) == final_term => {
+                    for candidate in corpus.lexicon(field) {
+                        if candidate != term && candidate.starts_with(term) {
+                            alternatives.push(TermAlternative {
+                                term: candidate,
+                                field,
+                                kind: ExpansionKind::Prefix,
+                                distance: 0,
+                            });
+                        }
+                    }
+                }
+                ExpansionPolicy::Fuzzy(_) if !is_pure_decimal(term) => {
+                    let scalar_count = term.chars().count();
+                    let maximum_distance = if scalar_count >= 7 {
+                        2
+                    } else if scalar_count >= 4 {
+                        1
+                    } else {
+                        0
+                    };
+                    for candidate in corpus.lexicon(field) {
+                        if candidate == term {
+                            continue;
+                        }
+                        let distance = levenshtein_scalars(term, &candidate);
+                        if distance > 0 && distance <= maximum_distance {
+                            alternatives.push(TermAlternative {
+                                term: candidate,
+                                field,
+                                kind: if distance == 1 {
+                                    ExpansionKind::TypoOne
+                                } else {
+                                    ExpansionKind::TypoTwo
+                                },
+                                distance,
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        alternatives.sort_by(|left, right| {
+            left.distance
+                .cmp(&right.distance)
+                .then_with(|| left.term.as_bytes().cmp(right.term.as_bytes()))
+                .then_with(|| left.kind.cmp(&right.kind))
+                .then_with(|| left.field.cmp(&right.field))
+        });
+        alternatives.dedup();
+        plans.insert(term.to_string(), TermPlan { alternatives });
+    }
+    Ok(ExpansionPlan::ExpandedTerms {
+        query,
+        fields,
+        terms: plans,
+    })
+}
+
+fn positive_terms(query: &Query) -> Vec<&str> {
+    fn visit<'a>(query: &'a Query, output: &mut Vec<&'a str>) {
+        match query {
+            Query::Term(term) => output.push(term),
+            Query::Phrase(terms) => output.extend(terms.iter().map(String::as_str)),
+            Query::And(children) => {
+                for child in children {
+                    if !matches!(child, Query::Not(_)) {
+                        visit(child, output);
+                    }
+                }
+            }
+            Query::All | Query::Not(_) => {}
+        }
+    }
+    let mut output = Vec::new();
+    visit(query, &mut output);
+    let mut seen = BTreeSet::new();
+    output.retain(|term| seen.insert(*term));
+    output
+}
+
+fn evaluate_plan(plan: &ExpansionPlan, title: &[String], text: &[String]) -> Trace {
+    match plan {
+        ExpansionPlan::Exact(query) => evaluate_query(query, title, text),
+        ExpansionPlan::ExpandedTerms {
+            query,
+            fields,
+            terms,
+        } => evaluate_expanded_query(query, *fields, terms, title, text),
+    }
+}
+
+fn evaluate_expanded_query(
+    query: &Query,
+    fields: EnabledFields,
+    plans: &BTreeMap<String, TermPlan>,
+    title: &[String],
+    text: &[String],
+) -> Trace {
+    match query {
+        Query::Term(term) => plans.get(term).map_or_else(
+            || evaluate_query(query, title, text),
+            |plan| evaluate_term_plan(plan, title, text),
+        ),
+        Query::And(children) => {
+            let mut combined = Trace {
+                matched: true,
+                ..Trace::default()
+            };
+            for child in children {
+                let trace = if matches!(child, Query::Not(_)) {
+                    evaluate_query_in_fields(child, title, text, fields)
+                } else {
+                    evaluate_expanded_query(child, fields, plans, title, text)
+                };
+                if !trace.matched {
+                    combined.matched = false;
+                    return combined;
+                }
+                combined.score += trace.score;
+                combined.provenance.title |= trace.provenance.title;
+                combined.provenance.transcript |= trace.provenance.transcript;
+                combined.provenance.phrase |= trace.provenance.phrase;
+            }
+            combined
+        }
+        Query::Phrase(phrase) => {
+            let title_match =
+                fields.contains(IndexedField::Title) && contains_phrase(title, phrase);
+            let text_match = fields.contains(IndexedField::Text) && contains_phrase(text, phrase);
+            if !title_match && !text_match {
+                return Trace::default();
+            }
+            let mut combined = Trace {
+                matched: true,
+                provenance: Provenance {
+                    title: title_match,
+                    transcript: text_match,
+                    phrase: true,
+                },
+                ..Trace::default()
+            };
+            let mut seen = BTreeSet::new();
+            for term in phrase.iter().filter(|term| seen.insert(term.as_str())) {
+                let trace = plans.get(term).map_or_else(
+                    || evaluate_query_in_fields(&Query::Term(term.clone()), title, text, fields),
+                    |plan| evaluate_term_plan(plan, title, text),
+                );
+                if !trace.matched {
+                    return Trace::default();
+                }
+                combined.score += trace.score;
+                combined.provenance.title |= trace.provenance.title;
+                combined.provenance.transcript |= trace.provenance.transcript;
+            }
+            combined.score *= 1.25;
+            combined
+        }
+        Query::All | Query::Not(_) => evaluate_query_in_fields(query, title, text, fields),
+    }
+}
+
+fn evaluate_term_plan(plan: &TermPlan, title: &[String], text: &[String]) -> Trace {
+    let mut combined = Trace::default();
+    for alternative in &plan.alternatives {
+        let tokens = match alternative.field {
+            IndexedField::Text => text,
+            IndexedField::Title => title,
+        };
+        let frequency = tokens
+            .iter()
+            .filter(|token| *token == &alternative.term)
+            .count() as f32;
+        if frequency == 0.0 {
+            continue;
+        }
+        let weight = match alternative.field {
+            IndexedField::Text => 4.0,
+            IndexedField::Title => 6.0,
+        };
+        let multiplier = match alternative.kind {
+            ExpansionKind::Exact => 1.0,
+            ExpansionKind::Prefix => 0.9,
+            ExpansionKind::TypoOne => 0.65,
+            ExpansionKind::TypoTwo => 0.4,
+        };
+        combined.matched = true;
+        combined.score += (frequency * weight) * multiplier;
+        combined.provenance.text_or_title(alternative.field);
+    }
+    combined
+}
+
+impl Provenance {
+    fn text_or_title(&mut self, field: IndexedField) {
+        match field {
+            IndexedField::Text => self.transcript = true,
+            IndexedField::Title => self.title = true,
+        }
+    }
+}
+
+fn is_pure_decimal(term: &str) -> bool {
+    !term.is_empty()
+        && term
+            .chars()
+            .all(|character| character.is_number_decimal_digit())
+}
+
+fn levenshtein_scalars(left: &str, right: &str) -> usize {
+    let right = right.chars().collect::<Vec<_>>();
+    let mut previous = (0..=right.len()).collect::<Vec<_>>();
+    let mut current = vec![0; right.len() + 1];
+    for (left_index, left_character) in left.chars().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_character) in right.iter().enumerate() {
+            let substitution =
+                previous[right_index] + usize::from(left_character != *right_character);
+            current[right_index + 1] = (current[right_index] + 1)
+                .min(previous[right_index + 1] + 1)
+                .min(substitution);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.len()]
+}
+
+fn evaluate_exhaustively(
+    corpus: &FixtureCorpus,
+    request: &OracleRequest,
+) -> Result<OracleResult, OracleError> {
+    if matches!(request.expansion, ExpansionPolicy::Split(_)) {
+        return Err(OracleError::UnsupportedReferenceSemantics("split"));
+    }
+    if matches!(request.expansion, ExpansionPolicy::TokenDrop) {
+        return Err(OracleError::UnsupportedReferenceSemantics("token_drop"));
     }
     let query = parse_query(&request.query)?;
+    let plan = build_expansion_plan(corpus, query, request.expansion)?;
     let creator = request.creator.as_deref().map(normalize_handle);
     let mut matches = Vec::new();
     for document in &corpus.documents {
@@ -220,7 +540,7 @@ fn evaluate_exhaustively(
         }
         let title = tokenize(&document.title);
         let text = tokenize(&document.text);
-        let trace = evaluate_query(&query, &title, &text);
+        let trace = evaluate_plan(&plan, &title, &text);
         if trace.matched {
             matches.push(DocumentMatch {
                 document,
@@ -312,14 +632,31 @@ struct Trace {
 }
 
 fn evaluate_query(query: &Query, title: &[String], text: &[String]) -> Trace {
+    evaluate_query_in_fields(query, title, text, EnabledFields::TextAndTitle)
+}
+
+fn evaluate_query_in_fields(
+    query: &Query,
+    title: &[String],
+    text: &[String],
+    fields: EnabledFields,
+) -> Trace {
     match query {
         Query::All => Trace {
             matched: true,
             ..Trace::default()
         },
         Query::Term(term) => {
-            let title_count = title.iter().filter(|token| *token == term).count() as f32;
-            let text_count = text.iter().filter(|token| *token == term).count() as f32;
+            let title_count = if fields.contains(IndexedField::Title) {
+                title.iter().filter(|token| *token == term).count() as f32
+            } else {
+                0.0
+            };
+            let text_count = if fields.contains(IndexedField::Text) {
+                text.iter().filter(|token| *token == term).count() as f32
+            } else {
+                0.0
+            };
             Trace {
                 matched: title_count > 0.0 || text_count > 0.0,
                 score: title_count * 6.0 + text_count * 4.0,
@@ -331,8 +668,8 @@ fn evaluate_query(query: &Query, title: &[String], text: &[String]) -> Trace {
             }
         }
         Query::Phrase(terms) => {
-            let title_match = contains_phrase(title, terms);
-            let text_match = contains_phrase(text, terms);
+            let title_match = fields.contains(IndexedField::Title) && contains_phrase(title, terms);
+            let text_match = fields.contains(IndexedField::Text) && contains_phrase(text, terms);
             Trace {
                 matched: title_match || text_match,
                 score: (u8::from(title_match) as f32 * 6.0 + u8::from(text_match) as f32 * 4.0)
@@ -350,7 +687,7 @@ fn evaluate_query(query: &Query, title: &[String], text: &[String]) -> Trace {
                 ..Trace::default()
             };
             for child in children {
-                let trace = evaluate_query(child, title, text);
+                let trace = evaluate_query_in_fields(child, title, text, fields);
                 if !trace.matched {
                     combined.matched = false;
                     return combined;
@@ -363,7 +700,7 @@ fn evaluate_query(query: &Query, title: &[String], text: &[String]) -> Trace {
             combined
         }
         Query::Not(child) => {
-            let excluded = evaluate_query(child, title, text);
+            let excluded = evaluate_query_in_fields(child, title, text, fields);
             Trace {
                 matched: !excluded.matched,
                 ..Trace::default()
@@ -751,9 +1088,7 @@ fn punctuation_and_unsupported_semantics_fail_closed() {
     );
     assert!(evaluate_exhaustively(&corpus, &request("create-effect", 10)).is_ok());
     for (expansion, expected) in [
-        (ExpansionPolicy::Prefix, "prefix"),
-        (ExpansionPolicy::Fuzzy, "fuzzy"),
-        (ExpansionPolicy::Split, "split"),
+        (ExpansionPolicy::Split(EnabledFields::TextAndTitle), "split"),
         (ExpansionPolicy::TokenDrop, "token_drop"),
     ] {
         let mut expanded = request("create", 10);
@@ -763,6 +1098,208 @@ fn punctuation_and_unsupported_semantics_fail_closed() {
             Err(OracleError::UnsupportedReferenceSemantics(expected))
         );
     }
+}
+
+#[test]
+fn prefix_expansion_is_complete_and_field_specific() {
+    let corpus = FixtureCorpus::from_jsonl(FIXTURE).unwrap();
+    let mut text = request("creat", 10);
+    text.expansion = ExpansionPolicy::Prefix(EnabledFields::Text);
+    let text_result = evaluate_exhaustively(&corpus, &text).unwrap();
+    assert_eq!(text_result.total_videos, 1);
+    assert_eq!(text_result.hits[0].video_id, "solid");
+
+    let mut title = text.clone();
+    title.expansion = ExpansionPolicy::Prefix(EnabledFields::Title);
+    let title_result = evaluate_exhaustively(&corpus, &title).unwrap();
+    assert_eq!(title_result.total_videos, 2);
+
+    let mut both = text;
+    both.expansion = ExpansionPolicy::Prefix(EnabledFields::TextAndTitle);
+    let both_result = evaluate_exhaustively(&corpus, &both).unwrap();
+    assert_eq!(both_result.total_videos, 2);
+    assert!(both_result.hits.iter().any(|hit| hit.provenance.title));
+    assert!(both_result.hits.iter().any(|hit| hit.provenance.transcript));
+
+    let phrase_query = parse_query("creat \"effect systems\"").unwrap();
+    let phrase_plan = build_expansion_plan(
+        &corpus,
+        phrase_query,
+        ExpansionPolicy::Prefix(EnabledFields::TextAndTitle),
+    )
+    .unwrap();
+    let ExpansionPlan::ExpandedTerms { terms, .. } = phrase_plan else {
+        panic!("prefix must produce a typed expansion plan");
+    };
+    assert!(
+        terms["creat"]
+            .alternatives
+            .iter()
+            .all(|alternative| alternative.kind == ExpansionKind::Exact)
+    );
+    assert_eq!(
+        positive_terms(&parse_query("alpha alpha \"beta gamma\"").unwrap()),
+        ["alpha", "beta", "gamma"]
+    );
+}
+
+#[test]
+fn fuzzy_expansion_obeys_complete_unicode_threshold_and_numeric_contract() {
+    let base = FixtureCorpus::from_jsonl(FIXTURE).unwrap();
+    let prototype = base.documents[0].clone();
+    let mut documents = Vec::new();
+    let terms = [
+        "aaab",
+        "aaac",
+        "aaad",
+        "aaae",
+        "aaaf",
+        "aaag",
+        "cafe",
+        "ééééééab",
+        "ab13",
+        "2024",
+        "2025",
+        "٢٠٢٤",
+        "٢٠٢٥",
+    ];
+    for (index, term) in terms.into_iter().enumerate() {
+        let mut document = prototype.clone();
+        document.id = format!("fuzzy-{index}");
+        document.video_id = format!("fuzzy-{index}");
+        document.title = "fixture".to_string();
+        document.text = term.to_string();
+        documents.push(document);
+    }
+    let corpus = FixtureCorpus { documents };
+
+    let mut fuzzy = request("aaaa", 10);
+    fuzzy.expansion = ExpansionPolicy::Fuzzy(EnabledFields::Text);
+    let fuzzy_result = evaluate_exhaustively(&corpus, &fuzzy).unwrap();
+    assert_eq!(fuzzy_result.total_videos, 6);
+
+    for (query, expected_video) in [
+        ("café", "fuzzy-6"),
+        ("ééééééé", "fuzzy-7"),
+        ("ab12", "fuzzy-8"),
+    ] {
+        let mut request = request(query, 10);
+        request.expansion = ExpansionPolicy::Fuzzy(EnabledFields::Text);
+        let result = evaluate_exhaustively(&corpus, &request).unwrap();
+        assert_eq!(result.total_videos, 1, "query={query}");
+        assert_eq!(result.hits[0].video_id, expected_video, "query={query}");
+    }
+
+    for (query, expected_video) in [("2024", "fuzzy-9"), ("٢٠٢٤", "fuzzy-11")] {
+        let mut request = request(query, 10);
+        request.expansion = ExpansionPolicy::Fuzzy(EnabledFields::Text);
+        let result = evaluate_exhaustively(&corpus, &request).unwrap();
+        assert_eq!(result.total_videos, 1, "query={query}");
+        assert_eq!(result.hits[0].video_id, expected_video, "query={query}");
+    }
+}
+
+#[test]
+fn expansion_order_scoring_and_negation_are_exact() {
+    let base = FixtureCorpus::from_jsonl(FIXTURE).unwrap();
+    let prototype = base.documents[0].clone();
+    let mut document = prototype.clone();
+    document.id = "combined".to_string();
+    document.video_id = "combined".to_string();
+    document.title = "aaab".to_string();
+    document.text = "aaac aaab aaac".to_string();
+    let corpus = FixtureCorpus {
+        documents: vec![document],
+    };
+
+    let query = parse_query("aaaa").unwrap();
+    let plan = build_expansion_plan(
+        &corpus,
+        query,
+        ExpansionPolicy::Fuzzy(EnabledFields::TextAndTitle),
+    )
+    .unwrap();
+    let ExpansionPlan::ExpandedTerms { terms, .. } = &plan else {
+        panic!("fuzzy must produce a typed expansion plan");
+    };
+    assert_eq!(
+        terms["aaaa"]
+            .alternatives
+            .iter()
+            .map(|alternative| {
+                (
+                    alternative.distance,
+                    alternative.term.as_str(),
+                    alternative.field,
+                    alternative.kind,
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            (0, "aaaa", IndexedField::Text, ExpansionKind::Exact),
+            (0, "aaaa", IndexedField::Title, ExpansionKind::Exact),
+            (1, "aaab", IndexedField::Text, ExpansionKind::TypoOne),
+            (1, "aaab", IndexedField::Title, ExpansionKind::TypoOne),
+            (1, "aaac", IndexedField::Text, ExpansionKind::TypoOne),
+        ]
+    );
+    let trace = evaluate_plan(&plan, &tokenize("aaab"), &tokenize("aaac aaab aaac"));
+    assert_eq!(
+        trace.score.to_bits(),
+        (3.0_f32 * 4.0 * 0.65 + 6.0 * 0.65).to_bits()
+    );
+
+    let mut negative_neighbor = prototype.clone();
+    negative_neighbor.id = "negative-neighbor".to_string();
+    negative_neighbor.video_id = "negative-neighbor".to_string();
+    negative_neighbor.title = "fixture".to_string();
+    negative_neighbor.text = "aaad aaac".to_string();
+    let mut exact_negative = prototype;
+    exact_negative.id = "exact-negative".to_string();
+    exact_negative.video_id = "exact-negative".to_string();
+    exact_negative.title = "fixture".to_string();
+    exact_negative.text = "aaad aaab".to_string();
+    let negation_corpus = FixtureCorpus {
+        documents: vec![negative_neighbor, exact_negative],
+    };
+    let mut request = request("aaad -aaab", 10);
+    request.expansion = ExpansionPolicy::Fuzzy(EnabledFields::Text);
+    let result = evaluate_exhaustively(&negation_corpus, &request).unwrap();
+    assert_eq!(result.total_videos, 1);
+    assert_eq!(result.hits[0].video_id, "negative-neighbor");
+}
+
+#[test]
+fn expansion_field_scope_applies_to_phrases_and_exact_negation() {
+    let base = FixtureCorpus::from_jsonl(FIXTURE).unwrap();
+    let prototype = base.documents[0].clone();
+    let mut title_phrase = prototype.clone();
+    title_phrase.id = "title-phrase".to_string();
+    title_phrase.video_id = "title-phrase".to_string();
+    title_phrase.title = "anchor alpha bet beta".to_string();
+    title_phrase.text = "fixture".to_string();
+    let mut text_phrase = prototype;
+    text_phrase.id = "text-phrase".to_string();
+    text_phrase.video_id = "text-phrase".to_string();
+    text_phrase.title = "anchor".to_string();
+    text_phrase.text = "alpha bet beta".to_string();
+    let corpus = FixtureCorpus {
+        documents: vec![title_phrase, text_phrase],
+    };
+
+    let mut phrase = request("\"alpha bet\"", 10);
+    phrase.expansion = ExpansionPolicy::Prefix(EnabledFields::Title);
+    let phrase_result = evaluate_exhaustively(&corpus, &phrase).unwrap();
+    assert_eq!(phrase_result.total_videos, 1);
+    assert_eq!(phrase_result.hits[0].video_id, "title-phrase");
+    let exact_result = evaluate_exhaustively(&corpus, &request("\"alpha bet\"", 10)).unwrap();
+    assert!(phrase_result.hits[0].score_bits != exact_result.hits[0].score_bits);
+
+    let mut negation = request("anchor -\"alpha bet\"", 10);
+    negation.expansion = ExpansionPolicy::Fuzzy(EnabledFields::Title);
+    let negation_result = evaluate_exhaustively(&corpus, &negation).unwrap();
+    assert_eq!(negation_result.total_videos, 1);
+    assert_eq!(negation_result.hits[0].video_id, "text-phrase");
 }
 
 #[test]

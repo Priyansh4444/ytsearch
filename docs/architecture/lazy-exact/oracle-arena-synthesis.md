@@ -48,13 +48,24 @@ their dropout is not counted as supporting evidence.
 
 ## First verifiable unit
 
-The initial unit supports exact terms, conjunction, repeated-token phrases,
-negation, creator scope, missing-versus-present numeric sorting, exhaustive
-ordering, and pagination. Prefix, fuzzy, split, and token-drop behavior must
-return an explicit unsupported result until their independent semantics are
-implemented. Unsupported is a failed coverage gate, never a passing fallback.
+The implemented foundation supports exact terms, conjunction, repeated-token
+phrases, negation, creator scope, missing-versus-present numeric sorting,
+exhaustive ordering, and pagination. The next unit adds typed per-field prefix
+and fuzzy plans: prefix applies only to the last deduplicated positive token,
+fuzzy distance counts Unicode scalars, decimal-only tokens remain exact, every
+in-threshold lexicon alternative is admitted, and negative terms remain exact.
+Split and token-drop behavior still return an explicit unsupported result until
+their independent semantics are implemented. Unsupported is a failed coverage
+gate, never a passing fallback.
 
 Verification requires fixture boundary tests, NFC/NFD token equivalence,
 phrase positions, negation-before-totals, missing-versus-zero ordering,
 page-size invariant enumeration, and a deliberately wrong candidate that the
 differential comparator rejects.
+
+Prefix/fuzzy verification additionally covers phrase-aware final-token
+selection, first-occurrence deduplication, independent title/text lexicons,
+more than four equal-distance alternatives, the four- and seven-scalar edit
+thresholds, mixed alphanumeric terms, ASCII and non-ASCII decimal terms,
+canonical alternative ordering, additive score bits, and exact negation while
+positive terms expand.

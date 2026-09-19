@@ -34,6 +34,17 @@ indexed, or deleted data.
 The machine-readable facts and failures are in
 [`baseline-receipt.json`](baseline-receipt.json).
 
+## Independent exhaustive oracle
+
+The oracle now covers the exact-query foundation plus typed prefix and fuzzy
+expansion without importing production parsing, scoring, posting, sorting, or
+aggregation helpers. Its expansion tests freeze phrase-aware final-token
+selection, first-occurrence term deduplication, per-field lexicons, uncapped
+equal-distance admission, Unicode-scalar edit thresholds, decimal exactness,
+canonical alternative order, additive score bits, and exact negative terms.
+Split and token-drop remain fail-closed and are not counted as completed P00
+coverage.
+
 ## Search baseline
 
 [`public-api-samples.txt`](public-api-samples.txt) retains every request from the
