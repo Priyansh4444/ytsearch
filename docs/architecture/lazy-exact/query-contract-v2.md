@@ -1,6 +1,6 @@
 # Raw query contract: observed legacy and schema-9 v2
 
-Status: **P00 contract draft; not yet fully frozen**  
+Status: **P00 contract frozen; executable goldens pass**  
 Scope: query parsing, match membership, score reduction, video/moment ranking, and request validation  
 Observed implementation: `schema9-p00` at `97f6031`
 
@@ -73,7 +73,7 @@ Consequences that are part of the observation, not assumptions:
 | `alpha -"beta gamma"` | positive query AND NOT exact phrase | same | **FROZEN** |
 | only negative terms | parser produces no positive terms; legacy falls into wildcard/all then subtracts | explicit full-document universe followed by subtraction | **FROZEN** |
 | `*` | wildcard; one visible moment per matched video in grouped mode | explicit wildcard mode, one visible moment per matched video | **FROZEN** |
-| punctuation only | parser produces no positive tokens and legacy follows the same all-documents branch as wildcard | reject with `invalid_query`; only the trimmed literal `*` selects wildcard | **DECIDED QG-01; GOLDEN PENDING** |
+| punctuation only | parser produces no positive tokens and legacy follows the same all-documents branch as wildcard | reject with `invalid_query`; only the trimmed literal `*` selects wildcard | **FROZEN QG-01; GOLDEN PASS** |
 | empty or whitespace | rejected before parsing with `q cannot be empty` | reject | **FROZEN** |
 | unmatched `"` | rejected with `query contains an unterminated quoted phrase` | reject with stable invalid-input category | **FROZEN** |
 | empty quoted phrase | rejected with `quoted phrase must contain at least one searchable token` | reject | **FROZEN** |
@@ -84,8 +84,8 @@ Consequences that are part of the observation, not assumptions:
 | `word-word` | two positive terms, not negation | same | **FROZEN** |
 | quoted phrase across title/text | cannot cross fields | never crosses fields | **FROZEN** |
 | quoted phrase across transcript chunks | cannot cross chunks | never crosses chunks | **FROZEN** |
-| Unicode-equivalent spellings | no explicit normalization; equality is produced lowercase term bytes | normalize the complete input to NFC, tokenize alphanumeric runs, apply locale-neutral Unicode lowercase, then NFC-normalize each emitted token; no compatibility folding | **DECIDED QG-02; GOLDEN PENDING** |
-| numerical tokens | accepted as alphanumeric terms; typo threshold is based on UTF-8 byte length, with no numeric exception | pure Unicode-decimal tokens are exact-only with no implicit prefix; mixed alphanumeric tokens use normal expansion; nonnumeric length thresholds count Unicode scalars after normalization | **DECIDED QG-03; GOLDEN PENDING** |
+| Unicode-equivalent spellings | no explicit normalization; equality is produced lowercase term bytes | normalize the complete input to NFC, tokenize alphanumeric runs, apply locale-neutral Unicode lowercase, then NFC-normalize each emitted token; no compatibility folding | **FROZEN QG-02; GOLDEN PASS** |
+| numerical tokens | accepted as alphanumeric terms; typo threshold is based on UTF-8 byte length, with no numeric exception | pure Unicode-decimal tokens are exact-only with no implicit prefix; mixed alphanumeric tokens use normal expansion; nonnumeric length thresholds count Unicode scalars after normalization | **FROZEN QG-03; GOLDEN PASS** |
 
 Negation markers are recognized only at the beginning of the query or following whitespace. A negative query must always have a named universe. The v2 AST must encode `All AND NOT(...)` for a negative-only query; subtraction from an empty set is forbidden.
 
@@ -119,12 +119,12 @@ Schema-9 v2 freezes the accepted *families* and the ordered token-drop policy, b
 
 | Question | Required resolution |
 | --- | --- |
-| Which lexicon alternatives are semantically admitted when more than four have equal edit distance? | **DECIDED QG-04; GOLDEN PENDING:** admit every term within the permitted distance; reduce in distance then normalized-term-byte order. DF may schedule work but never change membership. |
-| Does an exact split remain valid after the legacy one-million-posting budget is exceeded? | **DECIDED QG-05; GOLDEN PENDING:** every qualifying exact split is semantic regardless of posting work or alternative count. Execution must remain lazy without dropping membership. |
-| Do queries longer than 21 distinct terms continue token dropping beyond the legacy ladders? | **DECIDED QG-06; GOLDEN PENDING:** after the full predicate, try every prefix from n-1 through 1, then every suffix from index 1 through n-1; the first predicate meeting the threshold wins. The 512-byte query limit bounds the ladder. |
-| Is prefix matching enabled per field identically? | **DECIDED QG-07; GOLDEN PENDING:** apply the same complete normalized-prefix rule independently to each enabled field, then union while retaining field provenance. |
+| Which lexicon alternatives are semantically admitted when more than four have equal edit distance? | **FROZEN QG-04; GOLDEN PASS:** admit every term within the permitted distance; reduce in distance then normalized-term-byte order. DF may schedule work but never change membership. |
+| Does an exact split remain valid after the legacy one-million-posting budget is exceeded? | **FROZEN QG-05; GOLDEN PASS:** every qualifying exact split is semantic regardless of posting work or alternative count. Execution must remain lazy without dropping membership. |
+| Do queries longer than 21 distinct terms continue token dropping beyond the legacy ladders? | **FROZEN QG-06; GOLDEN PASS:** after the full predicate, try every prefix from n-1 through 1, then every suffix from index 1 through n-1; the first predicate meeting the threshold wins. The 512-byte query limit bounds the ladder. |
+| Is prefix matching enabled per field identically? | **FROZEN QG-07; GOLDEN PASS:** apply the same complete normalized-prefix rule independently to each enabled field, then union while retaining field provenance. |
 
-The QG-01 through QG-07 policy choices are decided. P00 grammar remains red until the named adversarial goldens prove each choice and the shared tokenizer prevents index/query drift.
+The QG-01 through QG-07 policy choices are frozen by the named adversarial goldens. P03 must implement one shared tokenizer for index and query paths so runtime behavior cannot drift from this oracle.
 
 ## Request validation
 
@@ -138,7 +138,7 @@ Unknown query-string fields are rejected by Serde's `deny_unknown_fields`; they 
 | `filter_by` | one exact `video_id:=value` or `youtuber_handle:=value`; optional balanced backticks; max value 256 bytes | same; parsed as an exact predicate |
 | `group_by` | absent or `video_id` | same |
 | `group_limit` | 1 through 250; default 5 in grouped output | same |
-| `per_page` | 0 through 250; default 10 | zero is a successful count-only window with exact totals/Tier 0, empty hits, no cursor, and `has_next_page=false` |
+| `per_page` | 0 through 250; default 10 | **FROZEN QV-01; GOLDEN PASS:** zero is a successful count-only window with exact totals/Tier 0, empty hits, no cursor, and `has_next_page=false` |
 | `page` | any `u32`; zero is coerced to one | preserve for compatible GET API |
 | `limit` | 0 through 250; mutually exclusive with page/per_page | zero has the same successful count-only semantics as `per_page=0` |
 | `offset` | `u32`, only with `limit` | same |
@@ -321,12 +321,12 @@ V2 uses `f32::total_cmp` only after finiteness is proved. Rank bounds must round
 | distinct exact/prefix/typo identities that hit one document | additive after identity deduplication, **FROZEN** |
 | identical identity reached twice | count once, **FROZEN** |
 | exact split bonus placement | after its two components, **FROZEN** |
-| overlapping split hypotheses and whole-token hypotheses | **DECIDED QS-01; GOLDEN PENDING:** each whole-token or split parse is a mutually exclusive query-slot hypothesis; fully score each and select by finite score descending, then exact-whole, prefix-whole, split-exact, split-fuzzy, typo-1, typo-2 priority, then canonical bytes. Never add competing parses. |
-| fuzzy-split phrase/proximity multiplier placement | **DECIDED QS-02; GOLDEN PENDING:** per document, reduce canonical field contributions and corrected-component multipliers, add left then right, add binary32 `4.0`, multiply by maximum text/title proximity, then multiply by `1.25` when adjacent. Phrase evidence boosts locally and never removes loose matches elsewhere. |
-| multiple phrase multipliers in one query | **DECIDED QS-03; GOLDEN PENDING:** compute each required phrase factor, choose the maximum in canonical phrase order, and multiply once. Ordered preference is OR. Never multiply phrase factors together. |
-| title and text unquoted proximity when both match | **DECIDED QS-04; GOLDEN PENDING:** use the maximum finite field factor, then evaluate `(raw * field_max) * ordered_factor` as two binary32 multiplications without FMA. |
+| overlapping split hypotheses and whole-token hypotheses | **FROZEN QS-01; GOLDEN PASS:** each whole-token or split parse is a mutually exclusive query-slot hypothesis; fully score each and select by finite score descending, then exact-whole, prefix-whole, split-exact, split-fuzzy, typo-1, typo-2 priority, then canonical bytes. Never add competing parses. |
+| fuzzy-split phrase/proximity multiplier placement | **FROZEN QS-02; GOLDEN PASS:** per document, reduce canonical field contributions and corrected-component multipliers, add left then right, add binary32 `4.0`, multiply by maximum text/title proximity, then multiply by `1.25` when adjacent. Phrase evidence boosts locally and never removes loose matches elsewhere. |
+| multiple phrase multipliers in one query | **FROZEN QS-03; GOLDEN PASS:** compute each required phrase factor, choose the maximum in canonical phrase order, and multiply once. Ordered preference is OR. Never multiply phrase factors together. |
+| title and text unquoted proximity when both match | **FROZEN QS-04; GOLDEN PASS:** use the maximum finite field factor, then evaluate `(raw * field_max) * ordered_factor` as two binary32 multiplications without FMA. |
 
-QS-01 through QS-04 now have reviewed policy answers. P00 still fails its score-freeze gate until the exact intermediate and final score-bit fixtures pass. An optimizer may not substitute mathematically equivalent reassociation.
+QS-01 through QS-04 have reviewed policy answers and exact intermediate/final score-bit fixtures in `engine/tests/query_contract_v2.rs`. An optimizer may not substitute mathematically equivalent reassociation.
 
 ## Ranking contracts
 
@@ -403,9 +403,9 @@ timestamp ascending
 external chunk ID ascending
 ```
 
-Unknown/missing numeric metadata is represented by an explicit missing bit and numeric zero in fast fields. **DECIDED QR-01; GOLDEN PENDING:** for each named descending numeric sort, every present value including real zero sorts before missing. Missing contributes zero only to relevance arithmetic and remains distinct in the sort key.
+Unknown/missing numeric metadata is represented by an explicit missing bit and numeric zero in fast fields. **FROZEN QR-01; GOLDEN PASS:** for each named descending numeric sort, every present value including real zero sorts before missing. Missing contributes zero only to relevance arithmetic and remains distinct in the sort key.
 
-**DECIDED QR-02; GOLDEN PENDING:** an absent publication timestamp sorts last for both newest and oldest. Present signed timestamps compare in the requested direction, preserving pre-epoch, epoch-zero, positive, and equal values.
+**FROZEN QR-02; GOLDEN PASS:** an absent publication timestamp sorts last for both newest and oldest. Present signed timestamps compare in the requested direction, preserving pre-epoch, epoch-zero, positive, and equal values.
 
 No generation-local dense identifier is a stable v2 tie breaker.
 
