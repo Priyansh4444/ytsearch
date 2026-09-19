@@ -36,6 +36,10 @@ Raw can replace Typesense as the canonical search index.
   - [ ] Resolve its 14 explicit `decision_pending` cases with executable
     exhaustive evidence; current reviewed-policy matrix digest is
     `4ab1279d…f1927e492`.
+  - [x] Add the independent exhaustive exact-query oracle foundation with
+    validated missing-value/video metadata, phrase/negation/scope semantics,
+    anchored moment totals, deterministic pagination, and fail-closed
+    expansion modes. Full matrix coverage remains required above.
   - [ ] Re-run the public performance lane without crossing the edge rate limit.
     The first 480-request attempt produced 360 expected HTTP 429 responses and
     a 490.436 ms `react` outlier; retain this failed attempt in P00 evidence.

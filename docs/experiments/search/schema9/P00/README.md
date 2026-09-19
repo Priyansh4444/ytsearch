@@ -78,6 +78,17 @@ byte-range upload continuation or cross-invocation adoption of a prior remote
 job directory. Schema 9 must extend the shared path rather than assuming those
 two missing capabilities already exist.
 
+## Exhaustive reference foundation
+
+The first independent oracle unit now covers the exact-query subset without
+importing production parser, scorer, posting, sorting, or aggregation helpers.
+It validates fixture identity and video-level metadata, preserves absent values
+separately from real zero, scans every document, paginates only after complete
+ordering, and differentially rejects candidate errors and result/facet drift.
+Prefix, fuzzy, split, and token-drop modes fail closed as explicitly unsupported
+until their independent semantics are implemented. This is foundation evidence,
+not completion of the 300-case gate.
+
 ## Next autonomous repairs
 
 1. Implement schema-9 structural metadata and lazy exact execution against the
