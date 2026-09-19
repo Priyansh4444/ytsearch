@@ -73,7 +73,7 @@ Consequences that are part of the observation, not assumptions:
 | `alpha -"beta gamma"` | positive query AND NOT exact phrase | same | **FROZEN** |
 | only negative terms | parser produces no positive terms; legacy falls into wildcard/all then subtracts | explicit full-document universe followed by subtraction | **FROZEN** |
 | `*` | wildcard; one visible moment per matched video in grouped mode | explicit wildcard mode, one visible moment per matched video | **FROZEN** |
-| punctuation only | parser produces no positive tokens and legacy follows the same all-documents branch as wildcard | **FAILED GATE:** choose rejection or explicit wildcard equivalence; never inherit by accident | **FAILED GATE QG-01** |
+| punctuation only | parser produces no positive tokens and legacy follows the same all-documents branch as wildcard | reject with `invalid_query`; only the trimmed literal `*` selects wildcard | **DECIDED QG-01; GOLDEN PENDING** |
 | empty or whitespace | rejected before parsing with `q cannot be empty` | reject | **FROZEN** |
 | unmatched `"` | rejected with `query contains an unterminated quoted phrase` | reject with stable invalid-input category | **FROZEN** |
 | empty quoted phrase | rejected with `quoted phrase must contain at least one searchable token` | reject | **FROZEN** |
@@ -84,8 +84,8 @@ Consequences that are part of the observation, not assumptions:
 | `word-word` | two positive terms, not negation | same | **FROZEN** |
 | quoted phrase across title/text | cannot cross fields | never crosses fields | **FROZEN** |
 | quoted phrase across transcript chunks | cannot cross chunks | never crosses chunks | **FROZEN** |
-| Unicode-equivalent spellings | no explicit normalization; equality is produced lowercase term bytes | **FAILED GATE:** select and version a normalization form or explicitly freeze byte-distinct behavior with adversarial fixtures | **FAILED GATE QG-02** |
-| numerical tokens | accepted as alphanumeric terms; typo threshold is based on UTF-8 byte length, with no numeric exception | **FAILED GATE:** freeze whether numeric terms permit typo/prefix expansion and whether threshold uses bytes or scalar count | **FAILED GATE QG-03** |
+| Unicode-equivalent spellings | no explicit normalization; equality is produced lowercase term bytes | normalize the complete input to NFC, tokenize alphanumeric runs, apply locale-neutral Unicode lowercase, then NFC-normalize each emitted token; no compatibility folding | **DECIDED QG-02; GOLDEN PENDING** |
+| numerical tokens | accepted as alphanumeric terms; typo threshold is based on UTF-8 byte length, with no numeric exception | pure Unicode-decimal tokens are exact-only with no implicit prefix; mixed alphanumeric tokens use normal expansion; nonnumeric length thresholds count Unicode scalars after normalization | **DECIDED QG-03; GOLDEN PENDING** |
 
 Negation markers are recognized only at the beginning of the query or following whitespace. A negative query must always have a named universe. The v2 AST must encode `All AND NOT(...)` for a negative-only query; subtraction from an empty set is forbidden.
 
@@ -119,12 +119,12 @@ Schema-9 v2 freezes the accepted *families* and the ordered token-drop policy, b
 
 | Question | Required resolution |
 | --- | --- |
-| Which lexicon alternatives are semantically admitted when more than four have equal edit distance? | **FAILED GATE QG-04:** specify deterministic complete selection or a reviewed bounded semantic rule with fixtures. |
-| Does an exact split remain valid after the legacy one-million-posting budget is exceeded? | **FAILED GATE QG-05:** decide semantics independently of cost; execution may be lazy but cannot silently lose recall. |
-| Do queries longer than 21 distinct terms continue token dropping beyond the legacy ladders? | **FAILED GATE QG-06:** freeze a total rule for arbitrary accepted query length. |
-| Is prefix matching enabled per field identically? | Legacy asks the fuzzy index for both enabled fields. **FAILED GATE QG-07:** prove the fuzzy index's per-field candidate semantics and freeze them with field-specific fixtures. |
+| Which lexicon alternatives are semantically admitted when more than four have equal edit distance? | **DECIDED QG-04; GOLDEN PENDING:** admit every term within the permitted distance; reduce in distance then normalized-term-byte order. DF may schedule work but never change membership. |
+| Does an exact split remain valid after the legacy one-million-posting budget is exceeded? | **DECIDED QG-05; GOLDEN PENDING:** every qualifying exact split is semantic regardless of posting work or alternative count. Execution must remain lazy without dropping membership. |
+| Do queries longer than 21 distinct terms continue token dropping beyond the legacy ladders? | **DECIDED QG-06; GOLDEN PENDING:** after the full predicate, try every prefix from n-1 through 1, then every suffix from index 1 through n-1; the first predicate meeting the threshold wins. The 512-byte query limit bounds the ladder. |
+| Is prefix matching enabled per field identically? | **DECIDED QG-07; GOLDEN PENDING:** apply the same complete normalized-prefix rule independently to each enabled field, then union while retaining field provenance. |
 
-Until QG-01 through QG-07 are resolved, P00 grammar is not fully frozen.
+The QG-01 through QG-07 policy choices are decided. P00 grammar remains red until the named adversarial goldens prove each choice and the shared tokenizer prevents index/query drift.
 
 ## Request validation
 
@@ -138,9 +138,9 @@ Unknown query-string fields are rejected by Serde's `deny_unknown_fields`; they 
 | `filter_by` | one exact `video_id:=value` or `youtuber_handle:=value`; optional balanced backticks; max value 256 bytes | same; parsed as an exact predicate |
 | `group_by` | absent or `video_id` | same |
 | `group_limit` | 1 through 250; default 5 in grouped output | same |
-| `per_page` | 0 through 250; default 10 | **FAILED GATE QV-01:** decide whether zero is a valid empty window or invalid input |
+| `per_page` | 0 through 250; default 10 | zero is a successful count-only window with exact totals/Tier 0, empty hits, no cursor, and `has_next_page=false` |
 | `page` | any `u32`; zero is coerced to one | preserve for compatible GET API |
-| `limit` | 0 through 250; mutually exclusive with page/per_page | **FAILED GATE QV-01** also applies to zero |
+| `limit` | 0 through 250; mutually exclusive with page/per_page | zero has the same successful count-only semantics as `per_page=0` |
 | `offset` | `u32`, only with `limit` | same |
 | `sort_by` | six explicit expressions below or absent | same transport strings |
 | `text_match_type` | absent or `sum_score` | same |
@@ -321,12 +321,12 @@ V2 uses `f32::total_cmp` only after finiteness is proved. Rank bounds must round
 | distinct exact/prefix/typo identities that hit one document | additive after identity deduplication, **FROZEN** |
 | identical identity reached twice | count once, **FROZEN** |
 | exact split bonus placement | after its two components, **FROZEN** |
-| overlapping split hypotheses and whole-token hypotheses | **FAILED GATE QS-01:** golden judgment required for whether all distinct identities add or mutually exclusive hypotheses select one branch |
-| fuzzy-split phrase/proximity multiplier placement | **FAILED GATE QS-02:** extract current branch order and approve or amend it |
-| multiple phrase multipliers in one query | **FAILED GATE QS-03:** define product, maximum, or independent score components |
-| title and text unquoted proximity when both match | legacy uses the maximum multiplier; v2 tentatively preserves maximum, but lacks bit-golden fixtures | **FAILED GATE QS-04** |
+| overlapping split hypotheses and whole-token hypotheses | **DECIDED QS-01; GOLDEN PENDING:** each whole-token or split parse is a mutually exclusive query-slot hypothesis; fully score each and select by finite score descending, then exact-whole, prefix-whole, split-exact, split-fuzzy, typo-1, typo-2 priority, then canonical bytes. Never add competing parses. |
+| fuzzy-split phrase/proximity multiplier placement | **DECIDED QS-02; GOLDEN PENDING:** per document, reduce canonical field contributions and corrected-component multipliers, add left then right, add binary32 `4.0`, multiply by maximum text/title proximity, then multiply by `1.25` when adjacent. Phrase evidence boosts locally and never removes loose matches elsewhere. |
+| multiple phrase multipliers in one query | **DECIDED QS-03; GOLDEN PENDING:** compute each required phrase factor, choose the maximum in canonical phrase order, and multiply once. Ordered preference is OR. Never multiply phrase factors together. |
+| title and text unquoted proximity when both match | **DECIDED QS-04; GOLDEN PENDING:** use the maximum finite field factor, then evaluate `(raw * field_max) * ordered_factor` as two binary32 multiplications without FMA. |
 
-P00 fails its score-freeze gate until QS-01 through QS-04 have reviewed answers and exact score-bit fixtures. An optimizer may not select convenient answers.
+QS-01 through QS-04 now have reviewed policy answers. P00 still fails its score-freeze gate until the exact intermediate and final score-bit fixtures pass. An optimizer may not substitute mathematically equivalent reassociation.
 
 ## Ranking contracts
 
@@ -403,9 +403,9 @@ timestamp ascending
 external chunk ID ascending
 ```
 
-Unknown/missing numeric metadata is represented by an explicit missing bit and numeric zero in fast fields. **FAILED GATE QR-01:** approve whether missing sorts below a real zero or is equivalent to zero; the reader must not infer this from storage encoding.
+Unknown/missing numeric metadata is represented by an explicit missing bit and numeric zero in fast fields. **DECIDED QR-01; GOLDEN PENDING:** for each named descending numeric sort, every present value including real zero sorts before missing. Missing contributes zero only to relevance arithmetic and remains distinct in the sort key.
 
-**FAILED GATE QR-02:** exact tie semantics for publication timestamps that are absent have the same missing-value decision requirement.
+**DECIDED QR-02; GOLDEN PENDING:** an absent publication timestamp sorts last for both newest and oldest. Present signed timestamps compare in the requested direction, preserving pre-epoch, epoch-zero, positive, and equal values.
 
 No generation-local dense identifier is a stable v2 tie breaker.
 
@@ -436,7 +436,7 @@ New response fields may expose explicit `total_videos` and `total_documents`; th
 
 ## P00 freeze ledger
 
-P00 is not semantically complete while any failed gate below remains open.
+The policy choice for every row is recorded above. P00 is not semantically complete while its executable golden evidence remains open.
 
 | Gate | Missing evidence or decision | Autonomous repair instruction | Passing evidence |
 | --- | --- | --- | --- |
@@ -485,6 +485,6 @@ The implementation must eventually prove all of these for every frozen row:
 
 ## Freeze verdict
 
-The legacy behavior and its constants are documented from source. The v2 core invariants, formulas, seven sort shapes, provenance model, and moment units are frozen above. The grammar and score contract is **not fully frozen** because QG-01 through QG-07, QV-01, QS-01 through QS-04, and QR-01 through QR-02 lack reviewed golden evidence.
+The legacy behavior and its constants are documented from source. Independent grammar and scoring reviews selected explicit v2 rules for the core invariants, formulas, seven sort shapes, provenance model, moment units, normalization, expansions, parse hypotheses, and missing values. Those choices are no longer implementer discretion.
 
-Therefore the honest P00 verdict for this artifact is **failed gate, actionable**. Continue only with the repair instructions in the freeze ledger; do not allow P01 representation measurements or P06 ranking implementation to choose those semantics implicitly.
+The contract is **decided but not yet evidence-frozen** because QG-01 through QG-07, QV-01, QS-01 through QS-04, and QR-01 through QR-02 still lack their executable adversarial and exact-bit goldens. Therefore the honest P00 verdict remains **failed gate, actionable**. Continue only with the repair instructions in the freeze ledger; do not allow P01 representation measurements or P06 ranking implementation to change the decisions implicitly.

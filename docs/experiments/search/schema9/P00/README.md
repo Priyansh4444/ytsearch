@@ -57,7 +57,7 @@ two missing capabilities already exist.
    independent reference, explicit decision, and exact golden evidence.
 2. Resolve the 14 explicit `decision_pending` cases in the fixed 300-case
    matrix and preserve its immutable IDs. Its current canonical SHA-256 is
-   `3d321ff8e3c17886d1ff463cc2aa68c56b1d668c5d32747878969bb577d89d60`.
+   `69a06dc8bc29f9f384011e1f8d761a71dc291aeac96585cc84edfedba22aceb0`.
 3. Add a single read-only P00 collector and fixture test so future captures do
    not depend on hand-assembled commands.
 4. Locate and hash the retained schema-8 artifact without changing it.

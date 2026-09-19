@@ -2188,6 +2188,10 @@
           "exact_totals": true,
           "tier0_overview": true,
           "highlights": true
+        },
+        "fixture": {
+          "positive_phrases": 2,
+          "distinct_factors": true
         }
       },
       "expected": {
@@ -2817,7 +2821,9 @@
         },
         "query_by": ["text", "title"],
         "fixture": {
-          "field_distribution": "first_term_title_second_term_text"
+          "text_factor": "better",
+          "title_factor": "present",
+          "ordered": true
         }
       },
       "expected": {
@@ -3665,6 +3671,9 @@
           "exact_totals": true,
           "tier0_overview": true,
           "highlights": true
+        },
+        "fixture": {
+          "fuzzy_split_docs": ["adjacent", "loose", "unrelated_adjacent"]
         }
       },
       "expected": {
@@ -4116,6 +4125,9 @@
           "exact_totals": true,
           "tier0_overview": true,
           "highlights": true
+        },
+        "fixture": {
+          "terms": ["2024", "2025", "20240", "iphone15"]
         }
       },
       "expected": {
@@ -4637,7 +4649,7 @@
       "category": "typo",
       "regression_tags": [],
       "request": {
-        "q": "qzxwvut",
+        "q": "aaaa",
         "scope": {
           "kind": "all"
         },
@@ -4651,6 +4663,10 @@
           "exact_totals": true,
           "tier0_overview": true,
           "highlights": true
+        },
+        "fixture": {
+          "equal_distance_candidates": 6,
+          "inverted_df_and_term_ids": true
         }
       },
       "expected": {
@@ -4680,6 +4696,10 @@
           "exact_totals": true,
           "tier0_overview": true,
           "highlights": true
+        },
+        "fixture": {
+          "estimated_postings_over": 1000000,
+          "qualifying_split_pairs": 9
         }
       },
       "expected": {
@@ -4709,6 +4729,9 @@
           "exact_totals": true,
           "tier0_overview": true,
           "highlights": true
+        },
+        "fixture": {
+          "matching_hypotheses": ["whole_exact", "whole_prefix", "split_exact", "typo"]
         }
       },
       "expected": {
@@ -4738,6 +4761,10 @@
           "exact_totals": true,
           "tier0_overview": true,
           "highlights": true
+        },
+        "fixture": {
+          "prefixes_in": ["text_only", "title_only", "both"],
+          "candidates_per_field": 6
         }
       },
       "expected": {
@@ -8545,6 +8572,9 @@
           "exact_totals": true,
           "tier0_overview": true,
           "highlights": true
+        },
+        "fixture": {
+          "timestamps": ["missing", -1, 0, 1, 1]
         }
       },
       "expected": {
@@ -8919,6 +8949,10 @@
           "exact_totals": true,
           "tier0_overview": true,
           "highlights": true
+        },
+        "fixture": {
+          "numeric_values": ["missing", 0, 1],
+          "fields": ["views", "likes", "comments"]
         }
       },
       "expected": {
@@ -9940,6 +9974,10 @@
           "exact_totals": true,
           "tier0_overview": true,
           "highlights": true
+        },
+        "fixture": {
+          "pair": ["café", "café"],
+          "normalization": "NFC"
         }
       },
       "expected": {
@@ -10333,7 +10371,7 @@
       "category": "unicode",
       "regression_tags": [],
       "request": {
-        "q": "AI 🤖",
+        "q": "🦀",
         "scope": {
           "kind": "all"
         },
@@ -10347,26 +10385,16 @@
           "exact_totals": true,
           "tier0_overview": true,
           "highlights": true
+        },
+        "fixture": {
+          "expected_tokens": []
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": true,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": [
-          "normalization_deterministic",
-          "utf8_highlight_boundaries_valid",
-          "no_unsafe_html"
-        ],
-        "legacy": {
-          "disposition": "same_or_unrecorded",
-          "reason": null,
-          "expected_video_ids": []
-        }
+        "kind": "decision_pending",
+        "gate_id": "QG-01",
+        "reason": "The schema-9 contract gate QG-01 requires reviewed golden evidence.",
+        "allowed_outcomes": ["reject_punctuation_only", "explicit_wildcard_equivalence"]
       }
     },
     {
@@ -11299,7 +11327,7 @@
       "category": "threshold",
       "regression_tags": ["threshold-boundary"],
       "request": {
-        "q": "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen",
+        "q": "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo",
         "scope": {
           "kind": "all"
         },
@@ -11313,26 +11341,16 @@
           "exact_totals": true,
           "tier0_overview": true,
           "highlights": true
+        },
+        "fixture": {
+          "only_match_after_legacy_drop_cap": true
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": true,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": [
-          "boundary_behavior_exact",
-          "legacy_boundary_recorded",
-          "no_silent_truncation"
-        ],
-        "legacy": {
-          "disposition": "same_or_unrecorded",
-          "reason": null,
-          "expected_video_ids": []
-        }
+        "kind": "decision_pending",
+        "gate_id": "QG-06",
+        "reason": "The schema-9 contract gate QG-06 requires reviewed golden evidence.",
+        "allowed_outcomes": ["unbounded_ordered_drop_rule", "versioned_maximum_query_terms"]
       }
     },
     {
@@ -11628,10 +11646,19 @@
         }
       },
       "expected": {
-        "kind": "decision_pending",
-        "gate_id": "QG-06",
-        "reason": "The schema-9 contract gate QG-06 requires reviewed golden evidence.",
-        "allowed_outcomes": ["unbounded_ordered_drop_rule", "versioned_maximum_query_terms"]
+        "kind": "success",
+        "exactness": {
+          "exhaustive_reference": true,
+          "enumerate_all_pages": true,
+          "totals_approximate": false,
+          "stable_across_page_sizes": true
+        },
+        "assertions": ["exact_match_set", "exact_totals", "tier0_equals_reference"],
+        "legacy": {
+          "disposition": "same_or_unrecorded",
+          "reason": null,
+          "expected_video_ids": []
+        }
       }
     },
     {
@@ -12098,10 +12125,19 @@
         }
       },
       "expected": {
-        "kind": "decision_pending",
-        "gate_id": "QG-01",
-        "reason": "The schema-9 contract gate QG-01 requires reviewed golden evidence.",
-        "allowed_outcomes": ["reject_punctuation_only", "explicit_wildcard_equivalence"]
+        "kind": "success",
+        "exactness": {
+          "exhaustive_reference": true,
+          "enumerate_all_pages": true,
+          "totals_approximate": false,
+          "stable_across_page_sizes": true
+        },
+        "assertions": ["exact_match_set", "exact_totals", "tier0_equals_reference"],
+        "legacy": {
+          "disposition": "same_or_unrecorded",
+          "reason": null,
+          "expected_video_ids": []
+        }
       }
     },
     {

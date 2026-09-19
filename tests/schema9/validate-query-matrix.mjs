@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const path = fileURLToPath(new URL("./query-matrix.json", import.meta.url));
-const pinnedSha = "3d321ff8e3c17886d1ff463cc2aa68c56b1d668c5d32747878969bb577d89d60";
+const pinnedSha = "69a06dc8bc29f9f384011e1f8d761a71dc291aeac96585cc84edfedba22aceb0";
 const counts = Object.freeze({
   common: 40,
   phrase: 40,
