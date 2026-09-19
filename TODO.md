@@ -30,7 +30,10 @@ Raw can replace Typesense as the canonical search index.
     in `scripts/benchmark-search-contract.json`.
   - [ ] Resolve every failed grammar/scoring cell in the v2 query contract with
     reviewed bit-golden fixtures; an unresolved cell blocks P01/P06 semantics.
-  - [ ] Finish and validate the immutable 300-case query matrix.
+  - [x] Create and structurally validate the immutable 300-case query matrix
+    with exact category counts and canonical digest.
+  - [ ] Resolve its 14 explicit `decision_pending` cases with reviewed golden
+    evidence; do not turn an unresolved query-contract cell into a guessed test.
   - [ ] Re-run the public performance lane without crossing the edge rate limit.
     The first 480-request attempt produced 360 expected HTTP 429 responses and
     a 490.436 ms `react` outlier; retain this failed attempt in P00 evidence.

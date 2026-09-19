@@ -89,7 +89,7 @@ Structural helper tests do not prove that production uses those helpers.
 - [ ] Inspect and edit `scripts/benchmark-search-contract.json` only for this phase. Record the final touched paths.
 - [ ] Inspect and edit `PROPOSED docs/architecture/lazy-exact/query-contract-v2.md` only for this phase. Record the final touched paths.
 - [ ] Inspect and edit `PROPOSED tests/schema9/query-matrix.json` only for this phase. Record the final touched paths.
-- [ ] Inspect and edit `PROPOSED scripts/check-schema9-query-matrix.mjs` only for this phase. Record the final touched paths.
+- [ ] Inspect and edit `PROPOSED tests/schema9/validate-query-matrix.mjs` only for this phase. Record the final touched paths.
 - [ ] Inspect and edit `PROPOSED scripts/capture-schema9-p00-baseline.sh` only for this phase. Record the final touched paths.
 - [ ] Inspect and edit `PROPOSED scripts/test-capture-schema9-p00-baseline.sh` only for this phase. Record the final touched paths.
 - [ ] Inspect and edit `PROPOSED docs/experiments/search/schema9/P00/` only for this phase. Record the final touched paths.

@@ -55,7 +55,9 @@ two missing capabilities already exist.
 
 1. Resolve every failed gate in the v2 query contract using its named fixture,
    independent reference, explicit decision, and exact golden evidence.
-2. Validate the fixed 300-case matrix and preserve its immutable IDs.
+2. Resolve the 14 explicit `decision_pending` cases in the fixed 300-case
+   matrix and preserve its immutable IDs. Its current canonical SHA-256 is
+   `3d321ff8e3c17886d1ff463cc2aa68c56b1d668c5d32747878969bb577d89d60`.
 3. Add a single read-only P00 collector and fixture test so future captures do
    not depend on hand-assembled commands.
 4. Locate and hash the retained schema-8 artifact without changing it.
