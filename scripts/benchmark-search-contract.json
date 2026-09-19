@@ -1,6 +1,99 @@
 {
   "schema_version": 1,
   "corpus": "raw-full-snapshot-2026-08-23",
+  "performance_gate": {
+    "contract_version": 2,
+    "successful_request_limit_ms": 200,
+    "warm_samples_per_case": 30,
+    "cold_process_runs": 3,
+    "warm_concurrency": [1, 4],
+    "reader_memory_bytes": 2147483648,
+    "reader_rss_limit_bytes_exclusive": 1610612736,
+    "reader_cgroup_80_percent_bytes": 1717986918,
+    "builder_4g_cgroup_80_percent_bytes": 3435973836,
+    "cold_open_physical_read_limit_bytes_exclusive": 200000000,
+    "required_swap_bytes": 0,
+    "required_unexpected_errors": 0,
+    "disk_use_limit_percent_exclusive": 80,
+    "canonical_cases": [
+      "react_global",
+      "fire_global",
+      "one_fire_global",
+      "coding_is_dead_global",
+      "this_is_the_common",
+      "the_common",
+      "cursor_typo_scoped",
+      "css_phrase_global",
+      "css_phrase_t3",
+      "blackhole_global",
+      "blackhole_veritasium",
+      "blackhole_vsauce",
+      "create_effect_global",
+      "create_effect_spaced_global",
+      "convex_global",
+      "in_the_spaced"
+    ],
+    "lanes": {
+      "internal_first_response": {
+        "start": "engine_http_request_received",
+        "end": "complete_serialized_exact_response",
+        "cache": "warm",
+        "concurrency": [1, 4],
+        "gate_ms_exclusive": 200
+      },
+      "public_first_response": {
+        "start": "same_region_client_request_start",
+        "end": "complete_body_received",
+        "cache": "warm",
+        "concurrency": [1, 4],
+        "gate_ms_exclusive": 200
+      },
+      "browser_first_result": {
+        "start": "search_submission_event",
+        "end": "first_real_result_card_painted",
+        "cache": "warm_server_no_speculative_query",
+        "gate_ms_exclusive": 200
+      },
+      "browser_tier0_overview": {
+        "start": "search_submission_event",
+        "end": "exact_totals_and_complete_tier0_painted",
+        "cache": "same_run_as_browser_first_result",
+        "gate_ms_exclusive": 200
+      },
+      "cold_first_query": {
+        "start": "request_after_reader_readiness",
+        "end": "complete_exact_response",
+        "cache": "fresh_process_verified_cold_payload",
+        "concurrency": [1],
+        "gate_ms_exclusive": 200
+      },
+      "publication_overlap": {
+        "start": "internal_or_public_request_start",
+        "end": "complete_response",
+        "cache": "build_transfer_activation_and_60s_warmed_new",
+        "concurrency": [4],
+        "gate_ms_exclusive": 200
+      },
+      "cursor_continuation": {
+        "start": "next_page_request_start",
+        "end": "complete_exact_page_received",
+        "cache": "same_pinned_session",
+        "gate_ms_exclusive": 200,
+        "required_repeated_rank_work": 0
+      },
+      "reader_open": {
+        "start": "process_start",
+        "end": "readiness",
+        "cache": "three_verified_cold_runs",
+        "physical_read_limit_bytes_exclusive": 200000000
+      },
+      "tier1_tier2": {
+        "start": "explicit_summary_request_start",
+        "end": "exact_summary_completion",
+        "gate": "record_P01_selected_latency_and_resource_budgets"
+      }
+    }
+  },
   "cases": {
     "react_global": {
       "top_video_id": "eYx_43BkRPE",

@@ -89,6 +89,10 @@ Structural helper tests do not prove that production uses those helpers.
 - [ ] Inspect and edit `scripts/benchmark-search-contract.json` only for this phase. Record the final touched paths.
 - [ ] Inspect and edit `PROPOSED docs/architecture/lazy-exact/query-contract-v2.md` only for this phase. Record the final touched paths.
 - [ ] Inspect and edit `PROPOSED tests/schema9/query-matrix.json` only for this phase. Record the final touched paths.
+- [ ] Inspect and edit `PROPOSED scripts/check-schema9-query-matrix.mjs` only for this phase. Record the final touched paths.
+- [ ] Inspect and edit `PROPOSED scripts/capture-schema9-p00-baseline.sh` only for this phase. Record the final touched paths.
+- [ ] Inspect and edit `PROPOSED scripts/test-capture-schema9-p00-baseline.sh` only for this phase. Record the final touched paths.
+- [ ] Inspect and edit `PROPOSED docs/experiments/search/schema9/P00/` only for this phase. Record the final touched paths.
 
 **Build.**
 
@@ -96,7 +100,7 @@ Structural helper tests do not prove that production uses those helpers.
 - [ ] Record the reader generation from authenticated readiness, all image digests, exact machine profiles, corpus hashes, mutation sequence, and retained schema-8 artifact identity. Public health document count alone is insufficient.
 - [ ] Freeze the v2 ranking and match-provenance contract in Appendix E. Export current legacy outputs separately and classify every intentional semantic difference.
 - [ ] Create the 300-case matrix with the category counts in Appendix G, the complete website traceability table in Appendix F, and explicit expected-error cases.
-- [ ] Inventory existing operations commands and distinguish already implemented receipts, publication locks, upload resume, and detached job retry from missing schema-9 work.
+- [ ] Inventory existing operations commands and distinguish already implemented receipts, publication locks, verified-build reuse, completed-file retry, and bounded same-invocation detached polling from missing schema-9 work. Do not claim byte-range upload resume or cross-invocation remote-handle adoption.
 
 **You see.**
 
@@ -826,7 +830,7 @@ A plan can state a contract before those experiments. It cannot label the contra
 | Verify whole artifacts during reader open | Can stall activation and cold queries. Verify footer/directory at open and payload units on first use. |
 | Remove SQLite during the schema change | It is the durable mutation/idempotency journal, outside the public scoring path. Preserve it unless separate evidence justifies a replacement. |
 | Increase the reader to hide a failed 2 GiB gate | Changes the acceptance profile. Report the failed gate and optimize or obtain an explicit revised requirement. |
-| Build a second publication/receipt controller | Existing locks, receipts, upload resume, and detached job reconnect already cover that role. Extend the shared path. |
+| Build a second publication/receipt controller | Existing locks, receipts, verified-build reuse, completed-file retry, and bounded same-invocation detached polling cover the shared core. Extend that path; byte-range resume and cross-invocation handle adoption remain missing. |
 
 ## Appendix C. Risks and autonomous repair instructions
 
@@ -1281,7 +1285,7 @@ Reuse existing publication mechanisms.
 - The existing mounted build receipt binds job, snapshot sequence/hash/length, compatibility, and output manifest identity. It does not itself bind source SHA or image digest.
 - P09 must add or link an immutable source/image release attestation and validate it with the existing artifact receipt. Do not describe that proposed source binding as already implemented.
 - Upload resume skips completed verified files. Current interrupted-file retry restarts that file; it is not byte-range resume.
-- SSH polling reconnects to the same detached job. A missing observation is not permission to launch another.
+- SSH polling reconnects to the same detached job only while the current wrapper retains its remote handle. Cross-invocation handle adoption is not implemented. A missing observation is not permission to launch another.
 - Local cleanup requires confirmed activation and matching identity, then uses the existing reclaim protocol.
 - WAL remains authoritative for durable mutations and captured publication sequences.
 

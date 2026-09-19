@@ -7,13 +7,35 @@ This file tracks the current requested work and end-to-end verification. Mark an
 Checked items are implemented and verified. Unchecked items are required before
 Raw can replace Typesense as the canonical search index.
 
-### Lazy exact schema-9 pivot (active; production remains generation 2145)
+### Lazy exact schema-9 pivot (active; production generation 2950 observed 2026-09-19)
+
+> P00 revalidation on 2026-09-19 found that production has advanced to
+> generation 2950. The old generation-2145 note is retained here as historical
+> context, not current runtime truth.
 
 - [x] Finish and verify the bounded-publication/4-GB-builder release gate.
 - [x] Arena three structurally distinct lazy exact designs and cross-judge them.
 - [x] Select Lucene/PISA as the base, with byte-budgeted high-DF bitmaps and
   typed adaptive-Roaring derived/facet sets as bounded grafts.
 - [x] Write the usage-first type, API, on-disk, session, and module sketch.
+- [x] Write and independently review the end-to-end P00-P11 execution plan in
+  `schema9.md`; execution was explicitly approved on 2026-09-19.
+- [ ] Complete P00 and freeze the starting state and acceptance contract.
+  - [x] Recover the saved integration branch into a persistent worktree and
+    prove its ancestry; missing temporary worktrees remain classified missing.
+  - [x] Revalidate authenticated production readiness as generation 2950 and
+    record the schema-6 manifest, machine/image/profile, queue worker, and
+    resource baseline without mutating production.
+  - [x] Encode the exact performance timers, workload, and resource thresholds
+    in `scripts/benchmark-search-contract.json`.
+  - [ ] Resolve every failed grammar/scoring cell in the v2 query contract with
+    reviewed bit-golden fixtures; an unresolved cell blocks P01/P06 semantics.
+  - [ ] Finish and validate the immutable 300-case query matrix.
+  - [ ] Re-run the public performance lane without crossing the edge rate limit.
+    The first 480-request attempt produced 360 expected HTTP 429 responses and
+    a 490.436 ms `react` outlier; retain this failed attempt in P00 evidence.
+  - [ ] Revalidate the retained schema-8 artifact's exact path and digest.
+  - [ ] Obtain an independent verdict at the final P00 head.
 - [x] Add synthetic counting/phrase/moment measurement forks with independent
   oracles, retained failures, provenance, paired sampling, and CI regression checks.
   This is measurement infrastructure, not production-corpus or latency proof.
