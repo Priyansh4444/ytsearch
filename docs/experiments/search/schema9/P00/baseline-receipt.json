@@ -66,10 +66,20 @@
     "daily_update_enabled": false
   },
   "retained_schema8": {
-    "status": "identity_not_revalidated_in_this_run",
-    "known_size_bytes": 8208104746,
-    "known_documents": 8322726,
-    "known_videos": 34611,
+    "status": "verified_on_stopped_builder_volume_2026-09-19",
+    "machine": "080d297f070d08",
+    "path": "/var/lib/ytsearch/raw-generation-work/00000000000000002152-679b22ad23669e6d/generation/broad-single.bin",
+    "job_id": "00000000000000002152-679b22ad23669e6d",
+    "target_sequence": 2152,
+    "size_bytes": 2738580172,
+    "sha256": "b65d859033d4d983662677084d36103dd11e432a652f7d2e0506e7bba40a7733",
+    "blake3": "e05dc250790e50958f82aa9932e6eec453a7970613866bbee41a051853c13c8c",
+    "manifest_blake3": "0d0ff00af02cff0c0855986bbddbf9d3d0a997da0c574e42f75e864cf6faefe6",
+    "corpus_identity": "07cfc344a4dd75fa4f390bdbf809874cbc02be70b89a378abf09490dd8f82383",
+    "documents": 8322726,
+    "videos": 34611,
+    "channels": 68,
+    "plans": 14024,
     "activation": "never_activated"
   },
   "command": "/tmp/run-p00-public-baseline.sh",
@@ -91,7 +101,6 @@
   "failure_cases": [
     "Public workload hit the edge rate limit after 120 requests; the remaining 360 returned HTTP 429.",
     "react_global included one 490.436 ms public request.",
-    "The retained schema-8 artifact identity was not available from the active reader and remains unverified.",
     "The production image does not expose its source commit in authenticated readiness.",
     "The observed generation is 2950, contradicting the old planning assumption that production remained on 2145."
   ],

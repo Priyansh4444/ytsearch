@@ -37,7 +37,9 @@ Raw can replace Typesense as the canonical search index.
   - [ ] Re-run the public performance lane without crossing the edge rate limit.
     The first 480-request attempt produced 360 expected HTTP 429 responses and
     a 490.436 ms `react` outlier; retain this failed attempt in P00 evidence.
-  - [ ] Revalidate the retained schema-8 artifact's exact path and digest.
+  - [x] Revalidate the retained schema-8 artifact on the stopped builder volume;
+    record its exact path, job/corpus/manifest identity, 2.739 GB size, BLAKE3,
+    and SHA-256, then stop the temporarily started sleep-only Machine.
   - [ ] Obtain an independent verdict at the final P00 head.
 - [x] Add synthetic counting/phrase/moment measurement forks with independent
   oracles, retained failures, provenance, paired sampling, and CI regression checks.

@@ -18,8 +18,17 @@ claim. Nothing in this capture deployed, activated, indexed, or deleted data.
   different metrics and neither is relabeled as the other.
 - The Raw queue worker was running. Its queue loop was enabled, while its daily
   update loop was disabled. P00 only observed it and did not start a job.
-- The exact retained schema-8 artifact path and digest were not visible from the
-  active reader. Historical size/counts remain explicitly unverified.
+- The retained schema-8 artifact was absent from the active reader and its two
+  retained schema-6 generations. A bounded inspection started the exact
+  sleep-only builder `080d297f070d08`, verified the artifact at job sequence
+  2152, hashed it, and stopped the same machine. `broad-single.bin` is
+  2,738,580,172 bytes, BLAKE3
+  `e05dc250790e50958f82aa9932e6eec453a7970613866bbee41a051853c13c8c`,
+  and SHA-256
+  `b65d859033d4d983662677084d36103dd11e432a652f7d2e0506e7bba40a7733`.
+  It contains 8,322,726 documents, 34,611 videos, and 68 channels and was never
+  activated. The older 8.208 GB figure described a different retained build and
+  is not the current rollback artifact.
 
 The machine-readable facts and failures are in
 [`baseline-receipt.json`](baseline-receipt.json).
@@ -60,6 +69,5 @@ two missing capabilities already exist.
    `69a06dc8bc29f9f384011e1f8d761a71dc291aeac96585cc84edfedba22aceb0`.
 3. Add a single read-only P00 collector and fixture test so future captures do
    not depend on hand-assembled commands.
-4. Locate and hash the retained schema-8 artifact without changing it.
-5. Run paced internal/public/browser baselines against identical corpus and
+4. Run paced internal/public/browser baselines against identical corpus and
    source identities, then request an independent verdict at the exact head.
