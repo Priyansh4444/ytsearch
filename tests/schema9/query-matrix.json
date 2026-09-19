@@ -2195,20 +2195,14 @@
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": true,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": ["maximum_phrase_factor_applied_once", "ordered_preference_is_or"],
-        "contract_gate": "QS-03",
-        "legacy": {
-          "disposition": "schema9_v2_supersedes_or_freezes_legacy",
-          "expected_video_ids": [],
-          "reason": "Resolved by the reviewed QS-03 executable golden oracle."
-        }
+        "kind": "decision_pending",
+        "gate_id": "QS-03",
+        "reason": "Reviewed policy is recorded, but executable schema-9 semantic evidence is still required for QS-03.",
+        "allowed_outcomes": [
+          "multiply_phrase_factors",
+          "maximum_phrase_factor",
+          "independent_phrase_components"
+        ]
       }
     },
     {
@@ -2833,20 +2827,10 @@
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": true,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": ["maximum_field_proximity", "two_binary32_multiplies_without_fma"],
-        "contract_gate": "QS-04",
-        "legacy": {
-          "disposition": "schema9_v2_supersedes_or_freezes_legacy",
-          "expected_video_ids": [],
-          "reason": "Resolved by the reviewed QS-04 executable golden oracle."
-        }
+        "kind": "decision_pending",
+        "gate_id": "QS-04",
+        "reason": "Reviewed policy is recorded, but executable schema-9 semantic evidence is still required for QS-04.",
+        "allowed_outcomes": ["maximum_field_proximity", "reviewed_both_field_reduction"]
       }
     },
     {
@@ -3693,23 +3677,10 @@
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": true,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": [
-          "fuzzy_split_score_is_per_document",
-          "left_then_right_then_bonus_then_max_proximity_then_adjacency"
-        ],
-        "contract_gate": "QS-02",
-        "legacy": {
-          "disposition": "schema9_v2_supersedes_or_freezes_legacy",
-          "expected_video_ids": [],
-          "reason": "Resolved by the reviewed QS-02 executable golden oracle."
-        }
+        "kind": "decision_pending",
+        "gate_id": "QS-02",
+        "reason": "Reviewed policy is recorded, but executable schema-9 semantic evidence is still required for QS-02.",
+        "allowed_outcomes": ["frozen_legacy_fuzzy_split_order", "reviewed_v2_fuzzy_split_order"]
       }
     },
     {
@@ -4160,23 +4131,10 @@
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": true,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": [
-          "pure_decimal_tokens_are_exact_only",
-          "mixed_alphanumeric_uses_normal_expansion"
-        ],
-        "contract_gate": "QG-03",
-        "legacy": {
-          "disposition": "schema9_v2_supersedes_or_freezes_legacy",
-          "expected_video_ids": [],
-          "reason": "Resolved by the reviewed QG-03 executable golden oracle."
-        }
+        "kind": "decision_pending",
+        "gate_id": "QG-03",
+        "reason": "Reviewed policy is recorded, but executable schema-9 semantic evidence is still required for QG-03.",
+        "allowed_outcomes": ["numeric_exact_only", "numeric_typo_and_prefix"]
       }
     },
     {
@@ -4712,23 +4670,10 @@
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": true,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": [
-          "all_equal_distance_terms_are_admitted",
-          "canonical_distance_then_bytes_order"
-        ],
-        "contract_gate": "QG-04",
-        "legacy": {
-          "disposition": "schema9_v2_supersedes_or_freezes_legacy",
-          "expected_video_ids": [],
-          "reason": "Resolved by the reviewed QG-04 executable golden oracle."
-        }
+        "kind": "decision_pending",
+        "gate_id": "QG-04",
+        "reason": "Reviewed policy is recorded, but executable schema-9 semantic evidence is still required for QG-04.",
+        "allowed_outcomes": ["complete_equal_distance_set", "reviewed_bounded_alternative_set"]
       }
     },
     {
@@ -4758,23 +4703,10 @@
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": true,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": [
-          "all_qualifying_splits_are_admitted",
-          "posting_budget_does_not_change_membership"
-        ],
-        "contract_gate": "QG-05",
-        "legacy": {
-          "disposition": "schema9_v2_supersedes_or_freezes_legacy",
-          "expected_video_ids": [],
-          "reason": "Resolved by the reviewed QG-05 executable golden oracle."
-        }
+        "kind": "decision_pending",
+        "gate_id": "QG-05",
+        "reason": "Reviewed policy is recorded, but executable schema-9 semantic evidence is still required for QG-05.",
+        "allowed_outcomes": ["split_remains_semantic", "reviewed_split_semantic_limit"]
       }
     },
     {
@@ -4803,23 +4735,10 @@
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": true,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": [
-          "mutually_exclusive_parse_hypotheses",
-          "score_then_semantic_priority_then_bytes"
-        ],
-        "contract_gate": "QS-01",
-        "legacy": {
-          "disposition": "schema9_v2_supersedes_or_freezes_legacy",
-          "expected_video_ids": [],
-          "reason": "Resolved by the reviewed QS-01 executable golden oracle."
-        }
+        "kind": "decision_pending",
+        "gate_id": "QS-01",
+        "reason": "Reviewed policy is recorded, but executable schema-9 semantic evidence is still required for QS-01.",
+        "allowed_outcomes": ["add_distinct_branch_identities", "mutually_exclusive_hypothesis"]
       }
     },
     {
@@ -4849,23 +4768,13 @@
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": true,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": [
-          "same_complete_prefix_rule_per_enabled_field",
-          "field_provenance_is_retained"
-        ],
-        "contract_gate": "QG-07",
-        "legacy": {
-          "disposition": "schema9_v2_supersedes_or_freezes_legacy",
-          "expected_video_ids": [],
-          "reason": "Resolved by the reviewed QG-07 executable golden oracle."
-        }
+        "kind": "decision_pending",
+        "gate_id": "QG-07",
+        "reason": "Reviewed policy is recorded, but executable schema-9 semantic evidence is still required for QG-07.",
+        "allowed_outcomes": [
+          "same_prefix_policy_per_field",
+          "explicit_field_specific_prefix_policy"
+        ]
       }
     },
     {
@@ -8669,23 +8578,10 @@
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": true,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": [
-          "missing_timestamp_last_in_both_directions",
-          "present_signed_timestamps_preserve_order"
-        ],
-        "contract_gate": "QR-02",
-        "legacy": {
-          "disposition": "schema9_v2_supersedes_or_freezes_legacy",
-          "expected_video_ids": [],
-          "reason": "Resolved by the reviewed QR-02 executable golden oracle."
-        }
+        "kind": "decision_pending",
+        "gate_id": "QR-02",
+        "reason": "Reviewed policy is recorded, but executable schema-9 semantic evidence is still required for QR-02.",
+        "allowed_outcomes": ["missing_timestamp_last", "missing_timestamp_as_epoch"]
       }
     },
     {
@@ -9060,20 +8956,10 @@
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": true,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": ["present_zero_sorts_before_missing", "missing_is_distinct_from_zero"],
-        "contract_gate": "QR-01",
-        "legacy": {
-          "disposition": "schema9_v2_supersedes_or_freezes_legacy",
-          "expected_video_ids": [],
-          "reason": "Resolved by the reviewed QR-01 executable golden oracle."
-        }
+        "kind": "decision_pending",
+        "gate_id": "QR-01",
+        "reason": "Reviewed policy is recorded, but executable schema-9 semantic evidence is still required for QR-01.",
+        "allowed_outcomes": ["missing_below_real_zero", "missing_equal_to_zero"]
       }
     },
     {
@@ -10095,23 +9981,10 @@
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": true,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": [
-          "nfc_equivalent_tokens_are_identical",
-          "normalization_is_versioned_and_shared"
-        ],
-        "contract_gate": "QG-02",
-        "legacy": {
-          "disposition": "schema9_v2_supersedes_or_freezes_legacy",
-          "expected_video_ids": [],
-          "reason": "Resolved by the reviewed QG-02 executable golden oracle."
-        }
+        "kind": "decision_pending",
+        "gate_id": "QG-02",
+        "reason": "Reviewed policy is recorded, but executable schema-9 semantic evidence is still required for QG-02.",
+        "allowed_outcomes": ["versioned_unicode_normalization", "byte_distinct_normalization"]
       }
     },
     {
@@ -10518,20 +10391,10 @@
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": true,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": ["reject_punctuation_only", "literal_star_is_only_wildcard"],
-        "contract_gate": "QG-01",
-        "legacy": {
-          "disposition": "schema9_v2_supersedes_or_freezes_legacy",
-          "expected_video_ids": [],
-          "reason": "Resolved by the reviewed QG-01 executable golden oracle."
-        }
+        "kind": "decision_pending",
+        "gate_id": "QG-01",
+        "reason": "Reviewed policy is recorded, but executable schema-9 semantic evidence is still required for QG-01.",
+        "allowed_outcomes": ["reject_punctuation_only", "explicit_wildcard_equivalence"]
       }
     },
     {
@@ -11484,23 +11347,10 @@
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": true,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": [
-          "complete_prefix_then_suffix_drop_ladder",
-          "legacy_candidate_cap_does_not_change_membership"
-        ],
-        "contract_gate": "QG-06",
-        "legacy": {
-          "disposition": "schema9_v2_supersedes_or_freezes_legacy",
-          "expected_video_ids": [],
-          "reason": "Resolved by the reviewed QG-06 executable golden oracle."
-        }
+        "kind": "decision_pending",
+        "gate_id": "QG-06",
+        "reason": "Reviewed policy is recorded, but executable schema-9 semantic evidence is still required for QG-06.",
+        "allowed_outcomes": ["unbounded_ordered_drop_rule", "versioned_maximum_query_terms"]
       }
     },
     {
@@ -12515,24 +12365,10 @@
         }
       },
       "expected": {
-        "kind": "success",
-        "exactness": {
-          "exhaustive_reference": true,
-          "enumerate_all_pages": false,
-          "totals_approximate": false,
-          "stable_across_page_sizes": true
-        },
-        "assertions": [
-          "count_only_success",
-          "exact_totals_and_tier0",
-          "empty_hits_no_cursor_no_next_page"
-        ],
-        "contract_gate": "QV-01",
-        "legacy": {
-          "disposition": "schema9_v2_supersedes_or_freezes_legacy",
-          "expected_video_ids": [],
-          "reason": "Resolved by the reviewed QV-01 executable golden oracle."
-        }
+        "kind": "decision_pending",
+        "gate_id": "QV-01",
+        "reason": "Reviewed policy is recorded, but executable schema-9 semantic evidence is still required for QV-01.",
+        "allowed_outcomes": ["success_empty_window", "invalid_page_size"]
       }
     },
     {

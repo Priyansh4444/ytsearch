@@ -1,7 +1,8 @@
 # Schema 9 P00 baseline
 
-Status: in progress with failed gates. This directory is evidence, not a release
-claim. Nothing in this capture deployed, activated, indexed, or deleted data.
+Status: in progress with failed live-performance gates. This directory is
+evidence, not a release claim. Nothing in this capture deployed, activated,
+indexed, or deleted data.
 
 ## Authoritative observations
 
@@ -45,6 +46,23 @@ The attempt intentionally remains failed. The public edge accepted the first
 retain errors in the denominator, and measure internal, public, and browser
 timers separately. It must not discard this run or call its valid subset a pass.
 
+### Paced single-sample probe at `afc83ad`
+
+The first read-only probe stayed below the 48-request/minute edge budget and
+returned 36 successful responses plus 12 client timeouts. It is still a failed
+gate because every request is part of the denominator. Complete response times
+included `this is the` 82 ms, `the` 1,341 ms, `and the` 3,292 ms, `in the`
+1,879 ms, `css which i think is dead now` 277 ms, `convex` 212 ms,
+`createEffect` 161 ms, `blackhole` 92 ms, `coding is dead` 339 ms, and `react`
+306 ms. Compact common queries measured 615–747 ms. The two-second cold
+`this is the` observation from a separate two-request probe was followed by a
+165 ms warm response; it is not a passing cold measurement.
+
+The current schema-6 reader therefore does not satisfy the schema-9 200 ms
+gate for broad/common queries. The failure is useful evidence: the lazy exact
+engine must obtain exact totals and page-one ranking without scanning or
+rescoring the broad match set.
+
 The narrower production contract probe passed on the same date for `blackhole`:
 338 global videos and 1,163 moments, 21 Veritasium videos, 15 Vsauce videos,
 all seven sorts, exact last-page behavior, and fail-closed invalid sort/video
@@ -62,11 +80,10 @@ two missing capabilities already exist.
 
 ## Next autonomous repairs
 
-1. Resolve every failed gate in the v2 query contract using its named fixture,
-   independent reference, explicit decision, and exact golden evidence.
-2. Resolve the 14 explicit `decision_pending` cases in the fixed 300-case
-   matrix and preserve its immutable IDs. Its current canonical SHA-256 is
-   `69a06dc8bc29f9f384011e1f8d761a71dc291aeac96585cc84edfedba22aceb0`.
+1. Implement schema-9 structural metadata and lazy exact execution against the
+   frozen contract; do not optimize by dropping broad-query membership.
+2. Run the full 300-case exhaustive differential and exact Tier-0/Tier-1
+   summary oracles against that implementation.
 3. Add a single read-only P00 collector and fixture test so future captures do
    not depend on hand-assembled commands.
 4. Run paced internal/public/browser baselines against identical corpus and

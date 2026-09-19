@@ -4,7 +4,7 @@
 //! They pin the reviewed v2 decisions before the lazy engine is implemented,
 //! so every later execution path has one bit-exact reference to match.
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::BTreeMap};
 
 use unicode_normalization::UnicodeNormalization;
 
@@ -121,7 +121,7 @@ struct Contribution {
     score: f32,
 }
 
-fn canonical_reduce(mut contributions: Vec<Contribution>) -> f32 {
+fn materialized_reduce(mut contributions: Vec<Contribution>) -> f32 {
     contributions.sort_by(|left, right| {
         left.slot
             .cmp(&right.slot)
@@ -132,6 +132,25 @@ fn canonical_reduce(mut contributions: Vec<Contribution>) -> f32 {
     contributions
         .into_iter()
         .fold(0.0_f32, |score, contribution| score + contribution.score)
+}
+
+fn streaming_reduce(contributions: impl IntoIterator<Item = Contribution>) -> f32 {
+    let mut ordered = BTreeMap::<(u8, &'static [u8], u8, u8), f32>::new();
+    for contribution in contributions {
+        *ordered
+            .entry((
+                contribution.slot,
+                contribution.term,
+                contribution.field,
+                contribution.expansion,
+            ))
+            .or_default() += contribution.score;
+    }
+    let mut score = 0.0_f32;
+    for contribution in ordered.into_values() {
+        score += contribution;
+    }
+    score
 }
 
 fn v2_tokens(input: &str) -> Vec<String> {
@@ -322,8 +341,8 @@ fn materialized_and_streaming_reducers_have_identical_bits() {
             score: 0.4,
         },
     ];
-    let materialized = canonical_reduce(contributions.clone());
-    let streaming = canonical_reduce(contributions.into_iter().rev().collect());
+    let materialized = materialized_reduce(contributions.clone());
+    let streaming = streaming_reduce(contributions.into_iter().rev());
     assert_eq!(materialized.to_bits(), 0x4130_cccd);
     assert_eq!(streaming.to_bits(), materialized.to_bits());
 }

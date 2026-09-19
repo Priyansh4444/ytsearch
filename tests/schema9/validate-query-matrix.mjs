@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const path = fileURLToPath(new URL("./query-matrix.json", import.meta.url));
-const pinnedSha = "4c9b5775aa675c3b3ead16dd179d6ef7c3cca325b63183a5d194ca1552f917d3";
+const pinnedSha = "4ab1279df8cb0debb8f877a59917320fac86a2c4ef43ab26b08153fa1927e492";
 const counts = Object.freeze({
   common: 40,
   phrase: 40,
@@ -59,7 +59,6 @@ const names = new Set();
 const requests = new Set();
 const regressions = new Set();
 const pendingGates = new Set();
-const resolvedGates = new Set();
 const actual = Object.fromEntries(Object.keys(counts).map((category) => [category, 0]));
 for (const c of matrix.cases) {
   assert.match(
@@ -116,13 +115,12 @@ for (const c of matrix.cases) {
     );
     assert.equal(r.grammar_version, 2, `${c.id}: successful request grammar version`);
     assert.equal(r.rank_version, 2, `${c.id}: successful request rank version`);
-    const countOnly = c.expected.contract_gate === "QV-01";
-    assert.deepEqual(r.page_sizes, countOnly ? [0] : [1, 3, 10, 20], `${c.id}: valid page sizes`);
+    assert.deepEqual(r.page_sizes, [1, 3, 10, 20], `${c.id}: valid page sizes`);
     assert.deepEqual(
       c.expected.exactness,
       {
         exhaustive_reference: true,
-        enumerate_all_pages: !countOnly,
+        enumerate_all_pages: true,
         totals_approximate: false,
         stable_across_page_sizes: true,
       },
@@ -137,11 +135,6 @@ for (const c of matrix.cases) {
       "expected_video_ids",
       "reason",
     ]);
-    if (c.expected.contract_gate) {
-      assert.match(c.expected.contract_gate, /^(QG|QV|QS|QR)-[0-9]{2}$/u);
-      assert(!resolvedGates.has(c.expected.contract_gate), `${c.id}: duplicate resolved gate`);
-      resolvedGates.add(c.expected.contract_gate);
-    }
   } else if (c.expected.kind === "error") {
     assert.deepEqual(Object.keys(c.expected.error).sort(), [
       "code",
@@ -167,11 +160,6 @@ for (const tag of requiredRegressions)
   assert(regressions.has(tag), `missing named regression: ${tag}`);
 assert.deepEqual(
   pendingGates,
-  new Set(),
-  "reviewed contract gates must not remain decision_pending",
-);
-assert.deepEqual(
-  resolvedGates,
   new Set([
     "QG-01",
     "QG-02",
@@ -188,7 +176,7 @@ assert.deepEqual(
     "QR-01",
     "QR-02",
   ]),
-  "every reviewed query-contract gate must have one executable matrix case",
+  "every unresolved query-contract gate must remain explicit in the matrix",
 );
 
 const sha = createHash("sha256").update(JSON.stringify(matrix)).digest("hex");
