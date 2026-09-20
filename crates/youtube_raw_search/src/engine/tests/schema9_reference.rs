@@ -199,6 +199,25 @@ struct TermPlan {
     alternatives: Vec<TermAlternative>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum HypothesisKind {
+    ExactWhole,
+    SplitExact,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum HypothesisPlan {
+    Whole(TermPlan),
+    Split { left: String, right: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SlotHypothesis {
+    kind: HypothesisKind,
+    canonical_bytes: Vec<u8>,
+    plan: HypothesisPlan,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ExpansionPlan {
     Exact(Query),
@@ -206,6 +225,11 @@ enum ExpansionPlan {
         query: Query,
         fields: EnabledFields,
         terms: BTreeMap<String, TermPlan>,
+    },
+    Hypotheses {
+        query: Query,
+        fields: EnabledFields,
+        slots: BTreeMap<String, Vec<SlotHypothesis>>,
     },
 }
 
@@ -263,12 +287,13 @@ fn build_expansion_plan(
     query: Query,
     policy: ExpansionPolicy,
 ) -> Result<ExpansionPlan, OracleError> {
+    if let ExpansionPolicy::Split(fields) = policy {
+        return build_split_plan(corpus, query, fields);
+    }
     let fields = match policy {
         ExpansionPolicy::ExactOnly => return Ok(ExpansionPlan::Exact(query)),
         ExpansionPolicy::Prefix(fields) | ExpansionPolicy::Fuzzy(fields) => fields,
-        ExpansionPolicy::Split(_) => {
-            return Err(OracleError::UnsupportedReferenceSemantics("split"));
-        }
+        ExpansionPolicy::Split(_) => unreachable!("split returned above"),
         ExpansionPolicy::TokenDrop => {
             return Err(OracleError::UnsupportedReferenceSemantics("token_drop"));
         }
@@ -349,6 +374,127 @@ fn build_expansion_plan(
     })
 }
 
+fn build_split_plan(
+    corpus: &FixtureCorpus,
+    query: Query,
+    fields: EnabledFields,
+) -> Result<ExpansionPlan, OracleError> {
+    if query_contains_positive_phrase(&query) {
+        return Err(OracleError::UnsupportedReferenceSemantics(
+            "split_with_phrase",
+        ));
+    }
+    if split_query_repeats_a_slot(&query) {
+        return Err(OracleError::UnsupportedReferenceSemantics(
+            "split_repeated_slot",
+        ));
+    }
+    let lexicons = [
+        (IndexedField::Text, corpus.lexicon(IndexedField::Text)),
+        (IndexedField::Title, corpus.lexicon(IndexedField::Title)),
+    ];
+    let appears_in_an_enabled_lexicon = |term: &str| {
+        lexicons
+            .iter()
+            .any(|(field, lexicon)| fields.contains(*field) && lexicon.contains(term))
+    };
+    let mut slots = BTreeMap::new();
+    for term in positive_terms(&query) {
+        let mut hypotheses = vec![SlotHypothesis {
+            kind: HypothesisKind::ExactWhole,
+            canonical_bytes: term.as_bytes().to_vec(),
+            plan: HypothesisPlan::Whole(exact_term_plan(term, fields)),
+        }];
+        if is_pure_decimal(term) {
+            slots.insert(term.to_string(), hypotheses);
+            continue;
+        }
+        let boundaries = term
+            .char_indices()
+            .map(|(byte, _)| byte)
+            .collect::<Vec<_>>();
+        let scalar_count = boundaries.len();
+        for (scalar_index, &byte_index) in boundaries.iter().enumerate().skip(1) {
+            if scalar_index < 3 || scalar_count.saturating_sub(scalar_index) < 3 {
+                continue;
+            }
+            let left = &term[..byte_index];
+            let right = &term[byte_index..];
+            if !appears_in_an_enabled_lexicon(left) || !appears_in_an_enabled_lexicon(right) {
+                continue;
+            }
+            let mut canonical_bytes = left.as_bytes().to_vec();
+            canonical_bytes.push(0);
+            canonical_bytes.extend_from_slice(right.as_bytes());
+            hypotheses.push(SlotHypothesis {
+                kind: HypothesisKind::SplitExact,
+                canonical_bytes,
+                plan: HypothesisPlan::Split {
+                    left: left.to_string(),
+                    right: right.to_string(),
+                },
+            });
+        }
+        hypotheses.sort_by(|left, right| {
+            left.kind
+                .cmp(&right.kind)
+                .then_with(|| left.canonical_bytes.cmp(&right.canonical_bytes))
+        });
+        slots.insert(term.to_string(), hypotheses);
+    }
+    Ok(ExpansionPlan::Hypotheses {
+        query,
+        fields,
+        slots,
+    })
+}
+
+fn query_contains_positive_phrase(query: &Query) -> bool {
+    match query {
+        Query::Phrase(_) => true,
+        Query::And(children) => children
+            .iter()
+            .filter(|child| !matches!(child, Query::Not(_)))
+            .any(query_contains_positive_phrase),
+        Query::All | Query::Term(_) | Query::Not(_) => false,
+    }
+}
+
+fn split_query_repeats_a_slot(query: &Query) -> bool {
+    fn visit<'a>(query: &'a Query, terms: &mut Vec<&'a str>) {
+        match query {
+            Query::Term(term) => terms.push(term),
+            Query::And(children) => {
+                for child in children {
+                    if !matches!(child, Query::Not(_)) {
+                        visit(child, terms);
+                    }
+                }
+            }
+            Query::All | Query::Phrase(_) | Query::Not(_) => {}
+        }
+    }
+    let mut terms = Vec::new();
+    visit(query, &mut terms);
+    let mut unique = BTreeSet::new();
+    terms.into_iter().any(|term| !unique.insert(term))
+}
+
+fn exact_term_plan(term: &str, fields: EnabledFields) -> TermPlan {
+    TermPlan {
+        alternatives: [IndexedField::Text, IndexedField::Title]
+            .into_iter()
+            .filter(|field| fields.contains(*field))
+            .map(|field| TermAlternative {
+                term: term.to_string(),
+                field,
+                kind: ExpansionKind::Exact,
+                distance: 0,
+            })
+            .collect(),
+    }
+}
+
 fn positive_terms(query: &Query) -> Vec<&str> {
     fn visit<'a>(query: &'a Query, output: &mut Vec<&'a str>) {
         match query {
@@ -379,6 +525,143 @@ fn evaluate_plan(plan: &ExpansionPlan, title: &[String], text: &[String]) -> Tra
             fields,
             terms,
         } => evaluate_expanded_query(query, *fields, terms, title, text),
+        ExpansionPlan::Hypotheses {
+            query,
+            fields,
+            slots,
+        } => evaluate_hypothesis_query(query, *fields, slots, title, text),
+    }
+}
+
+fn evaluate_hypothesis_query(
+    query: &Query,
+    fields: EnabledFields,
+    slots: &BTreeMap<String, Vec<SlotHypothesis>>,
+    title: &[String],
+    text: &[String],
+) -> Trace {
+    match query {
+        Query::Term(term) => slots.get(term).map_or_else(
+            || evaluate_query_in_fields(query, title, text, fields),
+            |hypotheses| select_hypothesis(hypotheses, fields, title, text),
+        ),
+        Query::And(children) => {
+            let mut combined = Trace {
+                matched: true,
+                ..Trace::default()
+            };
+            for child in children {
+                let trace = if matches!(child, Query::Not(_)) {
+                    evaluate_query_in_fields(child, title, text, fields)
+                } else {
+                    evaluate_hypothesis_query(child, fields, slots, title, text)
+                };
+                if !trace.matched {
+                    return Trace::default();
+                }
+                combined.score += trace.score;
+                combined.provenance.title |= trace.provenance.title;
+                combined.provenance.transcript |= trace.provenance.transcript;
+                combined.provenance.phrase |= trace.provenance.phrase;
+            }
+            combined
+        }
+        Query::Phrase(_) | Query::All | Query::Not(_) => {
+            evaluate_query_in_fields(query, title, text, fields)
+        }
+    }
+}
+
+fn select_hypothesis(
+    hypotheses: &[SlotHypothesis],
+    fields: EnabledFields,
+    title: &[String],
+    text: &[String],
+) -> Trace {
+    let mut candidates = hypotheses
+        .iter()
+        .filter_map(|hypothesis| {
+            let mut trace = match &hypothesis.plan {
+                HypothesisPlan::Whole(plan) => evaluate_term_plan(plan, title, text),
+                HypothesisPlan::Split { left, right } => {
+                    evaluate_exact_split(left, right, fields, title, text)
+                }
+            };
+            if !trace.matched {
+                return None;
+            }
+            assert!(trace.score.is_finite(), "reference score must be finite");
+            trace.selected_hypothesis = Some(HypothesisSelection {
+                kind: hypothesis.kind,
+                canonical_bytes: hypothesis.canonical_bytes.clone(),
+            });
+            Some(trace)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        right.score.total_cmp(&left.score).then_with(|| {
+            let left = left
+                .selected_hypothesis
+                .as_ref()
+                .expect("candidate selection");
+            let right = right
+                .selected_hypothesis
+                .as_ref()
+                .expect("candidate selection");
+            left.kind
+                .cmp(&right.kind)
+                .then_with(|| left.canonical_bytes.cmp(&right.canonical_bytes))
+        })
+    });
+    candidates.into_iter().next().unwrap_or_default()
+}
+
+fn evaluate_exact_split(
+    left: &str,
+    right: &str,
+    fields: EnabledFields,
+    title: &[String],
+    text: &[String],
+) -> Trace {
+    let occurrences = |field, term: &str| {
+        let tokens = match field {
+            IndexedField::Text => text,
+            IndexedField::Title => title,
+        };
+        tokens.iter().filter(|token| token.as_str() == term).count() as f32
+    };
+    let left_fields = [IndexedField::Text, IndexedField::Title]
+        .into_iter()
+        .filter(|field| fields.contains(*field) && occurrences(*field, left) > 0.0)
+        .collect::<Vec<_>>();
+    let right_fields = [IndexedField::Text, IndexedField::Title]
+        .into_iter()
+        .filter(|field| fields.contains(*field) && occurrences(*field, right) > 0.0)
+        .collect::<Vec<_>>();
+    if left_fields.is_empty() || right_fields.is_empty() {
+        return Trace::default();
+    }
+    let weight = |field| match field {
+        IndexedField::Text => 4.0_f32,
+        IndexedField::Title => 6.0_f32,
+    };
+    let mut score = 0.0_f32;
+    for field in &left_fields {
+        score += occurrences(*field, left) * weight(*field);
+    }
+    for field in &right_fields {
+        score += occurrences(*field, right) * weight(*field);
+    }
+    score += 8.0_f32;
+    let mut provenance = Provenance::default();
+    for field in left_fields.into_iter().chain(right_fields) {
+        provenance.text_or_title(field);
+    }
+    Trace {
+        matched: true,
+        score,
+        provenance,
+        selected_hypothesis: None,
     }
 }
 
@@ -521,9 +804,6 @@ fn evaluate_exhaustively(
     corpus: &FixtureCorpus,
     request: &OracleRequest,
 ) -> Result<OracleResult, OracleError> {
-    if matches!(request.expansion, ExpansionPolicy::Split(_)) {
-        return Err(OracleError::UnsupportedReferenceSemantics("split"));
-    }
     if matches!(request.expansion, ExpansionPolicy::TokenDrop) {
         return Err(OracleError::UnsupportedReferenceSemantics("token_drop"));
     }
@@ -624,11 +904,18 @@ fn evaluate_exhaustively(
     })
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HypothesisSelection {
+    kind: HypothesisKind,
+    canonical_bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Default)]
 struct Trace {
     matched: bool,
     score: f32,
     provenance: Provenance,
+    selected_hypothesis: Option<HypothesisSelection>,
 }
 
 fn evaluate_query(query: &Query, title: &[String], text: &[String]) -> Trace {
@@ -665,6 +952,7 @@ fn evaluate_query_in_fields(
                     transcript: text_count > 0.0,
                     phrase: false,
                 },
+                selected_hypothesis: None,
             }
         }
         Query::Phrase(terms) => {
@@ -679,6 +967,7 @@ fn evaluate_query_in_fields(
                     transcript: text_match,
                     phrase: title_match || text_match,
                 },
+                selected_hypothesis: None,
             }
         }
         Query::And(children) => {
@@ -1087,17 +1376,20 @@ fn punctuation_and_unsupported_semantics_fail_closed() {
         Err(OracleError::UnsupportedReferenceSemantics("prefix"))
     );
     assert!(evaluate_exhaustively(&corpus, &request("create-effect", 10)).is_ok());
-    for (expansion, expected) in [
-        (ExpansionPolicy::Split(EnabledFields::TextAndTitle), "split"),
-        (ExpansionPolicy::TokenDrop, "token_drop"),
-    ] {
-        let mut expanded = request("create", 10);
-        expanded.expansion = expansion;
-        assert_eq!(
-            evaluate_exhaustively(&corpus, &expanded),
-            Err(OracleError::UnsupportedReferenceSemantics(expected))
-        );
-    }
+    let mut expanded = request("create", 10);
+    expanded.expansion = ExpansionPolicy::TokenDrop;
+    assert_eq!(
+        evaluate_exhaustively(&corpus, &expanded),
+        Err(OracleError::UnsupportedReferenceSemantics("token_drop"))
+    );
+    let mut phrase_split = request("\"create effect\"", 10);
+    phrase_split.expansion = ExpansionPolicy::Split(EnabledFields::TextAndTitle);
+    assert_eq!(
+        evaluate_exhaustively(&corpus, &phrase_split),
+        Err(OracleError::UnsupportedReferenceSemantics(
+            "split_with_phrase"
+        ))
+    );
 }
 
 #[test]
@@ -1300,6 +1592,221 @@ fn expansion_field_scope_applies_to_phrases_and_exact_negation() {
     let negation_result = evaluate_exhaustively(&corpus, &negation).unwrap();
     assert_eq!(negation_result.total_videos, 1);
     assert_eq!(negation_result.hits[0].video_id, "text-phrase");
+}
+
+#[test]
+fn split_admits_every_qualifying_boundary_and_breaks_ties_canonically() {
+    let base = FixtureCorpus::from_jsonl(FIXTURE).unwrap();
+    let mut document = base.documents[0].clone();
+    document.id = "many-splits".to_string();
+    document.video_id = "many-splits".to_string();
+    document.title = "fixture".to_string();
+    let compact = "abcdefghijklmn";
+    let mut components = Vec::new();
+    for boundary in 3..=11 {
+        components.push(compact[..boundary].to_string());
+        components.push(compact[boundary..].to_string());
+    }
+    document.text = components.join(" ");
+    let corpus = FixtureCorpus {
+        documents: vec![document],
+    };
+
+    let plan = build_expansion_plan(
+        &corpus,
+        parse_query(compact).unwrap(),
+        ExpansionPolicy::Split(EnabledFields::Text),
+    )
+    .unwrap();
+    let ExpansionPlan::Hypotheses { slots, .. } = &plan else {
+        panic!("split must produce slot hypotheses");
+    };
+    let split_count = slots[compact]
+        .iter()
+        .filter(|hypothesis| hypothesis.kind == HypothesisKind::SplitExact)
+        .count();
+    assert_eq!(
+        split_count, 9,
+        "legacy's eight-alternative cap must not leak"
+    );
+
+    let trace = evaluate_plan(&plan, &[], &tokenize(&components.join(" ")));
+    assert_eq!(trace.score.to_bits(), 0x4180_0000);
+    assert_eq!(
+        trace.selected_hypothesis,
+        Some(HypothesisSelection {
+            kind: HypothesisKind::SplitExact,
+            canonical_bytes: b"abc\0defghijklmn".to_vec(),
+        })
+    );
+}
+
+#[test]
+fn split_boundaries_count_unicode_scalars_and_score_left_then_right_then_bonus() {
+    let base = FixtureCorpus::from_jsonl(FIXTURE).unwrap();
+    let mut document = base.documents[0].clone();
+    document.id = "unicode-split".to_string();
+    document.video_id = "unicode-split".to_string();
+    document.title = "fixture".to_string();
+    document.text = "ééé ééé abcdef".to_string();
+    let corpus = FixtureCorpus {
+        documents: vec![document],
+    };
+    let compact = "éééabcdef";
+    let plan = build_expansion_plan(
+        &corpus,
+        parse_query(compact).unwrap(),
+        ExpansionPolicy::Split(EnabledFields::Text),
+    )
+    .unwrap();
+    let ExpansionPlan::Hypotheses { slots, .. } = &plan else {
+        panic!("split must produce slot hypotheses");
+    };
+    let splits = slots[compact]
+        .iter()
+        .filter(|hypothesis| hypothesis.kind == HypothesisKind::SplitExact)
+        .collect::<Vec<_>>();
+    assert_eq!(splits.len(), 1);
+    assert_eq!(splits[0].canonical_bytes, "ééé\0abcdef".as_bytes());
+
+    let trace = evaluate_plan(&plan, &[], &tokenize("ééé ééé abcdef"));
+    assert_eq!(trace.score.to_bits(), 0x41a0_0000);
+
+    let mut numeric_document = corpus.documents[0].clone();
+    numeric_document.id = "numeric-components".to_string();
+    numeric_document.video_id = "numeric-components".to_string();
+    numeric_document.text = "123 456".to_string();
+    let numeric_corpus = FixtureCorpus {
+        documents: vec![numeric_document],
+    };
+    let mut numeric = request("123456", 10);
+    numeric.expansion = ExpansionPolicy::Split(EnabledFields::Text);
+    assert_eq!(
+        evaluate_exhaustively(&numeric_corpus, &numeric)
+            .unwrap()
+            .total_videos,
+        0,
+        "pure Unicode-decimal terms are exact-only"
+    );
+    let mut unicode_numeric_document = numeric_corpus.documents[0].clone();
+    unicode_numeric_document.id = "unicode-numeric-components".to_string();
+    unicode_numeric_document.video_id = "unicode-numeric-components".to_string();
+    unicode_numeric_document.text = "١٢٣ ٤٥٦".to_string();
+    let unicode_numeric_corpus = FixtureCorpus {
+        documents: vec![unicode_numeric_document],
+    };
+    let mut unicode_numeric = request("١٢٣٤٥٦", 10);
+    unicode_numeric.expansion = ExpansionPolicy::Split(EnabledFields::Text);
+    assert_eq!(
+        evaluate_exhaustively(&unicode_numeric_corpus, &unicode_numeric)
+            .unwrap()
+            .total_videos,
+        0,
+        "non-ASCII Unicode-decimal terms are exact-only"
+    );
+}
+
+#[test]
+fn split_requires_one_document_but_allows_components_across_enabled_fields() {
+    let base = FixtureCorpus::from_jsonl(FIXTURE).unwrap();
+    let prototype = base.documents[0].clone();
+    let mut cross_field = prototype.clone();
+    cross_field.id = "cross-field".to_string();
+    cross_field.video_id = "cross-field".to_string();
+    cross_field.title = "black".to_string();
+    cross_field.text = "hole".to_string();
+    let mut left_only = prototype.clone();
+    left_only.id = "left-only".to_string();
+    left_only.video_id = "left-only".to_string();
+    left_only.title = "fixture".to_string();
+    left_only.text = "black".to_string();
+    let mut right_only = prototype;
+    right_only.id = "right-only".to_string();
+    right_only.video_id = "right-only".to_string();
+    right_only.title = "fixture".to_string();
+    right_only.text = "hole".to_string();
+    let corpus = FixtureCorpus {
+        documents: vec![cross_field, left_only, right_only],
+    };
+
+    let mut both = request("blackhole", 10);
+    both.expansion = ExpansionPolicy::Split(EnabledFields::TextAndTitle);
+    let result = evaluate_exhaustively(&corpus, &both).unwrap();
+    assert_eq!(result.total_videos, 1);
+    assert_eq!(result.hits[0].video_id, "cross-field");
+    assert!(result.hits[0].provenance.title);
+    assert!(result.hits[0].provenance.transcript);
+
+    for fields in [EnabledFields::Text, EnabledFields::Title] {
+        let mut scoped = both.clone();
+        scoped.expansion = ExpansionPolicy::Split(fields);
+        assert_eq!(
+            evaluate_exhaustively(&corpus, &scoped)
+                .unwrap()
+                .total_videos,
+            0
+        );
+    }
+}
+
+#[test]
+fn whole_token_wins_an_exact_score_tie_and_negation_stays_exact() {
+    let base = FixtureCorpus::from_jsonl(FIXTURE).unwrap();
+    let mut tied = base.documents[0].clone();
+    tied.id = "tied".to_string();
+    tied.video_id = "tied".to_string();
+    tied.title = "fixture".to_string();
+    tied.text = "blackhole blackhole blackhole blackhole black hole".to_string();
+    let corpus = FixtureCorpus {
+        documents: vec![tied],
+    };
+    let plan = build_expansion_plan(
+        &corpus,
+        parse_query("blackhole").unwrap(),
+        ExpansionPolicy::Split(EnabledFields::Text),
+    )
+    .unwrap();
+    let trace = evaluate_plan(&plan, &[], &tokenize(&corpus.documents[0].text));
+    assert_eq!(trace.score.to_bits(), 0x4180_0000);
+    assert_eq!(
+        trace.selected_hypothesis,
+        Some(HypothesisSelection {
+            kind: HypothesisKind::ExactWhole,
+            canonical_bytes: b"blackhole".to_vec(),
+        })
+    );
+
+    let mut excluded = request("blackhole -black", 10);
+    excluded.expansion = ExpansionPolicy::Split(EnabledFields::Text);
+    assert_eq!(
+        evaluate_exhaustively(&corpus, &excluded)
+            .unwrap()
+            .total_videos,
+        0
+    );
+
+    let mut repeated = request("blackhole blackhole", 10);
+    repeated.expansion = ExpansionPolicy::Split(EnabledFields::Text);
+    assert_eq!(
+        evaluate_exhaustively(&corpus, &repeated),
+        Err(OracleError::UnsupportedReferenceSemantics(
+            "split_repeated_slot"
+        ))
+    );
+
+    let mut literal_negative_document = corpus.documents[0].clone();
+    literal_negative_document.id = "literal-negative".to_string();
+    literal_negative_document.video_id = "literal-negative".to_string();
+    literal_negative_document.text = "anchor black hole".to_string();
+    let literal_negative_corpus = FixtureCorpus {
+        documents: vec![literal_negative_document],
+    };
+    let mut literal_negative = request("anchor -blackhole", 10);
+    literal_negative.expansion = ExpansionPolicy::Split(EnabledFields::Text);
+    let literal_negative_result =
+        evaluate_exhaustively(&literal_negative_corpus, &literal_negative).unwrap();
+    assert_eq!(literal_negative_result.total_videos, 1);
+    assert_eq!(literal_negative_result.hits[0].video_id, "literal-negative");
 }
 
 #[test]

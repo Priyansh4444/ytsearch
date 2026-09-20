@@ -42,8 +42,12 @@ aggregation helpers. Its expansion tests freeze phrase-aware final-token
 selection, first-occurrence term deduplication, per-field lexicons, uncapped
 equal-distance admission, Unicode-scalar edit thresholds, decimal exactness,
 canonical alternative order, additive score bits, and exact negative terms.
-Split and token-drop remain fail-closed and are not counted as completed P00
-coverage.
+Literal exact-split hypotheses now have fixture coverage for uncapped candidate
+enumeration and exclusive score/priority/byte-order selection. Unsupported
+positive phrase and repeated-slot combinations still fail closed. Plural/fuzzy
+splits and the token-drop/threshold ladder remain incomplete. The evaluator
+still uses simplified frequency scores; complete v2 score parity and the
+300-case runtime differential remain open P00 gates.
 
 ## Search baseline
 

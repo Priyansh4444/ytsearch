@@ -43,7 +43,17 @@ Raw can replace Typesense as the canonical search index.
   - [x] Extend that independent oracle with complete typed per-field prefix and
     fuzzy expansion, Unicode-scalar thresholds, decimal exactness, canonical
     alternative ordering/additive scoring, and expansion-safe negation. Split
-    and token-drop semantics remain explicitly unsupported and unclosed.
+    and token-drop integration remain unclosed.
+  - [x] Add literal exact-split hypothesis enumeration and exclusive winner
+    selection to the fixture oracle, including more than eight candidates,
+    Unicode boundaries, enabled-field scope, and exact exclusions.
+  - [ ] Complete plural/fuzzy split alternatives, phrase/slot integration, and
+    the threshold-driven expansion ladder; literal split tests alone do not
+    close the v2 semantic gate.
+  - [ ] Correct oracle numeric prefix suppression and global slot deduplication
+    across terms/phrases; plan-list deduplication does not deduplicate scoring.
+  - [ ] Replace the oracle's simplified frequency scores with the complete
+    frozen v2 formulas and prove runtime/reference score-bit equivalence.
   - [ ] Re-run the public performance lane without crossing the edge rate limit.
     The first 480-request attempt produced 360 expected HTTP 429 responses and
     a 490.436 ms `react` outlier; retain this failed attempt in P00 evidence.

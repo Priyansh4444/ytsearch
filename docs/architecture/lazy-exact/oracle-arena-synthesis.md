@@ -54,9 +54,10 @@ exhaustive ordering, and pagination. The next unit adds typed per-field prefix
 and fuzzy plans: prefix applies only to the last deduplicated positive token,
 fuzzy distance counts Unicode scalars, decimal-only tokens remain exact, every
 in-threshold lexicon alternative is admitted, and negative terms remain exact.
-Split and token-drop behavior still return an explicit unsupported result until
-their independent semantics are implemented. Unsupported is a failed coverage
-gate, never a passing fallback.
+Exact literal split hypotheses are implemented as a separate unit. Token-drop
+and the full expansion ladder remain unsupported until their independent
+semantics are implemented. Unsupported is a failed coverage gate, never a
+passing fallback.
 
 Verification requires fixture boundary tests, NFC/NFD token equivalence,
 phrase positions, negation-before-totals, missing-versus-zero ordering,
@@ -69,3 +70,30 @@ more than four equal-distance alternatives, the four- and seven-scalar edit
 thresholds, mixed alphanumeric terms, ASCII and non-ASCII decimal terms,
 canonical alternative ordering, additive score bits, and exact negation while
 positive terms expand.
+
+The literal-split unit enumerates every qualifying Unicode boundary with at
+least three scalars on each side and both components in enabled lexicons. Each
+document selects one hypothesis by score, whole-token priority, then canonical
+bytes; competing hypotheses are not added. Components may occupy different
+enabled fields within one document. Decimal-only tokens remain exact.
+Tests include nine competing splits, canonical ties, field scope, cross-document
+rejection, exact negation, and the component/component/bonus reduction.
+Plural variants, fuzzy splits, repeated slots, positive phrases with splitting,
+and the threshold-driven expansion ladder remain pending. Unsupported phrase
+and repeated-slot combinations return explicit errors in this fixture evaluator.
+
+## Remaining authority gaps
+
+This fixture evaluator is still a foundation, not the v2 ranking oracle. Its
+field scores currently use token frequency times fixed field weights. They do
+not yet implement corpus IDF, BM25 normalization, title logarithmic frequency,
+position/proximity factors, or engagement. Existing score-bit assertions prove
+only the implemented arithmetic, not equivalence with the frozen complete
+score. The matrix and release gates remain open until those formulas and the
+production differential adapter are implemented and exercised end to end.
+
+The prefix/fuzzy commit also needs follow-up coverage and fixes for numeric
+prefix suppression and global query-slot deduplication across terms and
+phrases. Deduplicating the plan's term list alone does not prevent the AST
+evaluator from adding the same slot twice. Keep these as explicit defects;
+do not treat the earlier unit review as full semantic approval.
