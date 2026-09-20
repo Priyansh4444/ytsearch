@@ -52,8 +52,9 @@ Raw can replace Typesense as the canonical search index.
     close the v2 semantic gate.
   - [x] Correct oracle numeric prefix suppression with ASCII/Arabic-Indic and
     mixed-alphanumeric regression cases across all field selections.
-  - [ ] Correct global slot deduplication across terms/phrases; plan-list
-    deduplication does not deduplicate scoring.
+  - [x] Correct global slot deduplication across terms/phrases by separating
+    predicate membership from first-appearance slot reduction; repeated phrase
+    positions remain required and negative predicates never contribute scores.
   - [ ] Replace the oracle's simplified frequency scores with the complete
     frozen v2 formulas and prove runtime/reference score-bit equivalence.
   - [ ] Re-run the public performance lane without crossing the edge rate limit.

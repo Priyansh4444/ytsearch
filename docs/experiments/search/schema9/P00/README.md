@@ -44,7 +44,8 @@ equal-distance admission, Unicode-scalar edit thresholds, decimal exactness,
 canonical alternative order, additive score bits, and exact negative terms.
 Literal exact-split hypotheses now have fixture coverage for uncapped candidate
 enumeration and exclusive score/priority/byte-order selection. Unsupported
-positive phrase and repeated-slot combinations still fail closed. Plural/fuzzy
+positive phrase/split combinations still fail closed. Repeated slots now share
+one global score contribution while phrase occurrence checks remain intact. Plural/fuzzy
 splits and the token-drop/threshold ladder remain incomplete. The evaluator
 still uses simplified frequency scores; complete v2 score parity and the
 300-case runtime differential remain open P00 gates.

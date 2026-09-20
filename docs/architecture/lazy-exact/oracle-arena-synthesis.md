@@ -78,9 +78,9 @@ bytes; competing hypotheses are not added. Components may occupy different
 enabled fields within one document. Decimal-only tokens remain exact.
 Tests include nine competing splits, canonical ties, field scope, cross-document
 rejection, exact negation, and the component/component/bonus reduction.
-Plural variants, fuzzy splits, repeated slots, positive phrases with splitting,
-and the threshold-driven expansion ladder remain pending. Unsupported phrase
-and repeated-slot combinations return explicit errors in this fixture evaluator.
+Plural variants, fuzzy splits, positive phrases with splitting,
+and the threshold-driven expansion ladder remain pending. Unsupported positive
+phrase/split combinations return explicit errors in this fixture evaluator.
 
 ## Remaining authority gaps
 
@@ -94,7 +94,9 @@ production differential adapter are implemented and exercised end to end.
 
 Numeric prefix suppression now has a red-to-green regression covering ASCII
 and Arabic-Indic decimals plus mixed alphanumeric controls in all three field
-selections. Global query-slot deduplication across terms and phrases remains
-unfixed. Deduplicating the plan's term list alone does not prevent the AST
-evaluator from adding the same slot twice. Keep these as explicit defects;
-do not treat the earlier unit review as full semantic approval.
+selections. Global query-slot deduplication now separates AST membership from
+one reduction over distinct positive slots in first-appearance order. Exact,
+prefix, fuzzy, and literal-split plans use that shared evaluator. Repeated phrase
+occurrences remain positional requirements, negatives affect only membership,
+and the scaffold's phrase factor is applied once after slot reduction.
+These checks do not constitute full semantic approval of the pending scorer.
