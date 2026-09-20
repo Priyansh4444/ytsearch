@@ -314,7 +314,9 @@ fn build_expansion_plan(
                 distance: 0,
             });
             match policy {
-                ExpansionPolicy::Prefix(_) if Some(term) == final_term => {
+                ExpansionPolicy::Prefix(_)
+                    if Some(term) == final_term && !is_pure_decimal(term) =>
+                {
                     for candidate in corpus.lexicon(field) {
                         if candidate != term && candidate.starts_with(term) {
                             alternatives.push(TermAlternative {
@@ -1433,6 +1435,65 @@ fn prefix_expansion_is_complete_and_field_specific() {
         positive_terms(&parse_query("alpha alpha \"beta gamma\"").unwrap()),
         ["alpha", "beta", "gamma"]
     );
+}
+
+#[test]
+fn prefix_keeps_unicode_decimal_terms_exact_but_expands_mixed_alphanumeric() {
+    let base = FixtureCorpus::from_jsonl(FIXTURE).unwrap();
+    let prototype = base.documents[0].clone();
+    let mut documents = Vec::new();
+    for (field_name, in_title) in [("text", false), ("title", true)] {
+        for (name, term) in [
+            ("ascii-exact", "2024"),
+            ("ascii-extended", "20245"),
+            ("unicode-exact", "٢٠٢٤"),
+            ("unicode-extended", "٢٠٢٤٥"),
+            ("mixed-exact", "ab12"),
+            ("mixed-extended", "ab123"),
+        ] {
+            let mut document = prototype.clone();
+            document.id = format!("{field_name}-{name}");
+            document.video_id = document.id.clone();
+            document.title = if in_title {
+                term.to_string()
+            } else {
+                "fixture".to_string()
+            };
+            document.text = if in_title {
+                "fixture".to_string()
+            } else {
+                term.to_string()
+            };
+            documents.push(document);
+        }
+    }
+    let corpus = FixtureCorpus { documents };
+
+    for (fields, exact_count, mixed_count) in [
+        (EnabledFields::Text, 1, 2),
+        (EnabledFields::Title, 1, 2),
+        (EnabledFields::TextAndTitle, 2, 4),
+    ] {
+        for query in ["2024", "٢٠٢٤"] {
+            let mut numeric = request(query, 10);
+            numeric.expansion = ExpansionPolicy::Prefix(fields);
+            assert_eq!(
+                evaluate_exhaustively(&corpus, &numeric)
+                    .unwrap()
+                    .total_videos,
+                exact_count,
+                "query={query}, fields={fields:?}"
+            );
+        }
+
+        let mut mixed = request("ab12", 10);
+        mixed.expansion = ExpansionPolicy::Prefix(fields);
+        assert_eq!(
+            evaluate_exhaustively(&corpus, &mixed).unwrap().total_videos,
+            mixed_count,
+            "mixed fields={fields:?}"
+        );
+    }
 }
 
 #[test]

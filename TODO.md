@@ -40,7 +40,7 @@ Raw can replace Typesense as the canonical search index.
     validated missing-value/video metadata, phrase/negation/scope semantics,
     anchored moment totals, deterministic pagination, and fail-closed
     expansion modes. Full matrix coverage remains required above.
-  - [x] Extend that independent oracle with complete typed per-field prefix and
+  - [x] Extend that independent oracle with typed per-field prefix and
     fuzzy expansion, Unicode-scalar thresholds, decimal exactness, canonical
     alternative ordering/additive scoring, and expansion-safe negation. Split
     and token-drop integration remain unclosed.
@@ -50,8 +50,10 @@ Raw can replace Typesense as the canonical search index.
   - [ ] Complete plural/fuzzy split alternatives, phrase/slot integration, and
     the threshold-driven expansion ladder; literal split tests alone do not
     close the v2 semantic gate.
-  - [ ] Correct oracle numeric prefix suppression and global slot deduplication
-    across terms/phrases; plan-list deduplication does not deduplicate scoring.
+  - [x] Correct oracle numeric prefix suppression with ASCII/Arabic-Indic and
+    mixed-alphanumeric regression cases across all field selections.
+  - [ ] Correct global slot deduplication across terms/phrases; plan-list
+    deduplication does not deduplicate scoring.
   - [ ] Replace the oracle's simplified frequency scores with the complete
     frozen v2 formulas and prove runtime/reference score-bit equivalence.
   - [ ] Re-run the public performance lane without crossing the edge rate limit.

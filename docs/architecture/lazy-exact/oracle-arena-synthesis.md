@@ -92,8 +92,9 @@ only the implemented arithmetic, not equivalence with the frozen complete
 score. The matrix and release gates remain open until those formulas and the
 production differential adapter are implemented and exercised end to end.
 
-The prefix/fuzzy commit also needs follow-up coverage and fixes for numeric
-prefix suppression and global query-slot deduplication across terms and
-phrases. Deduplicating the plan's term list alone does not prevent the AST
+Numeric prefix suppression now has a red-to-green regression covering ASCII
+and Arabic-Indic decimals plus mixed alphanumeric controls in all three field
+selections. Global query-slot deduplication across terms and phrases remains
+unfixed. Deduplicating the plan's term list alone does not prevent the AST
 evaluator from adding the same slot twice. Keep these as explicit defects;
 do not treat the earlier unit review as full semantic approval.
