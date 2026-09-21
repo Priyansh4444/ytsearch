@@ -499,6 +499,21 @@ fn query_contains_positive_phrase(query: &Query) -> bool {
     }
 }
 
+fn positive_phrases(query: &Query) -> BTreeSet<&[String]> {
+    fn visit<'a>(query: &'a Query, phrases: &mut BTreeSet<&'a [String]>) {
+        match query {
+            Query::Phrase(terms) => {
+                phrases.insert(terms);
+            }
+            Query::And(children) => children.iter().for_each(|child| visit(child, phrases)),
+            Query::All | Query::Term(_) | Query::Not(_) => {}
+        }
+    }
+    let mut phrases = BTreeSet::new();
+    visit(query, &mut phrases);
+    phrases
+}
+
 fn exact_term_plan(term: &str, fields: EnabledFields) -> TermPlan {
     TermPlan {
         alternatives: [IndexedField::Text, IndexedField::Title]
@@ -630,14 +645,17 @@ fn evaluate_document_plan(
             reduced.selected_hypothesis = trace.selected_hypothesis;
         }
     }
-    let proximity = proximity::evaluate(&positive_unquoted_terms(query), fields, title, text);
+    let mut proximity = proximity::evaluate(&positive_unquoted_terms(query), fields, title, text);
+    for phrase in positive_phrases(query) {
+        proximity.include(proximity::exact_phrase(phrase, fields, title, text));
+    }
     reduced.ordered_evidence = proximity.ordered;
     reduced.score *= proximity.field_factor();
     assert!(
         reduced.score.is_finite(),
         "proximity reduction must remain finite"
     );
-    let ordered = proximity.ordered.any() || query_contains_positive_phrase(query);
+    let ordered = proximity.ordered.any();
     reduced.score *= if ordered { 1.25_f32 } else { 1.0_f32 };
     assert!(
         reduced.score.is_finite(),
@@ -2151,7 +2169,9 @@ fn positive_slots_are_global_distinct_and_negative_slots_never_score() {
         &tokenize("fixture"),
         &tokenize("alpha alpha beta gamma"),
     );
-    assert_eq!(phrase_trace.score.to_bits(), 0x40f6_cde5);
+    // QS-03 now includes the exact phrase's earliest occurrence factor before
+    // the single ordered multiplication (the phrase ends at token offset 2).
+    assert_eq!(phrase_trace.score.to_bits(), 0x4117_a517);
 }
 
 #[test]
@@ -2457,4 +2477,62 @@ fn differential_detects_a_deliberately_wrong_candidate() {
         first_mismatch(&expected, &Broken, &query),
         Some("candidate_error")
     );
+}
+
+#[test]
+fn required_phrase_factors_reduce_once_with_unquoted_and_negative_evidence() {
+    let mut document = FixtureCorpus::from_jsonl(FIXTURE).unwrap().documents[0].clone();
+    document.title = "alpha beta".to_owned();
+    document.text = "alpha beta gamma delta anchor spare".to_owned();
+    let corpus = FixtureCorpus {
+        documents: vec![document],
+    };
+    let trace = |query: &str| {
+        let plan = build_expansion_plan(
+            &corpus,
+            parse_query(query).unwrap(),
+            ExpansionPolicy::ExactOnly,
+        )
+        .unwrap();
+        evaluate_plan(
+            &plan,
+            &tokenize(&corpus.documents[0].title),
+            &tokenize(&corpus.documents[0].text),
+        )
+    };
+    let phrases = trace("\"alpha beta\" \"gamma delta\"");
+    assert!(phrases.matched);
+    assert_eq!(
+        phrases.ordered_evidence,
+        proximity::OrderedEvidence {
+            text: true,
+            title: true
+        }
+    );
+    assert_eq!(
+        phrases.score.to_bits(),
+        trace("\"alpha beta\" \"gamma delta\" \"alpha beta\"")
+            .score
+            .to_bits()
+    );
+    assert_eq!(
+        phrases.score.to_bits(),
+        trace("\"alpha beta\" \"gamma delta\" -\"absent phrase\"")
+            .score
+            .to_bits()
+    );
+    // The same additive slots and winning window imply identical score bits,
+    // even when both quoted and unquoted evidence independently establish order.
+    assert_eq!(
+        phrases.score.to_bits(),
+        trace("alpha beta \"gamma delta\"").score.to_bits()
+    );
+    assert!(!trace("\"alpha beta\" -\"gamma delta\"").matched);
+    let single = trace("\"anchor\"");
+    assert_eq!(
+        single.score.to_bits(),
+        (trace("anchor").score * 1.25_f32).to_bits()
+    );
+    assert!(single.ordered_evidence.text);
+    assert!(!single.ordered_evidence.title);
 }

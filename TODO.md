@@ -64,7 +64,10 @@ Raw can replace Typesense as the canonical search index.
   - [x] Add exhaustive unquoted proximity and ordered-evidence reduction with
     distinct positive slots, maximum enabled-field factor, separate ordered
     multiplier, and no displacement/cardinality cap.
-  - [ ] Complete richer phrase/fuzzy-split evidence factors, then prove complete
+  - [x] Clarify and implement zero-slop positive phrase factors: exact field-local
+    occurrences, repeated-token positions, canonical phrase deduplication, one
+    maximum across phrase/unquoted evidence, and one ordered multiplication.
+  - [ ] Complete nonzero-slop and expanded-term/fuzzy-split evidence factors, then prove complete
     ranking and runtime/reference score-bit equivalence.
   - [ ] Re-run the public performance lane without crossing the edge rate limit.
     The first 480-request attempt produced 360 expected HTTP 429 responses and

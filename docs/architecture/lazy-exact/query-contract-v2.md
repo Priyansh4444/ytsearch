@@ -328,6 +328,34 @@ V2 uses `f32::total_cmp` only after finiteness is proved. Rank bounds must round
 
 QS-01 through QS-04 have reviewed policy examples and score-bit fixtures in `engine/tests/query_contract_v2.rs`; those fixtures are scaffolding, not proof of runtime equivalence. An optimizer may not substitute mathematically equivalent reassociation once the executable reference is added.
 
+### Zero-slop phrase factor clarification (executable gate pending)
+
+QS-03 fixes factor reduction but originally left occurrence-to-factor derivation
+and quoted/unquoted composition unspecified. The following is an explicit v2
+policy clarification; it is not a claim about legacy behavior.
+
+For a required positive exact phrase with at least two token occurrences, use
+the proximity formula above with `displacement = occurrence_count - 1`,
+`max_offset = final token position`, and `token_count = occurrence_count`.
+Repeated tokens count as separate positional occurrences. Consider only exact
+occurrences within one enabled field of one document. The earliest occurrence
+in each field maximizes its factor. Deduplicate identical required phrases for
+factor reduction and traverse them in canonical normalized token-byte order.
+
+Use the maximum finite factor across those phrase occurrences, enabled fields,
+and the unquoted field factors, with identity `1.0`. Evaluate
+`(raw_score * maximum_factor) * ordered_factor` as two binary32 multiplications.
+Ordered evidence is the union of exact positive phrase evidence and unquoted
+ordered evidence; apply `1.25` once. Negative phrases contribute no score or
+ordered evidence. Phrase membership remains a required predicate.
+
+A one-token quoted phrase retains the existing ordered preference but has
+proximity factor `1.0`; quoting one term does not invent a multi-token window.
+The legacy `displacement > 10` branch is not part of this v2 formula, including
+for long exact phrases. This matches the uncapped unquoted oracle behavior.
+This clarification covers zero slop only; nonzero-slop semantics and expansion
+position substitution remain separate open executable gates.
+
 ## Ranking contracts
 
 ### Legacy observed video key

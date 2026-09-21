@@ -45,10 +45,12 @@ canonical alternative order, additive score bits, and exact negative terms.
 Literal exact-split hypotheses now have fixture coverage for uncapped candidate
 enumeration and exclusive score/priority/byte-order selection. Unsupported
 positive phrase/split combinations still fail closed. Repeated slots now share
-one global score contribution while phrase occurrence checks remain intact. Plural/fuzzy
-splits and the token-drop/threshold ladder remain incomplete. The evaluator
+one global score contribution while phrase occurrence checks remain intact.
+Plural/fuzzy splits and the token-drop/threshold ladder remain incomplete. The evaluator
 now uses corpus-wide IDF/BM25/title-log/first-position field scores with canonical
-contribution ordering. Pair proximity, phrase factors, engagement, complete v2
+contribution ordering. Literal unquoted proximity and generation-wide engagement
+are implemented, including ranking keys drawn from one actual best document.
+Expanded-term positional evidence, complete phrase semantics, complete v2
 ranking parity, and the 300-case runtime differential remain open P00 gates.
 
 ## Search baseline

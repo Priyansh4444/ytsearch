@@ -32,6 +32,23 @@ pub(super) struct ProximityEvidence {
 }
 
 impl ProximityEvidence {
+    pub(super) fn include(&mut self, other: Self) {
+        fn strongest(
+            left: Option<FieldProximity>,
+            right: Option<FieldProximity>,
+        ) -> Option<FieldProximity> {
+            match (left, right) {
+                (Some(left), Some(right)) if right.factor > left.factor => Some(right),
+                (Some(left), _) => Some(left),
+                (None, right) => right,
+            }
+        }
+        self.fields.text = strongest(self.fields.text, other.fields.text);
+        self.fields.title = strongest(self.fields.title, other.fields.title);
+        self.ordered.text |= other.ordered.text;
+        self.ordered.title |= other.ordered.title;
+    }
+
     pub(super) fn field_factor(self) -> f32 {
         [self.fields.text, self.fields.title]
             .into_iter()
@@ -43,6 +60,53 @@ impl ProximityEvidence {
 
     pub(super) fn ordered_factor(self) -> f32 {
         if self.ordered.any() { 1.25 } else { 1.0 }
+    }
+}
+
+/// Exact phrase windows retain repeated occurrences and never cross fields.
+pub(super) fn exact_phrase(
+    terms: &[String],
+    fields: EnabledFields,
+    title: &[String],
+    text: &[String],
+) -> ProximityEvidence {
+    fn occurrence(terms: &[String], tokens: &[String]) -> Option<FieldProximity> {
+        if terms.is_empty() {
+            return None;
+        }
+        tokens
+            .windows(terms.len())
+            .enumerate()
+            .find_map(|(start, window)| {
+                (window == terms).then(|| {
+                    let displacement = terms.len() - 1;
+                    let max_offset = start + displacement;
+                    FieldProximity {
+                        displacement,
+                        max_offset,
+                        factor: if terms.len() == 1 {
+                            1.0
+                        } else {
+                            factor(displacement, max_offset, terms.len())
+                        },
+                    }
+                })
+            })
+    }
+    let text = fields
+        .contains(IndexedField::Text)
+        .then(|| occurrence(terms, text))
+        .flatten();
+    let title = fields
+        .contains(IndexedField::Title)
+        .then(|| occurrence(terms, title))
+        .flatten();
+    ProximityEvidence {
+        fields: PerFieldProximity { text, title },
+        ordered: OrderedEvidence {
+            text: text.is_some(),
+            title: title.is_some(),
+        },
     }
 }
 
@@ -155,6 +219,70 @@ mod tests {
 
     fn tokens(source: &str) -> Vec<String> {
         source.split_whitespace().map(str::to_string).collect()
+    }
+
+    #[test]
+    fn exact_phrase_occurrences_preserve_multiplicity_and_choose_earliest() {
+        let phrase = tokens("alpha alpha");
+        let early = exact_phrase(
+            &phrase,
+            EnabledFields::Text,
+            &[],
+            &tokens("alpha alpha gap alpha alpha"),
+        );
+        assert_eq!(early.fields.text.unwrap().max_offset, 1);
+        assert_eq!(early.field_factor().to_bits(), 0x3f9e_2020);
+        let late = exact_phrase(
+            &phrase,
+            EnabledFields::Text,
+            &[],
+            &tokens("gap gap alpha alpha"),
+        );
+        assert!(early.field_factor() > late.field_factor());
+        assert_eq!(
+            exact_phrase(
+                &phrase,
+                EnabledFields::Text,
+                &[],
+                &tokens("alpha gap alpha")
+            ),
+            ProximityEvidence::default()
+        );
+        assert_eq!(
+            exact_phrase(
+                &phrase,
+                EnabledFields::TextAndTitle,
+                &tokens("alpha"),
+                &tokens("alpha")
+            ),
+            ProximityEvidence::default()
+        );
+    }
+
+    #[test]
+    fn exact_phrase_fields_single_tokens_and_long_phrases() {
+        let phrase = tokens("alpha beta");
+        let both = exact_phrase(
+            &phrase,
+            EnabledFields::TextAndTitle,
+            &phrase,
+            &tokens("gap gap alpha beta"),
+        );
+        assert_eq!(both.field_factor().to_bits(), 0x3f9e_2020);
+        assert!(both.ordered.text && both.ordered.title);
+        let disabled = exact_phrase(&phrase, EnabledFields::Text, &phrase, &[]);
+        assert_eq!(disabled, ProximityEvidence::default());
+        let single = exact_phrase(
+            &tokens("alpha"),
+            EnabledFields::Title,
+            &tokens("alpha"),
+            &[],
+        );
+        assert_eq!(single.field_factor().to_bits(), 1.0_f32.to_bits());
+        assert_eq!(single.ordered_factor().to_bits(), 1.25_f32.to_bits());
+        let long = (0..12).map(|i| format!("t{i}")).collect::<Vec<_>>();
+        let evidence = exact_phrase(&long, EnabledFields::Text, &[], &long);
+        assert_eq!(evidence.field_factor().to_bits(), 0x3f9b_7291);
     }
 
     #[test]

@@ -95,8 +95,9 @@ admission order. Literal splits reduce left then right then the bonus.
 
 Numeric goldens and scope-invariance tests cover these field formulas, including
 empty/zero-average corpora, frequency clamping, and finite reductions. They do
-not prove complete-score equivalence: pair proximity, richer phrase factors,
-and the production differential adapter remain required. The matrix and release
+not prove complete-score equivalence: expanded-term positional evidence,
+nonzero slop, fuzzy-split factors, and the production differential adapter remain
+required. The matrix and release
 gates stay open.
 
 Ranking now reduces an unbounded exact-evidence vector before ordered preference
@@ -107,8 +108,12 @@ sort. Missing metadata stays distinct for numeric sorting and contributes zero
 only to engagement arithmetic. Unquoted proximity now computes the exhaustive
 minimum window over distinct positive slots, chooses the maximum enabled-field
 factor, and applies the ordered multiplier separately without the legacy
-displacement/cardinality cap. Selected prefix/typo/split positions and richer
-phrase/fuzzy-split factors remain pending before claiming full ranking parity.
+displacement/cardinality cap. Zero-slop positive phrase factors now derive from
+earliest exact occurrences within each enabled field, preserve repeated token
+positions, and combine with unquoted factors by one maximum and one ordered
+multiplier. This uses the explicit QS-03 clarification in the query contract.
+Selected prefix/typo/split positions, nonzero slop, and fuzzy-split factors remain
+pending before claiming full ranking parity.
 
 Numeric prefix suppression now has a red-to-green regression covering ASCII
 and Arabic-Indic decimals plus mixed alphanumeric controls in all three field
