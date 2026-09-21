@@ -104,9 +104,23 @@ importing production parser, scorer, posting, sorting, or aggregation helpers.
 It validates fixture identity and video-level metadata, preserves absent values
 separately from real zero, scans every document, paginates only after complete
 ordering, and differentially rejects candidate errors and result/facet drift.
-Prefix, fuzzy, split, and token-drop modes fail closed as explicitly unsupported
-until their independent semantics are implemented. This is foundation evidence,
-not completion of the 300-case gate.
+Subsequent units added independent prefix/fuzzy candidates, literal split
+hypotheses, corpus-aware scoring, ranking, unquoted proximity, and zero-slop
+phrase factors. Token dropping, automatic fallback selection, expanded positional
+substitutions, nonzero phrase slop, and the complete filter/summary surface remain
+unfinished. This is foundation evidence, not completion of the 300-case gate.
+
+The grammar boundary unit reads query-error cases directly from the frozen matrix
+and checks their expected rejection categories. Separate boundary fixtures cover
+512 UTF-8 bytes, 32 phrase occurrences, escaped quotes/backslashes, and negation
+boundaries. This tests the independent oracle only: it does not prove production
+request validation, the remaining matrix cases, or the schema-9 latency target.
+
+Grammar-unit verification: 38 focused oracle tests; full Raw search crate 218
+passed, one ignored; formatting and all-target/all-feature Clippy with warnings
+denied passed. Eleven matrix query-error cases are exercised by one test; they
+are not eleven separately reported Rust test functions. No live/performance lane
+was run for this test-only parser unit.
 
 ## Next autonomous repairs
 

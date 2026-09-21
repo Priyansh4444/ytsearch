@@ -285,6 +285,10 @@ enum OracleError {
     EmptyQuery,
     PunctuationOnly,
     UnterminatedPhrase,
+    QueryTooLong,
+    PhraseTooLong,
+    InvalidNegation,
+    UnexpectedNegation,
     UnsupportedReferenceSemantics(&'static str),
 }
 
@@ -1171,6 +1175,9 @@ fn evaluate_query_in_fields(
 }
 
 fn parse_query(source: &str) -> Result<Query, OracleError> {
+    if source.len() > 512 {
+        return Err(OracleError::QueryTooLong);
+    }
     let trimmed = source.trim();
     if trimmed.is_empty() {
         return Err(OracleError::EmptyQuery);
@@ -1187,49 +1194,66 @@ fn parse_query(source: &str) -> Result<Query, OracleError> {
     let mut positive = Vec::new();
     let mut negative = Vec::new();
     let mut cursor = 0;
-    let chars = trimmed.char_indices().collect::<Vec<_>>();
+    let chars = trimmed.chars().collect::<Vec<_>>();
     while cursor < chars.len() {
-        while cursor < chars.len() && chars[cursor].1.is_whitespace() {
+        while cursor < chars.len() && chars[cursor].is_whitespace() {
             cursor += 1;
         }
         if cursor == chars.len() {
             break;
         }
         let mut excluded = false;
-        if chars[cursor].1 == '-' {
+        let boundary = cursor == 0 || chars[cursor - 1].is_whitespace();
+        if boundary && chars[cursor] == '!' {
+            return Err(OracleError::InvalidNegation);
+        }
+        if boundary && chars[cursor] == '-' {
             excluded = true;
             cursor += 1;
-            if cursor == chars.len() {
-                return Err(OracleError::PunctuationOnly);
+            if cursor == chars.len() || chars[cursor].is_whitespace() {
+                return Err(OracleError::InvalidNegation);
+            }
+            if chars[cursor] == '-' {
+                return Err(OracleError::UnexpectedNegation);
             }
         }
-        let node = if chars[cursor].1 == '"' {
+        let node = if chars[cursor] == '"' {
             cursor += 1;
-            let start = cursor;
-            while cursor < chars.len() && chars[cursor].1 != '"' {
-                cursor += 1;
+            let mut segment = String::new();
+            while cursor < chars.len() && chars[cursor] != '"' {
+                read_query_character(&chars, &mut cursor, &mut segment);
             }
             if cursor == chars.len() {
-                return Err(OracleError::UnterminatedPhrase);
+                return Err(if excluded {
+                    OracleError::InvalidNegation
+                } else {
+                    OracleError::UnterminatedPhrase
+                });
             }
-            let byte_start = chars.get(start).map_or(trimmed.len(), |entry| entry.0);
-            let byte_end = chars[cursor].0;
             cursor += 1;
-            let terms = tokenize(&trimmed[byte_start..byte_end]);
+            let terms = tokenize(&segment);
             if terms.is_empty() {
-                return Err(OracleError::PunctuationOnly);
+                return Err(if excluded {
+                    OracleError::InvalidNegation
+                } else {
+                    OracleError::PunctuationOnly
+                });
+            }
+            if terms.len() > 32 {
+                return Err(OracleError::PhraseTooLong);
             }
             Query::Phrase(terms)
         } else {
-            let start = cursor;
-            while cursor < chars.len() && !chars[cursor].1.is_whitespace() {
-                cursor += 1;
+            let mut segment = String::new();
+            while cursor < chars.len() && !chars[cursor].is_whitespace() && chars[cursor] != '"' {
+                read_query_character(&chars, &mut cursor, &mut segment);
             }
-            let byte_start = chars[start].0;
-            let byte_end = chars.get(cursor).map_or(trimmed.len(), |entry| entry.0);
-            let mut terms = tokenize(&trimmed[byte_start..byte_end]);
+            let mut terms = tokenize(&segment);
             if terms.is_empty() {
-                return Err(OracleError::PunctuationOnly);
+                if excluded {
+                    return Err(OracleError::InvalidNegation);
+                }
+                continue;
             }
             if terms.len() == 1 {
                 Query::Term(terms.remove(0))
@@ -1255,6 +1279,124 @@ fn parse_query(source: &str) -> Result<Query, OracleError> {
     } else {
         Query::And(positive)
     })
+}
+
+// Only quote and backslash are escaped; every other backslash stays literal
+// and is consequently a separator in the independent tokenizer.
+fn read_query_character(chars: &[char], cursor: &mut usize, segment: &mut String) {
+    if chars[*cursor] == '\\' && matches!(chars.get(*cursor + 1), Some('"' | '\\')) {
+        *cursor += 1;
+    }
+    segment.push(chars[*cursor]);
+    *cursor += 1;
+}
+
+#[test]
+fn grammar_rejects_every_matrix_query_error() {
+    let matrix: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/schema9/query-matrix.json"
+    )))
+    .unwrap();
+    let mut checked = 0;
+    for case in matrix["cases"].as_array().unwrap() {
+        let expected = &case["expected"];
+        if expected["kind"] != "error" || expected["error"]["parameter"] != "q" {
+            continue;
+        }
+        let query = case["request"]["q"].as_str().unwrap();
+        let error = parse_query(query).expect_err(case["id"].as_str().unwrap());
+        let (code, message) = match error {
+            OracleError::QueryTooLong => ("query_too_long", "maximum query length exceeded"),
+            OracleError::InvalidNegation => ("invalid_query_syntax", "invalid negation"),
+            OracleError::UnexpectedNegation => {
+                ("invalid_query_syntax", "unexpected negation operator")
+            }
+            OracleError::EmptyQuery
+            | OracleError::PunctuationOnly
+            | OracleError::UnterminatedPhrase
+            | OracleError::PhraseTooLong => ("invalid_query", "invalid query"),
+            OracleError::UnsupportedReferenceSemantics(_) => {
+                panic!("unsupported is not a grammar rejection: {}", case["id"])
+            }
+        };
+        assert_eq!(code, expected["error"]["code"], "{}", case["id"]);
+        assert!(
+            message.contains(expected["error"]["message_contains"].as_str().unwrap()),
+            "{}",
+            case["id"]
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "matrix must exercise query errors");
+}
+
+#[test]
+fn grammar_counts_utf8_bytes_and_phrase_occurrences() {
+    assert!(parse_query(&"é".repeat(256)).is_ok());
+    assert_eq!(
+        parse_query(&format!("{}a", "é".repeat(256))),
+        Err(OracleError::QueryTooLong)
+    );
+    assert_eq!(
+        parse_query(&format!(" {} ", "é".repeat(256))),
+        Err(OracleError::QueryTooLong)
+    );
+    let phrase = |count| format!("\"{}\"", vec!["a"; count].join(" "));
+    assert_eq!(
+        parse_query(&phrase(32)),
+        Ok(Query::Phrase(vec!["a".to_owned(); 32]))
+    );
+    assert_eq!(parse_query(&phrase(33)), Err(OracleError::PhraseTooLong));
+    assert_eq!(
+        parse_query(&format!("-{}", phrase(33))),
+        Err(OracleError::PhraseTooLong)
+    );
+}
+
+#[test]
+fn grammar_escapes_and_negation_boundaries_preserve_predicates() {
+    assert_eq!(parse_query("alpha , beta"), parse_query("alpha beta"));
+    assert_eq!(parse_query(", . ;"), Err(OracleError::PunctuationOnly));
+    assert_eq!(
+        parse_query(r#""alpha \"beta\" gamma""#),
+        Ok(Query::Phrase(vec![
+            "alpha".into(),
+            "beta".into(),
+            "gamma".into()
+        ]))
+    );
+    assert_eq!(parse_query(r#"alpha\"beta"#), parse_query("alpha-beta"));
+    assert_eq!(
+        parse_query(r#""alpha\\beta""#),
+        Ok(Query::Phrase(vec!["alpha".into(), "beta".into()]))
+    );
+    assert_eq!(parse_query(r#"alpha\beta"#), parse_query("alpha-beta"));
+    assert_eq!(
+        parse_query("-alpha"),
+        Ok(Query::And(vec![
+            Query::All,
+            Query::Not(Box::new(Query::Term("alpha".into())))
+        ]))
+    );
+    assert_eq!(
+        parse_query("alpha-beta"),
+        Ok(Query::And(vec![
+            Query::Term("alpha".into()),
+            Query::Term("beta".into())
+        ]))
+    );
+    assert_eq!(
+        parse_query(r#""alpha"-beta"#),
+        Ok(Query::And(vec![
+            Query::Phrase(vec!["alpha".into()]),
+            Query::Term("beta".into())
+        ]))
+    );
+    assert_eq!(
+        parse_query(r#""alpha\""#),
+        Err(OracleError::UnterminatedPhrase)
+    );
 }
 
 fn tokenize(source: &str) -> Vec<String> {

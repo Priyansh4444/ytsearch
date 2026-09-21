@@ -33,6 +33,10 @@ Raw can replace Typesense as the canonical search index.
     are retained but do not close the gate.
   - [x] Create and structurally validate the immutable 300-case query matrix
     with exact category counts and canonical digest.
+  - [x] Validate all 11 matrix query-error cases in the independent oracle,
+    with UTF-8 byte/phrase-length boundaries, quote/backslash escapes, and
+    negation/punctuation regressions. Production differential coverage remains
+    required; this does not close the full grammar gate.
   - [ ] Resolve its 14 explicit `decision_pending` cases with executable
     exhaustive evidence; current reviewed-policy matrix digest is
     `4ab1279d…f1927e492`.
