@@ -96,8 +96,17 @@ admission order. Literal splits reduce left then right then the bonus.
 Numeric goldens and scope-invariance tests cover these field formulas, including
 empty/zero-average corpora, frequency clamping, and finite reductions. They do
 not prove complete-score equivalence: pair proximity, richer phrase factors,
-engagement, the full ranking tuple, and the production differential adapter
-remain required. The matrix and release gates stay open.
+and the production differential adapter remain required. The matrix and release
+gates stay open.
+
+Ranking now reduces an unbounded exact-evidence vector before ordered preference
+and raw score, with generation-wide engagement in the documented tie-break or
+blend position. Group keys come from one actual best document. Within-video
+ordering uses the relevance key then timestamp and external chunk ID for every
+sort. Missing metadata stays distinct for numeric sorting and contributes zero
+only to engagement arithmetic. Ordered evidence still reflects required quoted
+phrases; unquoted proximity/ordered evidence must be completed before claiming
+full ranking parity.
 
 Numeric prefix suppression now has a red-to-green regression covering ASCII
 and Arabic-Indic decimals plus mixed alphanumeric controls in all three field

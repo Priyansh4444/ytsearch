@@ -14,8 +14,10 @@ use serde::Deserialize;
 use unicode_categories::UnicodeCategories;
 use unicode_normalization::UnicodeNormalization;
 
+mod ranking;
 mod scoring;
 
+use ranking::{EngagementContext, EngagementValues};
 use scoring::{ScoringContext, ScoringDocument};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -142,6 +144,7 @@ enum Query {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Sort {
     Relevance,
+    RelevantEngagement,
     Newest,
     Oldest,
     Views,
@@ -260,6 +263,10 @@ struct OracleHit {
     video_id: String,
     document_ids: Vec<String>,
     score_bits: u32,
+    blended_score_bits: u32,
+    normalized_engagement_bits: u32,
+    exact_evidence: Vec<bool>,
+    ordered_phrase: bool,
     provenance: Provenance,
 }
 
@@ -284,6 +291,10 @@ enum OracleError {
 struct DocumentMatch<'a> {
     document: &'a FixtureDocument,
     score: f32,
+    blended_score: f32,
+    normalized_engagement: f32,
+    exact_evidence: Vec<bool>,
+    ordered_phrase: bool,
     provenance: Provenance,
 }
 
@@ -592,6 +603,7 @@ fn evaluate_document_plan(
         );
         reduced.provenance.title |= trace.provenance.title;
         reduced.provenance.transcript |= trace.provenance.transcript;
+        reduced.exact_evidence.push(trace.exact_literal);
         if positive_slots.len() == 1 && index == 0 {
             reduced.selected_hypothesis = trace.selected_hypothesis;
         }
@@ -716,6 +728,7 @@ fn select_hypothesis(
                 kind: hypothesis.kind,
                 canonical_bytes: hypothesis.canonical_bytes.clone(),
             });
+            trace.exact_literal = hypothesis.kind == HypothesisKind::ExactWhole;
             Some(trace)
         })
         .collect::<Vec<_>>();
@@ -776,6 +789,8 @@ fn evaluate_exact_split(
         score,
         provenance,
         selected_hypothesis: None,
+        exact_literal: false,
+        exact_evidence: Vec::new(),
     }
 }
 
@@ -837,6 +852,9 @@ fn evaluate_term_plan(
             "term reduction must remain finite"
         );
         combined.provenance.text_or_title(alternative.field);
+        if alternative.kind == ExpansionKind::Exact {
+            combined.exact_literal = true;
+        }
     }
     combined
 }
@@ -903,6 +921,8 @@ fn evaluate_exhaustively(
     }
     let query = parse_query(&request.query)?;
     let plan = build_expansion_plan(corpus, query, request.expansion)?;
+    let engagement =
+        EngagementContext::from_generation(corpus.documents.iter().map(engagement_values));
     let creator = request.creator.as_deref().map(normalize_handle);
     let mut matches = Vec::new();
     for document in &corpus.documents {
@@ -916,9 +936,14 @@ fn evaluate_exhaustively(
         let text = tokenize(&document.text);
         let trace = evaluate_plan(&plan, &title, &text);
         if trace.matched {
+            let normalized_engagement = engagement.normalized(engagement_values(document));
             matches.push(DocumentMatch {
                 document,
                 score: trace.score,
+                blended_score: engagement.blended(trace.score, engagement_values(document)),
+                normalized_engagement,
+                exact_evidence: trace.exact_evidence,
+                ordered_phrase: trace.provenance.phrase,
                 provenance: trace.provenance,
             });
         }
@@ -950,12 +975,7 @@ fn evaluate_exhaustively(
     let mut ranked = groups
         .into_values()
         .map(|mut documents| {
-            documents.sort_unstable_by(|left, right| {
-                right
-                    .score
-                    .total_cmp(&left.score)
-                    .then_with(|| left.document.id.cmp(&right.document.id))
-            });
+            documents.sort_unstable_by(compare_documents);
             documents
         })
         .collect::<Vec<_>>();
@@ -978,6 +998,10 @@ fn evaluate_exhaustively(
                     .map(|matched| matched.document.id.clone())
                     .collect(),
                 score_bits: best.score.to_bits(),
+                blended_score_bits: best.blended_score.to_bits(),
+                normalized_engagement_bits: best.normalized_engagement.to_bits(),
+                exact_evidence: best.exact_evidence.clone(),
+                ordered_phrase: best.ordered_phrase,
                 provenance: documents
                     .iter()
                     .fold(Provenance::default(), |mut all, matched| {
@@ -1010,6 +1034,8 @@ struct Trace {
     score: f32,
     provenance: Provenance,
     selected_hypothesis: Option<HypothesisSelection>,
+    exact_literal: bool,
+    exact_evidence: Vec<bool>,
 }
 
 fn evaluate_query_in_fields(
@@ -1043,6 +1069,8 @@ fn evaluate_query_in_fields(
                     phrase: false,
                 },
                 selected_hypothesis: None,
+                exact_literal: false,
+                exact_evidence: Vec::new(),
             }
         }
         Query::Phrase(terms) => {
@@ -1058,6 +1086,8 @@ fn evaluate_query_in_fields(
                     phrase: title_match || text_match,
                 },
                 selected_hypothesis: None,
+                exact_literal: false,
+                exact_evidence: Vec::new(),
             }
         }
         Query::And(children) => {
@@ -1201,6 +1231,18 @@ fn normalize_handle(handle: &str) -> String {
     handle.trim_start_matches('@').to_ascii_lowercase()
 }
 
+fn engagement_values(document: &FixtureDocument) -> EngagementValues {
+    let value = |value| match value {
+        Present::Value(value) => Some(value),
+        Present::Missing => None,
+    };
+    EngagementValues {
+        views: value(document.views),
+        likes: value(document.likes),
+        comments: value(document.comments),
+    }
+}
+
 fn count_moments(matches: &[DocumentMatch<'_>]) -> usize {
     let mut by_video = BTreeMap::<&str, Vec<u32>>::new();
     for matched in matches {
@@ -1233,7 +1275,16 @@ fn compare_groups(left: &[DocumentMatch<'_>], right: &[DocumentMatch<'_>], sort:
     let left_best = &left[0];
     let right_best = &right[0];
     let primary = match sort {
-        Sort::Relevance => right_best.score.total_cmp(&left_best.score),
+        Sort::Relevance => compare_relevance_prefix(left_best, right_best)
+            .then_with(|| right_best.score.total_cmp(&left_best.score))
+            .then_with(|| {
+                right_best
+                    .normalized_engagement
+                    .total_cmp(&left_best.normalized_engagement)
+            }),
+        Sort::RelevantEngagement => compare_relevance_prefix(left_best, right_best)
+            .then_with(|| right_best.blended_score.total_cmp(&left_best.blended_score))
+            .then_with(|| right_best.score.total_cmp(&left_best.score)),
         Sort::Newest => compare_optional(
             left_best.document.published_at,
             right_best.document.published_at,
@@ -1252,14 +1303,39 @@ fn compare_groups(left: &[DocumentMatch<'_>], right: &[DocumentMatch<'_>], sort:
             true,
         ),
     };
-    primary
-        .then_with(|| right_best.score.total_cmp(&left_best.score))
+    let with_raw_score = match sort {
+        Sort::Relevance | Sort::RelevantEngagement => primary,
+        Sort::Newest | Sort::Oldest | Sort::Views | Sort::Likes | Sort::Comments => {
+            primary.then_with(|| right_best.score.total_cmp(&left_best.score))
+        }
+    };
+    with_raw_score.then_with(|| {
+        left_best
+            .document
+            .video_id
+            .cmp(&right_best.document.video_id)
+    })
+}
+
+fn compare_documents(left: &DocumentMatch<'_>, right: &DocumentMatch<'_>) -> Ordering {
+    compare_relevance_prefix(left, right)
+        .then_with(|| right.score.total_cmp(&left.score))
         .then_with(|| {
-            left_best
-                .document
-                .video_id
-                .cmp(&right_best.document.video_id)
+            right
+                .normalized_engagement
+                .total_cmp(&left.normalized_engagement)
         })
+        .then_with(|| left.document.timestamp_ms.cmp(&right.document.timestamp_ms))
+        .then_with(|| left.document.id.cmp(&right.document.id))
+}
+
+fn compare_relevance_prefix(left: &DocumentMatch<'_>, right: &DocumentMatch<'_>) -> Ordering {
+    let left_coverage = left.exact_evidence.iter().filter(|exact| **exact).count();
+    let right_coverage = right.exact_evidence.iter().filter(|exact| **exact).count();
+    right_coverage
+        .cmp(&left_coverage)
+        .then_with(|| right.exact_evidence.cmp(&left.exact_evidence))
+        .then_with(|| right.ordered_phrase.cmp(&left.ordered_phrase))
 }
 
 fn compare_optional<T: Ord>(left: Present<T>, right: Present<T>, descending: bool) -> Ordering {
@@ -1386,6 +1462,167 @@ fn all_sort_variants_keep_missing_last() {
         let result = evaluate_exhaustively(&corpus, &ranked).unwrap();
         assert_eq!(result.hits.last().unwrap().video_id, "rank-missing");
     }
+}
+
+#[test]
+fn relevance_uses_unbounded_exact_slot_evidence_and_split_is_not_literal() {
+    let base = FixtureCorpus::from_jsonl(FIXTURE).unwrap();
+    let prototype = base.documents[0].clone();
+    let mut exact = prototype.clone();
+    exact.id = "five-exact".to_string();
+    exact.video_id = "five-exact".to_string();
+    exact.title = "fixture".to_string();
+    exact.text = "alpha bravo charlie delta echoo".to_string();
+    let mut typo = prototype.clone();
+    typo.id = "four-exact".to_string();
+    typo.video_id = "four-exact".to_string();
+    typo.title = "fixture".to_string();
+    typo.text = "alpha bravo charlie delta echox echox echox".to_string();
+    let corpus = FixtureCorpus {
+        documents: vec![typo, exact],
+    };
+    let mut fuzzy = request("alpha bravo charlie delta echoo", 10);
+    fuzzy.expansion = ExpansionPolicy::Fuzzy(EnabledFields::Text);
+    let result = evaluate_exhaustively(&corpus, &fuzzy).unwrap();
+    assert_eq!(result.hits[0].video_id, "five-exact");
+    assert_eq!(
+        result.hits[0].exact_evidence,
+        [true, true, true, true, true]
+    );
+    assert_eq!(
+        result.hits[1].exact_evidence,
+        [true, true, true, true, false]
+    );
+
+    let mut whole = prototype.clone();
+    whole.id = "whole".to_string();
+    whole.video_id = "whole".to_string();
+    whole.title = "fixture".to_string();
+    whole.text = "blackhole".to_string();
+    let mut split = prototype;
+    split.id = "split".to_string();
+    split.video_id = "split".to_string();
+    split.title = "fixture".to_string();
+    split.text = "black black black hole hole hole".to_string();
+    let split_corpus = FixtureCorpus {
+        documents: vec![split, whole],
+    };
+    let mut split_request = request("blackhole", 10);
+    split_request.expansion = ExpansionPolicy::Split(EnabledFields::Text);
+    let split_result = evaluate_exhaustively(&split_corpus, &split_request).unwrap();
+    assert_eq!(split_result.hits[0].video_id, "whole");
+    assert_eq!(split_result.hits[0].exact_evidence, [true]);
+    assert_eq!(split_result.hits[1].exact_evidence, [false]);
+}
+
+#[test]
+fn grouped_rank_uses_one_document_and_stable_timestamp_chunk_ties() {
+    let base = FixtureCorpus::from_jsonl(FIXTURE).unwrap();
+    let prototype = base.documents[0].clone();
+    let mut exact = prototype.clone();
+    exact.id = "same-exact".to_string();
+    exact.video_id = "same".to_string();
+    exact.title = "fixture".to_string();
+    exact.text = "aaaa".to_string();
+    exact.timestamp_ms = 500;
+    let mut high_fuzzy = prototype.clone();
+    high_fuzzy.id = "same-fuzzy".to_string();
+    high_fuzzy.video_id = "same".to_string();
+    let fuzzy_title = std::iter::repeat_n("aaab", 100)
+        .collect::<Vec<_>>()
+        .join(" ");
+    high_fuzzy.title = fuzzy_title.clone();
+    high_fuzzy.text = "fixture".to_string();
+    high_fuzzy.timestamp_ms = 1;
+    let corpus = FixtureCorpus {
+        documents: vec![high_fuzzy, exact],
+    };
+    let plan = build_expansion_plan(
+        &corpus,
+        parse_query("aaaa").unwrap(),
+        ExpansionPolicy::Fuzzy(EnabledFields::TextAndTitle),
+    )
+    .unwrap();
+    let exact_trace = evaluate_plan(&plan, &tokenize("fixture"), &tokenize("aaaa"));
+    let fuzzy_trace = evaluate_plan(&plan, &tokenize(&fuzzy_title), &tokenize("fixture"));
+    assert!(fuzzy_trace.score > exact_trace.score);
+    let mut query = request("aaaa", 10);
+    query.expansion = ExpansionPolicy::Fuzzy(EnabledFields::TextAndTitle);
+    let result = evaluate_exhaustively(&corpus, &query).unwrap();
+    assert_eq!(result.hits[0].document_ids[0], "same-exact");
+    assert_eq!(result.hits[0].score_bits, exact_trace.score.to_bits());
+    assert_eq!(result.hits[0].exact_evidence, [true]);
+
+    let mut later = prototype.clone();
+    later.id = "z-later".to_string();
+    later.video_id = "ties".to_string();
+    later.title = "fixture".to_string();
+    later.text = "anchor".to_string();
+    later.timestamp_ms = 200;
+    let mut earlier_z = later.clone();
+    earlier_z.id = "z-earlier".to_string();
+    earlier_z.timestamp_ms = 100;
+    let mut earlier_a = earlier_z.clone();
+    earlier_a.id = "a-earlier".to_string();
+    let tie_corpus = FixtureCorpus {
+        documents: vec![later, earlier_z, earlier_a],
+    };
+    let ties = evaluate_exhaustively(&tie_corpus, &request("anchor", 10)).unwrap();
+    assert_eq!(
+        ties.hits[0].document_ids,
+        ["a-earlier", "z-earlier", "z-later"]
+    );
+}
+
+#[test]
+fn engagement_is_generation_scoped_and_blending_is_opt_in() {
+    let base = FixtureCorpus::from_jsonl(FIXTURE).unwrap();
+    let prototype = base.documents[0].clone();
+    let mut raw_winner = prototype.clone();
+    raw_winner.id = "raw".to_string();
+    raw_winner.video_id = "raw".to_string();
+    raw_winner.creator = "@one".to_string();
+    raw_winner.title = "fixture".to_string();
+    raw_winner.text = "alpha x".to_string();
+    raw_winner.views = Present::Value(0);
+    raw_winner.likes = Present::Value(0);
+    raw_winner.comments = Present::Value(0);
+    let mut engagement_winner = prototype;
+    engagement_winner.id = "engaged".to_string();
+    engagement_winner.video_id = "engaged".to_string();
+    engagement_winner.creator = "@two".to_string();
+    engagement_winner.title = "fixture".to_string();
+    engagement_winner.text = "x alpha".to_string();
+    engagement_winner.views = Present::Value(1_000_000);
+    engagement_winner.likes = Present::Value(100_000);
+    engagement_winner.comments = Present::Value(10_000);
+    let corpus = FixtureCorpus {
+        documents: vec![raw_winner, engagement_winner],
+    };
+
+    let relevant = evaluate_exhaustively(&corpus, &request("alpha", 10)).unwrap();
+    assert_eq!(relevant.hits[0].video_id, "raw");
+    let mut blended_request = request("alpha", 10);
+    blended_request.sort = Sort::RelevantEngagement;
+    let blended = evaluate_exhaustively(&corpus, &blended_request).unwrap();
+    assert_eq!(blended.hits[0].video_id, "engaged");
+
+    let engaged_global = relevant
+        .hits
+        .iter()
+        .find(|hit| hit.video_id == "engaged")
+        .unwrap();
+    let mut scoped = request("alpha", 10);
+    scoped.creator = Some("@two".to_string());
+    let scoped = evaluate_exhaustively(&corpus, &scoped).unwrap();
+    assert_eq!(
+        scoped.hits[0].normalized_engagement_bits,
+        engaged_global.normalized_engagement_bits
+    );
+    assert_eq!(
+        scoped.hits[0].blended_score_bits,
+        engaged_global.blended_score_bits
+    );
 }
 
 #[test]

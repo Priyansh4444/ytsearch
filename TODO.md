@@ -58,8 +58,11 @@ Raw can replace Typesense as the canonical search index.
   - [x] Replace simplified field frequency scores with independent full-corpus
     IDF, BM25, title log-frequency, first-position factors, final expansion
     multipliers, and canonical contribution reduction; verify numeric goldens.
-  - [ ] Complete proximity, phrase factors, engagement, and the full ranking
-    tuple, then prove runtime/reference score-bit equivalence.
+  - [x] Implement oracle ranking-key reduction with unbounded exact evidence,
+    one real best document per video, timestamp/external-ID ties, and
+    generation-wide engagement normalization and blending.
+  - [ ] Complete proximity and phrase evidence/factors, then prove complete
+    ranking and runtime/reference score-bit equivalence.
   - [ ] Re-run the public performance lane without crossing the edge rate limit.
     The first 480-request attempt produced 360 expected HTTP 429 responses and
     a 490.436 ms `react` outlier; retain this failed attempt in P00 evidence.
