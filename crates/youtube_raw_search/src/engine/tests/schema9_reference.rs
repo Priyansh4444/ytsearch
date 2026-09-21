@@ -14,6 +14,7 @@ use serde::Deserialize;
 use unicode_categories::UnicodeCategories;
 use unicode_normalization::UnicodeNormalization;
 
+mod proximity;
 mod ranking;
 mod scoring;
 
@@ -535,6 +536,27 @@ fn positive_terms(query: &Query) -> Vec<&str> {
     output
 }
 
+fn positive_unquoted_terms(query: &Query) -> Vec<&str> {
+    fn visit<'a>(query: &'a Query, output: &mut Vec<&'a str>) {
+        match query {
+            Query::Term(term) => output.push(term),
+            Query::And(children) => {
+                for child in children {
+                    if !matches!(child, Query::Not(_)) {
+                        visit(child, output);
+                    }
+                }
+            }
+            Query::All | Query::Phrase(_) | Query::Not(_) => {}
+        }
+    }
+    let mut output = Vec::new();
+    visit(query, &mut output);
+    let mut seen = BTreeSet::new();
+    output.retain(|term| seen.insert(*term));
+    output
+}
+
 fn evaluate_plan(plan: &ExpansionPlan, title: &[String], text: &[String]) -> Trace {
     match plan {
         ExpansionPlan::Terms {
@@ -608,12 +630,20 @@ fn evaluate_document_plan(
             reduced.selected_hypothesis = trace.selected_hypothesis;
         }
     }
-    if query_contains_positive_phrase(query) {
-        reduced.score *= 1.25_f32;
-        assert!(
-            reduced.score.is_finite(),
-            "phrase reduction must remain finite"
-        );
+    let proximity = proximity::evaluate(&positive_unquoted_terms(query), fields, title, text);
+    reduced.ordered_evidence = proximity.ordered;
+    reduced.score *= proximity.field_factor();
+    assert!(
+        reduced.score.is_finite(),
+        "proximity reduction must remain finite"
+    );
+    let ordered = proximity.ordered.any() || query_contains_positive_phrase(query);
+    reduced.score *= if ordered { 1.25_f32 } else { 1.0_f32 };
+    assert!(
+        reduced.score.is_finite(),
+        "ordered reduction must remain finite"
+    );
+    if ordered {
         reduced.provenance.phrase = true;
     }
     reduced
@@ -791,6 +821,7 @@ fn evaluate_exact_split(
         selected_hypothesis: None,
         exact_literal: false,
         exact_evidence: Vec::new(),
+        ordered_evidence: proximity::OrderedEvidence::default(),
     }
 }
 
@@ -1036,6 +1067,7 @@ struct Trace {
     selected_hypothesis: Option<HypothesisSelection>,
     exact_literal: bool,
     exact_evidence: Vec<bool>,
+    ordered_evidence: proximity::OrderedEvidence,
 }
 
 fn evaluate_query_in_fields(
@@ -1071,6 +1103,7 @@ fn evaluate_query_in_fields(
                 selected_hypothesis: None,
                 exact_literal: false,
                 exact_evidence: Vec::new(),
+                ordered_evidence: proximity::OrderedEvidence::default(),
             }
         }
         Query::Phrase(terms) => {
@@ -1088,6 +1121,7 @@ fn evaluate_query_in_fields(
                 selected_hypothesis: None,
                 exact_literal: false,
                 exact_evidence: Vec::new(),
+                ordered_evidence: proximity::OrderedEvidence::default(),
             }
         }
         Query::And(children) => {
@@ -1623,6 +1657,34 @@ fn engagement_is_generation_scoped_and_blending_is_opt_in() {
         scoped.hits[0].blended_score_bits,
         engaged_global.blended_score_bits
     );
+}
+
+#[test]
+fn unquoted_proximity_changes_score_and_rank_without_absorbing_other_syntax() {
+    let base = FixtureCorpus::from_jsonl(FIXTURE).unwrap();
+    let prototype = base.documents[0].clone();
+    let mut reversed = prototype.clone();
+    reversed.id = "reversed".to_string();
+    reversed.video_id = "reversed".to_string();
+    reversed.title = "fixture".to_string();
+    reversed.text = "beta alpha".to_string();
+    let mut adjacent = prototype.clone();
+    adjacent.id = "adjacent".to_string();
+    adjacent.video_id = "adjacent".to_string();
+    adjacent.title = "fixture".to_string();
+    adjacent.text = "alpha beta".to_string();
+    let corpus = FixtureCorpus {
+        documents: vec![reversed, adjacent],
+    };
+    let result = evaluate_exhaustively(&corpus, &request("alpha beta", 10)).unwrap();
+    assert_eq!(result.hits[0].video_id, "adjacent");
+    assert!(result.hits[0].ordered_phrase);
+    assert!(!result.hits[1].ordered_phrase);
+    assert!(result.hits[0].score_bits > result.hits[1].score_bits);
+    assert_eq!(result.hits[0].score_bits, 0x4022_9aae);
+
+    let parsed = parse_query("alpha alpha \"beta beta\" -gamma").unwrap();
+    assert_eq!(positive_unquoted_terms(&parsed), ["alpha"]);
 }
 
 #[test]

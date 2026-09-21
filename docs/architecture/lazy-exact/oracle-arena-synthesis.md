@@ -104,9 +104,11 @@ and raw score, with generation-wide engagement in the documented tie-break or
 blend position. Group keys come from one actual best document. Within-video
 ordering uses the relevance key then timestamp and external chunk ID for every
 sort. Missing metadata stays distinct for numeric sorting and contributes zero
-only to engagement arithmetic. Ordered evidence still reflects required quoted
-phrases; unquoted proximity/ordered evidence must be completed before claiming
-full ranking parity.
+only to engagement arithmetic. Unquoted proximity now computes the exhaustive
+minimum window over distinct positive slots, chooses the maximum enabled-field
+factor, and applies the ordered multiplier separately without the legacy
+displacement/cardinality cap. Selected prefix/typo/split positions and richer
+phrase/fuzzy-split factors remain pending before claiming full ranking parity.
 
 Numeric prefix suppression now has a red-to-green regression covering ASCII
 and Arabic-Indic decimals plus mixed alphanumeric controls in all three field

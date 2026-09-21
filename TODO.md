@@ -61,7 +61,10 @@ Raw can replace Typesense as the canonical search index.
   - [x] Implement oracle ranking-key reduction with unbounded exact evidence,
     one real best document per video, timestamp/external-ID ties, and
     generation-wide engagement normalization and blending.
-  - [ ] Complete proximity and phrase evidence/factors, then prove complete
+  - [x] Add exhaustive unquoted proximity and ordered-evidence reduction with
+    distinct positive slots, maximum enabled-field factor, separate ordered
+    multiplier, and no displacement/cardinality cap.
+  - [ ] Complete richer phrase/fuzzy-split evidence factors, then prove complete
     ranking and runtime/reference score-bit equivalence.
   - [ ] Re-run the public performance lane without crossing the edge rate limit.
     The first 480-request attempt produced 360 expected HTTP 429 responses and
