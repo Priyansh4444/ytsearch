@@ -14,6 +14,10 @@ use serde::Deserialize;
 use unicode_categories::UnicodeCategories;
 use unicode_normalization::UnicodeNormalization;
 
+mod scoring;
+
+use scoring::{ScoringContext, ScoringDocument};
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum ContentKind {
@@ -218,17 +222,19 @@ struct SlotHypothesis {
     plan: HypothesisPlan,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 enum ExpansionPlan {
     Terms {
         query: Query,
         fields: EnabledFields,
         terms: BTreeMap<String, TermPlan>,
+        scoring: ScoringContext,
     },
     Hypotheses {
         query: Query,
         fields: EnabledFields,
         slots: BTreeMap<String, Vec<SlotHypothesis>>,
+        scoring: ScoringContext,
     },
 }
 
@@ -286,8 +292,14 @@ fn build_expansion_plan(
     query: Query,
     policy: ExpansionPolicy,
 ) -> Result<ExpansionPlan, OracleError> {
+    let scoring =
+        ScoringContext::from_documents(corpus.documents.iter().map(|document| ScoringDocument {
+            video_id: &document.video_id,
+            title: &document.title,
+            text: &document.text,
+        }));
     if let ExpansionPolicy::Split(fields) = policy {
-        return build_split_plan(corpus, query, fields);
+        return build_split_plan(corpus, query, fields, scoring);
     }
     let fields = match policy {
         ExpansionPolicy::ExactOnly => {
@@ -304,6 +316,7 @@ fn build_expansion_plan(
                 query,
                 fields: EnabledFields::TextAndTitle,
                 terms,
+                scoring,
             });
         }
         ExpansionPolicy::Prefix(fields) | ExpansionPolicy::Fuzzy(fields) => fields,
@@ -387,6 +400,7 @@ fn build_expansion_plan(
         query,
         fields,
         terms: plans,
+        scoring,
     })
 }
 
@@ -394,6 +408,7 @@ fn build_split_plan(
     corpus: &FixtureCorpus,
     query: Query,
     fields: EnabledFields,
+    scoring: ScoringContext,
 ) -> Result<ExpansionPlan, OracleError> {
     if query_contains_positive_phrase(&query) {
         return Err(OracleError::UnsupportedReferenceSemantics(
@@ -457,6 +472,7 @@ fn build_split_plan(
         query,
         fields,
         slots,
+        scoring,
     })
 }
 
@@ -514,12 +530,28 @@ fn evaluate_plan(plan: &ExpansionPlan, title: &[String], text: &[String]) -> Tra
             query,
             fields,
             terms,
-        } => evaluate_document_plan(query, *fields, SlotPlans::Terms(terms), title, text),
+            scoring,
+        } => evaluate_document_plan(
+            query,
+            *fields,
+            SlotPlans::Terms(terms),
+            scoring,
+            title,
+            text,
+        ),
         ExpansionPlan::Hypotheses {
             query,
             fields,
             slots,
-        } => evaluate_document_plan(query, *fields, SlotPlans::Hypotheses(slots), title, text),
+            scoring,
+        } => evaluate_document_plan(
+            query,
+            *fields,
+            SlotPlans::Hypotheses(slots),
+            scoring,
+            title,
+            text,
+        ),
     }
 }
 
@@ -533,10 +565,11 @@ fn evaluate_document_plan(
     query: &Query,
     fields: EnabledFields,
     slots: SlotPlans<'_>,
+    scoring: &ScoringContext,
     title: &[String],
     text: &[String],
 ) -> Trace {
-    let membership = evaluate_membership(query, fields, slots, title, text);
+    let membership = evaluate_membership(query, fields, slots, scoring, title, text);
     if !membership.matched {
         return Trace::default();
     }
@@ -548,11 +581,15 @@ fn evaluate_document_plan(
         ..Trace::default()
     };
     for (index, term) in positive_slots.iter().enumerate() {
-        let trace = evaluate_slot(term, fields, slots, title, text);
+        let trace = evaluate_slot(term, fields, slots, scoring, title, text);
         if !trace.matched {
             return Trace::default();
         }
         reduced.score += trace.score;
+        assert!(
+            reduced.score.is_finite(),
+            "slot reduction must remain finite"
+        );
         reduced.provenance.title |= trace.provenance.title;
         reduced.provenance.transcript |= trace.provenance.transcript;
         if positive_slots.len() == 1 && index == 0 {
@@ -561,6 +598,10 @@ fn evaluate_document_plan(
     }
     if query_contains_positive_phrase(query) {
         reduced.score *= 1.25_f32;
+        assert!(
+            reduced.score.is_finite(),
+            "phrase reduction must remain finite"
+        );
         reduced.provenance.phrase = true;
     }
     reduced
@@ -570,6 +611,7 @@ fn evaluate_membership(
     query: &Query,
     fields: EnabledFields,
     slots: SlotPlans<'_>,
+    scoring: &ScoringContext,
     title: &[String],
     text: &[String],
 ) -> Trace {
@@ -579,7 +621,7 @@ fn evaluate_membership(
             ..Trace::default()
         },
         Query::Term(term) => {
-            let trace = evaluate_slot(term, fields, slots, title, text);
+            let trace = evaluate_slot(term, fields, slots, scoring, title, text);
             Trace {
                 matched: trace.matched,
                 provenance: trace.provenance,
@@ -607,7 +649,7 @@ fn evaluate_membership(
                         ..Trace::default()
                     }
                 } else {
-                    evaluate_membership(child, fields, slots, title, text)
+                    evaluate_membership(child, fields, slots, scoring, title, text)
                 };
                 if !trace.matched {
                     return Trace::default();
@@ -632,17 +674,18 @@ fn evaluate_slot(
     term: &str,
     fields: EnabledFields,
     slots: SlotPlans<'_>,
+    scoring: &ScoringContext,
     title: &[String],
     text: &[String],
 ) -> Trace {
     match slots {
         SlotPlans::Terms(plans) => plans.get(term).map_or_else(
             || evaluate_query_in_fields(&Query::Term(term.to_string()), title, text, fields),
-            |plan| evaluate_term_plan(plan, title, text),
+            |plan| evaluate_term_plan(plan, fields, scoring, title, text),
         ),
         SlotPlans::Hypotheses(plans) => plans.get(term).map_or_else(
             || evaluate_query_in_fields(&Query::Term(term.to_string()), title, text, fields),
-            |hypotheses| select_hypothesis(hypotheses, fields, title, text),
+            |hypotheses| select_hypothesis(hypotheses, fields, scoring, title, text),
         ),
     }
 }
@@ -650,6 +693,7 @@ fn evaluate_slot(
 fn select_hypothesis(
     hypotheses: &[SlotHypothesis],
     fields: EnabledFields,
+    scoring: &ScoringContext,
     title: &[String],
     text: &[String],
 ) -> Trace {
@@ -657,9 +701,11 @@ fn select_hypothesis(
         .iter()
         .filter_map(|hypothesis| {
             let mut trace = match &hypothesis.plan {
-                HypothesisPlan::Whole(plan) => evaluate_term_plan(plan, title, text),
+                HypothesisPlan::Whole(plan) => {
+                    evaluate_term_plan(plan, fields, scoring, title, text)
+                }
                 HypothesisPlan::Split { left, right } => {
-                    evaluate_exact_split(left, right, fields, title, text)
+                    evaluate_exact_split(left, right, fields, scoring, title, text)
                 }
             };
             if !trace.matched {
@@ -673,63 +719,56 @@ fn select_hypothesis(
             Some(trace)
         })
         .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| {
-        right.score.total_cmp(&left.score).then_with(|| {
-            let left = left
-                .selected_hypothesis
-                .as_ref()
-                .expect("candidate selection");
-            let right = right
-                .selected_hypothesis
-                .as_ref()
-                .expect("candidate selection");
-            left.kind
-                .cmp(&right.kind)
-                .then_with(|| left.canonical_bytes.cmp(&right.canonical_bytes))
-        })
-    });
+    candidates.sort_by(compare_scored_hypotheses);
     candidates.into_iter().next().unwrap_or_default()
+}
+
+fn compare_scored_hypotheses(left: &Trace, right: &Trace) -> Ordering {
+    right.score.total_cmp(&left.score).then_with(|| {
+        let left = left
+            .selected_hypothesis
+            .as_ref()
+            .expect("candidate selection");
+        let right = right
+            .selected_hypothesis
+            .as_ref()
+            .expect("candidate selection");
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.canonical_bytes.cmp(&right.canonical_bytes))
+    })
 }
 
 fn evaluate_exact_split(
     left: &str,
     right: &str,
     fields: EnabledFields,
+    scoring: &ScoringContext,
     title: &[String],
     text: &[String],
 ) -> Trace {
-    let occurrences = |field, term: &str| {
-        let tokens = match field {
-            IndexedField::Text => text,
-            IndexedField::Title => title,
-        };
-        tokens.iter().filter(|token| token.as_str() == term).count() as f32
+    let component_scores = |term: &str| {
+        [IndexedField::Text, IndexedField::Title]
+            .into_iter()
+            .filter(|field| fields.contains(*field))
+            .filter_map(|field| {
+                scoring
+                    .score_field(term, field, fields, 1.0, title, text)
+                    .map(|score| (field, score))
+            })
+            .collect::<Vec<_>>()
     };
-    let left_fields = [IndexedField::Text, IndexedField::Title]
-        .into_iter()
-        .filter(|field| fields.contains(*field) && occurrences(*field, left) > 0.0)
-        .collect::<Vec<_>>();
-    let right_fields = [IndexedField::Text, IndexedField::Title]
-        .into_iter()
-        .filter(|field| fields.contains(*field) && occurrences(*field, right) > 0.0)
-        .collect::<Vec<_>>();
-    if left_fields.is_empty() || right_fields.is_empty() {
+    let left_scores = component_scores(left);
+    let right_scores = component_scores(right);
+    if left_scores.is_empty() || right_scores.is_empty() {
         return Trace::default();
     }
-    let weight = |field| match field {
-        IndexedField::Text => 4.0_f32,
-        IndexedField::Title => 6.0_f32,
-    };
-    let mut score = 0.0_f32;
-    for field in &left_fields {
-        score += occurrences(*field, left) * weight(*field);
-    }
-    for field in &right_fields {
-        score += occurrences(*field, right) * weight(*field);
-    }
-    score += 8.0_f32;
+    let score = reduce_exact_split_scores(
+        left_scores.iter().map(|(_, score)| *score),
+        right_scores.iter().map(|(_, score)| *score),
+    );
     let mut provenance = Provenance::default();
-    for field in left_fields.into_iter().chain(right_fields) {
+    for (field, _) in left_scores.into_iter().chain(right_scores) {
         provenance.text_or_title(field);
     }
     Trace {
@@ -740,36 +779,86 @@ fn evaluate_exact_split(
     }
 }
 
-fn evaluate_term_plan(plan: &TermPlan, title: &[String], text: &[String]) -> Trace {
+fn reduce_exact_split_scores(
+    left: impl IntoIterator<Item = f32>,
+    right: impl IntoIterator<Item = f32>,
+) -> f32 {
+    fn component(scores: impl IntoIterator<Item = f32>, name: &str) -> f32 {
+        scores.into_iter().fold(0.0_f32, |total, score| {
+            let total = total + score;
+            assert!(
+                total.is_finite(),
+                "{name} split reduction must remain finite"
+            );
+            total
+        })
+    }
+    let left = component(left, "left");
+    let right = component(right, "right");
+    let components = left + right;
+    assert!(
+        components.is_finite(),
+        "split component sum must remain finite"
+    );
+    let score = components + 8.0_f32;
+    assert!(score.is_finite(), "split bonus must remain finite");
+    score
+}
+
+fn evaluate_term_plan(
+    plan: &TermPlan,
+    fields: EnabledFields,
+    scoring: &ScoringContext,
+    title: &[String],
+    text: &[String],
+) -> Trace {
     let mut combined = Trace::default();
-    for alternative in &plan.alternatives {
-        let tokens = match alternative.field {
-            IndexedField::Text => text,
-            IndexedField::Title => title,
-        };
-        let frequency = tokens
-            .iter()
-            .filter(|token| *token == &alternative.term)
-            .count() as f32;
-        if frequency == 0.0 {
-            continue;
-        }
-        let weight = match alternative.field {
-            IndexedField::Text => 4.0,
-            IndexedField::Title => 6.0,
-        };
+    for alternative in contribution_order(plan) {
         let multiplier = match alternative.kind {
             ExpansionKind::Exact => 1.0,
             ExpansionKind::Prefix => 0.9,
             ExpansionKind::TypoOne => 0.65,
             ExpansionKind::TypoTwo => 0.4,
         };
+        let Some(contribution) = scoring.score_field(
+            &alternative.term,
+            alternative.field,
+            fields,
+            multiplier,
+            title,
+            text,
+        ) else {
+            continue;
+        };
         combined.matched = true;
-        combined.score += (frequency * weight) * multiplier;
+        combined.score += contribution;
+        assert!(
+            combined.score.is_finite(),
+            "term reduction must remain finite"
+        );
         combined.provenance.text_or_title(alternative.field);
     }
     combined
 }
+
+fn contribution_order(plan: &TermPlan) -> Vec<&TermAlternative> {
+    let mut alternatives = plan.alternatives.iter().collect::<Vec<_>>();
+    alternatives.sort_by(|left, right| {
+        left.term
+            .as_bytes()
+            .cmp(right.term.as_bytes())
+            .then_with(|| left.kind.cmp(&right.kind))
+            .then_with(|| left.field.cmp(&right.field))
+    });
+    alternatives
+}
+
+/*
+The field scorer above deliberately stops before pair proximity, ordered boosts,
+engagement blending, and the final ranking tuple. Those remain separate schema-9
+gates; this oracle unit freezes only corpus statistics and per-field contribution
+order.
+*/
 
 impl Provenance {
     fn text_or_title(&mut self, field: IndexedField) {
@@ -1354,6 +1443,20 @@ fn creator_scope_and_zero_window_keep_exact_complete_totals() {
     assert_eq!(result.by_content_kind, BTreeMap::from([("video", 1)]));
     assert!(result.hits.is_empty());
 
+    let global = evaluate_exhaustively(&corpus, &request("create", 10)).unwrap();
+    let mut scoped_hits = request("create", 10);
+    scoped_hits.creator = Some("@RyanSolid".to_string());
+    let scoped_hits = evaluate_exhaustively(&corpus, &scoped_hits).unwrap();
+    let global_solid = global
+        .hits
+        .iter()
+        .find(|hit| hit.video_id == "solid")
+        .unwrap();
+    assert_eq!(
+        scoped_hits.hits[0].score_bits, global_solid.score_bits,
+        "corpus statistics are built before creator scope filtering"
+    );
+
     let title_only = evaluate_exhaustively(&corpus, &request("visual", 10)).unwrap();
     assert_eq!(title_only.total_videos, 1);
     assert_eq!(title_only.total_moments, 1);
@@ -1596,9 +1699,31 @@ fn expansion_order_scoring_and_negation_are_exact() {
         ]
     );
     let trace = evaluate_plan(&plan, &tokenize("aaab"), &tokenize("aaac aaab aaac"));
+    assert_eq!(trace.score.to_bits(), 0x4053_380a);
+
+    let reversed_distance_order = TermPlan {
+        alternatives: vec![
+            TermAlternative {
+                term: "zaaaaaa".to_string(),
+                field: IndexedField::Text,
+                kind: ExpansionKind::TypoOne,
+                distance: 1,
+            },
+            TermAlternative {
+                term: "aaaaabb".to_string(),
+                field: IndexedField::Text,
+                kind: ExpansionKind::TypoTwo,
+                distance: 2,
+            },
+        ],
+    };
     assert_eq!(
-        trace.score.to_bits(),
-        (3.0_f32 * 4.0 * 0.65 + 6.0 * 0.65).to_bits()
+        contribution_order(&reversed_distance_order)
+            .into_iter()
+            .map(|alternative| alternative.term.as_str())
+            .collect::<Vec<_>>(),
+        ["aaaaabb", "zaaaaaa"],
+        "admission distance order must not leak into canonical score reduction"
     );
 
     let mut negative_neighbor = prototype.clone();
@@ -1727,7 +1852,7 @@ fn positive_slots_are_global_distinct_and_negative_slots_never_score() {
         &tokenize("fixture"),
         &tokenize("alpha alpha beta gamma"),
     );
-    assert_eq!(phrase_trace.score.to_bits(), 0x4170_0000);
+    assert_eq!(phrase_trace.score.to_bits(), 0x40f6_cde5);
 }
 
 #[test]
@@ -1756,7 +1881,7 @@ fn repeated_phrase_occurrences_remain_a_positional_predicate() {
 }
 
 #[test]
-fn split_admits_every_qualifying_boundary_and_breaks_ties_canonically() {
+fn split_admits_every_qualifying_boundary_without_legacy_caps() {
     let base = FixtureCorpus::from_jsonl(FIXTURE).unwrap();
     let mut document = base.documents[0].clone();
     document.id = "many-splits".to_string();
@@ -1792,7 +1917,7 @@ fn split_admits_every_qualifying_boundary_and_breaks_ties_canonically() {
     );
 
     let trace = evaluate_plan(&plan, &[], &tokenize(&components.join(" ")));
-    assert_eq!(trace.score.to_bits(), 0x4180_0000);
+    assert_eq!(trace.score.to_bits(), 0x4129_89b4);
     assert_eq!(
         trace.selected_hypothesis,
         Some(HypothesisSelection {
@@ -1831,7 +1956,7 @@ fn split_boundaries_count_unicode_scalars_and_score_left_then_right_then_bonus()
     assert_eq!(splits[0].canonical_bytes, "ééé\0abcdef".as_bytes());
 
     let trace = evaluate_plan(&plan, &[], &tokenize("ééé ééé abcdef"));
-    assert_eq!(trace.score.to_bits(), 0x41a0_0000);
+    assert_eq!(trace.score.to_bits(), 0x4131_1e9d);
 
     let mut numeric_document = corpus.documents[0].clone();
     numeric_document.id = "numeric-components".to_string();
@@ -1865,6 +1990,21 @@ fn split_boundaries_count_unicode_scalars_and_score_left_then_right_then_bonus()
         0,
         "non-ASCII Unicode-decimal terms are exact-only"
     );
+}
+
+#[test]
+fn split_score_reduces_each_component_before_adding_the_bonus() {
+    let left = [4.767_863_8_f32, 2.227_841_1_f32];
+    let right = [10.130_319_f32, 18.477_358_f32];
+    let grouped = reduce_exact_split_scores(left, right);
+    let flat = left
+        .into_iter()
+        .chain(right)
+        .fold(0.0_f32, |total, score| total + score)
+        + 8.0_f32;
+    assert_eq!(grouped.to_bits(), 0x422e_69dd);
+    assert_eq!(flat.to_bits(), 0x422e_69dc);
+    assert_ne!(grouped.to_bits(), flat.to_bits());
 }
 
 #[test]
@@ -1911,7 +2051,7 @@ fn split_requires_one_document_but_allows_components_across_enabled_fields() {
 }
 
 #[test]
-fn whole_token_wins_an_exact_score_tie_and_negation_stays_exact() {
+fn whole_and_split_use_corpus_scores_and_equal_scores_use_frozen_priority() {
     let base = FixtureCorpus::from_jsonl(FIXTURE).unwrap();
     let mut tied = base.documents[0].clone();
     tied.id = "tied".to_string();
@@ -1928,14 +2068,30 @@ fn whole_token_wins_an_exact_score_tie_and_negation_stays_exact() {
     )
     .unwrap();
     let trace = evaluate_plan(&plan, &[], &tokenize(&corpus.documents[0].text));
-    assert_eq!(trace.score.to_bits(), 0x4180_0000);
+    assert_eq!(trace.score.to_bits(), 0x4127_2f96);
     assert_eq!(
         trace.selected_hypothesis,
         Some(HypothesisSelection {
-            kind: HypothesisKind::ExactWhole,
-            canonical_bytes: b"blackhole".to_vec(),
+            kind: HypothesisKind::SplitExact,
+            canonical_bytes: b"black\0hole".to_vec(),
         })
     );
+
+    let tied_trace = |kind, bytes: &[u8]| Trace {
+        matched: true,
+        score: 3.5,
+        selected_hypothesis: Some(HypothesisSelection {
+            kind,
+            canonical_bytes: bytes.to_vec(),
+        }),
+        ..Trace::default()
+    };
+    let whole = tied_trace(HypothesisKind::ExactWhole, b"blackhole");
+    let split = tied_trace(HypothesisKind::SplitExact, b"black\0hole");
+    assert_eq!(compare_scored_hypotheses(&whole, &split), Ordering::Less);
+    let earlier = tied_trace(HypothesisKind::SplitExact, b"abc\0defghijklmn");
+    let later = tied_trace(HypothesisKind::SplitExact, b"abcd\0efghijklmn");
+    assert_eq!(compare_scored_hypotheses(&earlier, &later), Ordering::Less);
 
     let mut excluded = request("blackhole -black", 10);
     excluded.expansion = ExpansionPolicy::Split(EnabledFields::Text);

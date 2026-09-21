@@ -55,8 +55,11 @@ Raw can replace Typesense as the canonical search index.
   - [x] Correct global slot deduplication across terms/phrases by separating
     predicate membership from first-appearance slot reduction; repeated phrase
     positions remain required and negative predicates never contribute scores.
-  - [ ] Replace the oracle's simplified frequency scores with the complete
-    frozen v2 formulas and prove runtime/reference score-bit equivalence.
+  - [x] Replace simplified field frequency scores with independent full-corpus
+    IDF, BM25, title log-frequency, first-position factors, final expansion
+    multipliers, and canonical contribution reduction; verify numeric goldens.
+  - [ ] Complete proximity, phrase factors, engagement, and the full ranking
+    tuple, then prove runtime/reference score-bit equivalence.
   - [ ] Re-run the public performance lane without crossing the edge rate limit.
     The first 480-request attempt produced 360 expected HTTP 429 responses and
     a 490.436 ms `react` outlier; retain this failed attempt in P00 evidence.

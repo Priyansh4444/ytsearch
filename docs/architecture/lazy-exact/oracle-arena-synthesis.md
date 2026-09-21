@@ -84,13 +84,20 @@ phrase/split combinations return explicit errors in this fixture evaluator.
 
 ## Remaining authority gaps
 
-This fixture evaluator is still a foundation, not the v2 ranking oracle. Its
-field scores currently use token frequency times fixed field weights. They do
-not yet implement corpus IDF, BM25 normalization, title logarithmic frequency,
-position/proximity factors, or engagement. Existing score-bit assertions prove
-only the implemented arithmetic, not equivalence with the frozen complete
-score. The matrix and release gates remain open until those formulas and the
-production differential adapter are implemented and exercised end to end.
+This fixture evaluator is still a foundation, not the complete v2 ranking oracle.
+Its independent `scoring.rs` now derives corpus IDF, BM25 normalization, title
+logarithmic frequency, and first-token position factors from the complete fixture
+before creator filtering. Title frequency counts distinct videos; enabled-field
+frequencies are combined and clamped to the corpus document count. Expansion
+multipliers are applied last to each field contribution. Contribution reduction
+uses term bytes, expansion kind, then text/title order independently of candidate
+admission order. Literal splits reduce left then right then the bonus.
+
+Numeric goldens and scope-invariance tests cover these field formulas, including
+empty/zero-average corpora, frequency clamping, and finite reductions. They do
+not prove complete-score equivalence: pair proximity, richer phrase factors,
+engagement, the full ranking tuple, and the production differential adapter
+remain required. The matrix and release gates stay open.
 
 Numeric prefix suppression now has a red-to-green regression covering ASCII
 and Arabic-Indic decimals plus mixed alphanumeric controls in all three field
