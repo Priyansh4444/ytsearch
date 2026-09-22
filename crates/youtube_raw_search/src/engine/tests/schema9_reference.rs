@@ -14,6 +14,7 @@ use serde::Deserialize;
 use unicode_categories::UnicodeCategories;
 use unicode_normalization::UnicodeNormalization;
 
+mod hypothesis_evidence;
 mod phrase_slop;
 mod proximity;
 mod ranking;
