@@ -57,6 +57,10 @@ Raw can replace Typesense as the canonical search index.
   - [ ] Complete plural/fuzzy split alternatives, phrase/slot integration, and
     the threshold-driven expansion ladder; literal split tests alone do not
     close the v2 semantic gate.
+  - [x] Prove QG-06's exact-only retained-query order without the legacy cap:
+    full, every prefix, every suffix; preserve exclusions/scope and select
+    before pagination. Automatic expansion/controller semantics and runtime
+    differential evidence remain open; the matrix pending gate is unchanged.
   - [x] Correct oracle numeric prefix suppression with ASCII/Arabic-Indic and
     mixed-alphanumeric regression cases across all field selections.
   - [x] Correct global slot deduplication across terms/phrases by separating

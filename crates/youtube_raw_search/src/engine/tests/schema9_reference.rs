@@ -18,6 +18,7 @@ mod phrase_slop;
 mod proximity;
 mod ranking;
 mod scoring;
+mod token_drop;
 
 use phrase_slop::PhraseSlop;
 use ranking::{EngagementContext, EngagementValues};
@@ -995,6 +996,14 @@ fn evaluate_exhaustively(
         return Err(OracleError::UnsupportedReferenceSemantics("token_drop"));
     }
     let query = parse_query(&request.query)?;
+    evaluate_query_exhaustively(corpus, request, query)
+}
+
+fn evaluate_query_exhaustively(
+    corpus: &FixtureCorpus,
+    request: &OracleRequest,
+    query: Query,
+) -> Result<OracleResult, OracleError> {
     if request.phrase_slop.is_some() && !query_contains_positive_phrase(&query) {
         return Err(OracleError::PhraseSlopRequiresPositivePhrase);
     }

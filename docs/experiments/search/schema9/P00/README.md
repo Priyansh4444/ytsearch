@@ -169,6 +169,27 @@ Matrix validation passed with 300 cases; focused grammar tests: four passed;
 full Raw search crate: 227 passed, one ignored; formatting passed. These remain
 reference/fixture checks, not production differential or performance evidence.
 
+### QG-06 exact-only ordered selector
+
+The reference now exposes an explicitly exact-only retained-query selector,
+separate from the still-unsupported automatic `TokenDrop` policy. It selects
+the full query first, then every prefix from `n-1` to `1`, then every suffix
+starting at `1` through `n-1`. It returns the original retained range plus the
+selected result, or an explicit exhausted outcome. Negatives remain exact and
+opaque; positive phrases are rejected by this helper. Scores describe retained
+slots using generation-wide statistics. Threshold one uses complete scoped
+totals before pagination, not the number of hits on the requested page.
+
+Six focused tests cover every prefix/suffix for 21, 22, and 32 distinct terms;
+the actual 22-token matrix request `threshold-004-fifteen-terms` reaches the
+twenty-first prefix and suffix. Other fixtures cover duplicate slots,
+prefix-before-suffix preference, creator and term/phrase exclusions,
+generation-wide scoring, deep/empty/count-only pages, and exhaustion.
+All six passed independent review and a separate test run. Full crate: 233
+passed, one ignored; formatting, all-target/all-feature Clippy with warnings
+denied, and diff checks passed. No matrix case was relabeled complete, no
+matrix digest changed, and no production/live/performance gate is claimed.
+
 ## Next autonomous repairs
 
 1. Implement schema-9 structural metadata and lazy exact execution against the
