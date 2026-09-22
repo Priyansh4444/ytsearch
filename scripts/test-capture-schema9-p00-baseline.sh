@@ -10,7 +10,7 @@ printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   'case "$1" in' \
-  '  status) printf '\''%s\n'\'' '\''{"Machines":[{"id":"reader-1"}]}'\'' ;;' \
+  '  status) if [[ "${P00_TEST_FAIL_READER:-}" == 1 ]]; then exit 43; fi; printf '\''%s\n'\'' '\''{"Machines":[{"id":"reader-1"}]}'\'' ;;' \
   '  machines) printf '\''%s\n'\'' '\''[{"id":"machine-1"}]'\'' ;;' \
   '  *) exit 2 ;;' \
   'esac' > "$tmp/bin/flyctl"
@@ -36,6 +36,20 @@ jq -e '
   .metrics.api_machines == 1 and .metrics.indexer_machines == 1 and
   .metrics.matrix == "pass" and .metrics.contract == "pass"
 ' "$tmp/output/receipt.json" >/dev/null
+
+mkdir -p "$tmp/failed-output"
+if PATH="$tmp/bin:$PATH" RAW_SEARCH_URL=http://reader.internal:8108 \
+  RAW_ADMIN_API_KEY="$secret" PRODUCTION_FRONTEND_URL=https://search.example \
+  P00_TEST_FAIL_READER=1 P00_OUTPUT="$tmp/failed-output" \
+  "$SCRIPT_DIR/capture-schema9-p00-baseline.sh" >/dev/null 2>&1; then
+  printf 'failed reader probe unexpectedly passed\n' >&2
+  exit 1
+fi
+jq -e '
+  .status == "fail" and
+  (.failure_cases | any(. == "reader app status probe failed")) and
+  .metrics.reader_machines == null
+' "$tmp/failed-output/receipt.json" >/dev/null
 if rg --fixed-strings "$secret" "$tmp/output" >/dev/null; then
   printf 'P00 collector leaked its admin secret\n' >&2
   exit 1
