@@ -128,9 +128,24 @@ if curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
   "${PRODUCTION_FRONTEND_URL%/}/api/availability" \
   > "$OUTPUT/availability.json" 2>/dev/null; then
   if ! jq -se 'select(length == 1) | .[0] | select(type == "object") |
-    select((.search_enabled | type) == "boolean" and (.mode | type) == "string")
+    select(
+      (.status == "scheduled_offline" or .status == "prewarming" or .status == "ready" or
+        .status == "starting" or .status == "degraded") and
+      (.search_enabled | type) == "boolean" and (.enforced | type) == "boolean" and
+      (.schedule_policy == "always_on" or .schedule_policy == "scheduled" or
+        .schedule_policy == "observe") and
+      (.schedule_phase == "closed" or .schedule_phase == "prewarm" or
+        .schedule_phase == "open") and
+      .time_zone == "America/Los_Angeles" and
+      .daily_window.opens == "12:00" and .daily_window.closes == "00:00" and
+      .daily_window.label == "12:00 PM–12:00 AM Pacific Time" and
+      (.next_transition_at | type) == "string")
   ' "$OUTPUT/availability.json" >/dev/null 2>&1; then
     failure_cases+=("availability response invalid")
+  elif ! jq -se '.[0] | select(.status == "ready" and .search_enabled == true and
+    .enforced == false and .schedule_policy == "always_on")' \
+    "$OUTPUT/availability.json" >/dev/null 2>&1; then
+    failure_cases+=("availability not always on and ready")
   fi
 else
   failure_cases+=("availability probe failed")
