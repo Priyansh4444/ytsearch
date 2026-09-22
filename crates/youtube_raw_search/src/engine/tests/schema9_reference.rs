@@ -1366,6 +1366,22 @@ fn grammar_rejects_every_matrix_query_error() {
 
 #[test]
 fn grammar_counts_utf8_bytes_and_phrase_occurrences() {
+    let matrix: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/schema9/query-matrix.json"
+    )))
+    .unwrap();
+    let boundary = matrix["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["id"] == "threshold-017-max-query")
+        .unwrap();
+    let query = boundary["request"]["q"].as_str().unwrap();
+    assert_eq!(boundary["expected"]["kind"], "success");
+    assert_eq!(query.len(), 512);
+    assert!(parse_query(query).is_ok());
+
     assert!(parse_query(&"é".repeat(256)).is_ok());
     assert_eq!(
         parse_query(&format!("{}a", "é".repeat(256))),

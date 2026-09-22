@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const path = fileURLToPath(new URL("./query-matrix.json", import.meta.url));
-const pinnedSha = "4ab1279df8cb0debb8f877a59917320fac86a2c4ef43ab26b08153fa1927e492";
+const pinnedSha = "3d36c847d3b9ef641c363ccffa2053975f13032ec849c02e49dae18ffd0949b9";
 const counts = Object.freeze({
   common: 40,
   phrase: 40,
@@ -105,6 +105,10 @@ for (const c of matrix.cases) {
   );
   if (c.expected.kind === "success") {
     assert(
+      Buffer.byteLength(r.q, "utf8") <= 512,
+      `${c.id}: successful request query must not exceed 512 UTF-8 bytes`,
+    );
+    assert(
       ["all", "creator"].includes(r.scope.kind),
       `${c.id}: successful request cannot use an invalid scope`,
     );
@@ -156,6 +160,14 @@ for (const c of matrix.cases) {
   }
 }
 assert.deepEqual(actual, counts);
+for (const [id, bytes] of [
+  ["threshold-017-max-query", 512],
+  ["threshold-018-over-max-query", 513],
+]) {
+  const boundary = matrix.cases.find((c) => c.id === id);
+  assert(boundary, `missing query byte boundary: ${id}`);
+  assert.equal(Buffer.byteLength(boundary.request.q, "utf8"), bytes, `${id}: query bytes`);
+}
 for (const tag of requiredRegressions)
   assert(regressions.has(tag), `missing named regression: ${tag}`);
 assert.deepEqual(

@@ -39,7 +39,10 @@ Raw can replace Typesense as the canonical search index.
     required; this does not close the full grammar gate.
   - [ ] Resolve its 14 explicit `decision_pending` cases with executable
     exhaustive evidence; current reviewed-policy matrix digest is
-    `4ab1279d…f1927e492`.
+    `3d36c847…0949b9` (reviewed 512/513-byte boundary fixture correction).
+  - [x] Repair the matrix's contradictory 4,096-byte success fixture to the
+    frozen 512-byte contract, test the actual boundary with the reference,
+    and reject oversized success fixtures categorically in the validator.
   - [x] Add the independent exhaustive exact-query oracle foundation with
     validated missing-value/video metadata, phrase/negation/scope semantics,
     anchored moment totals, deterministic pagination, and fail-closed

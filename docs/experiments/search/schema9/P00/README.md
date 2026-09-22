@@ -146,6 +146,29 @@ all-target/all-feature Clippy with warnings denied passed. Independent final
 code review passed and separately ran all nine focused tests. No live/perf
 measurement or runtime/reference parity is claimed by this unit.
 
+### Reviewed matrix byte-boundary correction
+
+The later acceptance audit found `threshold-017-max-query` incorrectly expected
+a 4,096-byte query to succeed despite the frozen 512 UTF-8 byte request limit.
+The structural/digest validator had accepted that contradiction. Before fixing
+the fixture, the new semantic guard reproduced the failure:
+`threshold-017-max-query: successful request query must not exceed 512 UTF-8 bytes`.
+
+Only the query strings for immutable IDs `threshold-017-max-query` and
+`threshold-018-over-max-query` changed: 4,096/4,097 bytes became 512/513 bytes.
+All IDs, counts, and expected outcomes are preserved. This deliberately revises
+the matrix's canonical digest from
+`4ab1279df8cb0debb8f877a59917320fac86a2c4ef43ab26b08153fa1927e492` to
+`3d36c847d3b9ef641c363ccffa2053975f13032ec849c02e49dae18ffd0949b9`.
+Earlier receipts describe the original digest; they are not retroactively
+evidence for this revision. No engine limit was loosened to accommodate a test.
+
+The validator now rejects every oversized success query, checks both actual
+boundary sizes, and the Rust grammar test parses the matrix's success fixture.
+Matrix validation passed with 300 cases; focused grammar tests: four passed;
+full Raw search crate: 227 passed, one ignored; formatting passed. These remain
+reference/fixture checks, not production differential or performance evidence.
+
 ## Next autonomous repairs
 
 1. Implement schema-9 structural metadata and lazy exact execution against the
