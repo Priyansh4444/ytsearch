@@ -24,7 +24,7 @@ printf '%s\n' \
   'url="${!#}"' \
   'case "$url" in' \
   '  */admin/readiness) if [[ "${P00_TEST_BAD_READINESS:-}" == 1 ]]; then printf '\''%s\n'\'' '\''not-json'\''; else printf '\''%s\n'\'' '\''{"generation":"00000000000000002950","last_sequence":2950}'\''; fi ;;' \
-  '  */api/availability) printf '\''%s\n'\'' '\''{"search_enabled":true,"mode":"always_on"}'\'' ;;' \
+  '  */api/availability) printf '\''%s\n'\'' '\''{"status":"ready","search_enabled":true,"enforced":false,"schedule_policy":"always_on","schedule_phase":"open","time_zone":"America/Los_Angeles","daily_window":{"opens":"12:00","closes":"00:00","label":"12:00 PM–12:00 AM Pacific Time"},"next_transition_at":"2026-09-23T07:00:00.000Z"}'\'' ;;' \
   '  *) exit 22 ;;' \
   'esac' > "$tmp/bin/curl"
 chmod +x "$tmp/bin/flyctl" "$tmp/bin/curl"
