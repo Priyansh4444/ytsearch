@@ -38,7 +38,9 @@ jq -e '
   .status == "pass" and .generation == "00000000000000002950" and
   .last_sequence == 2950 and .metrics.reader_machines == 1 and
   .metrics.api_machines == 1 and .metrics.indexer_machines == 1 and
-  .metrics.matrix == "pass" and .metrics.contract == "pass" and
+  .metrics.matrix == "pass" and .metrics.contract_file_present == true and
+  .grammar_version == null and .rank_version == null and
+  .target_grammar_version == 2 and .target_rank_version == 2 and
   .storage_schema == 6 and .metrics.active_documents == 8422419 and
   .metrics.active_videos == 35215 and .metrics.active_channels == 61 and
   .active_manifest.directory == "generations/00000000000000002950" and
