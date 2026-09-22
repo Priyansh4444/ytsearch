@@ -359,6 +359,36 @@ V2 uses `f32::total_cmp` only after finiteness is proved. Rank bounds must round
 
 QS-01 through QS-04 have reviewed policy examples and score-bit fixtures in `engine/tests/query_contract_v2.rs`; those fixtures are scaffolding, not proof of runtime equivalence. An optimizer may not substitute mathematically equivalent reassociation once the executable reference is added.
 
+### Admission evidence is independent of score-hypothesis selection
+
+Selecting a score-winning hypothesis must not change which complete admitted
+predicates matched. For each retained query slot, collect field provenance from
+every fully satisfied admitted hypothesis; an incomplete split contributes
+nothing. Compose that evidence through the complete query predicate. A failing
+required term/phrase or exclusion rejects the candidate rather than leaking
+partial evidence. Negative predicates contribute no positive score or provenance.
+
+Exact-token evidence means that the retained slot's admitted literal exact term
+actually matched an enabled field. It is independent of which hypothesis supplies
+the slot's score. A document containing `convex` therefore retains its exact bit
+even when its `con`/`vex` split wins numerical score selection. Dropped slots and
+disabled fields cannot supply exact evidence. A split alone never invents an
+exact match for its compact token.
+
+Score selection remains exclusive: select one complete hypothesis, never add
+Whole and Split scores. Its contribution order, winner identity, and score bits
+are unchanged by membership-evidence aggregation. Position evidence used for
+score factors must remain identified separately from admission provenance.
+Moment counting and match-set summaries consume admission evidence, not only
+the score winner. Highlights must eventually explain the evidence actually used
+for admission/ranking; highlight completion is a separate executable gate.
+
+This explicitly corrects the reference's prior winner-only provenance and exact
+bits. The reproduced failure retained two literal transcript chunks but counted
+one moment when a title-only split won; exact-only counted two and title-only
+correctly counted one. This correction does not approve the still-open automatic
+fallback stage policy.
+
 ### Zero-slop phrase factor clarification (executable gate pending)
 
 QS-03 fixes factor reduction but originally left occurrence-to-factor derivation

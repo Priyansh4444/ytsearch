@@ -640,10 +640,9 @@ fn evaluate_document_plan(
     text: &[String],
     slop: PhraseSlop,
 ) -> Trace {
-    let membership = evaluate_membership(query, fields, slots, scoring, title, text, slop);
-    if !membership.matched {
+    let Admission::Hit(membership) = admit(query, fields, slots, title, text, slop) else {
         return Trace::default();
-    }
+    };
 
     let positive_slots = positive_terms(query);
     let mut reduced = Trace {
@@ -653,17 +652,18 @@ fn evaluate_document_plan(
     };
     for (index, term) in positive_slots.iter().enumerate() {
         let trace = evaluate_slot(term, fields, slots, scoring, title, text);
-        if !trace.matched {
-            return Trace::default();
-        }
+        assert!(
+            trace.matched,
+            "admitted slot {term:?} had no scoring witness"
+        );
         reduced.score += trace.score;
         assert!(
             reduced.score.is_finite(),
             "slot reduction must remain finite"
         );
-        reduced.provenance.title |= trace.provenance.title;
-        reduced.provenance.transcript |= trace.provenance.transcript;
-        reduced.exact_evidence.push(trace.exact_literal);
+        reduced
+            .exact_evidence
+            .push(membership.exact_literals.contains(*term));
         if positive_slots.len() == 1 && index == 0 {
             reduced.selected_hypothesis = trace.selected_hypothesis;
         }
@@ -684,76 +684,209 @@ fn evaluate_document_plan(
         reduced.score.is_finite(),
         "ordered reduction must remain finite"
     );
-    if ordered {
-        reduced.provenance.phrase = true;
-    }
     reduced
 }
 
-fn evaluate_membership(
+#[derive(Clone, Debug, Default)]
+struct MembershipEvidence {
+    provenance: Provenance,
+    exact_literals: BTreeSet<String>,
+}
+
+impl MembershipEvidence {
+    fn merge(&mut self, other: Self) {
+        self.provenance.title |= other.provenance.title;
+        self.provenance.transcript |= other.provenance.transcript;
+        self.provenance.phrase |= other.provenance.phrase;
+        self.exact_literals.extend(other.exact_literals);
+    }
+}
+
+#[derive(Clone, Debug)]
+enum Admission {
+    Miss,
+    Hit(MembershipEvidence),
+}
+
+fn admit(
     query: &Query,
     fields: EnabledFields,
     slots: SlotPlans<'_>,
-    scoring: &ScoringContext,
     title: &[String],
     text: &[String],
     slop: PhraseSlop,
-) -> Trace {
+) -> Admission {
     match query {
-        Query::All => Trace {
-            matched: true,
-            ..Trace::default()
-        },
-        Query::Term(term) => {
-            let trace = evaluate_slot(term, fields, slots, scoring, title, text);
-            Trace {
-                matched: trace.matched,
-                provenance: trace.provenance,
-                ..Trace::default()
-            }
-        }
+        Query::All => Admission::Hit(MembershipEvidence::default()),
+        Query::Term(term) => admit_slot(term, fields, slots, title, text),
         Query::Phrase(terms) => {
-            let evidence = phrase_slop::evaluate(terms, fields, title, text, slop);
-            Trace {
-                matched: evidence.ordered.any(),
-                provenance: Provenance {
-                    title: evidence.ordered.title,
-                    transcript: evidence.ordered.text,
-                    phrase: evidence.ordered.any(),
-                },
-                ..Trace::default()
+            let ordered = phrase_slop::admits(terms, fields, title, text, slop);
+            if !ordered.any() {
+                return Admission::Miss;
             }
+            Admission::Hit(MembershipEvidence {
+                provenance: Provenance {
+                    title: ordered.title,
+                    transcript: ordered.text,
+                    phrase: true,
+                },
+                exact_literals: terms.iter().cloned().collect(),
+            })
         }
         Query::And(children) => {
-            let mut combined = Trace {
-                matched: true,
-                ..Trace::default()
-            };
+            let mut combined = MembershipEvidence::default();
             for child in children {
-                let trace = if matches!(child, Query::Not(_)) {
-                    let exact = evaluate_query_in_fields(child, title, text, fields);
-                    Trace {
-                        matched: exact.matched,
-                        ..Trace::default()
-                    }
+                let admission = if matches!(child, Query::Not(_)) {
+                    admit_exact_query(child, fields, title, text)
                 } else {
-                    evaluate_membership(child, fields, slots, scoring, title, text, slop)
+                    admit(child, fields, slots, title, text, slop)
                 };
-                if !trace.matched {
-                    return Trace::default();
-                }
-                combined.provenance.title |= trace.provenance.title;
-                combined.provenance.transcript |= trace.provenance.transcript;
-                combined.provenance.phrase |= trace.provenance.phrase;
+                let Admission::Hit(evidence) = admission else {
+                    return Admission::Miss;
+                };
+                combined.merge(evidence);
             }
-            combined
+            Admission::Hit(combined)
         }
-        Query::Not(_) => {
-            let exact = evaluate_query_in_fields(query, title, text, fields);
-            Trace {
-                matched: exact.matched,
-                ..Trace::default()
+        Query::Not(_) => admit_exact_query(query, fields, title, text),
+    }
+}
+
+fn admit_slot(
+    term: &str,
+    fields: EnabledFields,
+    slots: SlotPlans<'_>,
+    title: &[String],
+    text: &[String],
+) -> Admission {
+    let mut evidence = MembershipEvidence::default();
+    match slots {
+        SlotPlans::Terms(plans) => {
+            let Some(plan) = plans.get(term) else {
+                return admit_exact_query(&Query::Term(term.to_string()), fields, title, text);
+            };
+            evidence.merge(admit_term_plan(term, plan, title, text));
+        }
+        SlotPlans::Hypotheses(plans) => {
+            let Some(hypotheses) = plans.get(term) else {
+                return admit_exact_query(&Query::Term(term.to_string()), fields, title, text);
+            };
+            for hypothesis in hypotheses {
+                match &hypothesis.plan {
+                    HypothesisPlan::Whole(plan) => {
+                        evidence.merge(admit_term_plan(term, plan, title, text));
+                    }
+                    HypothesisPlan::Split { left, right } => {
+                        let left = matching_fields(left, fields, title, text);
+                        let right = matching_fields(right, fields, title, text);
+                        if !left.is_empty() && !right.is_empty() {
+                            for field in left.into_iter().chain(right) {
+                                evidence.provenance.text_or_title(field);
+                            }
+                        }
+                    }
+                }
             }
+        }
+    }
+    if evidence.provenance.title || evidence.provenance.transcript {
+        Admission::Hit(evidence)
+    } else {
+        Admission::Miss
+    }
+}
+
+fn admit_term_plan(
+    term: &str,
+    plan: &TermPlan,
+    title: &[String],
+    text: &[String],
+) -> MembershipEvidence {
+    let mut evidence = MembershipEvidence::default();
+    for alternative in &plan.alternatives {
+        if field_has(&alternative.term, alternative.field, title, text) {
+            evidence.provenance.text_or_title(alternative.field);
+            if alternative.kind == ExpansionKind::Exact {
+                evidence.exact_literals.insert(term.to_string());
+            }
+        }
+    }
+    evidence
+}
+
+fn matching_fields(
+    term: &str,
+    fields: EnabledFields,
+    title: &[String],
+    text: &[String],
+) -> Vec<IndexedField> {
+    [IndexedField::Text, IndexedField::Title]
+        .into_iter()
+        .filter(|field| fields.contains(*field) && field_has(term, *field, title, text))
+        .collect()
+}
+
+fn field_has(term: &str, field: IndexedField, title: &[String], text: &[String]) -> bool {
+    match field {
+        IndexedField::Text => text.iter().any(|token| token == term),
+        IndexedField::Title => title.iter().any(|token| token == term),
+    }
+}
+
+fn admit_exact_query(
+    query: &Query,
+    fields: EnabledFields,
+    title: &[String],
+    text: &[String],
+) -> Admission {
+    match query {
+        Query::Not(child) => {
+            if matches!(
+                admit_exact_query(child, fields, title, text),
+                Admission::Miss
+            ) {
+                Admission::Hit(MembershipEvidence::default())
+            } else {
+                Admission::Miss
+            }
+        }
+        Query::All => Admission::Hit(MembershipEvidence::default()),
+        Query::Term(term) => {
+            let fields = matching_fields(term, fields, title, text);
+            if fields.is_empty() {
+                return Admission::Miss;
+            }
+            let mut evidence = MembershipEvidence::default();
+            for field in fields {
+                evidence.provenance.text_or_title(field);
+            }
+            evidence.exact_literals.insert(term.clone());
+            Admission::Hit(evidence)
+        }
+        Query::Phrase(terms) => {
+            let title_hit = fields.contains(IndexedField::Title) && contains_phrase(title, terms);
+            let text_hit = fields.contains(IndexedField::Text) && contains_phrase(text, terms);
+            if !title_hit && !text_hit {
+                return Admission::Miss;
+            }
+            Admission::Hit(MembershipEvidence {
+                provenance: Provenance {
+                    title: title_hit,
+                    transcript: text_hit,
+                    phrase: true,
+                },
+                exact_literals: BTreeSet::new(),
+            })
+        }
+        Query::And(children) => {
+            let mut combined = MembershipEvidence::default();
+            for child in children {
+                let Admission::Hit(evidence) = admit_exact_query(child, fields, title, text) else {
+                    return Admission::Miss;
+                };
+                combined.merge(evidence);
+            }
+            Admission::Hit(combined)
         }
     }
 }
@@ -804,7 +937,6 @@ fn select_hypothesis(
                 kind: hypothesis.kind,
                 canonical_bytes: hypothesis.canonical_bytes.clone(),
             });
-            trace.exact_literal = hypothesis.kind == HypothesisKind::ExactWhole;
             Some(trace)
         })
         .collect::<Vec<_>>();
@@ -865,7 +997,6 @@ fn evaluate_exact_split(
         score,
         provenance,
         selected_hypothesis: None,
-        exact_literal: false,
         exact_evidence: Vec::new(),
         ordered_evidence: proximity::OrderedEvidence::default(),
     }
@@ -929,9 +1060,6 @@ fn evaluate_term_plan(
             "term reduction must remain finite"
         );
         combined.provenance.text_or_title(alternative.field);
-        if alternative.kind == ExpansionKind::Exact {
-            combined.exact_literal = true;
-        }
     }
     combined
 }
@@ -1036,7 +1164,7 @@ fn evaluate_query_exhaustively(
                 blended_score: engagement.blended(trace.score, engagement_values(document)),
                 normalized_engagement,
                 exact_evidence: trace.exact_evidence,
-                ordered_phrase: trace.provenance.phrase,
+                ordered_phrase: trace.ordered_evidence.any(),
                 provenance: trace.provenance,
             });
         }
@@ -1127,7 +1255,6 @@ struct Trace {
     score: f32,
     provenance: Provenance,
     selected_hypothesis: Option<HypothesisSelection>,
-    exact_literal: bool,
     exact_evidence: Vec<bool>,
     ordered_evidence: proximity::OrderedEvidence,
 }
@@ -1163,7 +1290,6 @@ fn evaluate_query_in_fields(
                     phrase: false,
                 },
                 selected_hypothesis: None,
-                exact_literal: false,
                 exact_evidence: Vec::new(),
                 ordered_evidence: proximity::OrderedEvidence::default(),
             }
@@ -1181,7 +1307,6 @@ fn evaluate_query_in_fields(
                     phrase: title_match || text_match,
                 },
                 selected_hypothesis: None,
-                exact_literal: false,
                 exact_evidence: Vec::new(),
                 ordered_evidence: proximity::OrderedEvidence::default(),
             }

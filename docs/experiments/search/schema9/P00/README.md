@@ -190,6 +190,33 @@ passed, one ignored; formatting, all-target/all-feature Clippy with warnings
 denied, and diff checks passed. No matrix case was relabeled complete, no
 matrix digest changed, and no production/live/performance gate is claimed.
 
+### Admission evidence independent of score-hypothesis selection
+
+A new red reference regression at `09b4209` reproduced a lost `blackhole`
+transcript match: two documents matched, but a title-only split won scoring and
+the oracle reported one moment and no transcript provenance. The observed
+failure was `(1, title=true, transcript=false, phrase=false)` versus the
+required `(2, title=true, transcript=true, phrase=false)`. The selected split
+score bits were `0x41277cd6` and are preserved by the repair.
+
+The corrected oracle computes score-free membership evidence from every
+complete admitted hypothesis, while selecting exactly one score hypothesis as
+before. A partial split cannot contribute provenance: its test lexicon really
+contains both split terms, but the tested document contains only one. Separate
+fixtures check creator/field scope, negative predicates, phrase membership and
+ordered evidence, and title-only versus exact-only paths. The slop membership
+check has a boolean path and is differentially checked against reference phrase
+evaluation on bounded fixtures. See
+[`fallback-evidence-design.md`](../../../../architecture/lazy-exact/fallback-evidence-design.md)
+for the arena synthesis and the proposed controller boundary. Controller
+semantics marked proposed there are not a completed v2 contract.
+
+Focused schema-9 tests: 61 passed; full Raw crate: 241 passed, one ignored;
+formatting and all-target/all-feature Clippy passed. An independent reviewer
+reran the 61 focused tests and found no blocker. This evidence covers the
+reference oracle only; it does not prove production score parity, the 300-case
+runtime differential, the 2 GiB latency gate, or readiness to activate schema 9.
+
 ## Next autonomous repairs
 
 1. Implement schema-9 structural metadata and lazy exact execution against the

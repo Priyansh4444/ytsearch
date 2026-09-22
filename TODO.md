@@ -85,6 +85,12 @@ Raw can replace Typesense as the canonical search index.
     exact negative phrases, deterministic ties, and five matrix queries'
     fixture membership/page/aggregate checks. Production parity and highlights
     remain outside this reference-unit evidence.
+  - [x] Separate exhaustive admission evidence from the winning score
+    hypothesis in the reference oracle. A split winner no longer erases a
+    literal transcript match or undercounts moments. Red regression committed
+    before the repair; partial splits, creator/field scope, negative terms,
+    phrase evidence, and score-bit stability are covered. Production runtime
+    parity and the full matrix remain open.
   - [ ] Complete expanded-term/fuzzy-split evidence factors, then prove complete
     ranking and runtime/reference score-bit equivalence.
   - [ ] Re-run the public performance lane without crossing the edge rate limit.

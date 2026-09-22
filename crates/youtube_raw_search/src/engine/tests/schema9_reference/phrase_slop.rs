@@ -1,4 +1,4 @@
-use super::{EnabledFields, IndexedField, OracleError, proximity};
+use super::{EnabledFields, IndexedField, OracleError, contains_phrase, proximity};
 use proximity::{FieldProximity, OrderedEvidence, PerFieldProximity, ProximityEvidence};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -13,6 +13,46 @@ impl TryFrom<i64> for PhraseSlop {
         }
         Ok(Self(value as u8))
     }
+}
+
+pub(super) fn admits(
+    terms: &[String],
+    fields: EnabledFields,
+    title: &[String],
+    text: &[String],
+    slop: PhraseSlop,
+) -> OrderedEvidence {
+    OrderedEvidence {
+        text: fields.contains(IndexedField::Text) && admits_field(terms, text, slop),
+        title: fields.contains(IndexedField::Title) && admits_field(terms, title, slop),
+    }
+}
+
+fn admits_field(terms: &[String], tokens: &[String], slop: PhraseSlop) -> bool {
+    if slop.0 == 0 {
+        return contains_phrase(tokens, terms);
+    }
+    let Some(first_term) = terms.first() else {
+        return false;
+    };
+    for (first, token) in tokens.iter().enumerate() {
+        if token != first_term {
+            continue;
+        }
+        let mut next = first + 1;
+        let mut complete = true;
+        for term in terms.iter().skip(1) {
+            let Some(offset) = tokens[next..].iter().position(|token| token == term) else {
+                complete = false;
+                break;
+            };
+            next += offset + 1;
+        }
+        if complete && next - first - terms.len() <= usize::from(slop.0) {
+            return true;
+        }
+    }
+    false
 }
 
 pub(super) fn evaluate(
@@ -129,6 +169,51 @@ mod tests {
                     document
                 })
                 .collect(),
+        }
+    }
+
+    #[test]
+    fn admission_truth_matches_scored_phrase_evidence() {
+        let cases = [
+            (
+                vec!["alpha".into(), "beta".into()],
+                "alpha beta",
+                "beta alpha",
+            ),
+            (
+                vec!["alpha".into(), "beta".into()],
+                "alpha gap beta",
+                "alpha beta",
+            ),
+            (
+                vec!["alpha".into(), "alpha".into()],
+                "alpha gap alpha",
+                "alpha",
+            ),
+            (
+                vec!["alpha".into(), "beta".into(), "gamma".into()],
+                "alpha gap beta gap gamma",
+                "alpha beta gamma",
+            ),
+        ];
+        for slop in 0..=8 {
+            let slop = PhraseSlop::try_from(slop).unwrap();
+            for fields in [
+                EnabledFields::Text,
+                EnabledFields::Title,
+                EnabledFields::TextAndTitle,
+            ] {
+                for (terms, title, text) in &cases {
+                    let title = super::super::tokenize(title);
+                    let text = super::super::tokenize(text);
+                    let admitted = admits(terms, fields, &title, &text, slop);
+                    let scored = evaluate(terms, fields, &title, &text, slop).ordered;
+                    assert_eq!(
+                        admitted, scored,
+                        "fields={fields:?} slop={slop:?} terms={terms:?}"
+                    );
+                }
+            }
         }
     }
 
