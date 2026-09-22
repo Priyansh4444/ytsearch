@@ -25,7 +25,9 @@ Raw can replace Typesense as the canonical search index.
     prove its ancestry; missing temporary worktrees remain classified missing.
   - [x] Revalidate authenticated production readiness as generation 2950 and
     record the schema-6 manifest, machine/image/profile, queue worker, and
-    resource baseline without mutating production.
+    resource baseline without mutating production. A later read-only audit
+    corrected the initial base-vs-active manifest attribution; the active
+    generation has 8,422,419 documents and 35,215 videos.
   - [x] Make the read-only P00 capture script emit a failure receipt for failed
     or malformed Fly/HTTP probes, preserving null unknowns and exact five-probe
     accounting. Local success/failure fixtures pass; this is not a fresh live

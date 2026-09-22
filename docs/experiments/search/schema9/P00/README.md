@@ -12,8 +12,13 @@ indexed, or deleted data.
 - Authenticated readiness on 2026-09-19 returned generation and mutation
   sequence 2950 with one acknowledged reader. This supersedes the historical
   generation-2145 planning assumption.
-- The active schema-6 manifest contains 8,142,650 documents, 32,822 videos,
-  and 61 channels. The active reader is a 2 GiB, two-shared-vCPU Fly Machine.
+- A 2026-09-22 read-only audit corrected the original manifest attribution:
+  generation 2950's active schema-6 manifest contains 8,422,419 documents,
+  35,215 videos, and 61 channels. The previously recorded 8,142,650 documents
+  and 32,822 videos belong to the immutable `/data/index` base manifest, not
+  the active mutable generation. The active manifest was written 2026-08-31,
+  before the original 2026-09-19 capture, so this was a measurement error rather
+  than observed growth. The active reader is a 2 GiB, two-shared-vCPU Fly Machine.
 - Reader-process RSS was 788,799,488 bytes with zero process swap. The cgroup
   used 1,906,786,304 bytes, mostly file cache, at the observation. These are
   different metrics and neither is relabeled as the other.
@@ -33,6 +38,11 @@ indexed, or deleted data.
 
 The machine-readable facts and failures are in
 [`baseline-receipt.json`](baseline-receipt.json).
+Its original source SHA and timestamps identify the first capture; the
+`observation_correction` field identifies the later direct audit and retains
+the misattributed base manifest separately. The public health endpoint also
+reported 8,422,419 documents on 2026-09-22. This count agreement does not
+substitute for an authenticated readiness receipt or full live performance lane.
 
 The read-only P00 collector previously exited before writing `receipt.json`
 when a Fly probe failed under `set -e`. A committed red fixture (`014cd4d`)
