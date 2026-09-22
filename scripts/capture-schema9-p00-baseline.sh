@@ -211,14 +211,14 @@ probe_failures="${#failure_cases[@]}"
 
 matrix_status=pass
 node "$ROOT/tests/schema9/validate-query-matrix.mjs" > "$OUTPUT/matrix-check.txt" 2>&1 || matrix_status=fail
-contract_status=pass
-test -s "$ROOT/docs/architecture/lazy-exact/query-contract-v2.md" || contract_status=fail
+contract_file_present=true
+test -s "$ROOT/docs/architecture/lazy-exact/query-contract-v2.md" || contract_file_present=false
 
 samples_digest="$(sha256sum "$OUTPUT/readiness.json" | cut -d ' ' -f1)"
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-if [[ "$matrix_status" != pass || "$contract_status" != pass ]]; then
-  failure_cases+=("matrix or query-contract structural validation failed")
+if [[ "$matrix_status" != pass || "$contract_file_present" != true ]]; then
+  failure_cases+=("matrix structural validation failed or query-contract file missing")
 fi
 if [[ "$reader_machine_count" != null && "$api_machine_count" != null && "$indexer_machine_count" != null ]] &&
   [[ "$reader_machine_count" != 1 || "$api_machine_count" != 1 || "$indexer_machine_count" -lt 1 ]]; then
@@ -234,7 +234,7 @@ jq -n \
   --arg tree_digest "$tree_digest" --argjson generation "$generation" \
   --argjson last_sequence "$last_sequence" --arg started_at "$started_at" \
   --arg finished_at "$finished_at" --arg samples_digest "sha256:$samples_digest" \
-  --arg matrix_status "$matrix_status" --arg contract_status "$contract_status" \
+  --arg matrix_status "$matrix_status" --argjson contract_file_present "$contract_file_present" \
   --argjson probe_failures "$probe_failures" \
   --argjson reader_machine_count "$reader_machine_count" \
   --argjson api_machine_count "$api_machine_count" \
@@ -249,12 +249,13 @@ jq -n \
   {
     gate:$gate,status:$status,source_commit:$source_commit,parent_commit:$parent_commit,
     tree_digest:$tree_digest,generation:$generation,last_sequence:$last_sequence,
-    storage_schema:$storage_schema,grammar_version:2,rank_version:2,
+    storage_schema:$storage_schema,grammar_version:null,rank_version:null,
+    target_grammar_version:2,target_rank_version:2,
     command:"scripts/capture-schema9-p00-baseline.sh (secrets omitted)",
     started_at:$started_at,finished_at:$finished_at,process_handle:"completed",
     attempted:$attempted,passed:($attempted - $probe_failures),failed:$probe_failures,skipped:(7 - $attempted),
     samples_path:"readiness.json",samples_digest:$samples_digest,
-    metrics:{matrix:$matrix_status,contract:$contract_status,reader_machines:$reader_machine_count,
+    metrics:{matrix:$matrix_status,contract_file_present:$contract_file_present,reader_machines:$reader_machine_count,
       api_machines:$api_machine_count,indexer_machines:$indexer_machine_count,
       active_documents:$active_documents,active_videos:$active_videos,
       active_channels:$active_channels},
