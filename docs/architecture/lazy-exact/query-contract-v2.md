@@ -126,6 +126,37 @@ Schema-9 v2 freezes the accepted *families* and the ordered token-drop policy, b
 
 The QG-01 through QG-07 policy choices are reviewed and recorded in the matrix, but their executable semantic gates remain pending. P03 must implement one shared tokenizer for index and query paths and prove these choices against an exhaustive reference; standalone policy examples are not sufficient.
 
+### Automatic fallback controller: remaining policy work
+
+The independent oracle's explicit `ExactOnly`, `Prefix`, `Fuzzy`, and `Split`
+modes are not a complete automatic controller. Do not advertise them as one.
+Before implementing that controller, resolve each issue below explicitly and
+add a discriminating exhaustive fixture; legacy behavior alone is not approval.
+
+| Issue | Observed legacy behavior to distinguish | Required fixture/repair |
+| --- | --- | --- |
+| Prefix stage | Prefix alternatives enter before the five-result threshold, even with five exact results | Compare exact-only and prefix-expanded sets at 4/5/6 scoped videos; define which stage wins |
+| Split eligibility | Single-token exact split precedes fuzzy split; unfiltered exact-split existence can suppress fuzzy split | Put exact-split matches outside the requested creator and fuzzy-split matches inside; decide eligibility using a named universe |
+| Positive phrases | A positive phrase makes its whole query exact-only, including unquoted companions | Mix a required phrase with a misspelled unquoted token; explicitly choose expansion policy |
+| Threshold scope/unit | Grouped paths count videos, ungrouped paths count documents, after exclusions/filters and before pagination | Use multiple chunks per video, creator exclusions, and different page sizes; threshold choice must not depend on page size |
+| Dropped predicate expansion | Multi-token alternatives combine across slots; prefix drops disable prefix expansion, suffix drops retain it; a one-slot drop does not invoke split recovery | Freeze stage settings per retained predicate and exercise both prefix and suffix wins |
+| Sparse/no winner | Legacy can discard 1–4 fuzzy/prefix-only matches unless some hit has every retained term exact | Define the no-winner result and explicitly reject or adopt this additional condition; never silently discard a nonempty admitted set |
+| Retained evidence/positions | Original versus retained query-slot evidence and expanded-position proximity are not fully defined | Specify selected-slot identity and position substitution before asserting score-bit equivalence |
+
+Observed sources are `engine.rs` automatic dispatch and
+`best_conjunctive_candidate`, `single_token.rs` fallback selection, and
+`conjunction.rs` alternative construction. These observations do not override
+QG-04 through QG-07's complete-alternative and ordered-drop requirements.
+
+The next independently verifiable piece is the QG-06 retained-query enumerator:
+full predicate, every prefix from `n-1` through `1`, then every suffix starting
+at `1` through `n-1`, with no legacy 20-candidate cap. Preserve exact exclusions
+and creator scope, count before pagination, and expose the selected range or
+exhaustion. An exact-only selector can prove this ordering with 21/22/32-token
+fixtures, including the actual 22-token `threshold-004-fifteen-terms` request.
+That sub-gate does not complete the automatic controller or permit marking the
+full pending matrix case verified without its runtime differential evidence.
+
 ## Request validation
 
 Unknown query-string fields are rejected by Serde's `deny_unknown_fields`; they must remain fail-closed in v2.
