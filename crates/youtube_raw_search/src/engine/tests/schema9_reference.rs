@@ -14,10 +14,12 @@ use serde::Deserialize;
 use unicode_categories::UnicodeCategories;
 use unicode_normalization::UnicodeNormalization;
 
+mod phrase_slop;
 mod proximity;
 mod ranking;
 mod scoring;
 
+use phrase_slop::PhraseSlop;
 use ranking::{EngagementContext, EngagementValues};
 use scoring::{ScoringContext, ScoringDocument};
 
@@ -245,6 +247,7 @@ enum ExpansionPlan {
 #[derive(Clone, Debug)]
 struct OracleRequest {
     query: String,
+    phrase_slop: Option<PhraseSlop>,
     creator: Option<String>,
     sort: Sort,
     expansion: ExpansionPolicy,
@@ -282,6 +285,8 @@ struct OracleResult {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum OracleError {
+    InvalidPhraseSlop,
+    PhraseSlopRequiresPositivePhrase,
     EmptyQuery,
     PunctuationOnly,
     UnterminatedPhrase,
@@ -577,6 +582,15 @@ fn positive_unquoted_terms(query: &Query) -> Vec<&str> {
 }
 
 fn evaluate_plan(plan: &ExpansionPlan, title: &[String], text: &[String]) -> Trace {
+    evaluate_plan_with_slop(plan, title, text, PhraseSlop::default())
+}
+
+fn evaluate_plan_with_slop(
+    plan: &ExpansionPlan,
+    title: &[String],
+    text: &[String],
+    slop: PhraseSlop,
+) -> Trace {
     match plan {
         ExpansionPlan::Terms {
             query,
@@ -590,6 +604,7 @@ fn evaluate_plan(plan: &ExpansionPlan, title: &[String], text: &[String]) -> Tra
             scoring,
             title,
             text,
+            slop,
         ),
         ExpansionPlan::Hypotheses {
             query,
@@ -603,6 +618,7 @@ fn evaluate_plan(plan: &ExpansionPlan, title: &[String], text: &[String]) -> Tra
             scoring,
             title,
             text,
+            slop,
         ),
     }
 }
@@ -620,8 +636,9 @@ fn evaluate_document_plan(
     scoring: &ScoringContext,
     title: &[String],
     text: &[String],
+    slop: PhraseSlop,
 ) -> Trace {
-    let membership = evaluate_membership(query, fields, slots, scoring, title, text);
+    let membership = evaluate_membership(query, fields, slots, scoring, title, text, slop);
     if !membership.matched {
         return Trace::default();
     }
@@ -651,7 +668,7 @@ fn evaluate_document_plan(
     }
     let mut proximity = proximity::evaluate(&positive_unquoted_terms(query), fields, title, text);
     for phrase in positive_phrases(query) {
-        proximity.include(proximity::exact_phrase(phrase, fields, title, text));
+        proximity.include(phrase_slop::evaluate(phrase, fields, title, text, slop));
     }
     reduced.ordered_evidence = proximity.ordered;
     reduced.score *= proximity.field_factor();
@@ -678,6 +695,7 @@ fn evaluate_membership(
     scoring: &ScoringContext,
     title: &[String],
     text: &[String],
+    slop: PhraseSlop,
 ) -> Trace {
     match query {
         Query::All => Trace {
@@ -692,11 +710,15 @@ fn evaluate_membership(
                 ..Trace::default()
             }
         }
-        Query::Phrase(_) => {
-            let trace = evaluate_query_in_fields(query, title, text, fields);
+        Query::Phrase(terms) => {
+            let evidence = phrase_slop::evaluate(terms, fields, title, text, slop);
             Trace {
-                matched: trace.matched,
-                provenance: trace.provenance,
+                matched: evidence.ordered.any(),
+                provenance: Provenance {
+                    title: evidence.ordered.title,
+                    transcript: evidence.ordered.text,
+                    phrase: evidence.ordered.any(),
+                },
                 ..Trace::default()
             }
         }
@@ -713,7 +735,7 @@ fn evaluate_membership(
                         ..Trace::default()
                     }
                 } else {
-                    evaluate_membership(child, fields, slots, scoring, title, text)
+                    evaluate_membership(child, fields, slots, scoring, title, text, slop)
                 };
                 if !trace.matched {
                     return Trace::default();
@@ -973,6 +995,9 @@ fn evaluate_exhaustively(
         return Err(OracleError::UnsupportedReferenceSemantics("token_drop"));
     }
     let query = parse_query(&request.query)?;
+    if request.phrase_slop.is_some() && !query_contains_positive_phrase(&query) {
+        return Err(OracleError::PhraseSlopRequiresPositivePhrase);
+    }
     let plan = build_expansion_plan(corpus, query, request.expansion)?;
     let engagement =
         EngagementContext::from_generation(corpus.documents.iter().map(engagement_values));
@@ -987,7 +1012,12 @@ fn evaluate_exhaustively(
         }
         let title = tokenize(&document.title);
         let text = tokenize(&document.text);
-        let trace = evaluate_plan(&plan, &title, &text);
+        let trace = evaluate_plan_with_slop(
+            &plan,
+            &title,
+            &text,
+            request.phrase_slop.unwrap_or_default(),
+        );
         if trace.matched {
             let normalized_engagement = engagement.normalized(engagement_values(document));
             matches.push(DocumentMatch {
@@ -1307,6 +1337,9 @@ fn grammar_rejects_every_matrix_query_error() {
         let query = case["request"]["q"].as_str().unwrap();
         let error = parse_query(query).expect_err(case["id"].as_str().unwrap());
         let (code, message) = match error {
+            OracleError::InvalidPhraseSlop | OracleError::PhraseSlopRequiresPositivePhrase => {
+                panic!("query parser must not validate request slop")
+            }
             OracleError::QueryTooLong => ("query_too_long", "maximum query length exceeded"),
             OracleError::InvalidNegation => ("invalid_query_syntax", "invalid negation"),
             OracleError::UnexpectedNegation => {
@@ -1578,6 +1611,7 @@ const FIXTURE: &str = include_str!("../../../../../tests/schema9/fixtures/refere
 fn request(query: &str, per_page: usize) -> OracleRequest {
     OracleRequest {
         query: query.to_string(),
+        phrase_slop: None,
         creator: None,
         sort: Sort::Relevance,
         expansion: ExpansionPolicy::ExactOnly,

@@ -71,7 +71,14 @@ Raw can replace Typesense as the canonical search index.
   - [x] Clarify and implement zero-slop positive phrase factors: exact field-local
     occurrences, repeated-token positions, canonical phrase deduplication, one
     maximum across phrase/unquoted evidence, and one ordered multiplication.
-  - [ ] Complete nonzero-slop and expanded-term/fuzzy-split evidence factors, then prove complete
+  - [x] Define and independently review nonzero-slop membership and ranking:
+    total gaps per positive phrase, exact negatives, and maximum occurrence
+    factor with explicit ordered preference. Policy is not runtime evidence.
+  - [x] Implement the nonzero-slop reference with boundary/score goldens,
+    exact negative phrases, deterministic ties, and five matrix queries'
+    fixture membership/page/aggregate checks. Production parity and highlights
+    remain outside this reference-unit evidence.
+  - [ ] Complete expanded-term/fuzzy-split evidence factors, then prove complete
     ranking and runtime/reference score-bit equivalence.
   - [ ] Re-run the public performance lane without crossing the edge rate limit.
     The first 480-request attempt produced 360 expected HTTP 429 responses and

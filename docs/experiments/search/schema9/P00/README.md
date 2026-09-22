@@ -107,7 +107,7 @@ ordering, and differentially rejects candidate errors and result/facet drift.
 Subsequent units added independent prefix/fuzzy candidates, literal split
 hypotheses, corpus-aware scoring, ranking, unquoted proximity, and zero-slop
 phrase factors. Token dropping, automatic fallback selection, expanded positional
-substitutions, nonzero phrase slop, and the complete filter/summary surface remain
+substitutions and the complete filter/summary surface remain
 unfinished. This is foundation evidence, not completion of the 300-case gate.
 
 The grammar boundary unit reads query-error cases directly from the frozen matrix
@@ -121,6 +121,30 @@ passed, one ignored; formatting and all-target/all-feature Clippy with warnings
 denied passed. Eleven matrix query-error cases are exercised by one test; they
 are not eleven separately reported Rust test functions. No live/performance lane
 was run for this test-only parser unit.
+
+### Phrase-slop policy clarification
+
+Independent review identified that the prior contract specified zero-slop
+scoring but required nonzero slop without defining its score reduction. The
+contract now explicitly defines total intervening-token membership, a separate
+budget per required phrase, exact negative phrases, and strongest-occurrence
+factor selection. Gapped positive phrases retain ordered evidence. This is an
+intentional v2 ranking policy, not a claim of legacy score equivalence.
+Implementation and runtime differential evidence are separate gates; policy
+review alone does not close either.
+
+The independent reference now implements this policy with a validated optional
+slop type and exhaustive ordered positions on bounded fixtures. Nine focused
+tests passed, including independent binary32 factor/score goldens, repeated
+tokens, total-gap boundaries, exact exclusions, strongest-occurrence selection,
+stable ties, and absent-versus-explicit-zero validation. Five frozen matrix
+queries additionally exercise local-fixture membership, ranking, pages, and
+creator/content-kind aggregates; this subset does not check highlights or a
+production candidate engine. All 300 matrix definitions retain their original
+digest. Full crate verification: 227 passed, one ignored; formatting and
+all-target/all-feature Clippy with warnings denied passed. Independent final
+code review passed and separately ran all nine focused tests. No live/perf
+measurement or runtime/reference parity is claimed by this unit.
 
 ## Next autonomous repairs
 

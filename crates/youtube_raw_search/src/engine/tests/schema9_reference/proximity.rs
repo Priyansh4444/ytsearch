@@ -199,7 +199,7 @@ fn minimum_window(terms: &[&str], tokens: &[String]) -> Option<(usize, usize)> {
     best
 }
 
-fn factor(displacement: usize, max_offset: usize, term_count: usize) -> f32 {
+pub(super) fn factor(displacement: usize, max_offset: usize, term_count: usize) -> f32 {
     let minimum_displacement = term_count.saturating_sub(1);
     let extra_gap = displacement.saturating_sub(minimum_displacement);
     let proximity = 0.20_f32 / (extra_gap as f32 + 1.0_f32).sqrt();

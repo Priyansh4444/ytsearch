@@ -353,8 +353,43 @@ A one-token quoted phrase retains the existing ordered preference but has
 proximity factor `1.0`; quoting one term does not invent a multi-token window.
 The legacy `displacement > 10` branch is not part of this v2 formula, including
 for long exact phrases. This matches the uncapped unquoted oracle behavior.
-This clarification covers zero slop only; nonzero-slop semantics and expansion
-position substitution remain separate open executable gates.
+Expansion position substitution remains a separate open executable gate.
+
+### Nonzero-slop phrase policy (executable gate pending)
+
+An explicitly supplied `phrase_slop`, including zero, requires at least one
+positive quoted phrase and must be an integer from 0 through 8. Absence means
+zero without imposing that request-shape requirement. This policy extends the
+zero-slop definition; it does not claim legacy score-bit parity.
+
+For a positive phrase with `n` token occurrences, enumerate strictly increasing
+positions `p[0] < ... < p[n-1]` whose indexed tokens equal the corresponding
+normalized phrase tokens, within one enabled field of one document. Admit the
+occurrence exactly when `p[n-1] - p[0] - (n - 1) <= phrase_slop`. Slop is the
+total intervening-token budget, not a per-gap budget; reversal/transposition
+does not qualify. Repeated tokens require distinct positions. Negative phrases
+always use zero slop, regardless of the request setting. Every required positive
+phrase must match; occurrences cannot cross fields or transcript chunks.
+The same request budget applies independently to each required positive phrase;
+it is not a shared budget consumed across phrases.
+
+For each admitted positive occurrence use the existing uncapped proximity
+formula with `displacement = p[n-1] - p[0]`, `max_offset = p[n-1]`, and
+`token_count = n`. A one-token phrase has factor `1.0`. Select the maximum
+finite binary32 factor within each field; equal factors choose the smallest
+tuple `(displacement, max_offset, positional_sequence)` for deterministic
+evidence. This is a maximum-factor rule, not the unquoted minimum-window rule:
+an early wider occurrence can outrank a sufficiently late tighter occurrence.
+Any nonfinite intermediate remains a corrupt-data error, never a candidate to
+silently discard while selecting that maximum.
+
+An admitted positive phrase supplies ordered evidence even when it contains
+gaps: the user requested that ordered predicate explicitly. This deliberately
+affects the ordered-evidence ranking component before the numeric score.
+Deduplicate phrases and reduce phrase/unquoted factors exactly as above, using
+one maximum factor and one ordered multiplication, never one per occurrence.
+The exhaustive reference may enumerate tuples on small fixtures; production
+must prove equivalent output without adopting an unbounded Cartesian scan.
 
 ## Ranking contracts
 
