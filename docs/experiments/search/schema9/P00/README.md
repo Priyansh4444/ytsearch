@@ -46,12 +46,20 @@ substitute for an authenticated readiness receipt or full live performance lane.
 
 The read-only P00 collector previously exited before writing `receipt.json`
 when a Fly probe failed under `set -e`. A committed red fixture (`014cd4d`)
-demonstrated the missing receipt. The repair records each of its five Fly/HTTP
+demonstrated the missing receipt. The repair records its five baseline Fly/HTTP
 probes independently, reports malformed responses and transport failures as
 separate cases, leaves unavailable values null, and counts simultaneous probe
 failures exactly. The local success, failed-reader, malformed-readiness, and
-combined-failure fixtures pass. This repairs evidence collection; no fresh live
-baseline or production readiness claim follows from those local fixtures.
+combined-failure fixtures pass.
+
+The base-versus-active misattribution prompted a second red fixture (`119ab88`).
+The collector now reads the active-generation pointer from the single reader,
+binds it to authenticated readiness, then reads only that generation's manifest
+through two read-only SSH probes. It records schema and document/video/channel
+counts plus a SHA-256 manifest digest. A stale pointer fails closed; skipped
+probes are counted when prerequisite evidence is unavailable. These local
+fixtures repair evidence collection, but no fresh credentialed live baseline
+or production readiness claim follows from them.
 
 ## Independent exhaustive oracle
 

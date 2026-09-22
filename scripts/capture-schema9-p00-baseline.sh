@@ -48,12 +48,39 @@ api_machine_count=null
 indexer_machine_count=null
 generation=null
 last_sequence=null
+storage_schema=null
+active_documents=null
+active_videos=null
+active_channels=null
+active_manifest=null
+attempted=5
+reader_machine_id=
+reader_state_directory=
 
 if flyctl status --app "$READER_APP" --json > "$OUTPUT/reader-app.json" 2>/dev/null; then
   reader_machine_count="$(jq -sce 'select(length == 1) | .[0].Machines | select(type == "array") | length' "$OUTPUT/reader-app.json" 2>/dev/null)" || {
     reader_machine_count=null
     failure_cases+=("reader app status response invalid")
   }
+  if [[ "$reader_machine_count" == 1 ]]; then
+    reader_location="$(jq -sce '
+      select(length == 1) | .[0].Machines[0] |
+      select((.id | type) == "string" and (.config.env.RAW_SEARCH_STATE_DIRECTORY | type) == "string") |
+      [.id, .config.env.RAW_SEARCH_STATE_DIRECTORY]
+    ' "$OUTPUT/reader-app.json" 2>/dev/null)" || reader_location=
+    if [[ -n "$reader_location" ]]; then
+      reader_machine_id="$(jq -r '.[0]' <<< "$reader_location")"
+      reader_state_directory="$(jq -r '.[1]' <<< "$reader_location")"
+    fi
+    # These values become SSH command arguments, so reject shell syntax and traversal.
+    if [[ ! "$reader_machine_id" =~ ^[0-9a-f]+$ ||
+      ! "$reader_state_directory" =~ ^/[A-Za-z0-9_./-]+$ ||
+      "$reader_state_directory" == *..* ]]; then
+      reader_machine_id=
+      reader_state_directory=
+      failure_cases+=("reader machine location invalid")
+    fi
+  fi
 else
   failure_cases+=("reader app status probe failed")
 fi
@@ -88,6 +115,11 @@ if curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
   if [[ -n "$readiness_values" ]]; then
     generation="$(jq -c '.[0]' <<< "$readiness_values")"
     last_sequence="$(jq -c '.[1]' <<< "$readiness_values")"
+    if [[ ! "$(jq -r '.[0]' <<< "$readiness_values")" =~ ^[0-9]{20}$ ]]; then
+      generation=null
+      last_sequence=null
+      failure_cases+=("readiness generation invalid")
+    fi
   fi
 else
   failure_cases+=("readiness probe failed")
@@ -102,6 +134,63 @@ if curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
   fi
 else
   failure_cases+=("availability probe failed")
+fi
+
+if [[ -n "$reader_machine_id" && -n "$reader_state_directory" &&
+  "$generation" != null && "$last_sequence" != null ]]; then
+  attempted=$((attempted + 1))
+  if flyctl ssh console --app "$READER_APP" --machine "$reader_machine_id" \
+    --command "cat $reader_state_directory/active-generation.json" \
+    > "$OUTPUT/active-generation.json" 2>/dev/null; then
+    pointer="$(jq -sce '
+      select(length == 1) | .[0] | select(type == "object") |
+      select((.sequence | type) == "number" and
+        (.sequence | . >= 0 and . == floor) and
+        (.directory | type) == "string") |
+      [.sequence, .directory]
+    ' "$OUTPUT/active-generation.json" 2>/dev/null)" || pointer=
+    if [[ -z "$pointer" ]]; then
+      failure_cases+=("active generation pointer invalid")
+    else
+      expected_directory="generations/$(jq -r . <<< "$generation")"
+      if [[ "$(jq -r '.[0]' <<< "$pointer")" != "$last_sequence" ||
+        "$(jq -r '.[1]' <<< "$pointer")" != "$expected_directory" ]]; then
+        failure_cases+=("active generation pointer differs from readiness")
+      else
+        attempted=$((attempted + 1))
+        if flyctl ssh console --app "$READER_APP" --machine "$reader_machine_id" \
+          --command "cat $reader_state_directory/$expected_directory/manifest.json" \
+          > "$OUTPUT/active-manifest.json" 2>/dev/null; then
+          manifest="$(jq -sce '
+            select(length == 1) | .[0] | select(type == "object") |
+            select((.schema_version | type) == "number" and (.schema_version | . > 0 and . == floor) and
+              (.documents | type) == "number" and (.documents | . >= 0 and . == floor) and
+              (.videos | type) == "number" and (.videos | . >= 0 and . == floor) and
+              (.channels | type) == "number" and (.channels | . >= 0 and . == floor) and
+              (.files | type) == "object" and (.files | length) > 0 and
+              all(.files[]; (.bytes | type) == "number" and (.bytes | . >= 0 and . == floor) and
+                (.blake3 | type) == "string" and (.blake3 | test("^[0-9a-f]{64}$")))) |
+            [.schema_version, .documents, .videos, .channels]
+          ' "$OUTPUT/active-manifest.json" 2>/dev/null)" || manifest=
+          if [[ -n "$manifest" ]]; then
+            storage_schema="$(jq -c '.[0]' <<< "$manifest")"
+            active_documents="$(jq -c '.[1]' <<< "$manifest")"
+            active_videos="$(jq -c '.[2]' <<< "$manifest")"
+            active_channels="$(jq -c '.[3]' <<< "$manifest")"
+            manifest_digest="$(sha256sum "$OUTPUT/active-manifest.json" | cut -d ' ' -f1)"
+            active_manifest="$(jq -cn --arg directory "$expected_directory" \
+              --arg digest "sha256:$manifest_digest" '{directory:$directory,digest:$digest}')"
+          else
+            failure_cases+=("active generation manifest invalid")
+          fi
+        else
+          failure_cases+=("active generation manifest probe failed")
+        fi
+      fi
+    fi
+  else
+    failure_cases+=("active generation pointer probe failed")
+  fi
 fi
 probe_failures="${#failure_cases[@]}"
 
@@ -135,17 +224,26 @@ jq -n \
   --argjson reader_machine_count "$reader_machine_count" \
   --argjson api_machine_count "$api_machine_count" \
   --argjson indexer_machine_count "$indexer_machine_count" \
+  --argjson storage_schema "$storage_schema" \
+  --argjson active_documents "$active_documents" \
+  --argjson active_videos "$active_videos" \
+  --argjson active_channels "$active_channels" \
+  --argjson active_manifest "$active_manifest" \
+  --argjson attempted "$attempted" \
   --argjson failures "$failures" '
   {
     gate:$gate,status:$status,source_commit:$source_commit,parent_commit:$parent_commit,
     tree_digest:$tree_digest,generation:$generation,last_sequence:$last_sequence,
-    storage_schema:null,grammar_version:2,rank_version:2,
+    storage_schema:$storage_schema,grammar_version:2,rank_version:2,
     command:"scripts/capture-schema9-p00-baseline.sh (secrets omitted)",
     started_at:$started_at,finished_at:$finished_at,process_handle:"completed",
-    attempted:5,passed:(5 - $probe_failures),failed:$probe_failures,skipped:0,
+    attempted:$attempted,passed:($attempted - $probe_failures),failed:$probe_failures,skipped:(7 - $attempted),
     samples_path:"readiness.json",samples_digest:$samples_digest,
     metrics:{matrix:$matrix_status,contract:$contract_status,reader_machines:$reader_machine_count,
-      api_machines:$api_machine_count,indexer_machines:$indexer_machine_count},
+      api_machines:$api_machine_count,indexer_machines:$indexer_machine_count,
+      active_documents:$active_documents,active_videos:$active_videos,
+      active_channels:$active_channels},
+    active_manifest:$active_manifest,
     failure_cases:$failures,reviewer:"pending-independent-P00-verdict"
   }' > "$OUTPUT/receipt.json"
 

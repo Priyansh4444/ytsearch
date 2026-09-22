@@ -32,6 +32,11 @@ Raw can replace Typesense as the canonical search index.
     or malformed Fly/HTTP probes, preserving null unknowns and exact five-probe
     accounting. Local success/failure fixtures pass; this is not a fresh live
     production capture.
+  - [x] Bind P00's active corpus evidence to the authenticated readiness
+    generation via the reader's active-generation pointer and that generation's
+    manifest, with schema/document/video/channel counts and a manifest digest.
+    A stale pointer fails closed. Local fixtures pass; a credentialed live run
+    and independent P00 verdict remain open.
   - [x] Encode the exact performance timers, workload, and resource thresholds
     in `scripts/benchmark-search-contract.json`.
   - [ ] Resolve every failed grammar/scoring cell in the v2 query contract with

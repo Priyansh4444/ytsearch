@@ -14,7 +14,7 @@ printf '%s\n' \
   '  machines) printf '\''%s\n'\'' '\''[{"id":"machine-1"}]'\'' ;;' \
   '  ssh) remote_command="${!#}"; case "$remote_command" in' \
   '    */active-generation.json) if [[ "${P00_TEST_BAD_POINTER:-}" == 1 ]]; then printf '\''%s\n'\'' '\''{"sequence":2949,"directory":"generations/00000000000000002949"}'\''; else printf '\''%s\n'\'' '\''{"sequence":2950,"directory":"generations/00000000000000002950"}'\''; fi ;;' \
-  '    */manifest.json) printf '\''%s\n'\'' '\''{"schema_version":6,"documents":8422419,"videos":35215,"channels":61,"files":{"documents.blocks":{"bytes":690354376,"blake3":"8f6bac0d015f44111c39ef171cc263c3fd8c26a87035b225504f84babcd94301"}}}'\'' ;;' \
+  '    */generations/00000000000000002950/manifest.json) printf '\''%s\n'\'' '\''{"schema_version":6,"documents":8422419,"videos":35215,"channels":61,"files":{"documents.blocks":{"bytes":690354376,"blake3":"8f6bac0d015f44111c39ef171cc263c3fd8c26a87035b225504f84babcd94301"}}}'\'' ;;' \
   '    *) exit 44 ;; esac ;;' \
   '  *) exit 2 ;;' \
   'esac' > "$tmp/bin/flyctl"
@@ -40,8 +40,9 @@ jq -e '
   .metrics.api_machines == 1 and .metrics.indexer_machines == 1 and
   .metrics.matrix == "pass" and .metrics.contract == "pass" and
   .storage_schema == 6 and .metrics.active_documents == 8422419 and
-  .metrics.active_videos == 35215 and
+  .metrics.active_videos == 35215 and .metrics.active_channels == 61 and
   .active_manifest.directory == "generations/00000000000000002950" and
+  (.active_manifest.digest | startswith("sha256:")) and
   .attempted == 7 and .passed == 7 and .failed == 0 and .skipped == 0
 ' "$tmp/output/receipt.json" >/dev/null
 
@@ -56,7 +57,8 @@ fi
 jq -e '
   .status == "fail" and
   (.failure_cases | any(. == "active generation pointer differs from readiness")) and
-  .metrics.active_documents == null and .active_manifest == null
+  .metrics.active_documents == null and .active_manifest == null and
+  .attempted == 6 and .failed == 1 and .skipped == 1
 ' "$tmp/stale-pointer-output/receipt.json" >/dev/null
 
 mkdir -p "$tmp/failed-output"
@@ -98,6 +100,7 @@ if PATH="$tmp/bin:$PATH" RAW_SEARCH_URL=http://reader.internal:8108 \
 fi
 jq -e '
   .status == "fail" and .attempted == 5 and .passed == 3 and .failed == 2 and
+  .skipped == 2 and
   (.failure_cases | any(. == "reader app status probe failed")) and
   (.failure_cases | any(. == "readiness response invalid"))
 ' "$tmp/multi-failure-output/receipt.json" >/dev/null
