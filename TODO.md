@@ -26,6 +26,10 @@ Raw can replace Typesense as the canonical search index.
   - [x] Revalidate authenticated production readiness as generation 2950 and
     record the schema-6 manifest, machine/image/profile, queue worker, and
     resource baseline without mutating production.
+  - [x] Make the read-only P00 capture script emit a failure receipt for failed
+    or malformed Fly/HTTP probes, preserving null unknowns and exact five-probe
+    accounting. Local success/failure fixtures pass; this is not a fresh live
+    production capture.
   - [x] Encode the exact performance timers, workload, and resource thresholds
     in `scripts/benchmark-search-contract.json`.
   - [ ] Resolve every failed grammar/scoring cell in the v2 query contract with

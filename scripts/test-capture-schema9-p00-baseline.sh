@@ -19,7 +19,7 @@ printf '%s\n' \
   'set -euo pipefail' \
   'url="${!#}"' \
   'case "$url" in' \
-  '  */admin/readiness) printf '\''%s\n'\'' '\''{"generation":"00000000000000002950","last_sequence":2950}'\'' ;;' \
+  '  */admin/readiness) if [[ "${P00_TEST_BAD_READINESS:-}" == 1 ]]; then printf '\''%s\n'\'' '\''not-json'\''; else printf '\''%s\n'\'' '\''{"generation":"00000000000000002950","last_sequence":2950}'\''; fi ;;' \
   '  */api/availability) printf '\''%s\n'\'' '\''{"search_enabled":true,"mode":"always_on"}'\'' ;;' \
   '  *) exit 22 ;;' \
   'esac' > "$tmp/bin/curl"
@@ -50,7 +50,37 @@ jq -e '
   (.failure_cases | any(. == "reader app status probe failed")) and
   .metrics.reader_machines == null
 ' "$tmp/failed-output/receipt.json" >/dev/null
-if rg --fixed-strings "$secret" "$tmp/output" >/dev/null; then
+
+mkdir -p "$tmp/malformed-output"
+if PATH="$tmp/bin:$PATH" RAW_SEARCH_URL=http://reader.internal:8108 \
+  RAW_ADMIN_API_KEY="$secret" PRODUCTION_FRONTEND_URL=https://search.example \
+  P00_TEST_BAD_READINESS=1 P00_OUTPUT="$tmp/malformed-output" \
+  "$SCRIPT_DIR/capture-schema9-p00-baseline.sh" >/dev/null 2>&1; then
+  printf 'malformed readiness probe unexpectedly passed\n' >&2
+  exit 1
+fi
+jq -e '
+  .status == "fail" and
+  (.failure_cases | any(. == "readiness response invalid")) and
+  .generation == null and .last_sequence == null
+' "$tmp/malformed-output/receipt.json" >/dev/null
+
+mkdir -p "$tmp/multi-failure-output"
+if PATH="$tmp/bin:$PATH" RAW_SEARCH_URL=http://reader.internal:8108 \
+  RAW_ADMIN_API_KEY="$secret" PRODUCTION_FRONTEND_URL=https://search.example \
+  P00_TEST_FAIL_READER=1 P00_TEST_BAD_READINESS=1 \
+  P00_OUTPUT="$tmp/multi-failure-output" \
+  "$SCRIPT_DIR/capture-schema9-p00-baseline.sh" >/dev/null 2>&1; then
+  printf 'multiple failed probes unexpectedly passed\n' >&2
+  exit 1
+fi
+jq -e '
+  .status == "fail" and .attempted == 5 and .passed == 3 and .failed == 2 and
+  (.failure_cases | any(. == "reader app status probe failed")) and
+  (.failure_cases | any(. == "readiness response invalid"))
+' "$tmp/multi-failure-output/receipt.json" >/dev/null
+if rg --fixed-strings "$secret" "$tmp/output" "$tmp/failed-output" \
+  "$tmp/malformed-output" "$tmp/multi-failure-output" >/dev/null; then
   printf 'P00 collector leaked its admin secret\n' >&2
   exit 1
 fi

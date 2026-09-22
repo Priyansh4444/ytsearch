@@ -34,6 +34,15 @@ indexed, or deleted data.
 The machine-readable facts and failures are in
 [`baseline-receipt.json`](baseline-receipt.json).
 
+The read-only P00 collector previously exited before writing `receipt.json`
+when a Fly probe failed under `set -e`. A committed red fixture (`014cd4d`)
+demonstrated the missing receipt. The repair records each of its five Fly/HTTP
+probes independently, reports malformed responses and transport failures as
+separate cases, leaves unavailable values null, and counts simultaneous probe
+failures exactly. The local success, failed-reader, malformed-readiness, and
+combined-failure fixtures pass. This repairs evidence collection; no fresh live
+baseline or production readiness claim follows from those local fixtures.
+
 ## Independent exhaustive oracle
 
 The oracle now covers the exact-query foundation plus typed prefix and fuzzy
