@@ -31,7 +31,11 @@
       "create_effect_global",
       "create_effect_spaced_global",
       "convex_global",
-      "in_the_spaced"
+      "in_the_spaced",
+      "this_global",
+      "clearly_the_world_is_ending",
+      "the_world_is_ending",
+      "fable_on_high_global"
     ],
     "lanes": {
       "internal_first_response": {

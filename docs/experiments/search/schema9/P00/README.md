@@ -325,6 +325,13 @@ includes `broad-single.bin`. The observed disk reads are consistent with this
 full validation; the probes did not measure each file's share of the 300 seconds.
 Schema 9's lazy per-unit checksums and cold-open contract remain necessary.
 
+A read-only Axiom review on 2026-09-22 found 30 of 273 Raw search events over
+250 ms in the preceding seven days, including a 42.3-second backend call.
+Ten missing slow query shapes were added to the shared benchmark matrix. The
+timing breakdown and unresolved cause are recorded in
+[`slow-searches-2026-09-22.md`](slow-searches-2026-09-22.md). These observations
+are failed performance evidence, not a schema-9 performance pass.
+
 ## Next autonomous repairs
 
 1. Implement schema-9 structural metadata and lazy exact execution against the

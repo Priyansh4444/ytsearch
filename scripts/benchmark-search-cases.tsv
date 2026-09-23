@@ -1,4 +1,6 @@
 # label<TAB>query<TAB>optional youtuber filter
+# Additional global cases below reproduce >250 ms Raw backend calls in Axiom,
+# 2026-09-17 through 2026-09-21. See P00/slow-searches-2026-09-22.md.
 react_global	react
 fire_global	fire
 one_fire_global	one fire
@@ -44,3 +46,13 @@ javascript_runtime	javascript runtime
 memory_mapped_search	memory mapped search
 rust_performance	rust performance
 computer_architecture	computer architecture
+this_global	this
+clearly_the_world_is_ending	clearly the world is ending
+the_world_is_ending	the world is ending
+fable_on_high_global	fable on high
+this_is_not_real	this is not real
+showered_in_fire	showered in fire
+the_beginning_of_hte_end	the beginning of hte end
+this_is_the_end	this is the end
+how_i_code_with_ai	how I code with AI
+how_i_code_with_ai_right_now	How I code with AI right now
