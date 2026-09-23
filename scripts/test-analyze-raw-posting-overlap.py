@@ -45,6 +45,11 @@ class PostingOverlapTests(unittest.TestCase):
             lexicon_path.write_bytes(lexicon)
             posting_path.write_bytes(postings)
             result = ANALYZER.analyze(lexicon_path, posting_path, 5, 2)
+            posting_path.write_bytes(
+                b"RAWPOS01" + struct.pack("<II", 3, 1) + and_bytes + the_bytes
+            )
+            with self.assertRaisesRegex(ValueError, "term counts differ"):
+                ANALYZER.analyze(lexicon_path, posting_path, 5, 2)
         pair = next(
             item
             for item in result["pairs"]

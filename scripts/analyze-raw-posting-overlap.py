@@ -136,6 +136,8 @@ def analyze(lexicon: Path, postings: Path, documents: int, videos: int) -> dict:
                     raise ValueError("invalid posting file header")
                 if struct.unpack_from("<I", data, 12)[0] != 1:
                     raise ValueError("unsupported posting version")
+                if struct.unpack_from("<I", data, 8)[0] != struct.unpack_from("<I", lex, 8)[0]:
+                    raise ValueError("posting and lexicon term counts differ")
                 descriptors = {term: lookup(lex, term) for term in terms}
                 decoded = {}
                 single_reports = []
