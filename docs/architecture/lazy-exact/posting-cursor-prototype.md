@@ -21,8 +21,10 @@ the complete encoded sequence, cross every skip boundary, seek to `u32::MAX`,
 exercise malformed bytes, and compare 1000 random seeks against a sorted-vector
 oracle. Decode counters distinguish blocks visited from decoded posting IDs.
 
-This prototype builds all directories in memory and does not yet account for
-their capacity under the session memory budget. It also does not validate a
+This prototype reports retained encoded bytes separately from retained vector
+capacity, including all four skip directories. It does not reserve that memory
+under the session budget or include the temporary base directory held during
+construction, allocator metadata, or the list header. It also does not validate a
 borrowed on-disk directory lazily. The 2 GiB and 200 ms gates require P01 codec
 comparison on the retained corpus, P03 file-format integration, and P10 reader
 measurements before this cursor can be considered production-ready.

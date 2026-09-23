@@ -3,6 +3,8 @@
 //! Positions are stored separately. The production file descriptor and codec
 //! choice remain P01/P03 gates; this module proves the cursor contract.
 
+use std::mem::size_of;
+
 use super::sets::{DocId, SetId, Universe};
 
 const BLOCK_SIZE: usize = 8;
@@ -32,6 +34,8 @@ pub(crate) enum PostingError {
     ZeroFrequency(u64),
     #[error("posting stream is truncated or malformed")]
     Malformed,
+    #[error("posting byte count overflows")]
+    ByteOverflow,
 }
 
 pub(crate) struct PostingList {
@@ -112,6 +116,18 @@ impl PostingList {
 
     pub(crate) fn encoded_bytes(&self) -> usize {
         self.bytes.len()
+    }
+
+    /// Retained vector capacity, excluding allocator metadata and this header.
+    pub(crate) fn resident_payload_bytes(&self) -> Result<u64, PostingError> {
+        self.directories
+            .iter()
+            .try_fold(self.bytes.capacity() as u64, |total, level| {
+                let bytes = (level.capacity() as u64)
+                    .checked_mul(size_of::<Checkpoint>() as u64)
+                    .ok_or(PostingError::ByteOverflow)?;
+                total.checked_add(bytes).ok_or(PostingError::ByteOverflow)
+            })
     }
 
     pub(crate) fn cursor(&self) -> PostingCursor<'_> {

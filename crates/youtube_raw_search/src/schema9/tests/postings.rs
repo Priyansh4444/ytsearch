@@ -22,6 +22,7 @@ fn round_trip_and_seek_all_skip_boundaries() {
     let list = PostingList::encode(universe(50_000), &postings).unwrap();
     assert_eq!(list.len(), postings.len() as u64);
     assert!(list.encoded_bytes() > 0);
+    assert!(list.resident_payload_bytes().unwrap() > list.encoded_bytes() as u64);
     assert_eq!(ids(&list), postings);
     assert_eq!(
         list.directories.each_ref().map(Vec::len),
