@@ -2,7 +2,7 @@
 
 The generation will contain one small `directory.bin` plus immutable data
 files. The directory will be written only after every data file is complete and
-verified. The reader will open and authenticate the directory, compare every
+verified. The reader will open and validate the directory, compare every
 listed file length with filesystem metadata, and defer payload checksums until
 a byte range is used. The directory itself has a trailing BLAKE3 of all bytes
 before that digest. It is capped at 16 MiB so cold open cannot read arbitrary
@@ -21,10 +21,11 @@ bytes. Files larger than 4 GiB use `u64` byte lengths and offsets.
 The integrity-unit size is 2–8 MiB. Its count must equal ceiling(file length /
 unit size), with a short final unit. An empty optional data file has zero
 units and zero digests. Every declared byte range is checked for overflow and
-file bounds before the verifier touches bytes. The footer digest authenticates
-the digest directory; the exact generation path and immutable-file lifetime
-must also be bound by publication and reader ownership. A digest alone does not
-identify a file when its metadata can be substituted.
+file bounds before the verifier touches bytes. The trailing checksum detects
+directory corruption but does not authenticate its identity. Publication must
+bind its digest to a trusted generation manifest; the reader must verify that
+binding and preserve the exact immutable-file lifetime. A digest alone does
+not identify a file when its metadata can be substituted.
 
 This is a design draft, not a frozen codec. P01 has not selected the posting
 codec or bitmap threshold. Before implementing the directory parser, P03 must
