@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "kind": "raw-reader-canary-checksum-diagnostic",
+  "source_commit": "7cf6fc365e6ffa854fe217a95caa0784c98e0333",
+  "base_image_digest": "sha256:09b2fc639c63cbca74f05da137c455cf2eb5d32f0a256e12d1e5b711dca66dcd",
+  "reader_image_digest": "sha256:ae2e5b15ad29febdf564a6b062810cdda90a1bf491e7706430fce8ffe9a9385a",
+  "canary_machine_id": "847314c22d52e8",
+  "canary_volume_id": "vol_4oj1x0oxkq82eo2r",
+  "active_generation_sequence": 2152,
+  "capture_log_sha256": "sha256:0396a627a948c77d36b181e73bd557cd52ef23c1a3af980904e0216de437e331",
+  "checksum_files": [
+    {
+      "file": "channels.json",
+      "bytes": 24988,
+      "elapsed_ms": 0,
+      "completed_at_utc": "2026-09-23T09:27:01.084885Z"
+    },
+    {
+      "file": "videos.json",
+      "bytes": 73988216,
+      "elapsed_ms": 2840,
+      "completed_at_utc": "2026-09-23T09:27:03.925538Z"
+    },
+    {
+      "file": "lexicon.bin",
+      "bytes": 14834953,
+      "elapsed_ms": 924,
+      "completed_at_utc": "2026-09-23T09:27:04.850072Z"
+    },
+    {
+      "file": "postings.bin",
+      "bytes": 319459254,
+      "elapsed_ms": 19564,
+      "completed_at_utc": "2026-09-23T09:27:24.414656Z"
+    },
+    {
+      "file": "positions.bin",
+      "bytes": 147564846,
+      "elapsed_ms": 8771,
+      "completed_at_utc": "2026-09-23T09:27:33.186635Z"
+    },
+    {
+      "file": "positions.full.bin",
+      "bytes": 24957079,
+      "elapsed_ms": 1441,
+      "completed_at_utc": "2026-09-23T09:27:34.628237Z"
+    },
+    {
+      "file": "documents.blocks",
+      "bytes": 681903222,
+      "elapsed_ms": 42012,
+      "completed_at_utc": "2026-09-23T09:28:16.640926Z"
+    },
+    {
+      "file": "documents.meta",
+      "bytes": 201826136,
+      "elapsed_ms": 12001,
+      "completed_at_utc": "2026-09-23T09:28:28.642290Z"
+    },
+    {
+      "file": "fuzzy.bin",
+      "bytes": 14740896,
+      "elapsed_ms": 926,
+      "completed_at_utc": "2026-09-23T09:28:29.568730Z"
+    },
+    {
+      "file": "bigrams.text.bin",
+      "bytes": 244324487,
+      "elapsed_ms": 14509,
+      "completed_at_utc": "2026-09-23T09:28:44.078212Z"
+    },
+    {
+      "file": "bigrams.title.bin",
+      "bytes": 624477,
+      "elapsed_ms": 102,
+      "completed_at_utc": "2026-09-23T09:28:44.180499Z"
+    },
+    {
+      "file": "broad-single.bin",
+      "bytes": 2738580172,
+      "elapsed_ms": 163901,
+      "completed_at_utc": "2026-09-23T09:31:28.082922Z"
+    }
+  ],
+  "checksum_file_count": 12,
+  "checksum_input_bytes": 4462828726,
+  "summed_checksum_elapsed_ms": 266991,
+  "private_ipv6_health": {
+    "status": "failed",
+    "attempts": 100,
+    "deadline_seconds": 300
+  },
+  "active_generation_opened_log_observed": false,
+  "cleanup": {
+    "canary_state": "stopped",
+    "machine_lease": "released",
+    "scoped_token": "revoked"
+  },
+  "production_reader": {
+    "machine_id": "d89303da029328",
+    "state": "started",
+    "image_digest": "sha256:09b2fc639c63cbca74f05da137c455cf2eb5d32f0a256e12d1e5b711dca66dcd",
+    "bind": "0.0.0.0:8108"
+  },
+  "interpretation": "Checksum timings cover all 12 schema-8 generation files. The source then parses metadata and opens the broad-single index, which validates every decoded payload; the probe did not time those steps separately. Health did not pass within 300 seconds, so the release gate remains failed. The checksum byte count is logical input, not measured physical disk reads."
+}

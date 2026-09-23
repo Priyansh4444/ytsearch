@@ -325,6 +325,21 @@ includes `broad-single.bin`. The observed disk reads are consistent with this
 full validation; the probes did not measure each file's share of the 300 seconds.
 Schema 9's lazy per-unit checksums and cold-open contract remain necessary.
 
+The exact `7cf6fc3` overlay was then built from the same production base and
+staged only on the stopped, DNS-isolated canary. A third 300-second private
+IPv6 probe failed, and cleanup stopped the canary, released its lease, and
+revoked the temporary scoped token. Per-file startup logs show that all 12
+schema-8 files were checksummed: 4,462,828,726 logical input bytes took a sum
+of 266,991 ms. `broad-single.bin` alone contributed 2,738,580,172 bytes and
+163,901 ms. The last checksum completed at 09:31:28 UTC, but no
+`active raw generation opened` or listener-ready event appeared before the
+probe ended. See
+[`reader-canary-checksums-2026-09-23.json`](reader-canary-checksums-2026-09-23.json).
+These byte counts are checksum input, not measured physical I/O. Source review
+shows that `BroadSingleIndex::open` subsequently decodes and validates every
+answer payload; its elapsed time has not been isolated. This remains a failed
+cold-start gate, and the production reader was not changed.
+
 A read-only Axiom review on 2026-09-22 found 30 of 273 Raw search events over
 250 ms in the preceding seven days, including a 42.3-second backend call.
 Ten missing slow query shapes were added to the shared benchmark matrix. The

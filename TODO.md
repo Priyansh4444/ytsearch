@@ -846,8 +846,12 @@ Raw can replace Typesense as the canonical search index.
   A second instrumented canary run localized the delay to opening active
   generation 2152 (4.2 GB, including 2.6 GB of retained schema-8 broad
   answers); it read over 5 GB without swap but still missed the 300-second
-  listener/health gate. Determine the exact cold-open file cost and use a
-  representative, verified generation for the IPv6 reader release gate.
+  listener/health gate. A third instrumented run measured 266,991 ms of
+  checksums over 4,462,828,726 logical bytes, including 163,901 ms for
+  `broad-single.bin`; generation open still had not completed when the
+  300-second probe ended. See the P00 2026-09-23 checksum receipt. Measure
+  the remaining open work, implement the lazy schema-9 cold-open design, and
+  use a representative, verified generation for the IPv6 reader release gate.
 - [x] Apply the configured idle-shutdown deadline to failed pending-publication
   retries, which previously bypassed the check. Test clean daemon exit with
   the pending marker preserved; this bounds failed wake cost but does not fix
