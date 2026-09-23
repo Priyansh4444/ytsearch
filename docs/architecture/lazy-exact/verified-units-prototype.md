@@ -13,5 +13,6 @@ slice and an already validated digest vector; there is no footer parser,
 generation identity, mmap lifetime management, writer, or production reader
 integration yet. A whole-file checksum is not performed at open. The current
 tests cover untouched units, overlapping reads, a short final unit, concurrent
-corruption, invalid metadata/ranges, and empty files. The cold-open physical
+success and corruption, exact unit boundaries, later-unit corruption, invalid
+metadata/ranges without hashing, and empty files. The cold-open physical
 read and 2 GiB reader gates remain open.

@@ -137,6 +137,46 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_success_and_exact_boundary_hash_only_one_unit() {
+        let bytes = vec![4; MIN_UNIT_BYTES * 2];
+        let verifier =
+            Arc::new(VerifiedUnits::new(&bytes, MIN_UNIT_BYTES, digests(&bytes)).unwrap());
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let verifier = Arc::clone(&verifier);
+                scope.spawn(move || {
+                    assert_eq!(
+                        verifier.read(0, MIN_UNIT_BYTES).unwrap().len(),
+                        MIN_UNIT_BYTES
+                    );
+                });
+            }
+        });
+        assert_eq!(verifier.hash_attempts[0].load(super::Ordering::Relaxed), 1);
+        assert_eq!(verifier.hash_attempts[1].load(super::Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn spanning_corruption_and_invalid_ranges_do_not_return_unverified_bytes() {
+        let mut bytes = vec![5; MIN_UNIT_BYTES * 2];
+        let expected = digests(&bytes);
+        bytes[MIN_UNIT_BYTES] = 6;
+        let verifier = VerifiedUnits::new(&bytes, MIN_UNIT_BYTES, expected).unwrap();
+        assert_eq!(
+            verifier.read(0, bytes.len() + 1),
+            Err(UnitError::OutOfBounds)
+        );
+        assert_eq!(verifier.hash_attempts[0].load(super::Ordering::Relaxed), 0);
+        assert_eq!(verifier.hash_attempts[1].load(super::Ordering::Relaxed), 0);
+        assert_eq!(
+            verifier.read(MIN_UNIT_BYTES - 1, 2),
+            Err(UnitError::Corrupt(1))
+        );
+        assert_eq!(verifier.hash_attempts[0].load(super::Ordering::Relaxed), 1);
+        assert_eq!(verifier.hash_attempts[1].load(super::Ordering::Relaxed), 1);
+    }
+
+    #[test]
     fn rejects_bad_metadata_and_ranges_and_accepts_empty_file() {
         assert!(matches!(
             VerifiedUnits::new(&[], 0, vec![]),
