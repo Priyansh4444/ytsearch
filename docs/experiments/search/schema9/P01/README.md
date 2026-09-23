@@ -19,6 +19,10 @@ input identity, all samples, denominators, and resource counters.
 The measurements support retaining both sparse and dense exact-set paths. They
 do not choose a production DF threshold or bitmap byte budget: the generated
 corpus, local host, and warm in-process timing differ from the 2 GiB Fly
-reader. P01 still needs real-corpus distribution, phrase, codec, rank-frontier,
-session, and independent performance evidence. The P02 set implementation on
+reader. P01 still needs real-corpus overlap and timing, phrase, codec,
+rank-frontier, session, and independent performance evidence. The P02 set implementation on
 the child branch is a unit foundation, not a P01 or P02 completion verdict.
+
+The separate [active lexicon survey](active-lexicon-df-2950.md) records actual
+schema-6 term frequencies and payload-only bitmap capacities. It does not
+convert these synthetic timing results into production performance evidence.
