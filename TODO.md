@@ -42,11 +42,20 @@ Raw can replace Typesense as the canonical search index.
     300-case matrix, 61 focused tests, full Raw crate, format, and Clippy all
     pass. The receipt is `P00/unit-2026-09-22/receipt.json`; it does not close
     production runtime, load, or latency gates.
-  - [x] Record the current Raw worker inventory and a cost floor in
+  - [x] Record the current Raw worker inventory and a cost baseline in
     `docs/operations/raw-mutable-migration.md`: reader and queue worker are
-    started, daily refresh is disabled, the publication builder is stopped,
-    and the known subtotal is $31.16/month before variable charges. This is a
-    pricing estimate, not an invoice or a completed migration gate.
+    started alongside the API, daily refresh is disabled, and the publication
+    builder is stopped. A complete Raw app inventory corrected the earlier
+    incomplete subtotal to $37.63/month before variable charges and legacy
+    Typesense resources. A read-only legacy inventory adds $9.15/month of
+    provisioned volumes, for a $46.78/month known cross-app subtotal. This is
+    a pricing estimate, not an invoice or a
+    completed migration gate.
+  - [ ] Reconcile the 2026-09-22 exact-retirement inventory drift before any
+    Typesense deletion: the legacy API and cold-benchmark Machines have new
+    attached volume IDs and the legacy indexer has two new unattached IDs.
+    Verify their contents and queue state; keep the existing fail-closed
+    allowlist until that evidence exists.
   - [x] Encode the exact performance timers, workload, and resource thresholds
     in `scripts/benchmark-search-contract.json`.
   - [ ] Resolve every failed grammar/scoring cell in the v2 query contract with
