@@ -157,6 +157,10 @@ Raw can replace Typesense as the canonical search index.
     term pairs from the same active generation, with independently checked
     lexicon/postings SHA-256 and explicit document versus video universes.
     This is structural overlap evidence, not timing or mixed-field semantics.
+  - [x] Measure exact pair counting on copied active schema-6 postings with
+    independently checked intersections, both sparse methods, paired dense
+    bitmap scans, and construction/residency receipts. The local count kernels
+    do not establish a schema-9 threshold or the 2 GiB reader byte budget.
   - [x] Add the internal schema-9 typed DocSet/VideoSet foundation with exact
     sparse/dense AND, OR, positive subtraction, generation/segment checks,
     streaming counts, and charged materialization. Exhaustive and large-set
