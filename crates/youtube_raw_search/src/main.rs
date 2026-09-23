@@ -6,6 +6,7 @@ use youtube_raw_search::{
 use youtube_search_service::{SearchBackend, ServerConfig};
 
 const USAGE: &str = "usage: youtube-raw-search build <chunks.jsonl> <channels.jsonl> <index-dir> | measure-broad-single <index-dir> <query>... | serve [index-dir] | serve-mutable | slice <input.jsonl> <output.jsonl> <max-videos>";
+const DEFAULT_BIND: &str = "[::]:8108";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -43,7 +44,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .or_else(|| env::var_os("RAW_SEARCH_INDEX_PATH").map(PathBuf::from))
                 .unwrap_or_else(|| PathBuf::from("/data/index"));
             let bind = env::var("RAW_SEARCH_BIND")
-                .unwrap_or_else(|_| "0.0.0.0:8108".to_string())
+                .unwrap_or_else(|_| DEFAULT_BIND.to_string())
                 .parse::<SocketAddr>()?;
             let api_key = env::var("RAW_SEARCH_API_KEY").ok();
             let engine = RawSearchEngine::open(&index_path)?;
@@ -86,7 +87,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn serve_mutable() -> Result<(), Box<dyn std::error::Error>> {
     let bind = env::var("RAW_SEARCH_BIND")
-        .unwrap_or_else(|_| "0.0.0.0:8108".to_string())
+        .unwrap_or_else(|_| DEFAULT_BIND.to_string())
         .parse::<SocketAddr>()?;
     let base_index = env_path("RAW_SEARCH_INDEX_PATH", "/data/index");
     let state_directory = env_path("RAW_SEARCH_STATE_DIRECTORY", "/data/mutable");
@@ -140,4 +141,17 @@ fn required_path(value: Option<String>, name: &str) -> Result<PathBuf, Box<dyn s
     value
         .map(PathBuf::from)
         .ok_or_else(|| format!("missing {name}").into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DEFAULT_BIND;
+    use std::net::{IpAddr, SocketAddr};
+
+    #[test]
+    fn default_bind_accepts_fly_private_ipv6() {
+        let bind: SocketAddr = DEFAULT_BIND.parse().unwrap();
+        assert_eq!(bind.ip(), IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED));
+        assert_eq!(bind.port(), 8108);
+    }
 }
