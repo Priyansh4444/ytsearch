@@ -10,3 +10,6 @@ mod postings;
 
 #[allow(dead_code)]
 mod verified_units;
+
+#[allow(dead_code)]
+mod footer;
