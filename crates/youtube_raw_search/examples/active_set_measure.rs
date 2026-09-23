@@ -293,12 +293,21 @@ fn main() -> Result<(), Box<dyn Error>> {
                 assert_eq!(count, oracle_count);
                 bitmap_samples.push(ns);
             }
-            let (count, ns) = sample(|| sparse_linear_count(black_box(a), black_box(b)));
-            assert_eq!(count, oracle_count);
-            linear_samples.push(ns);
-            let (count, ns) = sample(|| sparse_seek_count(black_box(a), black_box(b)));
-            assert_eq!(count, oracle_count);
-            seek_samples.push(ns);
+            if round % 2 == 0 {
+                let (count, ns) = sample(|| sparse_linear_count(black_box(a), black_box(b)));
+                assert_eq!(count, oracle_count);
+                linear_samples.push(ns);
+                let (count, ns) = sample(|| sparse_seek_count(black_box(a), black_box(b)));
+                assert_eq!(count, oracle_count);
+                seek_samples.push(ns);
+            } else {
+                let (count, ns) = sample(|| sparse_seek_count(black_box(a), black_box(b)));
+                assert_eq!(count, oracle_count);
+                seek_samples.push(ns);
+                let (count, ns) = sample(|| sparse_linear_count(black_box(a), black_box(b)));
+                assert_eq!(count, oracle_count);
+                linear_samples.push(ns);
+            }
             if round % 2 != 0 {
                 let (count, ns) = sample(|| bitmap_count(black_box(dense_a), black_box(dense_b)));
                 assert_eq!(count, oracle_count);

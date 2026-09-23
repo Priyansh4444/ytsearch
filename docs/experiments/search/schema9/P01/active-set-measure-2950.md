@@ -5,7 +5,7 @@ generation 2950 files. It is not the 2 GiB Fly reader or a schema-9 release
 benchmark. The [JSON receipt](active-set-measure-2950.json) contains all 31
 paired samples, construction times, source identity, and input digests. The
 harness is [`active_set_measure.rs`](../../../../../crates/youtube_raw_search/examples/active_set_measure.rs)
-at commit `58c1ea44b3aab430ea399dbe3648adc371149e79`.
+at commit `db4fded25d897b88d9b7122c51b5846dc767338b`.
 
 The harness checked the active manifest's BLAKE3 for both source files before
 decoding. It compared each count with the independent
@@ -16,22 +16,23 @@ their AND. Times below are milliseconds, rounded from nanoseconds.
 
 | Transcript pair | Exact intersection | Best sparse median | Dense bitmap median |
 | --- | ---: | ---: | ---: |
-| `the` + `and` | 1,944,010 | 55.702 | 0.187 |
-| `in` + `the` | 1,077,539 | 34.866 | 0.194 |
-| `this` + `is` | 747,843 | 28.870 | 0.189 |
-| `is` + `the` | 1,298,392 | 41.803 | 0.192 |
-| `coding` + `dead` | 20 | 0.061 | 0.118 |
-| `css` + `dead` | 11 | 0.030 | 0.283 |
-| `create` + `effect` | 535 | 0.273 | 0.109 |
-| `black` + `hole` | 1,084 | 0.083 | 0.117 |
-| `one` + `fire` | 824 | 0.698 | 0.110 |
+| `the` + `and` | 1,944,010 | 55.813 | 0.199 |
+| `in` + `the` | 1,077,539 | 34.998 | 0.194 |
+| `this` + `is` | 747,843 | 29.090 | 0.208 |
+| `is` + `the` | 1,298,392 | 42.158 | 0.208 |
+| `coding` + `dead` | 20 | 0.061 | 0.120 |
+| `css` + `dead` | 11 | 0.029 | 0.283 |
+| `create` + `effect` | 535 | 0.277 | 0.113 |
+| `black` + `hole` | 1,084 | 0.068 | 0.112 |
+| `one` + `fire` | 824 | 0.705 | 0.114 |
 
-The selected sparse method was linear merge for every pair. An existing bitmap
+The selected sparse method was linear merge for every pair; the harness
+counterbalanced sparse call order across rounds. An existing bitmap
 is much faster for broad count kernels; sparse arrays win for some rare pairs.
 The two methods use different construction and residency costs: each full text
 bitmap occupies 1,052,808 bytes. The 14 distinct terms here retained
 14,739,312 bytes of bitmap vector capacity and 57,070,332 bytes of decoded
-sparse vector capacity. Bitmap construction took about 0.6–9.4 ms per term in
+sparse vector capacity. Bitmap construction took about 0.4–9.3 ms per term in
 this run. The process high-water RSS was 412,708,864 bytes, including mapped
 input files, retained vectors, and runtime allocations. This does not establish
 a production bitmap cache budget.
