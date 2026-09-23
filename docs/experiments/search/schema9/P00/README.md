@@ -262,6 +262,33 @@ reran the 61 focused tests and found no blocker. This evidence covers the
 reference oracle only; it does not prove production score parity, the 300-case
 runtime differential, the 2 GiB latency gate, or readiness to activate schema 9.
 
+### Reader private-network repair checkpoint (2026-09-22)
+
+The started reader `d89303da029328` still advertises
+`RAW_SEARCH_BIND=0.0.0.0:8108`; the stopped, DNS-isolated canary
+`847314c22d52e8` is configured for `[::]:8108`. The queue worker
+`8e426df7e305e8` remains started with `DAILY_UPDATE_ENABLED=0`, and the live
+queue invariant fails. These are current-state observations, not repaired
+production behavior.
+
+Commit `6e7544d` changes both Raw serve modes to default to `[::]:8108`.
+Commit `1f426dd` makes the on-demand worker own the 24-hour catalog pass on
+hourly Cloudflare wakes and checks the reader's IPv6 configuration. Local Raw
+crate tests (242 passed, one ignored), Clippy, formatting, the queue fixture,
+the cost guard, and Worker Vitest (36 tests) passed. The exact committed Raw
+overlay was built and pushed from production base image
+`sha256:09b2fc639c63cbca74f05da137c455cf2eb5d32f0a256e12d1e5b711dca66dcd`
+as `registry.fly.io/ytsearch-raw-production:raw-overlay-1f426ddb6cc4-09b2fc639c63`
+with manifest digest
+`sha256:25fd489e367ee3c333c58139f3018f399ce6674655548ae97e09c17be2ec6c79`.
+The build used `--build-only --push` and did not deploy it.
+
+Canary staging dry run selected only machine `847314c22d52e8` and volume
+`vol_4oj1x0oxkq82eo2r`. Applying that stage stopped at the credential
+preflight because `FLY_API_TOKEN` was absent; no Machine config changed.
+Private IPv6 readiness, pending publication recovery, daily completion, and
+schema-9 search gates remain open.
+
 ## Next autonomous repairs
 
 1. Implement schema-9 structural metadata and lazy exact execution against the
