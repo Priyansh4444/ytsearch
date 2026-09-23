@@ -1259,12 +1259,24 @@ pub(super) fn validate_manifest_files(
             )));
         }
         if matches!(validation, ManifestValidation::Full) {
+            tracing::info!(
+                file = name,
+                bytes = actual_bytes,
+                "validating raw generation file checksum"
+            );
+            let started = std::time::Instant::now();
             let actual_checksum = checksum_file(&path)?;
             if actual_checksum != expected.blake3 {
                 return Err(Error::Corrupt(format!(
                     "generation file {name} failed its BLAKE3 checksum"
                 )));
             }
+            tracing::info!(
+                file = name,
+                bytes = actual_bytes,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "validated raw generation file checksum"
+            );
         }
     }
     Ok(())
