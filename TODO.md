@@ -149,6 +149,12 @@ Raw can replace Typesense as the canonical search index.
   differential/performance lanes supersede it; preserve its experiment evidence.
 - [ ] Prototype phrase bitmap-vs-skip candidates on a production-shaped corpus.
 - [ ] Prototype bitmap-vs-skip exact counting and derive the bitmap byte budget.
+  - [x] Add the internal schema-9 typed DocSet/VideoSet foundation with exact
+    sparse/dense AND, OR, positive subtraction, generation/segment checks,
+    streaming counts, and charged materialization. Exhaustive and large-set
+    unit fixtures pass on the `schema9-p02-sets` child branch. This does not
+    select the production bitmap budget, implement seekable postings, or close
+    the P02 live/performance gates.
 - [ ] Prove exact query-dependent 20-second moment totals under 200 ms for the
   broadest canonical queries; do not substitute static buckets or approximation.
 - [ ] Prototype scalar-vs-batched Tier-1 fast-field histograms.
