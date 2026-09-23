@@ -838,6 +838,11 @@ Raw can replace Typesense as the canonical search index.
   but a bounded 300-second private health probe failed before port 8108
   listened. Investigate cold-open startup on the 2 GiB canary before any
   production reader update; see the P00 reader-canary smoke receipt.
+  A second instrumented canary run localized the delay to opening active
+  generation 2152 (4.2 GB, including 2.6 GB of retained schema-8 broad
+  answers); it read over 5 GB without swap but still missed the 300-second
+  listener/health gate. Determine the exact cold-open file cost and use a
+  representative, verified generation for the IPv6 reader release gate.
 - [x] Apply the configured idle-shutdown deadline to failed pending-publication
   retries, which previously bypassed the check. Test clean daemon exit with
   the pending marker preserved; this bounds failed wake cost but does not fix

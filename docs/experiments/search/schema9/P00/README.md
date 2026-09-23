@@ -304,6 +304,20 @@ started on the old IPv4 image. See
 This is a failed startup gate. Private IPv6 readiness, pending publication
 recovery, daily completion, and schema-9 search gates remain open.
 
+Commit `eeb679b` adds startup stage logs. Its tested, immutable overlay was
+pushed and staged on the same isolated canary. A second bounded run confirmed
+that SQLite opened in about half a second, then active-generation opening did
+not finish within 300 seconds. The canary volume points to generation 2152,
+whose directory is 4.2 GB and includes the retained 2.6 GB schema-8
+`broad-single.bin`. During the open, the reader was observed in disk sleep;
+its read counter progressed beyond 5 GB, RSS rose from about 9 MB to 753 MB,
+and swap remained zero. The evidence localizes the delay to generation open
+but does not identify the specific file operation. The canary stopped and its
+lease was released. See
+[`reader-canary-diagnostic-2026-09-22.json`](reader-canary-diagnostic-2026-09-22.json).
+The 300-second startup gate still fails; this run does not validate private
+IPv6 readiness or authorize production promotion.
+
 ## Next autonomous repairs
 
 1. Implement schema-9 structural metadata and lazy exact execution against the
