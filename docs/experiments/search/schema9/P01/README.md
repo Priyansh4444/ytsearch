@@ -26,3 +26,6 @@ the child branch is a unit foundation, not a P01 or P02 completion verdict.
 The separate [active lexicon survey](active-lexicon-df-2950.md) records actual
 schema-6 term frequencies and payload-only bitmap capacities. It does not
 convert these synthetic timing results into production performance evidence.
+The [active posting survey](active-posting-overlap-2950.md) additionally
+records exact overlap for selected canonical term pairs, without claiming
+schema-9 timing or full query semantics.
