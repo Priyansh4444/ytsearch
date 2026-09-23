@@ -169,27 +169,28 @@ fn bitmap_count(left: &[u64], right: &[u64]) -> u64 {
         .sum()
 }
 
-fn sparse_intersection_count(left: &[u32], right: &[u32]) -> u64 {
+fn sparse_linear_count(left: &[u32], right: &[u32]) -> u64 {
+    let (mut i, mut j, mut count) = (0, 0, 0);
+    while i < left.len() && j < right.len() {
+        match left[i].cmp(&right[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                count += 1;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    count
+}
+
+fn sparse_seek_count(left: &[u32], right: &[u32]) -> u64 {
     let (short, long) = if left.len() <= right.len() {
         (left, right)
     } else {
         (right, left)
     };
-    if long.len() <= short.len().saturating_mul(32) {
-        let (mut i, mut j, mut count) = (0, 0, 0);
-        while i < short.len() && j < long.len() {
-            match short[i].cmp(&long[j]) {
-                std::cmp::Ordering::Less => i += 1,
-                std::cmp::Ordering::Greater => j += 1,
-                std::cmp::Ordering::Equal => {
-                    count += 1;
-                    i += 1;
-                    j += 1;
-                }
-            }
-        }
-        return count;
-    }
     let mut long_offset = 0;
     let mut count = 0;
     for &id in short {
@@ -272,47 +273,58 @@ fn main() -> Result<(), Box<dyn Error>> {
             .find(|item| item["left"] == left && item["right"] == right)
             .and_then(|item| item["text"]["intersection"].as_u64())
             .ok_or_else(|| invalid("missing exact overlap oracle"))?;
-        if sparse_intersection_count(a, b) != oracle_count
+        if sparse_linear_count(a, b) != oracle_count
+            || sparse_seek_count(a, b) != oracle_count
             || bitmap_count(dense_a, dense_b) != oracle_count
         {
             return Err(invalid("candidate count differs from independent overlap receipt").into());
         }
         for _ in 0..WARMUP {
-            black_box(sparse_intersection_count(black_box(a), black_box(b)));
+            black_box(sparse_linear_count(black_box(a), black_box(b)));
+            black_box(sparse_seek_count(black_box(a), black_box(b)));
             black_box(bitmap_count(black_box(dense_a), black_box(dense_b)));
         }
-        let mut sparse_samples = Vec::with_capacity(ROUNDS);
+        let mut linear_samples = Vec::with_capacity(ROUNDS);
+        let mut seek_samples = Vec::with_capacity(ROUNDS);
         let mut bitmap_samples = Vec::with_capacity(ROUNDS);
         for round in 0..ROUNDS {
             if round % 2 == 0 {
                 let (count, ns) = sample(|| bitmap_count(black_box(dense_a), black_box(dense_b)));
                 assert_eq!(count, oracle_count);
                 bitmap_samples.push(ns);
-                let (count, ns) = sample(|| sparse_intersection_count(black_box(a), black_box(b)));
-                assert_eq!(count, oracle_count);
-                sparse_samples.push(ns);
-            } else {
-                let (count, ns) = sample(|| sparse_intersection_count(black_box(a), black_box(b)));
-                assert_eq!(count, oracle_count);
-                sparse_samples.push(ns);
+            }
+            let (count, ns) = sample(|| sparse_linear_count(black_box(a), black_box(b)));
+            assert_eq!(count, oracle_count);
+            linear_samples.push(ns);
+            let (count, ns) = sample(|| sparse_seek_count(black_box(a), black_box(b)));
+            assert_eq!(count, oracle_count);
+            seek_samples.push(ns);
+            if round % 2 != 0 {
                 let (count, ns) = sample(|| bitmap_count(black_box(dense_a), black_box(dense_b)));
                 assert_eq!(count, oracle_count);
                 bitmap_samples.push(ns);
             }
         }
-        let mut sorted_sparse = sparse_samples.clone();
+        let mut sorted_linear = linear_samples.clone();
+        let mut sorted_seek = seek_samples.clone();
         let mut sorted_bitmap = bitmap_samples.clone();
-        sorted_sparse.sort_unstable();
+        sorted_linear.sort_unstable();
+        sorted_seek.sort_unstable();
         sorted_bitmap.sort_unstable();
+        let linear_median = sorted_linear[ROUNDS / 2];
+        let seek_median = sorted_seek[ROUNDS / 2];
         cases.push(json!({
             "left": left,
             "right": right,
             "exact_intersection": oracle_count,
-            "sparse_samples_ns": sparse_samples,
+            "sparse_linear_samples_ns": linear_samples,
+            "sparse_seek_samples_ns": seek_samples,
             "bitmap_and_samples_ns": bitmap_samples,
-            "sparse_median_ns": sorted_sparse[ROUNDS / 2],
+            "sparse_linear_median_ns": linear_median,
+            "sparse_seek_median_ns": seek_median,
+            "best_sparse_median_ns": linear_median.min(seek_median),
             "bitmap_median_ns": sorted_bitmap[ROUNDS / 2],
-            "sparse_method": if a.len().max(b.len()) <= a.len().min(b.len()).saturating_mul(32) { "linear_merge" } else { "ordered_binary_seek" },
+            "best_sparse_method": if linear_median <= seek_median { "linear_merge" } else { "ordered_binary_seek" },
         }));
     }
     let report = json!({
@@ -326,7 +338,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         "rounds": ROUNDS,
         "warmup": WARMUP,
-        "sparse_method": "linear merge when posting length ratio is at most 32; otherwise ordered binary seeks in the longer list",
+        "sparse_methods": ["linear merge", "ordered binary seeks in the longer list"],
         "construction": construction,
         "cases": cases,
         "peak_rss_bytes": peak_rss_bytes(),
@@ -346,7 +358,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bitmap, bitmap_count, sparse_intersection_count};
+    use super::{bitmap, bitmap_count, sparse_linear_count, sparse_seek_count};
 
     #[test]
     fn sparse_and_bitmap_intersections_agree_across_size_ratios() {
@@ -357,7 +369,8 @@ mod tests {
             ((0..1000).collect(), vec![2, 100]),
         ] {
             let expected = left.iter().filter(|id| right.contains(id)).count() as u64;
-            assert_eq!(sparse_intersection_count(&left, &right), expected);
+            assert_eq!(sparse_linear_count(&left, &right), expected);
+            assert_eq!(sparse_seek_count(&left, &right), expected);
             assert_eq!(
                 bitmap_count(&bitmap(&left, 16), &bitmap(&right, 16)),
                 expected
