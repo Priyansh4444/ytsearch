@@ -38,6 +38,10 @@ Raw can replace Typesense as the canonical search index.
     A stale pointer fails closed. Local fixtures and a credentialed read-only
     seven-probe inventory capture at `e528093` pass; independent full P00
     verdict, runtime differential, and performance gates remain open.
+  - [x] Re-run the independent schema-9 reference unit at head `3ae1a1a`:
+    300-case matrix, 61 focused tests, full Raw crate, format, and Clippy all
+    pass. The receipt is `P00/unit-2026-09-22/receipt.json`; it does not close
+    production runtime, load, or latency gates.
   - [x] Encode the exact performance timers, workload, and resource thresholds
     in `scripts/benchmark-search-contract.json`.
   - [ ] Resolve every failed grammar/scoring cell in the v2 query contract with
