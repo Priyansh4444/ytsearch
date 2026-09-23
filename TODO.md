@@ -58,11 +58,12 @@ Raw can replace Typesense as the canonical search index.
     manifest directory yet; neither video outcomes nor queue admission are
     proven. Run discovery, classify every video, publish, and verify the active
     catalog before closing this gate.
-  - [ ] Reconcile the 2026-09-22 exact-retirement inventory drift before any
-    Typesense deletion: the legacy API and cold-benchmark Machines have new
-    attached volume IDs and the legacy indexer has two new unattached IDs.
-    Verify their contents and queue state; keep the existing fail-closed
-    allowlist until that evidence exists.
+  - [ ] Reconcile the latest exact-retirement inventory drift before any
+    Typesense deletion. The 2026-09-23 read-only receipt shows another new
+    attached primary Typesense volume, the legacy API and cold-benchmark
+    replacements, two new unattached indexer volumes, and two historical IDs
+    no longer listed. Verify contents, lineage, and queue state; keep the
+    existing fail-closed allowlist until that evidence exists.
   - [x] Encode the exact performance timers, workload, and resource thresholds
     in `scripts/benchmark-search-contract.json`.
   - [ ] Resolve every failed grammar/scoring cell in the v2 query contract with
