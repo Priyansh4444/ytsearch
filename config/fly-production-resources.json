@@ -5,7 +5,7 @@
     "raw_api": {
       "app": "ytsearch-api-raw-production",
       "machine_id": "8e7204a7694d28",
-      "volume_id": "vol_4y8ynnd9o110m33r",
+      "volume_id": "vol_vxmgn65k0385y1n4",
       "mount_path": "/data"
     },
     "raw_reader": {
@@ -17,13 +17,13 @@
     "raw_reader_canary": {
       "app": "ytsearch-raw-production",
       "machine_id": "847314c22d52e8",
-      "volume_id": "vol_r7y9220glk19p73r",
+      "volume_id": "vol_4oj1x0oxkq82eo2r",
       "mount_path": "/data/mutable"
     },
     "raw_queue_worker": {
       "app": "ytsearch-indexer-raw-production",
       "machine_id": "8e426df7e305e8",
-      "volume_id": "vol_vwnq1y52yxn3308v",
+      "volume_id": "vol_4m3p79pqxz2ngl1v",
       "mount_path": "/var/lib/ytsearch"
     },
     "raw_publication_builder": {
