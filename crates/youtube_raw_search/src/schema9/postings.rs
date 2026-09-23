@@ -121,6 +121,7 @@ impl PostingList {
             decoded: [None; BLOCK_SIZE],
             position: 0,
             exhausted: false,
+            faulted: false,
             blocks_decoded: 0,
             postings_decoded: 0,
         }
@@ -235,13 +236,26 @@ pub(crate) struct PostingCursor<'a> {
     decoded: [Option<Posting>; BLOCK_SIZE],
     position: usize,
     exhausted: bool,
+    faulted: bool,
     blocks_decoded: u64,
     postings_decoded: u64,
 }
 
 impl PostingCursor<'_> {
     fn load(&mut self, index: usize) -> Result<(), PostingError> {
-        self.decoded = self.list.decode_block(index)?;
+        let decoded = match self.list.decode_block(index) {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                // A corrupt block ends this cursor. In particular, next() may
+                // have consumed the last slot of the previous block already.
+                self.faulted = true;
+                self.block_index = None;
+                self.decoded = [None; BLOCK_SIZE];
+                self.position = 0;
+                return Err(error);
+            }
+        };
+        self.decoded = decoded;
         self.block_index = Some(index);
         self.position = 0;
         self.blocks_decoded += 1;
@@ -250,6 +264,9 @@ impl PostingCursor<'_> {
     }
 
     pub(crate) fn current(&mut self) -> Result<Option<Posting>, PostingError> {
+        if self.faulted {
+            return Err(PostingError::Malformed);
+        }
         if self.exhausted {
             return Ok(None);
         }
@@ -264,6 +281,9 @@ impl PostingCursor<'_> {
     }
 
     pub(crate) fn advance(&mut self, target: DocId) -> Result<Option<Posting>, PostingError> {
+        if self.faulted {
+            return Err(PostingError::Malformed);
+        }
         if self.exhausted {
             return Ok(None);
         }

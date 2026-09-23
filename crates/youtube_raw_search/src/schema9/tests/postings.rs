@@ -196,3 +196,31 @@ fn randomized_seeks_match_a_sorted_vector_oracle() {
         assert!(cursor.decoded_counts().1 <= BLOCK_SIZE as u64);
     }
 }
+
+#[test]
+fn malformed_later_block_poison_cursor_without_panicking() {
+    let postings = (0..9_u32).map(|doc| (doc, 1)).collect::<Vec<_>>();
+    let mut list = PostingList::encode(universe(9), &postings).unwrap();
+    let second_block = list.directories[3][1].byte_offset as usize;
+    list.bytes[second_block + 5] = 0;
+    let mut cursor = list.cursor();
+    for doc in 0..7 {
+        assert_eq!(cursor.next().unwrap().unwrap().doc.raw(), doc);
+    }
+    assert!(matches!(cursor.next(), Err(PostingError::Malformed)));
+    assert!(matches!(cursor.current(), Err(PostingError::Malformed)));
+    assert!(matches!(cursor.next(), Err(PostingError::Malformed)));
+    assert!(matches!(
+        cursor.advance(DocId::from_raw(8)),
+        Err(PostingError::Malformed)
+    ));
+    let mut direct_seek = list.cursor();
+    assert!(matches!(
+        direct_seek.advance(DocId::from_raw(8)),
+        Err(PostingError::Malformed)
+    ));
+    assert!(matches!(
+        direct_seek.current(),
+        Err(PostingError::Malformed)
+    ));
+}
