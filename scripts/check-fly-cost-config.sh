@@ -24,6 +24,8 @@ require_line "$SCRIPT_DIR/fly-run-queue-indexer.sh" 'INDEXER_DATA_DIRECTORY:-/va
 require_line "$SCRIPT_DIR/fly-run-queue-indexer.sh" 'QUEUE_ONE_REQUEST_PER_PASS:-0' "queue requests must share one bounded publication batch"
 require_line "$SCRIPT_DIR/fly-run-queue-indexer.sh" 'RAW_PUBLICATION_MIN_FREE_BYTES:-8000000000' "detached builds require eight GB of free volume space"
 require_line "$SCRIPT_DIR/fly-run-queue-indexer.sh" 'IDLE_GAP_FILL_MAX_PASSES:-1' "on-demand indexer must run only one automatic gap pass"
-require_line "$SCRIPT_DIR/fly-run-queue-indexers.sh" 'DAILY_UPDATE_ENABLED:-0' "on-demand indexer must not become a daily always-running worker"
+require_line "$SCRIPT_DIR/fly-run-queue-indexers.sh" 'DAILY_UPDATE_ENABLED:-1' "on-demand indexer must run the daily catalog pass"
+require_line "$SCRIPT_DIR/fly-run-queue-indexers.sh" 'DAILY_UPDATE_INITIAL_DELAY_SECONDS:-0' "first due daily pass must run on wake"
+require_line "$ROOT/wrangler.jsonc" '17 \* \* \* \*' "hourly repair wake must remain configured"
 
 echo "fly_cost_config=ok raw=shared2x/2GiB indexer=shared2x/2GiB/on-demand"

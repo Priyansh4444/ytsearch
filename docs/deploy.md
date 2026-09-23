@@ -99,6 +99,15 @@ The configured Machine must have `QUEUE_TARGET_BACKEND=raw`, restart policy
 `no`, and a persistent transcript cache. A Cloudflare Queue message wakes it;
 the API JSONL queue remains authoritative.
 
+The Worker cron at `17 * * * *` also sends a repair wake. The queue worker owns
+the daily catalog pass: `DAILY_UPDATE_ENABLED=1`, a zero initial delay, and a
+persisted `/var/lib/ytsearch/daily-update.last-completed` timestamp cause the
+first idle wake after each 24-hour interval to run `index-youtubers` over the
+embedded creator list and publish one generation. The worker may stop after
+five idle minutes; the hourly wake is required to resume the daily check.
+Verify the cron, the worker configuration, a `daily_update_completed` log, and
+the persisted timestamp before claiming daily indexing is operating.
+
 ## 4. Cloudflare Worker
 
 `wrangler.jsonc` sends both search and queue routes to
