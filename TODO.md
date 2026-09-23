@@ -852,6 +852,12 @@ Raw can replace Typesense as the canonical search index.
   300-second probe ended. See the P00 2026-09-23 checksum receipt. Measure
   the remaining open work, implement the lazy schema-9 cold-open design, and
   use a representative, verified generation for the IPv6 reader release gate.
+  The fourth isolated run at `b385432` measured 268,588 ms of checksum work,
+  then 6,005 ms opening metadata and other indexes. Eager
+  `BroadSingleIndex::open` started but had not completed at the 300-second
+  health deadline. The canary stopped and production stayed unchanged; see
+  the P00 2026-09-23 open-stage receipt. Replace this eager schema-8 path with
+  the planned lazy schema-9 design and prove cold-open/resource gates.
 - [x] Apply the configured idle-shutdown deadline to failed pending-publication
   retries, which previously bypassed the check. Test clean daemon exit with
   the pending marker preserved; this bounds failed wake cost but does not fix

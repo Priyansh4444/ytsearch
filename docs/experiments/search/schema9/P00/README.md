@@ -340,6 +340,19 @@ shows that `BroadSingleIndex::open` subsequently decodes and validates every
 answer payload; its elapsed time has not been isolated. This remains a failed
 cold-start gate, and the production reader was not changed.
 
+Commit `b385432` added separate metadata and broad-index startup markers. Its
+exact tested overlay was built and pushed from the same immutable base, then
+staged only on the isolated canary. The fourth bounded private-IPv6 probe again
+failed the 300-second health gate. The 12 checksums took 268,588 ms in sum;
+metadata and other indexes then opened in 6,005 ms. Eager
+`BroadSingleIndex::open` began at 10:04:57 UTC and had not completed when the
+canary was stopped at 10:05:25 UTC. The new receipt is
+[`reader-canary-open-stages-2026-09-23.json`](reader-canary-open-stages-2026-09-23.json).
+The canary lease was released, its temporary token was revoked, and the
+production reader remained on its previous image. The exact remaining
+broad-index open duration is unknown; schema-9's lazy cold-open implementation
+and a passing canary gate are still required before production promotion.
+
 A read-only Axiom review on 2026-09-22 found 30 of 273 Raw search events over
 250 ms in the preceding seven days, including a 42.3-second backend call.
 Ten missing slow query shapes were added to the shared benchmark matrix. The
