@@ -100,6 +100,19 @@ ranking parity, and the 300-case runtime differential remain open P00 gates.
 
 ## Search baseline
 
+### QV-01 count-only reference slice
+
+At source `b6d2b5f88f800497e0cb39cd82722ac372ddf6a0`, the independent
+reference evaluates the frozen matrix case `empty-010-invalid-page-size-zero`
+with `per_page=0`. A fixture with two transcript moments in one video, one
+title-only video, and one other creator preserves three videos and four exact
+moments across full and count-only windows. Zero-sized windows return no hits
+and `has_next_page=false` for first, deep, zero, and maximum-u32 pages. Creator
+scope retains its own exact totals and facets. The focused tests passed 2/2;
+the full Raw crate passed 244 tests with one ignored; all-target Clippy and
+formatting passed. The query matrix still records QV-01 as `decision_pending`:
+this fixture does not test the production runtime, `limit=0`, or cursors.
+
 [`public-api-samples.txt`](public-api-samples.txt) retains every request from the
 first public baseline attempt. [`public-api-summary.tsv`](public-api-summary.tsv)
 contains case, attempts, errors, p50, p95, p99, and maximum milliseconds.
