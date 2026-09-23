@@ -387,31 +387,38 @@ fn main() -> Result<(), Box<dyn Error>> {
             return Err(invalid("source differs from independent term receipt").into());
         }
         let ids = source_ids(&postings, source, universe)?;
-        let mut codecs = Vec::new();
+        let mut encoded = Vec::new();
         for (kind, &block) in BLOCKS.iter().enumerate() {
             let packed = kind != 0;
-            let mut encode_ns = Vec::new();
-            let mut decode_ns = Vec::new();
-            let mut seek_ns = Vec::new();
-            let mut encoded = encode(&ids, block, packed);
-            if decode(&encoded)? != ids {
+            let candidate = encode(&ids, block, packed);
+            if decode(&candidate)? != ids {
                 return Err(invalid("candidate decode differs from source posting IDs").into());
             }
             for &probe in &probes {
                 let expected = ids.get(ids.partition_point(|&id| id < probe)).copied();
-                if seek(&encoded, probe)? != expected {
+                if seek(&candidate, probe)? != expected {
                     return Err(invalid("candidate seek differs from source posting IDs").into());
                 }
             }
-            for round in 0..ROUNDS {
+            encoded.push(candidate);
+        }
+        let mut encode_samples: [Vec<u128>; 4] = std::array::from_fn(|_| Vec::new());
+        let mut decode_samples: [Vec<u128>; 4] = std::array::from_fn(|_| Vec::new());
+        let mut seek_samples: [Vec<u128>; 4] = std::array::from_fn(|_| Vec::new());
+        for round in 0..ROUNDS {
+            // Rotate candidate order to pair each round under nearby CPU conditions.
+            for step in 0..BLOCKS.len() {
+                let kind = (round + step) % BLOCKS.len();
+                let block = BLOCKS[kind];
+                let packed = kind != 0;
                 let (candidate, elapsed) = timed(|| encode(black_box(&ids), block, packed));
-                encode_ns.push(elapsed);
+                encode_samples[kind].push(elapsed);
                 if round % 2 == 0 {
                     let (decoded, elapsed) = timed(|| decode(black_box(&candidate)));
                     if decoded? != ids {
                         return Err(invalid("timed decode differs from source").into());
                     }
-                    decode_ns.push(elapsed);
+                    decode_samples[kind].push(elapsed);
                 }
                 let (result, elapsed) = timed(|| -> Result<u64, Box<dyn Error>> {
                     let mut sum = 0_u64;
@@ -422,16 +429,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                     Ok(sum)
                 });
                 black_box(result?);
-                seek_ns.push(elapsed);
+                seek_samples[kind].push(elapsed);
                 if round % 2 != 0 {
                     let (decoded, elapsed) = timed(|| decode(black_box(&candidate)));
                     if decoded? != ids {
                         return Err(invalid("timed decode differs from source").into());
                     }
-                    decode_ns.push(elapsed);
+                    decode_samples[kind].push(elapsed);
                 }
-                encoded = candidate;
+                encoded[kind] = candidate;
             }
+        }
+        let mut codecs = Vec::new();
+        for (kind, encoded) in encoded.iter().enumerate() {
+            let packed = kind != 0;
+            let block = BLOCKS[kind];
+            let encode_ns = &encode_samples[kind];
+            let decode_ns = &decode_samples[kind];
+            let seek_ns = &seek_samples[kind];
             codecs.push(json!({
                 "codec": if packed { "bitpacked_delta" } else { "delta_varint" },
                 "block": block,
@@ -441,11 +456,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "directory_serialized_bytes": encoded.entries.len() * if packed { 16 } else { 12 },
                 "retained_capacity_bytes": encoded.retained_bytes(),
                 "encode_samples_ns": encode_ns,
-                "encode_median_ns": median(&encode_ns),
+                "encode_median_ns": median(encode_ns),
                 "decode_samples_ns": decode_ns,
-                "decode_median_ns": median(&decode_ns),
+                "decode_median_ns": median(decode_ns),
                 "seek_257_probes_samples_ns": seek_ns,
-                "seek_257_probes_median_ns": median(&seek_ns),
+                "seek_257_probes_median_ns": median(seek_ns),
             }));
         }
         terms.push(json!({ "term": name, "df": ids.len(), "schema6_source_posting_bytes_with_frequency": source.1, "codecs": codecs }));
@@ -470,6 +485,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "harness_source_commit": args[7],
         "input": {"generation": 2950, "documents": universe, "lexicon_blake3": args[5], "postings_blake3": args[6], "overlap_receipt_source_commit": oracle["analyzer_source_commit"]},
         "rounds": ROUNDS,
+        "round_order": "candidate order rotates by one in each paired round; decode and seek order alternates",
         "probes": "256 evenly spaced universe targets plus universe sentinel; same targets for all codecs and terms",
         "terms": terms,
         "limits": [
