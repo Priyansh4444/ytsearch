@@ -42,6 +42,11 @@ Raw can replace Typesense as the canonical search index.
     300-case matrix, 61 focused tests, full Raw crate, format, and Clippy all
     pass. The receipt is `P00/unit-2026-09-22/receipt.json`; it does not close
     production runtime, load, or latency gates.
+  - [x] Record the current Raw worker inventory and a cost floor in
+    `docs/operations/raw-mutable-migration.md`: reader and queue worker are
+    started, daily refresh is disabled, the publication builder is stopped,
+    and the known subtotal is $31.16/month before variable charges. This is a
+    pricing estimate, not an invoice or a completed migration gate.
   - [x] Encode the exact performance timers, workload, and resource thresholds
     in `scripts/benchmark-search-contract.json`.
   - [ ] Resolve every failed grammar/scoring cell in the v2 query contract with

@@ -68,6 +68,34 @@ volumes is about $72.36/month before those variable charges.
 
 ## Design
 
+## Current Raw-only cost and worker inventory (2026-09-22)
+
+The read-only P00 inventory at generation 2950 found one always-on reader
+(`shared-cpu-2x`, 2 GiB, `sjc`) and one started queue worker with the same
+size. The queue worker has `QUEUE_LOOP=1`, `MODE=update`, and
+`DAILY_UPDATE_ENABLED=0`; the second indexer machine is a stopped,
+on-demand publication builder. Provisioned volumes are 20 GiB for the reader,
+10 GiB for the queue worker, and 20 GiB on the stopped builder.
+
+Using Fly's current published `shared-cpu-2x`/2 GiB rate of $11.83 per started
+machine-month and $0.15 per provisioned volume GiB-month, the known steady-state
+floor is:
+
+| Resource | Monthly estimate |
+| --- | ---: |
+| Raw reader, started | $11.83 |
+| Queue worker, started | $11.83 |
+| 50 GiB provisioned volumes | $7.50 |
+| Known subtotal | **$31.16/month** |
+
+This excludes stopped-machine rootfs, snapshot storage, egress, and any
+indexer runtime while publishing. It is therefore a floor, not an invoice
+claim. Fly documents the rates at
+<https://fly.io/docs/about/pricing/>; the source-bound machine/count receipt is
+`docs/experiments/search/schema9/P00/capture-2026-09-22/`. The stopped builder
+remains retained for rollback and trial evidence rather than being treated as
+an active 24/7 cost.
+
 The mmap schema-v6 generation remains immutable. Mutability is implemented as
 a durable control plane and atomic generation publication, not by placing locks
 inside the query hot path. SQLite is not the search engine: public searches do
