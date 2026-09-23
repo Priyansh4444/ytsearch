@@ -24,6 +24,14 @@ indexed, or deleted data.
   different metrics and neither is relabeled as the other.
 - The Raw queue worker was running. Its queue loop was enabled, while its daily
   update loop was disabled. P00 only observed it and did not start a job.
+- A later read-only exact handle comparison found 62 configured handles but 61
+  in active generation 2950. `@BrodieRobertson` is the sole missing configured
+  handle; no unexpected handles were present. The queue worker has no
+  `.reconciliation` discovery-manifest directory yet. The
+  [`creator-gap-2026-09-22.json`](creator-gap-2026-09-22.json) receipt binds this
+  comparison to the list digest, active-generation pointer, and channel-file
+  digest. This is not a per-video completeness check, nor proof that Brodie's
+  discovery or queue request succeeded.
 - The retained schema-8 artifact was absent from the active reader and its two
   retained schema-6 generations. A bounded inspection started the exact
   sleep-only builder `080d297f070d08`, verified the artifact at job sequence

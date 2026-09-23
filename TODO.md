@@ -51,6 +51,13 @@ Raw can replace Typesense as the canonical search index.
     provisioned volumes, for a $46.78/month known cross-app subtotal. This is
     a pricing estimate, not an invoice or a
     completed migration gate.
+  - [ ] Reconcile all configured creator handles and their discovered videos.
+    The read-only generation-2950 comparison at
+    `P00/creator-gap-2026-09-22.json` found 62 canonical handles, 61 active,
+    and only `@BrodieRobertson` missing. The worker has no complete-discovery
+    manifest directory yet; neither video outcomes nor queue admission are
+    proven. Run discovery, classify every video, publish, and verify the active
+    catalog before closing this gate.
   - [ ] Reconcile the 2026-09-22 exact-retirement inventory drift before any
     Typesense deletion: the legacy API and cold-benchmark Machines have new
     attached volume IDs and the legacy indexer has two new unattached IDs.

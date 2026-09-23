@@ -1,0 +1,19 @@
+{
+  "status": "failed",
+  "observed_at_utc": "2026-09-23T03:52:13Z",
+  "source_commit": "ec608d4815d17a1a2d7f17e3e401cc1a64400048",
+  "reader_app": "ytsearch-raw-production",
+  "reader_machine_id": "d89303da029328",
+  "active_generation": 2950,
+  "active_directory": "generations/00000000000000002950",
+  "canonical_list_sha256": "193d4bbd4824fe66cf728bf880795ca732fdf15ef1722d800d0ebced708b1243",
+  "active_channels_bytes": 22451,
+  "active_channels_blake3_from_manifest": "7567c4f8778abfe906d6eca697db0bc00d4037f9b8f10e5d4dd6f55a378be76b",
+  "active_channels_sha256_observed": "de844980572f1d75767d724b47b6acaefcdd469e197ee3726425c7f44f925926",
+  "canonical_handles": 62,
+  "active_handles": 61,
+  "missing_handles": ["@brodierobertson"],
+  "unexpected_handles": [],
+  "queue_worker_reconciliation_directory": "absent",
+  "scope": "Read-only handle comparison; no discovery, per-video classification, queue admission, or publication was performed."
+}
