@@ -157,6 +157,10 @@ Raw can replace Typesense as the canonical search index.
     term pairs from the same active generation, with independently checked
     lexicon/postings SHA-256 and explicit document versus video universes.
     This is structural overlap evidence, not timing or mixed-field semantics.
+  - [x] Measure exact pair counting on copied active schema-6 postings with
+    independently checked intersections, both sparse methods, paired dense
+    bitmap scans, and construction/residency receipts. The local count kernels
+    do not establish a schema-9 threshold or the 2 GiB reader byte budget.
 - [ ] Prove exact query-dependent 20-second moment totals under 200 ms for the
   broadest canonical queries; do not substitute static buckets or approximation.
 - [ ] Prototype scalar-vs-batched Tier-1 fast-field histograms.
