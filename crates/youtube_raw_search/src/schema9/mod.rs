@@ -4,3 +4,6 @@
 
 #[allow(dead_code)]
 mod sets;
+
+#[allow(dead_code)]
+mod postings;
