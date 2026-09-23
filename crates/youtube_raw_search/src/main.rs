@@ -97,12 +97,15 @@ async fn serve_mutable() -> Result<(), Box<dyn std::error::Error>> {
         base_index,
         state_directory: state_directory.clone(),
     }));
+    tracing::info!("opening raw mutation store");
     let store = Arc::new(MutationStore::open(
         &env::var_os("RAW_SEARCH_MUTATION_DB")
             .map(PathBuf::from)
             .unwrap_or_else(|| state_directory.join("mutations.sqlite3")),
     )?);
+    tracing::info!("opening active raw generation");
     let (active_engine, active_sequence) = publisher.open_active_generation(&store)?;
+    tracing::info!(active_sequence, "active raw generation opened");
     let engine = Arc::new(ReloadableEngine::new(active_engine, active_sequence));
     let admin = AdminState::new(
         Arc::clone(&engine),
