@@ -35,8 +35,9 @@ Raw can replace Typesense as the canonical search index.
   - [x] Bind P00's active corpus evidence to the authenticated readiness
     generation via the reader's active-generation pointer and that generation's
     manifest, with schema/document/video/channel counts and a manifest digest.
-    A stale pointer fails closed. Local fixtures pass; a credentialed live run
-    and independent P00 verdict remain open.
+    A stale pointer fails closed. Local fixtures and a credentialed read-only
+    seven-probe inventory capture at `e528093` pass; independent full P00
+    verdict, runtime differential, and performance gates remain open.
   - [x] Encode the exact performance timers, workload, and resource thresholds
     in `scripts/benchmark-search-contract.json`.
   - [ ] Resolve every failed grammar/scoring cell in the v2 query contract with

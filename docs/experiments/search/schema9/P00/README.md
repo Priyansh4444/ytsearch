@@ -58,8 +58,18 @@ binds it to authenticated readiness, then reads only that generation's manifest
 through two read-only SSH probes. It records schema and document/video/channel
 counts plus a SHA-256 manifest digest. A stale pointer fails closed; skipped
 probes are counted when prerequisite evidence is unavailable. These local
-fixtures repair evidence collection, but no fresh credentialed live baseline
-or production readiness claim follows from them.
+fixtures repair evidence collection; the separately retained
+[`capture-2026-09-22/`](capture-2026-09-22/README.md) provides the later
+credentialed, read-only inventory receipt at source `e528093`.
+
+The first live attempt at `4b459bb` retained a failed receipt because the
+collector's fixture used obsolete `mode` while the live availability response
+uses `schedule_policy`. After a red fixture (`50f77c4`) and the contract fix,
+the seven probes passed. Another red fixture (`30ddae9`) prevented the collector
+from hardcoding target grammar/rank version 2 as if they were observed production
+versions; the final receipt reports observed versions as unknown. This inventory
+capture does not close P00's failed public performance or runtime-differential
+gates.
 
 ## Independent exhaustive oracle
 

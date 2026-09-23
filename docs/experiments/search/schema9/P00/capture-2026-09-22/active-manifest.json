@@ -1,0 +1,50 @@
+{
+  "schema_version": 6,
+  "documents": 8422419,
+  "videos": 35215,
+  "channels": 61,
+  "terms": 302871,
+  "blocks": 131601,
+  "average_document_tokens": 20.110785,
+  "max_view_count": 306343693,
+  "max_like_count": 12406451,
+  "max_comment_count": 350218,
+  "files": {
+    "channels.json": {
+      "bytes": 22451,
+      "blake3": "7567c4f8778abfe906d6eca697db0bc00d4037f9b8f10e5d4dd6f55a378be76b"
+    },
+    "documents.blocks": {
+      "bytes": 690354376,
+      "blake3": "8f6bac0d015f44111c39ef171cc263c3fd8c26a87035b225504f84babcd94301"
+    },
+    "documents.meta": {
+      "bytes": 204243696,
+      "blake3": "51b6b24858068bed22cfb763cee08e0ecb5970dca6d836272a464717446cc4a9"
+    },
+    "fuzzy.bin": {
+      "bytes": 14896936,
+      "blake3": "d110120917510acb1a9cd4dd3cd7742d47387e35cfc07ec1d63a8a6c43b70373"
+    },
+    "lexicon.bin": {
+      "bytes": 14978769,
+      "blake3": "8a1ff979bd120527288482b154b22a73c186b26ae35b1eeb57432d9d6d5b7b00"
+    },
+    "positions.bin": {
+      "bytes": 149320235,
+      "blake3": "80c356023b050b75474d650d60b53c70b657a072b168e79380272e4dacad7501"
+    },
+    "positions.full.bin": {
+      "bytes": 25215874,
+      "blake3": "94d7145cf4e72e7e29e8338226b8a38f2825e784693ff20a67f242f4e0240804"
+    },
+    "postings.bin": {
+      "bytes": 323319352,
+      "blake3": "e532bdca38fd8e73a5f4868db7003004c3d7261e3061c7ef46337c1efbae26f9"
+    },
+    "videos.json": {
+      "bytes": 74927606,
+      "blake3": "a88deca1167e586e38a247cdde52aa1565b1a7e2f62e09c8a82c6920310818ed"
+    }
+  }
+}
