@@ -153,6 +153,10 @@ Raw can replace Typesense as the canonical search index.
     2950's checksummed lexicon. The report establishes real-corpus density and
     payload-only bitmap capacities; it does not select a bitmap threshold or
     prove a 2 GiB query/session budget.
+  - [x] Record exact posting intersections for canonical broad and selective
+    term pairs from the same active generation, with independently checked
+    lexicon/postings SHA-256 and explicit document versus video universes.
+    This is structural overlap evidence, not timing or mixed-field semantics.
   - [x] Add the internal schema-9 typed DocSet/VideoSet foundation with exact
     sparse/dense AND, OR, positive subtraction, generation/segment checks,
     streaming counts, and charged materialization. Exhaustive and large-set
