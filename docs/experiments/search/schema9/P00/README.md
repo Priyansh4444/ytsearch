@@ -318,6 +318,13 @@ lease was released. See
 The 300-second startup gate still fails; this run does not validate private
 IPv6 readiness or authorize production promotion.
 
+The source path explains a mandatory part of this work: `RawSearchEngine::open`
+selects `ManifestValidation::Full`, and `validate_manifest_files` reads and
+BLAKE3-hashes every schema-8 generation file before the listener binds. That
+includes `broad-single.bin`. The observed disk reads are consistent with this
+full validation; the probes did not measure each file's share of the 300 seconds.
+Schema 9's lazy per-unit checksums and cold-open contract remain necessary.
+
 ## Next autonomous repairs
 
 1. Implement schema-9 structural metadata and lazy exact execution against the

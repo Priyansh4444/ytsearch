@@ -48,5 +48,5 @@
     "production_reader_state": "started",
     "production_reader_bind": "0.0.0.0:8108"
   },
-  "conclusion": "The long startup is inside active-generation opening after SQLite opens. Disk reads progressed without swap; the evidence does not establish whether file checksum, metadata loading, or another read step dominates. The canary did not reach the listener within the required bound."
+  "conclusion": "The long startup is inside active-generation opening after SQLite opens. The source requires a full read and BLAKE3 checksum of every schema-8 generation file before binding the listener, including broad-single.bin. Disk reads progressed without swap; the probe did not measure each file's share of the delay. The canary did not reach the listener within the required bound."
 }
