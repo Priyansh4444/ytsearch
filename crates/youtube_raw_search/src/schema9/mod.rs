@@ -7,3 +7,6 @@ mod sets;
 
 #[allow(dead_code)]
 mod postings;
+
+#[allow(dead_code)]
+mod verified_units;
