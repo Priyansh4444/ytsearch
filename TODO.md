@@ -834,6 +834,10 @@ Raw can replace Typesense as the canonical search index.
   refused. The deployed reader binds `0.0.0.0:8108`; the target configuration
   binds `[::]:8108`. Verify private readiness and actual queue consumption
   after the gated release. Starting the worker alone did not repair it.
+  The 2026-09-22 isolated canary with the committed IPv6 overlay was staged,
+  but a bounded 300-second private health probe failed before port 8108
+  listened. Investigate cold-open startup on the 2 GiB canary before any
+  production reader update; see the P00 reader-canary smoke receipt.
 - [x] Apply the configured idle-shutdown deadline to failed pending-publication
   retries, which previously bypassed the check. Test clean daemon exit with
   the pending marker preserved; this bounds failed wake cost but does not fix

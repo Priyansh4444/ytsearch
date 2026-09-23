@@ -284,10 +284,25 @@ with manifest digest
 The build used `--build-only --push` and did not deploy it.
 
 Canary staging dry run selected only machine `847314c22d52e8` and volume
-`vol_4oj1x0oxkq82eo2r`. Applying that stage stopped at the credential
-preflight because `FLY_API_TOKEN` was absent; no Machine config changed.
-Private IPv6 readiness, pending publication recovery, daily completion, and
-schema-9 search gates remain open.
+`vol_4oj1x0oxkq82eo2r`. The first apply attempt stopped at the credential
+preflight because `FLY_API_TOKEN` was absent. An authenticated Fly CLI session
+subsequently issued a short-lived, scoped organization token. The next apply
+attempt exposed a source-commit mismatch: this README had been committed after
+the image build, so staging derived an image tag that did not exist. Running
+the stage script from an isolated checkout of the approved `1f426dd` source
+resolved that mismatch. The canary now holds the exact image digest above,
+remains stopped, skips DNS registration, and has no services or checks.
+
+A leased, bounded private-IPv6 smoke then started that canary. Fly took about
+three minutes to prepare the VM. After the Machine started, `/health` did not
+respond during 300 one-second attempts through the exact private IP, and an
+in-VM kernel check showed no TCP6 listener on port 8108 during that interval.
+The authenticated admin readiness check was therefore not reached. Cleanup
+stopped the canary and released its lease; the production reader remains
+started on the old IPv4 image. See
+[`reader-canary-smoke-2026-09-22.json`](reader-canary-smoke-2026-09-22.json).
+This is a failed startup gate. Private IPv6 readiness, pending publication
+recovery, daily completion, and schema-9 search gates remain open.
 
 ## Next autonomous repairs
 
