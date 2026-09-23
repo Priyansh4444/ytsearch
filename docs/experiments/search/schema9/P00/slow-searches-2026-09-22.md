@@ -13,9 +13,9 @@ for all but at most 1 ms of `duration_ms`; `result_processing_ms` was 0 ms.
 This localizes the observed delay to the Raw backend call, rather than API
 result processing. It does not establish which part of the Raw engine was slow.
 
-| UTC time | Query | Total / backend (ms) | Note |
+| Event time UTC | Query | Total / backend (ms) | Note |
 | --- | --- | ---: | --- |
-| Sep 19 23:16:38 | `the world is ending` | 42,283 / 42,283 | Largest outlier, 16 seconds after post-OOM health passed |
+| Sep 19 23:16:38 | `the world is ending` | 42,283 / 42,283 | Largest outlier, logged after an OOM restart |
 | Sep 20 13:03:02 | `clearly the world is ending` | 5,141 / 5,141 | Same query took 2,524 ms on Sep 19 |
 | Sep 19 23:12:42 | `fable on high` | 1,924 / 1,924 | Previously only creator-scoped in benchmark matrix |
 | Sep 19 23:12:29 | `and the` | 3,213 / 3,212 | High-frequency words |
@@ -34,12 +34,13 @@ metadata. The complete operator-only query output was not committed.
 
 The Fly reader Machine event history reports an OOM kill at
 2026-09-19T23:14:41Z, restart at 23:14:43Z, and a passing health check at
-23:16:22Z. The 42.3-second request began at 23:16:38Z, soon after that
-restart. Cold cache after restart is a plausible contributor. The record does
-not prove that this query caused the OOM, whether it waited on disk, or why
-the restart was slow. A cold first-query and concurrent memory trace remains
-required. The Machine still showed the legacy IPv4 bind and schema-6 image
-when inspected on 2026-09-22.
+23:16:22Z. The 42.3-second query event was logged at approximately
+23:16:38Z. The API emits `search_query` after completing the search, so that
+event time must not be treated as the request start. Cold cache after restart
+is a plausible contributor. The record does not prove that this query caused
+the OOM, whether it waited on disk, or why the restart was slow. A cold
+first-query and concurrent memory trace remains required. The Machine still
+showed the legacy IPv4 bind and schema-6 image when inspected on 2026-09-22.
 
 Ten previously missing global query shapes were added to the benchmark matrix.
 The four most useful new cases are also mandatory in the performance contract.
