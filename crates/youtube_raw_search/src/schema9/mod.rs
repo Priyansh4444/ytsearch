@@ -19,3 +19,6 @@ mod builder;
 
 #[allow(dead_code)]
 mod fast_fields;
+
+#[allow(dead_code)]
+mod source;
