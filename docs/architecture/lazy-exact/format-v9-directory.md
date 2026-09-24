@@ -84,8 +84,11 @@ exact consumption of all bytes before the trailer and uses checked arithmetic
 for offsets, lengths, and digest allocation. The reader then compares every
 declared file length with filesystem metadata before accessing data.
 
-`Directory::decode` validates metadata and checksum. It does **not** verify
-data file digests. `VerifiedUnits` checks each touched 2–8 MiB data unit once
+`Directory::decode` validates metadata and checksum. `Directory::decode_bound`
+also requires the generation sequence, mutation sequence, corpus digest, and
+directory digest supplied independently by a trusted generation manifest; a
+validly checksummed substituted directory fails that check. It does **not**
+verify data file digests. `VerifiedUnits` checks each touched 2–8 MiB data unit once
 before returning its bytes; a caller must retain immutable backing files for
 its entire lifetime. The production reader must also validate the trusted
 manifest binding, open files without substitution races, and preserve them

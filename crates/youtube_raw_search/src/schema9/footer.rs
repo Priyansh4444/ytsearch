@@ -94,6 +94,15 @@ pub(crate) struct Directory {
     pub(crate) files: Vec<FileRecord>,
 }
 
+/// Values supplied by the trusted generation manifest, not by directory.bin.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DirectoryBinding {
+    pub(crate) generation: u64,
+    pub(crate) mutation_sequence: u64,
+    pub(crate) corpus_digest: [u8; DIGEST_BYTES],
+    pub(crate) directory_digest: [u8; DIGEST_BYTES],
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum DirectoryError {
     #[error("directory exceeds 16 MiB or has invalid length")]
@@ -112,6 +121,8 @@ pub(crate) enum DirectoryError {
     Digest,
     #[error("observed file lengths differ from directory records")]
     FileLength,
+    #[error("directory identity differs from generation manifest")]
+    Identity,
 }
 
 impl Directory {
@@ -238,6 +249,21 @@ impl Directory {
         encoded[encoded.len() - DIGEST_BYTES..]
             .try_into()
             .map_err(|_| DirectoryError::Size)
+    }
+
+    pub(crate) fn decode_bound(
+        encoded: &[u8],
+        binding: &DirectoryBinding,
+    ) -> Result<Self, DirectoryError> {
+        let directory = Self::decode(encoded)?;
+        if directory.generation != binding.generation
+            || directory.mutation_sequence != binding.mutation_sequence
+            || directory.corpus_digest != binding.corpus_digest
+            || encoded[encoded.len() - DIGEST_BYTES..] != binding.directory_digest
+        {
+            return Err(DirectoryError::Identity);
+        }
+        Ok(directory)
     }
 
     /// Check the complete observed file set, including absence of optional files.
@@ -566,5 +592,39 @@ mod tests {
             Directory::digest(&a).unwrap(),
             Directory::digest(&b).unwrap()
         );
+        let binding = DirectoryBinding {
+            generation: 7,
+            mutation_sequence: 81,
+            corpus_digest: [9; DIGEST_BYTES],
+            directory_digest: Directory::digest(&a).unwrap(),
+        };
+        assert_eq!(Directory::decode_bound(&a, &binding), Ok(fixture()));
+        assert_eq!(
+            Directory::decode_bound(&b, &binding),
+            Err(DirectoryError::Identity)
+        );
+        for changed in [
+            DirectoryBinding {
+                generation: 8,
+                ..binding.clone()
+            },
+            DirectoryBinding {
+                mutation_sequence: 82,
+                ..binding.clone()
+            },
+            DirectoryBinding {
+                corpus_digest: [8; DIGEST_BYTES],
+                ..binding.clone()
+            },
+            DirectoryBinding {
+                directory_digest: [8; DIGEST_BYTES],
+                ..binding.clone()
+            },
+        ] {
+            assert_eq!(
+                Directory::decode_bound(&a, &changed),
+                Err(DirectoryError::Identity)
+            );
+        }
     }
 }
