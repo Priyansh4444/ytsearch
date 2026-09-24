@@ -204,6 +204,11 @@ Raw can replace Typesense as the canonical search index.
   - [ ] Prove the source audit against the complete canonical corpus and
     captured mutation snapshot, then emit and structurally validate every
     generation file from the audited dense IDs before publication.
+    - [x] Audit all 8,142,650 immutable base chunks and 32,822 videos with
+      exact-ID uniqueness and source-order title precedence; retain the
+      [P03 receipt](docs/experiments/search/schema9/P03/base-source-audit-2026-09-24.json).
+    - [ ] Capture and reconcile active mutations/tombstones against the base,
+      then run the same audit for the exact active-generation input.
 - [ ] Prove footer-only cold open reads under 200 MB, RSS under 1.5 GiB, zero
   swap/OOM, and worst-case exact page-one + totals + Tier 0 under 200 ms on 2 GB.
 - [ ] Exercise every documented website/API regression constraint against the

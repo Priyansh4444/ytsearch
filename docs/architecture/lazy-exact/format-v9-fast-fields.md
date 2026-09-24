@@ -34,12 +34,14 @@ uses a disk-backed SQLite unique key to reject duplicate external IDs. Its
 ordered scan uses `(external_video_id, t_start_ms, external_document_id)` so
 dense video and document IDs can be assigned without retaining the corpus in
 memory. The spool is rejected after any append error. Its sorted video audit
-requires the same creator and title on every chunk, rejects two different
-known durations or publication times, and preserves all-missing engagement
-counters. For observed counters it selects the maximum, matching current Raw
-aggregation. The real corpus still needs a source-conflict audit, and mutation
-snapshot completeness remains a publication gate. Scratch space and sort
-runtime must be measured before this path can be used for production builds.
+requires one creator and rejects two different known durations or publication
+times. The complete base archive contains at least one one-chunk title typo;
+schema-6 selects the first title in canonical archive order. Schema-9 preserves
+that source-order choice and counts videos with title conflicts in its audit
+receipt. It preserves all-missing engagement counters and selects the maximum
+observed value, matching current Raw aggregation. Mutation snapshot
+completeness remains a publication gate. Scratch space and sort runtime must
+be measured before this path can be used for production builds.
 The writer-facing sorted iterator is exposed only after the video audit returns
 an `AuditedSource`; a conflict consumes the unaudited spool without yielding a
 writer input.
