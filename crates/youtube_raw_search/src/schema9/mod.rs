@@ -13,3 +13,6 @@ mod verified_units;
 
 #[allow(dead_code)]
 mod footer;
+
+#[allow(dead_code)]
+mod builder;

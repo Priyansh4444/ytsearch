@@ -99,6 +99,15 @@ result, including corruption, is cached for concurrent callers. The publisher
 must keep generation files immutable and rollback-capable while a mapping or
 pinned search session can use them.
 
+`finalize_directory` is the P03 unpublished-candidate handoff. It accepts only
+the declared structural file names, hashes their units, writes and syncs
+`directory.bin`, reopens the bound directory, and checks every unit before
+returning its identity for a trusted publication manifest. A failed candidate
+is not publishable; the caller must retain or discard it as failed evidence.
+This finalizer does not create or decode structural content, derive the corpus
+identity from source archives, or write the trusted manifest. Those writer and
+publication integrations remain open.
+
 `Directory::decode` validates metadata and checksum. `Directory::decode_bound`
 also requires the generation sequence, mutation sequence, corpus digest, and
 directory digest supplied independently by a trusted generation manifest; a
