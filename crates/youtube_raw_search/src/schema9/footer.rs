@@ -10,7 +10,27 @@ const DIRECTORY_VERSION: u16 = 1;
 const HEADER_BYTES: usize = 100;
 const RECORD_BYTES: usize = 20;
 const DIGEST_BYTES: usize = 32;
+const CORPUS_IDENTITY_DOMAIN: &[u8] = b"ytsearch schema9 corpus identity v1\0";
 pub(crate) const MAX_DIRECTORY_BYTES: usize = 16 * 1024 * 1024;
+
+/// Combine the captured mutation snapshot with its immutable base archives.
+/// Inputs are decoded BLAKE3 digest bytes from the publication job.
+pub(crate) fn corpus_digest(
+    base_corpus: &[u8; DIGEST_BYTES],
+    base_chunks: &[u8; DIGEST_BYTES],
+    base_channels: &[u8; DIGEST_BYTES],
+    snapshot: &[u8; DIGEST_BYTES],
+    mutation_sequence: u64,
+) -> [u8; DIGEST_BYTES] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(CORPUS_IDENTITY_DOMAIN);
+    hasher.update(base_corpus);
+    hasher.update(base_chunks);
+    hasher.update(base_channels);
+    hasher.update(snapshot);
+    hasher.update(&mutation_sequence.to_le_bytes());
+    *hasher.finalize().as_bytes()
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 #[repr(u16)]
@@ -625,6 +645,25 @@ mod tests {
                 Directory::decode_bound(&a, &changed),
                 Err(DirectoryError::Identity)
             );
+        }
+    }
+
+    #[test]
+    fn corpus_identity_binds_each_source_and_captured_sequence() {
+        let inputs = ([1; 32], [2; 32], [3; 32], [4; 32], 81_u64);
+        let expected = corpus_digest(&inputs.0, &inputs.1, &inputs.2, &inputs.3, inputs.4);
+        assert_eq!(
+            expected,
+            corpus_digest(&inputs.0, &inputs.1, &inputs.2, &inputs.3, inputs.4)
+        );
+        for different in [
+            corpus_digest(&[9; 32], &inputs.1, &inputs.2, &inputs.3, inputs.4),
+            corpus_digest(&inputs.0, &[9; 32], &inputs.2, &inputs.3, inputs.4),
+            corpus_digest(&inputs.0, &inputs.1, &[9; 32], &inputs.3, inputs.4),
+            corpus_digest(&inputs.0, &inputs.1, &inputs.2, &[9; 32], inputs.4),
+            corpus_digest(&inputs.0, &inputs.1, &inputs.2, &inputs.3, inputs.4 + 1),
+        ] {
+            assert_ne!(different, expected);
         }
     }
 }

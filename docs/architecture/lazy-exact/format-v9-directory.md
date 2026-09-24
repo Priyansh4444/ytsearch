@@ -28,17 +28,17 @@ No extension or trailing padding is accepted in version 1.
 | 96 | 2 | file record count, at most 11 |
 | 98 | 2 | reserved, exactly zero |
 
-The corpus digest is a **provisional opaque 32-byte identity** in this
-prototype. Its production calculation is not frozen: a Raw generation depends
-on both the base corpus and the captured mutation snapshot. The current
-publication job records `snapshot_blake3`, target sequence, and compatibility
-(`corpus_identity`, `base_chunks_blake3`, `base_channels_blake3`), while the
-current generation manifest has no schema-9 directory binding. P03 integration
-must define a canonical binary digest over those exact inputs and save it in
-the trusted publication manifest. The manifest must bind snapshot identity,
-mutation sequence, generation sequence, and directory digest together. The
-directory parser only checks field shape; neither its trailer nor this field
-authenticates a substituted directory or corpus.
+The corpus digest is BLAKE3 over the domain bytes
+`ytsearch schema9 corpus identity v1` followed by NUL, then the decoded
+32-byte BLAKE3 digests of base corpus identity, base chunks, base channels,
+and captured mutation snapshot, in that order, then the captured mutation
+sequence as little-endian `u64`. The current publication job records these
+inputs as canonical hex strings and a target sequence. The schema-9 writer
+must decode and validate them before computing this digest. The current
+generation manifest has no schema-9 directory binding; integration must save
+the snapshot identity, mutation sequence, generation sequence, corpus digest,
+and directory digest in the trusted publication manifest. The directory
+checksum alone does not authenticate a substituted directory or corpus.
 
 Each record starts immediately after the 100-byte header. Records are sorted
 by increasing file-kind ID. Every required kind appears exactly once. The only
