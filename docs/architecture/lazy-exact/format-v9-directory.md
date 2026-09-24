@@ -86,6 +86,10 @@ declared file length with filesystem metadata before accessing data.
 `FileRecord::from_file` constructs these hashes from a completed immutable
 file with one bounded unit buffer and rejects a required empty file or an
 observed append. The publisher still needs to call it from a schema-9 build.
+`OpenedGeneration::open_bound` reads at most 16 MiB plus one byte from the
+directory, checks its trusted binding, opens the ten required data files and
+any optional file by fixed names, compares lengths, and retains those handles.
+It does not read or hash data-file payloads at cold open.
 
 `Directory::decode` validates metadata and checksum. `Directory::decode_bound`
 also requires the generation sequence, mutation sequence, corpus digest, and

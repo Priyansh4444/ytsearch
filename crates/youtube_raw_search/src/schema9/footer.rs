@@ -171,6 +171,46 @@ pub(crate) struct DirectoryBinding {
     pub(crate) directory_digest: [u8; DIGEST_BYTES],
 }
 
+/// Holds the exact file handles whose lengths were checked at cold open.
+pub(crate) struct OpenedGeneration {
+    pub(crate) directory: Directory,
+    pub(crate) files: BTreeMap<FileKind, File>,
+}
+
+impl OpenedGeneration {
+    pub(crate) fn open_bound(
+        root: &Path,
+        binding: &DirectoryBinding,
+    ) -> Result<Self, DirectoryError> {
+        let directory_file =
+            File::open(root.join("directory.bin")).map_err(|_| DirectoryError::Io)?;
+        let directory_len = directory_file
+            .metadata()
+            .map_err(|_| DirectoryError::Io)?
+            .len();
+        if directory_len > MAX_DIRECTORY_BYTES as u64 {
+            return Err(DirectoryError::Size);
+        }
+        let mut encoded = Vec::with_capacity(directory_len as usize);
+        directory_file
+            .take((MAX_DIRECTORY_BYTES + 1) as u64)
+            .read_to_end(&mut encoded)
+            .map_err(|_| DirectoryError::Io)?;
+        let directory = Directory::decode_bound(&encoded, binding)?;
+        let mut files = BTreeMap::new();
+        for record in &directory.files {
+            let file =
+                File::open(root.join(record.kind.file_name())).map_err(|_| DirectoryError::Io)?;
+            let metadata = file.metadata().map_err(|_| DirectoryError::Io)?;
+            if !metadata.is_file() || metadata.len() != record.length {
+                return Err(DirectoryError::FileLength);
+            }
+            files.insert(record.kind, file);
+        }
+        Ok(Self { directory, files })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum DirectoryError {
     #[error("directory exceeds 16 MiB or has invalid length")]
@@ -740,5 +780,44 @@ mod tests {
         let empty = FileRecord::from_file(FileKind::Bitmaps, &path, MIN_UNIT_BYTES).unwrap();
         assert_eq!(empty.length, 0);
         assert!(empty.unit_digests.is_empty());
+    }
+
+    #[test]
+    fn cold_open_binds_directory_and_retains_checked_file_handles() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut directory = fixture();
+        for record in &mut directory.files {
+            record.length = 1;
+            record.unit_digests = vec![*blake3::hash(&[record.kind as u8]).as_bytes()];
+            std::fs::write(
+                temporary.path().join(record.kind.file_name()),
+                [record.kind as u8],
+            )
+            .unwrap();
+        }
+        let encoded = directory.encode().unwrap();
+        std::fs::write(temporary.path().join("directory.bin"), &encoded).unwrap();
+        let binding = DirectoryBinding {
+            generation: directory.generation,
+            mutation_sequence: directory.mutation_sequence,
+            corpus_digest: directory.corpus_digest,
+            directory_digest: Directory::digest(&encoded).unwrap(),
+        };
+        let mut opened = OpenedGeneration::open_bound(temporary.path(), &binding).unwrap();
+        assert_eq!(opened.directory, directory);
+        assert_eq!(opened.files.len(), 10);
+        std::fs::remove_file(temporary.path().join(FileKind::Terms.file_name())).unwrap();
+        let mut byte = [0];
+        opened
+            .files
+            .get_mut(&FileKind::Terms)
+            .unwrap()
+            .read_exact(&mut byte)
+            .unwrap();
+        assert_eq!(byte, [FileKind::Terms as u8]);
+        assert!(matches!(
+            OpenedGeneration::open_bound(temporary.path(), &binding),
+            Err(DirectoryError::Io)
+        ));
     }
 }
