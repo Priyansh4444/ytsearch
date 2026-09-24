@@ -22,3 +22,6 @@ mod fast_fields;
 
 #[allow(dead_code)]
 mod source;
+
+#[allow(dead_code)]
+mod source_spool;
