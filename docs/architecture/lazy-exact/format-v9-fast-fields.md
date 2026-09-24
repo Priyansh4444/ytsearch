@@ -155,6 +155,11 @@ external ID bytes, and contiguous document ranges. A reader round trip covers
 known zero versus missing values. It is not a complete structural writer:
 documents, channels, postings, facets, payload references, and a full
 cross-file audit remain open.
+The private `documents.bin` encoder now uses the same audited dense stream for
+its video/time spine, exact external IDs, text token counts, and one title-owner
+flag per video. The table encoder and reader share one set of header/descriptor
+width constants. This does not yet guarantee that postings, payloads, and
+facets use those same IDs; the complete writer must bind and validate them.
 
 For active generation 2950's 8,422,419 documents, the 8-byte spine is about
 64.3 MiB; a 40-byte fixed row would require about 321 MiB for the same broad

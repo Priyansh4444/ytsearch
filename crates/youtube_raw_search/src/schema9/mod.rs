@@ -28,3 +28,9 @@ mod source_spool;
 
 #[allow(dead_code)]
 mod video_writer;
+
+#[allow(dead_code)]
+mod table_writer;
+
+#[allow(dead_code)]
+mod document_writer;
