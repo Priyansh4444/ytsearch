@@ -207,6 +207,15 @@ impl OpenedGeneration {
             }
             files.insert(record.kind, file);
         }
+        for kind in FileKind::ALL {
+            if !files.contains_key(&kind) {
+                match root.join(kind.file_name()).symlink_metadata() {
+                    Ok(_) => return Err(DirectoryError::FileLength),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => return Err(DirectoryError::Io),
+                }
+            }
+        }
         Ok(Self { directory, files })
     }
 }
@@ -806,6 +815,12 @@ mod tests {
         let mut opened = OpenedGeneration::open_bound(temporary.path(), &binding).unwrap();
         assert_eq!(opened.directory, directory);
         assert_eq!(opened.files.len(), 10);
+        std::fs::write(temporary.path().join(FileKind::Bitmaps.file_name()), []).unwrap();
+        assert!(matches!(
+            OpenedGeneration::open_bound(temporary.path(), &binding),
+            Err(DirectoryError::FileLength)
+        ));
+        std::fs::remove_file(temporary.path().join(FileKind::Bitmaps.file_name())).unwrap();
         std::fs::remove_file(temporary.path().join(FileKind::Terms.file_name())).unwrap();
         let mut byte = [0];
         opened
