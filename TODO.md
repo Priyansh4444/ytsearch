@@ -75,6 +75,10 @@ Raw can replace Typesense as the canonical search index.
     with UTF-8 byte/phrase-length boundaries, quote/backslash escapes, and
     negation/punctuation regressions. Production differential coverage remains
     required; this does not close the full grammar gate.
+  - [x] Prove the QV-01 count-only reference on the matrix's zero-sized window:
+    exact video/moment totals and facets survive `per_page=0`, hits stay empty,
+    and `has_next_page` is false across pages and creator scope. Runtime parity,
+    `limit=0`, and cursor behavior remain open; the matrix case stays pending.
   - [ ] Resolve its 14 explicit `decision_pending` cases with executable
     exhaustive evidence; current reviewed-policy matrix digest is
     `3d36c847…0949b9` (reviewed 512/513-byte boundary fixture correction).
