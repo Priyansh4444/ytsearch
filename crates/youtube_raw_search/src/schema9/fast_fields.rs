@@ -1,5 +1,7 @@
 //! Bounded schema-9 fast-field headers and the document summary spine.
 
+use std::ops::Range;
+
 use super::{
     footer::{DirectoryError, FileKind, GenerationBytes, OpenedGeneration},
     sets::{DocId, SetId, VideoId},
@@ -25,6 +27,8 @@ pub(crate) enum FastFieldError {
     Range,
     #[error("fast-field document references an unknown video")]
     Video,
+    #[error("fast-field video value or missingness is inconsistent")]
+    VideoValue,
     #[error(transparent)]
     Directory(#[from] DirectoryError),
     #[error(transparent)]
@@ -132,8 +136,28 @@ impl<'g> Table<'g> {
 
 pub(crate) struct FastFields<'g> {
     documents: Table<'g>,
-    _videos: Table<'g>,
+    videos: Table<'g>,
     video_count: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ContentKind {
+    Unknown,
+    Short,
+    Video,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct VideoFields {
+    pub(crate) creator: u32,
+    pub(crate) kind: ContentKind,
+    pub(crate) year: Option<i32>,
+    pub(crate) duration_ms: Option<u32>,
+    pub(crate) published_at_s: Option<i64>,
+    pub(crate) views: Option<u64>,
+    pub(crate) likes: Option<u64>,
+    pub(crate) comments: Option<u64>,
+    pub(crate) documents: Range<u32>,
 }
 
 impl<'g> FastFields<'g> {
@@ -167,7 +191,7 @@ impl<'g> FastFields<'g> {
         )?;
         Ok(Self {
             documents,
-            _videos: videos,
+            videos,
             video_count: directory.video_count,
         })
     }
@@ -180,6 +204,85 @@ impl<'g> FastFields<'g> {
         }
         Ok((VideoId::from_raw(video), u32_at(row, 4)?))
     }
+
+    pub(crate) fn video(&self, id: VideoId) -> Result<VideoFields, FastFieldError> {
+        let raw = id.raw();
+        let mask = self.videos.row(8, raw, 1)?[0];
+        if mask & 0x80 != 0
+            || (mask & 1 != 0) != (mask & 4 != 0)
+            || (mask & 2 != 0) != (mask & 8 != 0)
+        {
+            return Err(FastFieldError::VideoValue);
+        }
+        let creator = u32_at(self.videos.row(0, raw, 4)?, 0)?;
+        let kind_byte = self.videos.row(1, raw, 1)?[0];
+        let year_raw = i32_at(self.videos.row(2, raw, 4)?, 0)?;
+        let duration_raw = u32_at(self.videos.row(3, raw, 4)?, 0)?;
+        let published_raw = i64_at(self.videos.row(4, raw, 8)?, 0)?;
+        let views_raw = u64_at(self.videos.row(5, raw, 8)?, 0)?;
+        let likes_raw = u64_at(self.videos.row(6, raw, 8)?, 0)?;
+        let comments_raw = u64_at(self.videos.row(7, raw, 8)?, 0)?;
+        let first = u32_at(self.videos.row(12, raw, 4)?, 0)?;
+        let count = u32_at(self.videos.row(13, raw, 4)?, 0)?;
+        let end = first.checked_add(count).ok_or(FastFieldError::VideoValue)?;
+        if u64::from(end) > self.documents.count {
+            return Err(FastFieldError::VideoValue);
+        }
+        let duration_ms = present(duration_raw, mask, 2)?;
+        let kind = match (present(kind_byte, mask, 0)?, duration_ms) {
+            (None, None) => ContentKind::Unknown,
+            (Some(1), Some(0..=60_000)) => ContentKind::Short,
+            (Some(2), Some(60_001..)) => ContentKind::Video,
+            _ => return Err(FastFieldError::VideoValue),
+        };
+        let year = present(year_raw, mask, 1)?;
+        let published_at_s = present(published_raw, mask, 3)?;
+        if let Some(year) = year
+            && (year == 0 || Some(year) != published_at_s.and_then(utc_year))
+        {
+            return Err(FastFieldError::VideoValue);
+        }
+        Ok(VideoFields {
+            creator,
+            kind,
+            year,
+            duration_ms,
+            published_at_s,
+            views: present(views_raw, mask, 4)?,
+            likes: present(likes_raw, mask, 5)?,
+            comments: present(comments_raw, mask, 6)?,
+            documents: first..end,
+        })
+    }
+}
+
+fn present<T: Copy + Default + PartialEq>(
+    value: T,
+    missing_mask: u8,
+    bit: u8,
+) -> Result<Option<T>, FastFieldError> {
+    if missing_mask & (1 << bit) == 0 {
+        Ok(Some(value))
+    } else if value == T::default() {
+        Ok(None)
+    } else {
+        Err(FastFieldError::VideoValue)
+    }
+}
+
+fn utc_year(seconds: i64) -> Option<i32> {
+    let days = seconds.div_euclid(86_400);
+    let shifted = days.checked_add(719_468)?;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    i32::try_from(year).ok()
 }
 
 fn u16_at(bytes: &[u8], offset: usize) -> Result<u16, FastFieldError> {
@@ -204,6 +307,26 @@ fn u32_at(bytes: &[u8], offset: usize) -> Result<u32, FastFieldError> {
 
 fn u64_at(bytes: &[u8], offset: usize) -> Result<u64, FastFieldError> {
     Ok(u64::from_le_bytes(
+        bytes
+            .get(offset..offset + 8)
+            .ok_or(FastFieldError::Format)?
+            .try_into()
+            .map_err(|_| FastFieldError::Format)?,
+    ))
+}
+
+fn i32_at(bytes: &[u8], offset: usize) -> Result<i32, FastFieldError> {
+    Ok(i32::from_le_bytes(
+        bytes
+            .get(offset..offset + 4)
+            .ok_or(FastFieldError::Format)?
+            .try_into()
+            .map_err(|_| FastFieldError::Format)?,
+    ))
+}
+
+fn i64_at(bytes: &[u8], offset: usize) -> Result<i64, FastFieldError> {
+    Ok(i64::from_le_bytes(
         bytes
             .get(offset..offset + 8)
             .ok_or(FastFieldError::Format)?
@@ -257,6 +380,48 @@ mod tests {
         put(&mut bytes, spine + 4, &123_u32.to_le_bytes());
         put(&mut bytes, spine + 12, &456_u32.to_le_bytes());
         bytes
+    }
+
+    fn video_file() -> Vec<u8> {
+        let mut bytes = table_file(b"YTS9VID\0", &VIDEO_WIDTHS, 1);
+        let mask_offset = section_offset(&bytes, 8);
+        let count_offset = section_offset(&bytes, 13);
+        bytes[mask_offset] = 0x7f;
+        put(&mut bytes, count_offset, &2_u32.to_le_bytes());
+        bytes
+    }
+
+    fn section_offset(bytes: &[u8], index: usize) -> usize {
+        u64_at(bytes, HEADER_BYTES + index * DESCRIPTOR_BYTES + 8).unwrap() as usize
+    }
+
+    fn decoded_video(bytes: &[u8]) -> Result<VideoFields, FastFieldError> {
+        let video_verifier = verifier(bytes);
+        let video_table = Table::open(
+            &video_verifier,
+            bytes.len() as u64,
+            b"YTS9VID\0",
+            &VIDEO_WIDTHS,
+            1,
+            7,
+            81,
+        )?;
+        let document_bytes = document_file();
+        let document_verifier = verifier(&document_bytes);
+        let fields = FastFields {
+            documents: Table::open(
+                &document_verifier,
+                document_bytes.len() as u64,
+                b"YTS9DOC\0",
+                &DOCUMENT_WIDTHS,
+                2,
+                7,
+                81,
+            )?,
+            videos: video_table,
+            video_count: 1,
+        };
+        fields.video(VideoId::from_raw(0))
     }
 
     fn verifier(bytes: &[u8]) -> VerifiedUnits<GenerationBytes> {
@@ -337,7 +502,7 @@ mod tests {
             for kind in FileKind::ALL.into_iter().filter(|kind| kind.required()) {
                 let contents = match kind {
                     FileKind::Documents => documents.clone(),
-                    FileKind::Videos => table_file(b"YTS9VID\0", &VIDEO_WIDTHS, 1),
+                    FileKind::Videos => video_file(),
                     _ => vec![kind as u8],
                 };
                 std::fs::write(temporary.path().join(kind.file_name()), contents).unwrap();
@@ -361,6 +526,10 @@ mod tests {
             let generation = OpenedGeneration::open_bound(temporary.path(), &binding).unwrap();
             let fields = FastFields::open(&generation).unwrap();
             assert_eq!(fields.document_spine(DocId::from_raw(0)).unwrap().1, 123);
+            assert_eq!(
+                fields.video(VideoId::from_raw(0)).unwrap().kind,
+                ContentKind::Unknown
+            );
             if bad_video {
                 assert_eq!(
                     fields.document_spine(DocId::from_raw(1)),
@@ -373,5 +542,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn video_missingness_kind_boundary_and_utc_year_are_exact() {
+        let mut bytes = video_file();
+        let mask_offset = section_offset(&bytes, 8);
+        bytes[mask_offset] = 0x70;
+        let kind_offset = section_offset(&bytes, 1);
+        let year_offset = section_offset(&bytes, 2);
+        let duration_offset = section_offset(&bytes, 3);
+        let published_offset = section_offset(&bytes, 4);
+        bytes[kind_offset] = 1;
+        put(&mut bytes, year_offset, &2024_i32.to_le_bytes());
+        put(&mut bytes, duration_offset, &60_000_u32.to_le_bytes());
+        put(
+            &mut bytes,
+            published_offset,
+            &1_709_210_096_i64.to_le_bytes(),
+        );
+        assert_eq!(utc_year(1_709_210_096), Some(2024));
+        assert_eq!(utc_year(-1), Some(1969));
+        assert_eq!(utc_year(0), Some(1970));
+        let video = decoded_video(&bytes).unwrap();
+        assert_eq!(video.kind, ContentKind::Short);
+        assert_eq!(video.duration_ms, Some(60_000));
+        assert_eq!(video.year, Some(2024));
+        assert_eq!(video.published_at_s, Some(1_709_210_096));
+        assert_eq!(video.views, None);
+        assert_eq!(video.documents, 0..2);
+        bytes[mask_offset] = 0x60;
+        put(&mut bytes, duration_offset, &60_001_u32.to_le_bytes());
+        bytes[kind_offset] = 2;
+        let video = decoded_video(&bytes).unwrap();
+        assert_eq!(video.kind, ContentKind::Video);
+        assert_eq!(video.views, Some(0));
+        bytes[kind_offset] = 1;
+        assert_eq!(decoded_video(&bytes), Err(FastFieldError::VideoValue));
+        bytes[kind_offset] = 2;
+        put(&mut bytes, year_offset, &2023_i32.to_le_bytes());
+        assert_eq!(decoded_video(&bytes), Err(FastFieldError::VideoValue));
     }
 }
