@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "kind": "raw-canonical-source-prefix-inspection",
+  "observed_at_utc": "2026-09-24T10:52:38Z",
+  "reader_app": "ytsearch-raw-production",
+  "reader_machine_id": "d89303da029328",
+  "source_path": "/data/source/youtube_transcript_chunks.jsonl.gz",
+  "source_compressed_bytes": 850118690,
+  "selection": "first 10000 decompressed JSONL records only",
+  "records": 10000,
+  "distinct_video_ids": 85,
+  "largest_line_bytes": 1105,
+  "missing_required_fields": {},
+  "null_or_absent": {
+    "published_at_timestamp": 10000,
+    "view_count": 9915,
+    "like_count": 9915,
+    "comment_count": 9915
+  },
+  "known_metadata_conflicts_within_prefix": {},
+  "limitations": [
+    "Prefix is ordered and not a random sample; it does not prove the remaining corpus.",
+    "Only public field names, types, lengths, and aggregate counts were retained; transcript text was not retained.",
+    "This is read-only source inspection, not a schema-9 build, corpus-wide identity audit, or publication gate."
+  ]
+}
