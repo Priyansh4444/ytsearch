@@ -85,3 +85,22 @@ fn zero_window_on_empty_match_stays_an_exact_empty_result() {
     assert!(result.hits.is_empty());
     assert!(!result.has_next_page);
 }
+
+#[test]
+fn differential_rejects_wrong_next_page_even_when_hits_and_totals_match() {
+    struct WrongNext(OracleResult);
+    impl CandidateImplementation for WrongNext {
+        fn search(&self, _request: &OracleRequest) -> Result<OracleResult, OracleError> {
+            let mut result = self.0.clone();
+            result.has_next_page = !result.has_next_page;
+            Ok(result)
+        }
+    }
+    let corpus = corpus();
+    let request = request("react", 0);
+    let expected = evaluate_exhaustively(&corpus, &request).unwrap();
+    assert_eq!(
+        first_mismatch(&expected, &WrongNext(expected.clone()), &request),
+        Some("has_next_page")
+    );
+}

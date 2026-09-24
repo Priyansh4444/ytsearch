@@ -1759,6 +1759,9 @@ fn first_mismatch(
     if expected.by_content_kind != actual.by_content_kind {
         return Some("by_content_kind");
     }
+    if expected.has_next_page != actual.has_next_page {
+        return Some("has_next_page");
+    }
     None
 }
 
