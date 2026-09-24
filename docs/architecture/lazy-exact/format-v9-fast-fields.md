@@ -33,10 +33,16 @@ The private source spool appends each validated JSON line to a scratch file and
 uses a disk-backed SQLite unique key to reject duplicate external IDs. Its
 ordered scan uses `(external_video_id, t_start_ms, external_document_id)` so
 dense video and document IDs can be assigned without retaining the corpus in
-memory. The spool is rejected after any append error. It does not yet resolve
-per-video metadata conflicts or prove that a mutation snapshot is complete;
-both remain publication gates. Scratch space and sort runtime must be measured
-on the real corpus before this path can be used for production builds.
+memory. The spool is rejected after any append error. Its sorted video audit
+requires the same creator and title on every chunk, rejects two different
+known durations or publication times, and preserves all-missing engagement
+counters. For observed counters it selects the maximum, matching current Raw
+aggregation. The real corpus still needs a source-conflict audit, and mutation
+snapshot completeness remains a publication gate. Scratch space and sort
+runtime must be measured before this path can be used for production builds.
+The writer-facing sorted iterator is exposed only after the video audit returns
+an `AuditedSource`; a conflict consumes the unaudited spool without yielding a
+writer input.
 
 Canonical chunks carry optional `duration` in milliseconds and optional
 `published_at_timestamp` in whole Unix **seconds**. Kind is derived from a
