@@ -91,6 +91,13 @@ directory, checks its trusted binding, opens the ten required data files and
 any optional file by fixed names, compares lengths, and retains those handles.
 An undeclared optional bitmap file is rejected. It does not read or hash
 data-file payloads at cold open.
+`OpenedGeneration::verified_file` maps a retained nonempty file handle once and
+shares the verifier for every later access to that file. Empty optional files use an empty
+backing value because the operating system cannot mmap a zero-byte file.
+First access to a byte range checks every intersecting integrity unit; the
+result, including corruption, is cached for concurrent callers. The publisher
+must keep generation files immutable and rollback-capable while a mapping or
+pinned search session can use them.
 
 `Directory::decode` validates metadata and checksum. `Directory::decode_bound`
 also requires the generation sequence, mutation sequence, corpus digest, and

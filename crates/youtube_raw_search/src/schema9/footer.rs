@@ -1,8 +1,9 @@
 //! Versioned schema-9 directory metadata. The digest detects corruption only;
 //! callers must bind the exact directory digest to a trusted generation manifest.
 
-use super::verified_units::{MAX_UNIT_BYTES, MIN_UNIT_BYTES};
-use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
+use super::verified_units::{MAX_UNIT_BYTES, MIN_UNIT_BYTES, UnitError, VerifiedUnits};
+use memmap2::{Mmap, MmapOptions};
+use std::{collections::BTreeMap, fs::File, io::Read, path::Path, sync::OnceLock};
 
 const MAGIC: &[u8; 8] = b"YTS9DIR\0";
 const SCHEMA_VERSION: u16 = 9;
@@ -175,6 +176,21 @@ pub(crate) struct DirectoryBinding {
 pub(crate) struct OpenedGeneration {
     pub(crate) directory: Directory,
     pub(crate) files: BTreeMap<FileKind, File>,
+    verifiers: BTreeMap<FileKind, OnceLock<Result<VerifiedUnits<GenerationBytes>, DirectoryError>>>,
+}
+
+pub(crate) enum GenerationBytes {
+    Empty,
+    Mapped(Mmap),
+}
+
+impl AsRef<[u8]> for GenerationBytes {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Empty => &[],
+            Self::Mapped(map) => map,
+        }
+    }
 }
 
 impl OpenedGeneration {
@@ -216,7 +232,56 @@ impl OpenedGeneration {
                 }
             }
         }
-        Ok(Self { directory, files })
+        let verifiers = directory
+            .files
+            .iter()
+            .map(|record| (record.kind, OnceLock::new()))
+            .collect();
+        Ok(Self {
+            directory,
+            files,
+            verifiers,
+        })
+    }
+
+    pub(crate) fn verified_file(
+        &self,
+        kind: FileKind,
+    ) -> Result<&VerifiedUnits<GenerationBytes>, DirectoryError> {
+        self.verifiers
+            .get(&kind)
+            .ok_or(DirectoryError::FileLength)?
+            .get_or_init(|| self.map_verified_file(kind))
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
+    fn map_verified_file(
+        &self,
+        kind: FileKind,
+    ) -> Result<VerifiedUnits<GenerationBytes>, DirectoryError> {
+        let record = self
+            .directory
+            .files
+            .iter()
+            .find(|record| record.kind == kind)
+            .ok_or(DirectoryError::FileLength)?;
+        let file = self.files.get(&kind).ok_or(DirectoryError::FileLength)?;
+        let bytes = if record.length == 0 {
+            GenerationBytes::Empty
+        } else {
+            // SAFETY: the generation's files must remain immutable while any
+            // mapped reader exists. Publication and cleanup own that invariant.
+            GenerationBytes::Mapped(
+                unsafe { MmapOptions::new().map(file) }.map_err(|_| DirectoryError::Io)?,
+            )
+        };
+        VerifiedUnits::new(
+            bytes,
+            record.unit_bytes as usize,
+            record.unit_digests.clone(),
+        )
+        .map_err(DirectoryError::Unit)
     }
 }
 
@@ -242,6 +307,8 @@ pub(crate) enum DirectoryError {
     Identity,
     #[error("directory data file cannot be read")]
     Io,
+    #[error(transparent)]
+    Unit(#[from] UnitError),
 }
 
 impl Directory {
@@ -815,6 +882,18 @@ mod tests {
         let mut opened = OpenedGeneration::open_bound(temporary.path(), &binding).unwrap();
         assert_eq!(opened.directory, directory);
         assert_eq!(opened.files.len(), 10);
+        assert_eq!(
+            opened.verified_file(FileKind::Terms).unwrap().read(0, 1),
+            Ok(&[FileKind::Terms as u8][..])
+        );
+        std::fs::write(temporary.path().join(FileKind::Postings.file_name()), [99]).unwrap();
+        let corrupt = opened.verified_file(FileKind::Postings).unwrap();
+        assert_eq!(corrupt.read(0, 1), Err(UnitError::Corrupt(0)));
+        assert_eq!(corrupt.read(0, 1), Err(UnitError::Corrupt(0)));
+        assert!(std::ptr::eq(
+            corrupt,
+            opened.verified_file(FileKind::Postings).unwrap()
+        ));
         std::fs::write(temporary.path().join(FileKind::Bitmaps.file_name()), []).unwrap();
         assert!(matches!(
             OpenedGeneration::open_bound(temporary.path(), &binding),
@@ -834,5 +913,42 @@ mod tests {
             OpenedGeneration::open_bound(temporary.path(), &binding),
             Err(DirectoryError::Io)
         ));
+    }
+
+    #[test]
+    fn declared_empty_bitmap_opens_without_mapping_an_empty_file() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut directory = fixture();
+        for record in &mut directory.files {
+            record.length = 1;
+            record.unit_digests = vec![*blake3::hash(&[record.kind as u8]).as_bytes()];
+            std::fs::write(
+                temporary.path().join(record.kind.file_name()),
+                [record.kind as u8],
+            )
+            .unwrap();
+        }
+        directory.files.insert(
+            4,
+            FileRecord {
+                kind: FileKind::Bitmaps,
+                length: 0,
+                unit_bytes: MIN_UNIT_BYTES as u32,
+                unit_digests: vec![],
+            },
+        );
+        std::fs::write(temporary.path().join(FileKind::Bitmaps.file_name()), []).unwrap();
+        let encoded = directory.encode().unwrap();
+        std::fs::write(temporary.path().join("directory.bin"), &encoded).unwrap();
+        let binding = DirectoryBinding {
+            generation: directory.generation,
+            mutation_sequence: directory.mutation_sequence,
+            corpus_digest: directory.corpus_digest,
+            directory_digest: Directory::digest(&encoded).unwrap(),
+        };
+        let opened = OpenedGeneration::open_bound(temporary.path(), &binding).unwrap();
+        let bitmap = opened.verified_file(FileKind::Bitmaps).unwrap();
+        assert_eq!(bitmap.read(0, 0), Ok(&[][..]));
+        assert_eq!(bitmap.read(0, 1), Err(UnitError::OutOfBounds));
     }
 }
