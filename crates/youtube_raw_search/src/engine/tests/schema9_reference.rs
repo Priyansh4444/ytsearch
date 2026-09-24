@@ -14,6 +14,7 @@ use serde::Deserialize;
 use unicode_categories::UnicodeCategories;
 use unicode_normalization::UnicodeNormalization;
 
+mod count_only;
 mod hypothesis_evidence;
 mod phrase_slop;
 mod proximity;
@@ -283,6 +284,7 @@ struct OracleResult {
     by_creator: BTreeMap<String, usize>,
     by_content_kind: BTreeMap<&'static str, usize>,
     hits: Vec<OracleHit>,
+    has_next_page: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1206,6 +1208,8 @@ fn evaluate_query_exhaustively(
         .page
         .saturating_sub(1)
         .saturating_mul(request.per_page);
+    let has_next_page =
+        request.per_page > 0 && start.saturating_add(request.per_page) < total_videos;
     let hits = ranked
         .into_iter()
         .skip(start)
@@ -1240,6 +1244,7 @@ fn evaluate_query_exhaustively(
         by_creator,
         by_content_kind,
         hits,
+        has_next_page,
     })
 }
 
@@ -1753,6 +1758,9 @@ fn first_mismatch(
     }
     if expected.by_content_kind != actual.by_content_kind {
         return Some("by_content_kind");
+    }
+    if expected.has_next_page != actual.has_next_page {
+        return Some("has_next_page");
     }
     None
 }
@@ -2783,6 +2791,7 @@ fn differential_detects_a_deliberately_wrong_candidate() {
                 by_creator: BTreeMap::new(),
                 by_content_kind: BTreeMap::new(),
                 hits: Vec::new(),
+                has_next_page: false,
             })
         }
     }
