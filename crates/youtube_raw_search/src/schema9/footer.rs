@@ -913,6 +913,11 @@ mod tests {
             OpenedGeneration::open_bound(temporary.path(), &binding),
             Err(DirectoryError::Io)
         ));
+        std::fs::remove_dir_all(temporary.path()).unwrap();
+        assert_eq!(
+            opened.verified_file(FileKind::Terms).unwrap().read(0, 1),
+            Ok(&[FileKind::Terms as u8][..])
+        );
     }
 
     #[test]
