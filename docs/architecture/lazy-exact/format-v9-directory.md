@@ -83,6 +83,9 @@ BLAKE3 digest of every preceding byte, starting at offset 0. Decoding requires
 exact consumption of all bytes before the trailer and uses checked arithmetic
 for offsets, lengths, and digest allocation. The reader then compares every
 declared file length with filesystem metadata before accessing data.
+`FileRecord::from_file` constructs these hashes from a completed immutable
+file with one bounded unit buffer and rejects a required empty file or an
+observed append. The publisher still needs to call it from a schema-9 build.
 
 `Directory::decode` validates metadata and checksum. `Directory::decode_bound`
 also requires the generation sequence, mutation sequence, corpus digest, and

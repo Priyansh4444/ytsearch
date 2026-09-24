@@ -2,7 +2,7 @@
 //! callers must bind the exact directory digest to a trusted generation manifest.
 
 use super::verified_units::{MAX_UNIT_BYTES, MIN_UNIT_BYTES};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
 
 const MAGIC: &[u8; 8] = b"YTS9DIR\0";
 const SCHEMA_VERSION: u16 = 9;
@@ -100,6 +100,54 @@ pub(crate) struct FileRecord {
     pub(crate) unit_digests: Vec<[u8; DIGEST_BYTES]>,
 }
 
+impl FileRecord {
+    /// Hash a completed immutable data file using one bounded scratch buffer.
+    pub(crate) fn from_file(
+        kind: FileKind,
+        path: &Path,
+        unit_bytes: usize,
+    ) -> Result<Self, DirectoryError> {
+        if !(MIN_UNIT_BYTES..=MAX_UNIT_BYTES).contains(&unit_bytes) {
+            return Err(DirectoryError::Metadata);
+        }
+        let mut file = File::open(path).map_err(|_| DirectoryError::Io)?;
+        let length = file.metadata().map_err(|_| DirectoryError::Io)?.len();
+        if kind.required() && length == 0 {
+            return Err(DirectoryError::Metadata);
+        }
+        let unit_count = if length == 0 {
+            0
+        } else {
+            1 + (length - 1) / unit_bytes as u64
+        };
+        let capacity = usize::try_from(unit_count).map_err(|_| DirectoryError::Size)?;
+        if capacity > MAX_DIRECTORY_BYTES / DIGEST_BYTES {
+            return Err(DirectoryError::Size);
+        }
+        let mut unit_digests = Vec::with_capacity(capacity);
+        let mut buffer = vec![0_u8; if length == 0 { 0 } else { unit_bytes }];
+        let mut remaining = length;
+        while remaining != 0 {
+            let bytes = usize::try_from(remaining.min(unit_bytes as u64))
+                .map_err(|_| DirectoryError::Size)?;
+            file.read_exact(&mut buffer[..bytes])
+                .map_err(|_| DirectoryError::Io)?;
+            unit_digests.push(*blake3::hash(&buffer[..bytes]).as_bytes());
+            remaining -= bytes as u64;
+        }
+        let mut extra = [0_u8];
+        if file.read(&mut extra).map_err(|_| DirectoryError::Io)? != 0 {
+            return Err(DirectoryError::FileLength);
+        }
+        Ok(Self {
+            kind,
+            length,
+            unit_bytes: unit_bytes as u32,
+            unit_digests,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Directory {
     pub(crate) normalization_version: u16,
@@ -143,6 +191,8 @@ pub(crate) enum DirectoryError {
     FileLength,
     #[error("directory identity differs from generation manifest")]
     Identity,
+    #[error("directory data file cannot be read")]
+    Io,
 }
 
 impl Directory {
@@ -665,5 +715,30 @@ mod tests {
         ] {
             assert_ne!(different, expected);
         }
+    }
+
+    #[test]
+    fn file_record_hashes_exact_final_unit_and_empty_optional_file() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("postings.bin");
+        let mut contents = vec![7_u8; MIN_UNIT_BYTES];
+        contents.push(8);
+        std::fs::write(&path, &contents).unwrap();
+        let record = FileRecord::from_file(FileKind::Postings, &path, MIN_UNIT_BYTES).unwrap();
+        assert_eq!(record.length, contents.len() as u64);
+        assert_eq!(record.unit_digests.len(), 2);
+        assert_eq!(
+            record.unit_digests[0],
+            *blake3::hash(&contents[..MIN_UNIT_BYTES]).as_bytes()
+        );
+        assert_eq!(record.unit_digests[1], *blake3::hash(&[8]).as_bytes());
+        std::fs::write(&path, []).unwrap();
+        assert_eq!(
+            FileRecord::from_file(FileKind::Postings, &path, MIN_UNIT_BYTES),
+            Err(DirectoryError::Metadata)
+        );
+        let empty = FileRecord::from_file(FileKind::Bitmaps, &path, MIN_UNIT_BYTES).unwrap();
+        assert_eq!(empty.length, 0);
+        assert!(empty.unit_digests.is_empty());
     }
 }
