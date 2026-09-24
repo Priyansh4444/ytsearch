@@ -27,6 +27,7 @@ if [[ ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
   printf 'unexpected Git commit: %s\n' "$source_commit" >&2
   exit 1
 fi
+state_directory="/data/mutable/trials/${source_commit:0:12}"
 if [[ ! "$BASE_IMAGE" =~ @sha256:([0-9a-f]{64})$ ]]; then
   printf 'BASE_IMAGE must name an immutable sha256 digest\n' >&2
   exit 1
@@ -67,6 +68,7 @@ canary_is_exact() {
   printf '%s' "$candidate" | canary_is_stageable && jq -e \
     --arg image "$reader_image" \
     --arg source "$source_commit" \
+    --arg state_directory "$state_directory" \
     --arg base "sha256:$base_digest" '
     (.config.image == $image or (.config.image | startswith($image + "@sha256:"))) and
     (.image_ref.digest | test("^sha256:[0-9a-f]{64}$")) and
@@ -76,7 +78,7 @@ canary_is_exact() {
       RAW_SEARCH_BIND:"[::]:8108",
       RAW_SEARCH_INDEX_PATH:"/data/index",
       RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
-      RAW_SEARCH_STATE_DIRECTORY:"/data/mutable",
+      RAW_SEARCH_STATE_DIRECTORY:$state_directory,
       RUST_LOG:"youtube_raw_search=info"
     } and
     .config.init == {swap_size_mb:512} and
@@ -156,7 +158,8 @@ trap 'cleanup_reader_stage $?' EXIT
 trap 'exit 130' INT TERM
 
 jq -n --arg image "$reader_image" --arg source "$source_commit" \
-  --arg base_digest "sha256:$base_digest" --arg volume "$RAW_CANARY_VOLUME_ID" '{
+  --arg base_digest "sha256:$base_digest" --arg volume "$RAW_CANARY_VOLUME_ID" \
+  --arg state_directory "$state_directory" '{
   image:$image,
   env:{
     RAW_SEARCH_BASE_CHANNELS_GZIP:"/data/source/youtube_youtubers.jsonl.gz",
@@ -164,7 +167,7 @@ jq -n --arg image "$reader_image" --arg source "$source_commit" \
     RAW_SEARCH_BIND:"[::]:8108",
     RAW_SEARCH_INDEX_PATH:"/data/index",
     RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
-    RAW_SEARCH_STATE_DIRECTORY:"/data/mutable",
+    RAW_SEARCH_STATE_DIRECTORY:$state_directory,
     RUST_LOG:"youtube_raw_search=info"
   },
   init:{swap_size_mb:512},
@@ -206,7 +209,7 @@ fly_machine_session_release "$session_directory"
 lease_acquired=0
 
 jq -c --arg source_commit "$source_commit" --arg base_image "$BASE_IMAGE" \
-  --arg image "$reader_image" '{
+  --arg image "$reader_image" --arg state_directory "$state_directory" '{
   schema_version:1,
   kind:"raw-reader-canary",
   source_commit:$source_commit,
@@ -216,6 +219,7 @@ jq -c --arg source_commit "$source_commit" --arg base_image "$BASE_IMAGE" \
   private_ip:.private_ip,
   resolved_image:($image + "@" + .image_ref.digest),
   state:.state,
+  state_directory:$state_directory,
   isolated:true,
   memory_mb:.config.guest.memory_mb,
   cpus:.config.guest.cpus

@@ -335,7 +335,7 @@ canary_is_safe() {
     .config.env.RAW_SEARCH_BIND == "[::]:8108" and
     .config.env.RAW_SEARCH_INDEX_PATH == "/data/index" and
     .config.env.RAW_SEARCH_REQUIRE_FILE_SECRETS == "1" and
-    .config.env.RAW_SEARCH_STATE_DIRECTORY == "/data/mutable" and
+    .config.env.RAW_SEARCH_STATE_DIRECTORY == ("/data/mutable/trials/" + $source[0:12]) and
     .config.env.RUST_LOG == "youtube_raw_search=info" and
     ((.config.env | keys | sort) == [
       "RAW_SEARCH_BASE_CHANNELS_GZIP",
