@@ -429,7 +429,8 @@ if [ "$START_AFTER_RECONCILIATION" = "1" ]; then
     exit 1
   fi
 else
-  REQUIRED_QUEUE_WORKER_STATES=created,stopped "$SCRIPT_DIR/check-queue-indexers.sh"
+  QUEUE_READER_CHECK_MODE=deferred REQUIRED_QUEUE_WORKER_STATES=created,stopped \
+    "$SCRIPT_DIR/check-queue-indexers.sh"
 fi
 
 reconciliation_succeeded=1

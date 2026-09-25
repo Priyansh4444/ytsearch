@@ -129,6 +129,19 @@ verify_embedded_file() {
 verify_embedded_file /usr/local/bin/cloud-index-queue "$EXPECTED_ENTRYPOINT_FILE"
 verify_embedded_file /tmp/daily-indexed-channels.txt "$EXPECTED_CREATOR_LIST_FILE"
 
+if [ "${QUEUE_READER_CHECK_MODE:-required}" = "deferred" ]; then
+  if [ "$REQUIRED_STATES" != "created,stopped" ]; then
+    echo "Reader readiness may be deferred only for a stopped worker stage." >&2
+    exit 1
+  fi
+  echo "queue_reader_check=deferred worker_stage_only=1"
+  exit 0
+fi
+if [ "${QUEUE_READER_CHECK_MODE:-required}" != "required" ]; then
+  echo "QUEUE_READER_CHECK_MODE must be required or deferred." >&2
+  exit 1
+fi
+
 if [ -n "${RAW_READER_MACHINES_JSON_FILE:-}" ]; then
   reader_machines="$(cat "$RAW_READER_MACHINES_JSON_FILE")"
 else

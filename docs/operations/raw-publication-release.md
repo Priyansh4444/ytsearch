@@ -153,6 +153,11 @@ must be the exact production Machine name,
 now checks this before starting. Reconcile and verify the live worker first;
 keep the canary stopped until then. [Fly's private DNS documentation](https://fly.io/docs/networking/private-networking/)
 describes the exact Machine name as a way to address one Machine.
+`scripts/reconcile-raw-queue-worker.sh` can stage the stopped worker with this
+target while the production reader still has its IPv4 bind. Its stopped-stage
+check reports `queue_reader_check=deferred worker_stage_only=1`; this is only a
+configuration check. Start the worker and run the ordinary full queue checker
+after the production reader serves private IPv6 and publication is safe.
 
 ### Broad-query memory gate
 

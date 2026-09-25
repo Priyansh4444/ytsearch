@@ -82,6 +82,22 @@ if RAW_READER_MACHINES_JSON_FILE="$tmp/ipv4-only-reader.json" \
   echo "IPv4-only reader must fail the private-network queue path" >&2
   exit 1
 fi
+RAW_READER_MACHINES_JSON_FILE="$tmp/ipv4-only-reader.json" \
+  MACHINES_JSON_FILE="$tmp/healthy.json" \
+  QUEUE_READER_CHECK_MODE=deferred REQUIRED_QUEUE_WORKER_STATES=created,stopped \
+  "$SCRIPT_DIR/check-queue-indexers.sh" > "$tmp/staged-check.txt"
+if [ "$(tail -n 1 "$tmp/staged-check.txt")" != "queue_reader_check=deferred worker_stage_only=1" ]; then
+  echo "a deferred check must label its limited scope" >&2
+  exit 1
+fi
+jq '.[0].state = "started"' "$tmp/healthy.json" > "$tmp/started-during-stage.json"
+if RAW_READER_MACHINES_JSON_FILE="$tmp/ipv4-only-reader.json" \
+  MACHINES_JSON_FILE="$tmp/started-during-stage.json" \
+  QUEUE_READER_CHECK_MODE=deferred REQUIRED_QUEUE_WORKER_STATES=started \
+  "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then
+  echo "a started worker must never defer reader readiness" >&2
+  exit 1
+fi
 jq '.[0].state = "stopped" | .[1].state = "started"' \
   "$RAW_READER_MACHINES_JSON_FILE" > "$tmp/canary-only-reader.json"
 if RAW_READER_MACHINES_JSON_FILE="$tmp/canary-only-reader.json" \
