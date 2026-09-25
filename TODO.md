@@ -849,6 +849,11 @@ Raw can replace Typesense as the canonical search index.
   and verify a newly released video's transcript is searchable. On 2026-09-10,
   the live worker had daily refresh disabled, no completion timestamp, and a
   pending publication marker.
+  On 2026-09-24 the exact worker was stopped and reconciled with the current
+  entrypoint, 62-handle list, production-Machine-specific Raw URL, and
+  `DAILY_UPDATE_ENABLED=1`. It remains stopped while the reader is IPv4-only;
+  the staged configuration passes, but daily execution and publication do not.
+  See `P00/queue-stage-2026-09-24.json`.
 - [ ] Restore private reader connectivity before claiming queue recovery.
   On 2026-09-07, the worker exited with code 1 during admin readiness;
   an independent builder probe resolved private DNS but received connection
