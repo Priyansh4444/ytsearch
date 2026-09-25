@@ -7,8 +7,8 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 RAW_READER_MACHINES_JSON_FILE="$tmp/reader.json"
 export RAW_READER_MACHINES_JSON_FILE
 jq -n '[
-  {id:"reader-1",state:"started",config:{env:{RAW_SEARCH_BIND:"[::]:8108"},services:[{internal_port:8108,protocol:"tcp"}]}},
-  {id:"reader-canary",state:"stopped",config:{env:{RAW_SEARCH_BIND:"[::]:8108"},services:[{internal_port:8108,protocol:"tcp"}]}}
+  {id:"d89303da029328",state:"started",config:{env:{RAW_SEARCH_BIND:"[::]:8108"},services:[{internal_port:8108,protocol:"tcp"}]}},
+  {id:"847314c22d52e8",state:"stopped",config:{env:{RAW_SEARCH_BIND:"[::]:8108"},services:[{internal_port:8108,protocol:"tcp"}]}}
 ]' > "$RAW_READER_MACHINES_JSON_FILE"
 entrypoint_b64="$(base64 < "$SCRIPT_DIR/cloud-index-queue-entrypoint.sh" | tr -d '\n')"
 creator_list_b64="$(base64 < "$SCRIPT_DIR/indexed-channels.txt" | tr -d '\n')"
@@ -44,7 +44,7 @@ fixture() {
         IDLE_GAP_FILL_MAX_NEW_VIDEOS:"10",
         RAW_PUBLICATION_TIMEOUT_SECONDS:"3600",
         RAW_PENDING_PUBLICATION_FILE:"/var/lib/ytsearch/raw-publication.pending",
-        RAW_SEARCH_API_URL:"http://ytsearch-raw-production.internal:8108",
+        RAW_SEARCH_API_URL:"http://d89303da029328.vm.ytsearch-raw-production.internal:8108",
         YOUTUBE_API_KEY_FILE:"/run/secrets/youtube-api-key.txt",
         YT_DLP_COOKIES_FILE:"/run/secrets/yt-dlp-cookies.txt",
         CREDENTIAL_PREFLIGHT_MARKER:"/run/ytsearch-credential-preflight.ok",
@@ -67,12 +67,27 @@ fixture() {
 
 fixture stopped 300 no >"$tmp/healthy.json"
 MACHINES_JSON_FILE="$tmp/healthy.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null
+jq '.[0].config.env.RAW_SEARCH_API_URL = "http://ytsearch-raw-production.internal:8108"' \
+  "$tmp/healthy.json" > "$tmp/app-wide-raw-url.json"
+if MACHINES_JSON_FILE="$tmp/app-wide-raw-url.json" \
+  "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then
+  echo "app-wide Raw DNS can route a production worker to a started canary" >&2
+  exit 1
+fi
 jq '.[0].config.env.RAW_SEARCH_BIND = "0.0.0.0:8108"' \
   "$RAW_READER_MACHINES_JSON_FILE" > "$tmp/ipv4-only-reader.json"
 if RAW_READER_MACHINES_JSON_FILE="$tmp/ipv4-only-reader.json" \
   MACHINES_JSON_FILE="$tmp/healthy.json" \
   "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then
   echo "IPv4-only reader must fail the private-network queue path" >&2
+  exit 1
+fi
+jq '.[0].state = "stopped" | .[1].state = "started"' \
+  "$RAW_READER_MACHINES_JSON_FILE" > "$tmp/canary-only-reader.json"
+if RAW_READER_MACHINES_JSON_FILE="$tmp/canary-only-reader.json" \
+  MACHINES_JSON_FILE="$tmp/healthy.json" \
+  "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then
+  echo "a started canary must not satisfy the production reader invariant" >&2
   exit 1
 fi
 if MACHINES_JSON_FILE="$tmp/healthy.json" \

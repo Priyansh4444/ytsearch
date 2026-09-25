@@ -163,5 +163,21 @@
     "mutation_created": true,
     "initial_last_sequence": 0,
     "final_last_sequence": 1
+  },
+  "queue_worker_isolation_finding": {
+    "worker_machine": "8e426df7e305e8",
+    "configured_target": "http://ytsearch-raw-production.internal:8108",
+    "synthetic_operation_id": "protocol-channel-4444ee366532-1790297574",
+    "synthetic_operation_sequence": 1,
+    "work_database_sha256": "485d47970af4c60d8100be69b31feb2bd60f6ba03441665d1c1189fc813fed32",
+    "work_database_tables": {
+      "operations": 1,
+      "channel_mutations": 1,
+      "video_mutations": 0
+    },
+    "observed_worker_log_utc": "2026-09-25T00:57:58Z",
+    "worker_log_event": "Downloading Raw mutation snapshot through sequence 1",
+    "interpretation": "The worker consumed the canary protocol snapshot while the canary was started. The app-wide Raw DNS target cannot be treated as canary isolation; exact production Machine DNS pinning is required before another canary run.",
+    "production_publication_observed": false
   }
 }

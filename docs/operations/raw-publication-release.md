@@ -141,6 +141,19 @@ source-bound samples. The canary was stopped and its lease released after the
 CLI token expired during cleanup. This is a failed performance gate, not
 permission to switch the production reader.
 
+The same trial exposed an isolation failure: while the canary was started, the
+live queue worker using `ytsearch-raw-production.internal` downloaded the
+canary's synthetic protocol operation at sequence 1 into its own work volume.
+The worker rejected a generation compatibility mismatch and did not publish
+it. The source-bound receipt records the exact operation and copied work
+database hash. `dns.skip_registration` and an empty service list did not keep
+the app-wide name safe for this worker in the observed run. The queue target
+must be the exact production Machine name,
+`d89303da029328.vm.ytsearch-raw-production.internal`, and the canary runner
+now checks this before starting. Reconcile and verify the live worker first;
+keep the canary stopped until then. [Fly's private DNS documentation](https://fly.io/docs/networking/private-networking/)
+describes the exact Machine name as a way to address one Machine.
+
 ### Broad-query memory gate
 
 On August 31, 2026, repeated global warmups drove four uncancellable blocking

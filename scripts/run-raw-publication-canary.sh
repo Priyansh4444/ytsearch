@@ -433,6 +433,28 @@ if [[ "$(jq -r '.config.metadata.base_image_digest // ""' <<<"$builder")" != "$b
   exit 1
 fi
 
+# A started canary was observed through the app-wide .internal name by the
+# live queue worker despite dns.skip_registration. Require the production
+# worker to target the exact production reader before starting the canary.
+queue_app="$(jq -er '.resources.raw_queue_worker.app' "$FLY_PRODUCTION_INVENTORY_RESOLVED_PATH")"
+queue_machine_id="$(jq -er '.resources.raw_queue_worker.machine_id' "$FLY_PRODUCTION_INVENTORY_RESOLVED_PATH")"
+production_reader_id="$(jq -er '.resources.raw_reader.machine_id' "$FLY_PRODUCTION_INVENTORY_RESOLVED_PATH")"
+production_reader_app="$(jq -er '.resources.raw_reader.app' "$FLY_PRODUCTION_INVENTORY_RESOLVED_PATH")"
+expected_queue_target="http://${production_reader_id}.vm.${production_reader_app}.internal:8108"
+queue_machine="$(flyctl machine list --app "$queue_app" --json |
+  jq -ce --arg id "$queue_machine_id" '
+    [.[] | select(.id == $id)] |
+    if length == 1 then .[0] else error("exact Raw queue worker not found") end
+  ')"
+if ! jq -e --arg target "$expected_queue_target" '
+  .config.env.YTSEARCH_MACHINE_ROLE == "queue-indexer" and
+  .config.env.QUEUE_TARGET_BACKEND == "raw" and
+  .config.env.RAW_SEARCH_API_URL == $target
+' <<<"$queue_machine" >/dev/null; then
+  printf 'refusing canary start while the Raw queue worker can route to a canary\n' >&2
+  exit 1
+fi
+
 output_directory="${OUTPUT_DIR:-.search-experiment/results/raw-canary-${run_id}}"
 mkdir -p "$(dirname -- "$output_directory")"
 if ! mkdir "$output_directory"; then

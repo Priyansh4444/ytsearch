@@ -150,6 +150,10 @@ Raw can replace Typesense as the canonical search index.
     production stayed on generation 2950; see
     `P00/canary-baseline-2026-09-24.json`. The canary was recovered to stopped
     after a short-lived Fly CLI token expired during cleanup.
+    During that run the live worker's app-wide Raw DNS target consumed the
+    canary's synthetic sequence-1 mutation snapshot. No generation was
+    published; pin the worker to the exact production reader Machine and pass
+    the new canary isolation preflight before another run.
   - [x] Revalidate the retained schema-8 artifact on the stopped builder volume;
     record its exact path, job/corpus/manifest identity, 2.739 GB size, BLAKE3,
     and SHA-256, then stop the temporarily started sleep-only Machine.
