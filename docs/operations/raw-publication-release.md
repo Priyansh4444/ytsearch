@@ -203,8 +203,9 @@ The six-hour reader lease is a worst-case mutual-exclusion and recovery
 envelope derived from both complete builder runs, restarts, health checks, and
 cleanup. It does not keep a stopped Machine running for six hours; normal
 cleanup stops the Machines and releases both leases immediately.
-Machine API requests refresh the persisted `flyctl` login once after an HTTP
-401 or 403. Safe reads retry once. Mutations return the original rejection so
+With `FLY_MACHINE_SESSION_ALLOW_CLI_TOKEN_REFRESH=1`, Machine API requests
+refresh the persisted `flyctl` login once after an HTTP 401 or 403. Safe reads
+retry once. Mutations return the original rejection so
 their caller must resolve Machine state before deciding whether to issue a new
 request. This keeps cleanup viable when the original bearer expires during a
 long cold start without blindly replaying a mutation.
