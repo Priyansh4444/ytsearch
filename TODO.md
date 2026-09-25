@@ -143,6 +143,13 @@ Raw can replace Typesense as the canonical search index.
     shapes are now in the shared benchmark matrix; the Raw backend consumed
     nearly all recorded time, but its internal bottleneck remains unproven.
     See `P00/slow-searches-2026-09-22.md`.
+    A September 24 isolated 2 GiB reader canary opened the immutable schema-6
+    base and passed publication protocol v1, but its 165-request private-path
+    baseline failed the 200 ms gate: p95 462.734 ms, max 675.084 ms, with 11
+    existing benchmark cases above 250 ms. The builder never started and
+    production stayed on generation 2950; see
+    `P00/canary-baseline-2026-09-24.json`. The canary was recovered to stopped
+    after a short-lived Fly CLI token expired during cleanup.
   - [x] Revalidate the retained schema-8 artifact on the stopped builder volume;
     record its exact path, job/corpus/manifest identity, 2.739 GB size, BLAKE3,
     and SHA-256, then stop the temporarily started sleep-only Machine.

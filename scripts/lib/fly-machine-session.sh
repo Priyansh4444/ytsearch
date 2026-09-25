@@ -102,9 +102,28 @@ _fly_machine_session_url() {
 }
 
 _fly_machine_session_refresh_auth() {
-  _fly_machine_session_error \
-    "Fly rejected FLY_API_TOKEN; create a new scoped token and rerun the command"
-  return 1
+  local directory="$1"
+  local fresh_token temporary_header
+  if [[ "${FLY_MACHINE_SESSION_ALLOW_CLI_TOKEN_REFRESH:-0}" != 1 ]]; then
+    _fly_machine_session_error \
+      "Fly rejected FLY_API_TOKEN; create a new scoped token and rerun the command"
+    return 1
+  fi
+  if ! fresh_token="$(flyctl auth token)" \
+    || [[ -z "$fresh_token" || "$(printf '%s' "$fresh_token" | tr -d '\r\n')" != "$fresh_token" ]]; then
+    _fly_machine_session_error 'Fly CLI could not refresh the Machine API token'
+    return 1
+  fi
+  temporary_header="$directory/auth.header.refresh.$$"
+  (umask 077; printf 'Authorization: Bearer %s\n' "$fresh_token" > "$temporary_header")
+  unset fresh_token
+  chmod 600 "$temporary_header"
+  if cmp -s -- "$temporary_header" "$directory/auth.header"; then
+    rm -f -- "$temporary_header"
+    _fly_machine_session_error 'Fly CLI returned the same rejected Machine API token'
+    return 1
+  fi
+  mv -f -- "$temporary_header" "$directory/auth.header"
 }
 
 _fly_machine_session_request() {

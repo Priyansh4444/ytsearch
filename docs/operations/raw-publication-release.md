@@ -124,6 +124,23 @@ This is an integrity-check allowance, not a search-latency allowance: the
 2 GB canary took 193 seconds to fully checksum and open active generation 2145
 on August 31, 2026. Search cases still fail closed above 200 ms.
 
+When the operator uses a short-lived token from `flyctl auth token` as
+`FLY_API_TOKEN`, set `FLY_MACHINE_SESSION_ALLOW_CLI_TOKEN_REFRESH=1` for the
+gate. The Machine session helper then obtains a fresh CLI token after an
+authentication rejection. It only replays reads; a rejected mutation still
+requires an authoritative state check. A scoped token supplied directly in
+`FLY_API_TOKEN` keeps the default fail-closed behavior.
+
+The September 24 canary at source `4444ee366532` opened the immutable schema-6
+base and passed the authenticated publication protocol check, but failed before
+starting the builder. Its 165-request baseline had zero errors, p95 462.734 ms,
+and maximum 675.084 ms. Eleven existing benchmark cases exceeded 250 ms;
+`and the` reached 675.084 ms and `the` reached 532.820 ms. See
+`docs/experiments/search/schema9/P00/canary-baseline-2026-09-24.json` for the
+source-bound samples. The canary was stopped and its lease released after the
+CLI token expired during cleanup. This is a failed performance gate, not
+permission to switch the production reader.
+
 ### Broad-query memory gate
 
 On August 31, 2026, repeated global warmups drove four uncancellable blocking
