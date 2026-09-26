@@ -980,16 +980,27 @@ pub(super) fn inverse_document_frequency(documents: u32, frequency: u32) -> f32 
     (1.0 + (documents - frequency + 0.5) / (frequency + 0.5)).ln()
 }
 
+const BM25_K1: f32 = 1.2;
+const BM25_B: f32 = 0.75;
+
 pub(super) fn bm25(frequency: u32, document_tokens: u32, average_tokens: f32) -> f32 {
-    const K1: f32 = 1.2;
-    const B: f32 = 0.75;
-    let frequency = frequency as f32;
+    bm25_with_length_norm(frequency, bm25_length_norm(document_tokens, average_tokens))
+}
+
+/// The document-dependent BM25 denominator term. Streaming scans compute it
+/// once per document and share it across every matching term alternative.
+pub(super) fn bm25_length_norm(document_tokens: u32, average_tokens: f32) -> f32 {
     let normalized_length = if average_tokens > 0.0 {
         document_tokens as f32 / average_tokens
     } else {
         1.0
     };
-    frequency * (K1 + 1.0) / (frequency + K1 * (1.0 - B + B * normalized_length))
+    BM25_K1 * (1.0 - BM25_B + BM25_B * normalized_length)
+}
+
+pub(super) fn bm25_with_length_norm(frequency: u32, length_norm: f32) -> f32 {
+    let frequency = frequency as f32;
+    frequency * (BM25_K1 + 1.0) / (frequency + length_norm)
 }
 
 pub(super) fn token_position_multiplier(first_position: u32, enabled: bool) -> f32 {

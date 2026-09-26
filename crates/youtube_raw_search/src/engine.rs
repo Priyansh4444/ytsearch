@@ -207,6 +207,7 @@ mod broad_measure;
 mod broad_single;
 mod builder;
 mod conjunction;
+mod partition;
 mod query_support;
 mod single_token;
 mod storage;
@@ -281,6 +282,7 @@ struct EngineInner {
     broad_single: Option<broad_single::BroadSingleIndex>,
     documents: MappedFile,
     metadata: DocumentTable,
+    partition: Option<partition::DocumentPartition>,
     index_bytes: u64,
 }
 
@@ -1513,26 +1515,41 @@ impl RawSearchEngine {
             .fold(0_u8, |mask, alternative| {
                 mask | alternative.fields.exact_mask
             });
+        let partitions = self.scan_document_partitions(|range| {
+            let mut groups = self.empty_group_slots();
+            let mut documents = 0_usize;
+            let mut exact_matches = Vec::new();
+            self.visit_plan_conjunction_range(&plans, range, |candidate, record| {
+                documents = documents.saturating_add(1);
+                if documents <= MAX_EXACT_PROXIMITY_MATCHES {
+                    exact_matches.push(candidate);
+                } else if documents == MAX_EXACT_PROXIMITY_MATCHES + 1 {
+                    exact_matches.clear();
+                    exact_matches.shrink_to_fit();
+                }
+                self.record_group_match_values(
+                    &mut groups,
+                    candidate,
+                    record.video,
+                    record.t_start_ms,
+                    hits_per_group,
+                    Some(full_exact_mask),
+                )
+            })?;
+            Ok((groups, documents, exact_matches))
+        })?;
         let mut groups = self.empty_group_slots();
         let mut documents = 0_usize;
         let mut exact_matches = Vec::new();
-        self.visit_plan_conjunction(&plans, |candidate, record| {
-            documents = documents.saturating_add(1);
+        for (partition_groups, partition_documents, partition_matches) in partitions {
+            partition::merge_disjoint_groups(&mut groups, partition_groups)?;
+            documents = documents.saturating_add(partition_documents);
             if documents <= MAX_EXACT_PROXIMITY_MATCHES {
-                exact_matches.push(candidate);
-            } else if documents == MAX_EXACT_PROXIMITY_MATCHES + 1 {
-                exact_matches.clear();
-                exact_matches.shrink_to_fit();
+                exact_matches.extend(partition_matches);
+            } else {
+                exact_matches = Vec::new();
             }
-            self.record_group_match_values(
-                &mut groups,
-                candidate,
-                record.video,
-                record.t_start_ms,
-                hits_per_group,
-                Some(full_exact_mask),
-            )
-        })?;
+        }
         let found = groups.iter().flatten().count();
         match broad_grouped_disposition(documents, found) {
             BroadGroupedDisposition::PreserveExact => {
@@ -1599,17 +1616,24 @@ impl RawSearchEngine {
         let dominant_exact_mask = plan.alternatives.iter().fold(0_u8, |mask, alternative| {
             mask | alternative.fields.exact_mask
         });
-        let mut groups = self.empty_group_slots();
-        self.visit_term_plan(plan, |candidate, record| {
-            self.record_group_match_values(
-                &mut groups,
-                candidate,
-                record.video,
-                record.t_start_ms,
-                hits_per_group,
-                Some(dominant_exact_mask),
-            )
+        let partitions = self.scan_document_partitions(|range| {
+            let mut groups = self.empty_group_slots();
+            self.visit_term_plan_range(plan, range, |candidate, record| {
+                self.record_group_match_values(
+                    &mut groups,
+                    candidate,
+                    record.video,
+                    record.t_start_ms,
+                    hits_per_group,
+                    Some(dominant_exact_mask),
+                )
+            })?;
+            Ok(groups)
         })?;
+        let mut groups = self.empty_group_slots();
+        for partition_groups in partitions {
+            partition::merge_disjoint_groups(&mut groups, partition_groups)?;
+        }
         if groups.iter().flatten().count() < TYPO_RESULT_THRESHOLD {
             return Ok(None);
         }

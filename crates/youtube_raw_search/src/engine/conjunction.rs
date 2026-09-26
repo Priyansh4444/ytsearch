@@ -219,6 +219,10 @@ impl RawSearchEngine {
         Ok((plans, highlights))
     }
 
+    fn document_length_norm(&self, document_tokens: u32) -> f32 {
+        bm25_length_norm(document_tokens, self.inner.manifest.average_document_tokens)
+    }
+
     pub(super) fn stream_plan_conjunction(&self, plans: &[TermPlan]) -> Result<Vec<DocMatch>> {
         let mut matches = Vec::new();
         self.visit_plan_conjunction(plans, |candidate, _| {
@@ -228,21 +232,88 @@ impl RawSearchEngine {
         Ok(matches)
     }
 
-    pub(super) fn visit_term_plan<F>(&self, plan: &TermPlan, mut visit: F) -> Result<()>
+    pub(super) fn visit_term_plan<F>(&self, plan: &TermPlan, visit: F) -> Result<()>
+    where
+        F: FnMut(DocMatch, SearchDocumentRecord) -> Result<()>,
+    {
+        self.visit_term_plan_range(plan, 0..self.inner.manifest.documents, visit)
+    }
+
+    /// Visits matches with document IDs in `documents`. Only a range that
+    /// reaches the final document validates the complete posting lists; that
+    /// range decodes every earlier posting while seeking to its start.
+    pub(super) fn visit_term_plan_range<F>(
+        &self,
+        plan: &TermPlan,
+        documents: std::ops::Range<u32>,
+        visit: F,
+    ) -> Result<()>
+    where
+        F: FnMut(DocMatch, SearchDocumentRecord) -> Result<()>,
+    {
+        let checkpoints = self.text_checkpoints_at(documents.start);
+        self.visit_term_plan_from(plan, documents, checkpoints, visit)
+    }
+
+    pub(super) fn visit_term_plan_from<F>(
+        &self,
+        plan: &TermPlan,
+        documents: std::ops::Range<u32>,
+        checkpoints: Option<&HashMap<u32, partition::TextSeekCheckpoint>>,
+        mut visit: F,
+    ) -> Result<()>
     where
         F: FnMut(DocMatch, SearchDocumentRecord) -> Result<()>,
     {
         let mut stream = StreamingTermPlan::new(self, plan)?;
-        stream.advance_to(0)?;
+        if let Some(checkpoints) = checkpoints {
+            stream.restore_checkpoints(checkpoints);
+        }
+        stream.advance_to(documents.start)?;
         while let Some(document) = stream.current_document() {
+            if document >= documents.end {
+                break;
+            }
             let record = self.inner.metadata.search_document(document)?;
-            let candidate = stream.take_current(record.tokens)?;
+            let length_norm = self.document_length_norm(record.tokens);
+            let candidate = stream.take_current(length_norm)?;
             visit(candidate, record)?;
         }
-        stream.finish()
+        if documents.end >= self.inner.manifest.documents {
+            stream.finish()?;
+        }
+        Ok(())
     }
 
-    pub(super) fn visit_plan_conjunction<F>(&self, plans: &[TermPlan], mut visit: F) -> Result<()>
+    pub(super) fn visit_plan_conjunction<F>(&self, plans: &[TermPlan], visit: F) -> Result<()>
+    where
+        F: FnMut(DocMatch, SearchDocumentRecord) -> Result<()>,
+    {
+        self.visit_plan_conjunction_range(plans, 0..self.inner.manifest.documents, visit)
+    }
+
+    /// Range-bounded conjunction with the same validation rule as
+    /// `visit_term_plan_range`.
+    pub(super) fn visit_plan_conjunction_range<F>(
+        &self,
+        plans: &[TermPlan],
+        documents: std::ops::Range<u32>,
+        visit: F,
+    ) -> Result<()>
+    where
+        F: FnMut(DocMatch, SearchDocumentRecord) -> Result<()>,
+    {
+        let checkpoints = self.text_checkpoints_at(documents.start);
+        self.visit_plan_conjunction_from(plans, documents, checkpoints, visit)
+    }
+
+    pub(super) fn visit_plan_conjunction_from<F>(
+        &self,
+        plans: &[TermPlan],
+        documents: std::ops::Range<u32>,
+        checkpoints: Option<&HashMap<u32, partition::TextSeekCheckpoint>>,
+        mut visit: F,
+    ) -> Result<()>
     where
         F: FnMut(DocMatch, SearchDocumentRecord) -> Result<()>,
     {
@@ -256,7 +327,10 @@ impl RawSearchEngine {
             .map(|plan| StreamingTermPlan::new(self, plan))
             .collect::<Result<Vec<_>>>()?;
         for stream in &mut streams {
-            stream.advance_to(0)?;
+            if let Some(checkpoints) = checkpoints {
+                stream.restore_checkpoints(checkpoints);
+            }
+            stream.advance_to(documents.start)?;
         }
         loop {
             let mut target = 0;
@@ -268,7 +342,7 @@ impl RawSearchEngine {
                 };
                 target = target.max(document);
             }
-            if exhausted {
+            if exhausted || target >= documents.end {
                 break;
             }
             for stream in &mut streams {
@@ -281,20 +355,23 @@ impl RawSearchEngine {
                 continue;
             }
             let record = self.inner.metadata.search_document(target)?;
+            let length_norm = self.document_length_norm(record.tokens);
             let mut stream_matches = streams.iter_mut();
             let mut combined = stream_matches
                 .next()
                 .ok_or_else(|| Error::Corrupt("streaming conjunction is empty".to_string()))?
-                .take_current(record.tokens)?;
+                .take_current(length_norm)?;
             for stream in stream_matches {
-                let next = stream.take_current(record.tokens)?;
+                let next = stream.take_current(length_norm)?;
                 combined = combine_plan_matches(target, combined, next);
             }
             visit(combined, record)?;
         }
 
-        for stream in &mut streams {
-            stream.finish()?;
+        if documents.end >= self.inner.manifest.documents {
+            for stream in &mut streams {
+                stream.finish()?;
+            }
         }
         Ok(())
     }
@@ -751,14 +828,27 @@ impl<'a> TextAlternativeCursor<'a> {
         self.validate_complete()
     }
 
-    fn contribution(&self, document_tokens: u32) -> Option<DocMatch> {
+    /// Resumes a fresh cursor after the checkpoint's postings. The final
+    /// partition still validates the complete count from the restored total.
+    fn restore_checkpoint(&mut self, checkpoint: partition::TextSeekCheckpoint) {
+        debug_assert_eq!(self.decoded, 0);
+        let position_cursor = match (self.positions, checkpoint.position_cursor) {
+            (None, _) => 0,
+            (Some(_), Some(position_cursor)) => position_cursor,
+            (Some(_), None) => return,
+        };
+        self.posting_cursor = checkpoint.posting_cursor;
+        self.position_cursor = position_cursor;
+        self.previous_document = checkpoint.previous_document;
+        self.decoded = checkpoint.decoded;
+        self.current = None;
+    }
+
+    fn contribution(&self, length_norm: f32) -> Option<DocMatch> {
         let (document, frequency, first_position) = self.current?;
         let fields = self.alternative.fields;
-        let score = bm25(
-            frequency,
-            document_tokens,
-            self.engine.inner.manifest.average_document_tokens,
-        ) * self.idf
+        let score = bm25_with_length_norm(frequency, length_norm)
+            * self.idf
             * TEXT_QUERY_WEIGHT
             * token_position_multiplier(first_position, fields.prioritize_position)
             * self.alternative.score_multiplier;
@@ -825,6 +915,14 @@ impl<'a> StreamingTermPlan<'a> {
         self.current_document
     }
 
+    fn restore_checkpoints(&mut self, checkpoints: &HashMap<u32, partition::TextSeekCheckpoint>) {
+        for cursor in &mut self.text {
+            if let Some(checkpoint) = checkpoints.get(&cursor.alternative.entry.term) {
+                cursor.restore_checkpoint(*checkpoint);
+            }
+        }
+    }
+
     fn refresh_current_document(&mut self) {
         let mut current_document = self.title.current_document();
         let mut active_text = 0_u64;
@@ -860,7 +958,7 @@ impl<'a> StreamingTermPlan<'a> {
         Ok(())
     }
 
-    fn take_current(&mut self, document_tokens: u32) -> Result<DocMatch> {
+    fn take_current(&mut self, length_norm: f32) -> Result<DocMatch> {
         let document = self
             .current_document
             .ok_or_else(|| Error::Corrupt("streaming plan has no current document".to_string()))?;
@@ -871,7 +969,7 @@ impl<'a> StreamingTermPlan<'a> {
             active_text &= active_text - 1;
             let cursor = &mut self.text[index];
             debug_assert_eq!(cursor.current_document(), Some(document));
-            if let Some(contribution) = cursor.contribution(document_tokens) {
+            if let Some(contribution) = cursor.contribution(length_norm) {
                 merge_plan_contribution(&mut combined, contribution);
             }
             cursor.consume_current()?;
@@ -974,17 +1072,22 @@ impl<'a> TitlePlanCursor<'a> {
         self.pending.peek().map(|entry| entry.0.0)
     }
 
+    // Advance the heap top in place: one video usually stays the minimum for
+    // its whole document run, so PeekMut's early-exit sift beats pop + push.
     fn advance_to(&mut self, target: u32) {
-        while self
-            .current_document()
-            .is_some_and(|document| document < target)
-        {
-            let std::cmp::Reverse((_, index)) = self.pending.pop().expect("title heap entry");
+        while let Some(mut top) = self.pending.peek_mut() {
+            let std::cmp::Reverse((document, index)) = *top;
+            if document >= target {
+                break;
+            }
             let video = &mut self.videos[index];
             video.document_index += video.documents[video.document_index..]
                 .partition_point(|document| *document < target);
-            if let Some(&document) = video.documents.get(video.document_index) {
-                self.pending.push(std::cmp::Reverse((document, index)));
+            match video.documents.get(video.document_index) {
+                Some(&next) => *top = std::cmp::Reverse((next, index)),
+                None => {
+                    std::collections::binary_heap::PeekMut::pop(top);
+                }
             }
         }
     }
@@ -994,16 +1097,22 @@ impl<'a> TitlePlanCursor<'a> {
             .current_document()
             .ok_or_else(|| Error::Corrupt("title plan has no current document".to_string()))?;
         let mut combined = None;
-        while self.current_document() == Some(document) {
-            let std::cmp::Reverse((_, index)) = self.pending.pop().expect("title heap entry");
+        while let Some(mut top) = self.pending.peek_mut() {
+            let std::cmp::Reverse((current, index)) = *top;
+            if current != document {
+                break;
+            }
             let video = &mut self.videos[index];
             merge_plan_contribution(
                 &mut combined,
                 DocMatch::with_exact_mask(document, video.score, false, video.exact_mask),
             );
             video.document_index += 1;
-            if let Some(&next) = video.documents.get(video.document_index) {
-                self.pending.push(std::cmp::Reverse((next, index)));
+            match video.documents.get(video.document_index) {
+                Some(&next) => *top = std::cmp::Reverse((next, index)),
+                None => {
+                    std::collections::binary_heap::PeekMut::pop(top);
+                }
             }
         }
         combined.ok_or_else(|| Error::Corrupt("title plan contribution is empty".to_string()))
