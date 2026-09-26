@@ -328,6 +328,10 @@ struct PhraseCursor<'a> {
 
 struct ParsedQuery {
     terms: Vec<String>,
+    // Unquoted tokens in query order, duplicates kept. `terms` is the distinct
+    // set used for matching; ordered-phrase evidence needs the real sequence,
+    // or "the end of the world" would be judged as "the end of world".
+    sequence: Vec<String>,
     phrases: Vec<Vec<String>>,
     excluded_terms: Vec<String>,
     excluded_phrases: Vec<Vec<String>>,
@@ -338,6 +342,7 @@ struct QueryParser {
     seen: HashSet<String>,
     excluded_seen: HashSet<String>,
     terms: Vec<String>,
+    sequence: Vec<String>,
     phrases: Vec<Vec<String>>,
     excluded_terms: Vec<String>,
     excluded_phrases: Vec<Vec<String>>,
@@ -368,6 +373,7 @@ type HighlightGroups = Vec<Vec<String>>;
 
 struct CandidateSearch<'a> {
     constraints: SearchConstraints<'a>,
+    sequence: &'a [String],
     initial: Option<InitialConjunction>,
     skip_exact: bool,
 }
@@ -644,6 +650,7 @@ impl RawSearchEngine {
             return self.search_quoted(params, parsed, fields, &excluded_documents);
         }
         let terms = parsed.terms;
+        let sequence = parsed.sequence;
 
         if terms.len() == 1 {
             if filter.is_none()
@@ -686,7 +693,13 @@ impl RawSearchEngine {
         let fast_enough = !skip_exact
             && self.reaches_result_threshold(params, &fast_matches, TYPO_RESULT_THRESHOLD)?;
         if fast_enough {
-            self.apply_exact_proximity(&terms, fields, &mut fast_matches, &mut block_cache)?;
+            self.apply_exact_proximity(
+                &terms,
+                &sequence,
+                fields,
+                &mut fast_matches,
+                &mut block_cache,
+            )?;
             return self.format_matches(params, &fast_highlights, fast_matches, &mut block_cache);
         }
 
@@ -702,6 +715,7 @@ impl RawSearchEngine {
             true,
             CandidateSearch {
                 constraints,
+                sequence: &sequence,
                 initial: Some(InitialConjunction {
                     matches: fast_matches,
                     highlights: fast_highlights,
@@ -735,6 +749,7 @@ impl RawSearchEngine {
                 false,
                 CandidateSearch {
                     constraints,
+                    sequence: &terms[..retained],
                     initial: None,
                     skip_exact: false,
                 },
@@ -751,6 +766,7 @@ impl RawSearchEngine {
                 true,
                 CandidateSearch {
                     constraints,
+                    sequence: &terms[dropped..],
                     initial: None,
                     skip_exact: false,
                 },
@@ -869,9 +885,12 @@ impl RawSearchEngine {
         Ok(PositionTargets { documents, videos })
     }
 
+    /// Applies proximity over the distinct `terms` and ordered-phrase evidence
+    /// over `sequence`, the query's tokens in order with duplicates.
     fn apply_exact_proximity(
         &self,
         terms: &[String],
+        sequence: &[String],
         fields: QueryFields,
         matches: &mut [DocMatch],
         cache: &mut BlockCache,
@@ -884,15 +903,17 @@ impl RawSearchEngine {
             return Ok(());
         }
         if matches.len() <= MAX_DIRECT_POSITION_TARGETS {
-            return self.apply_exact_proximity_from_documents(terms, fields, matches, cache);
+            return self
+                .apply_exact_proximity_from_documents(terms, sequence, fields, matches, cache);
         }
-        if self.try_apply_exact_bigram(terms, fields, matches)? {
+        // The bigram sidecar proves adjacency of exactly two distinct tokens.
+        if sequence == terms && self.try_apply_exact_bigram(terms, fields, matches)? {
             // Schema 7 makes exact adjacency and its earliest offset authoritative for
             // large two-token result sets. Non-adjacent candidates retain their BM25
             // score instead of faulting the complete positional streams back into RAM.
             return Ok(());
         }
-        self.apply_exact_proximity_from_postings(terms, fields, matches)
+        self.apply_exact_proximity_from_postings(terms, sequence, fields, matches)
     }
 
     fn try_apply_exact_bigram(
@@ -944,10 +965,12 @@ impl RawSearchEngine {
     fn apply_exact_proximity_from_postings(
         &self,
         terms: &[String],
+        sequence: &[String],
         fields: QueryFields,
         matches: &mut [DocMatch],
     ) -> Result<()> {
         let terms = &terms[..terms.len().min(MAX_PROXIMITY_TOKENS)];
+        let sequence = &sequence[..sequence.len().min(MAX_PROXIMITY_TOKENS)];
         let targets = self.position_targets(matches)?;
         let text_windows = if fields.text {
             self.position_windows_for_field(terms, IndexedField::Text, &targets.documents)?
@@ -959,7 +982,7 @@ impl RawSearchEngine {
         } else {
             Vec::new()
         };
-        let ordered_phrases = self.phrase_field_matches(terms, fields, &targets, 0)?;
+        let ordered_phrases = self.phrase_field_matches(sequence, fields, &targets, 0)?;
         for candidate in matches {
             let text_multiplier = candidate
                 .matches_text()
@@ -990,11 +1013,13 @@ impl RawSearchEngine {
     fn apply_exact_proximity_from_documents(
         &self,
         terms: &[String],
+        sequence: &[String],
         fields: QueryFields,
         matches: &mut [DocMatch],
         cache: &mut BlockCache,
     ) -> Result<()> {
         let terms = &terms[..terms.len().min(MAX_PROXIMITY_TOKENS)];
+        let sequence = &sequence[..sequence.len().min(MAX_PROXIMITY_TOKENS)];
         for candidate in matches {
             let record = self.inner.metadata.document(candidate.document())?;
             let video = self
@@ -1007,13 +1032,13 @@ impl RawSearchEngine {
                 document
                     .get("text")
                     .and_then(Value::as_str)
-                    .map(|value| positional_summary(value, terms))
+                    .map(|value| positional_summary(value, terms, sequence))
             } else {
                 None
             };
             let title_summary = fields
                 .title
-                .then(|| positional_summary(&video.title, terms));
+                .then(|| positional_summary(&video.title, terms, sequence));
             let text_multiplier = text_summary
                 .and_then(|summary| summary.window)
                 .map(|window| proximity_multiplier(window, terms.len(), fields.prioritize_position))
@@ -1144,7 +1169,13 @@ impl RawSearchEngine {
             retain_not_excluded(&mut matches, search.constraints.excluded_documents);
             let enough = self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)?;
             if enough {
-                self.apply_exact_proximity(terms, fields, &mut matches, block_cache)?;
+                self.apply_exact_proximity(
+                    terms,
+                    search.sequence,
+                    fields,
+                    &mut matches,
+                    block_cache,
+                )?;
                 return Ok(Some((matches, highlight_terms)));
             }
             if typo_distance == maximum_distance {
@@ -1154,7 +1185,13 @@ impl RawSearchEngine {
                 let has_sparse_result =
                     self.reaches_result_threshold(params, &matches, DROP_RESULT_THRESHOLD)?;
                 return if has_complete_exact_match && has_sparse_result {
-                    self.apply_exact_proximity(terms, fields, &mut matches, block_cache)?;
+                    self.apply_exact_proximity(
+                        terms,
+                        search.sequence,
+                        fields,
+                        &mut matches,
+                        block_cache,
+                    )?;
                     Ok(Some((matches, highlight_terms)))
                 } else {
                     Ok(None)

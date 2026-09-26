@@ -463,6 +463,7 @@ pub(super) fn parse_query(value: &str) -> Result<ParsedQuery> {
     record_unquoted_segment(&mut segment, allow_leading_exclusion, &mut parser)?;
     Ok(ParsedQuery {
         terms: parser.terms,
+        sequence: parser.sequence,
         phrases: parser.phrases,
         excluded_terms: parser.excluded_terms,
         excluded_phrases: parser.excluded_phrases,
@@ -516,8 +517,11 @@ pub(super) fn record_unquoted_segment(
             if parser.excluded_seen.insert(token.clone()) {
                 parser.excluded_terms.push(token);
             }
-        } else if parser.seen.insert(token.clone()) {
-            parser.terms.push(token);
+        } else {
+            if parser.seen.insert(token.clone()) {
+                parser.terms.push(token.clone());
+            }
+            parser.sequence.push(token);
         }
     }
     segment.clear();
@@ -609,7 +613,11 @@ pub(super) struct PositionalSummary {
     pub(super) ordered: bool,
 }
 
-pub(super) fn positional_summary(value: &str, terms: &[String]) -> PositionalSummary {
+pub(super) fn positional_summary(
+    value: &str,
+    terms: &[String],
+    sequence: &[String],
+) -> PositionalSummary {
     let tokens = ordered_tokens(value);
     let mut positions = vec![Vec::new(); terms.len()];
     for (position, token) in tokens.iter().enumerate() {
@@ -624,7 +632,9 @@ pub(super) fn positional_summary(value: &str, terms: &[String]) -> PositionalSum
     }
     let window =
         minimum_position_window_slices(&positions.iter().map(Vec::as_slice).collect::<Vec<_>>());
-    let ordered = tokens.windows(terms.len()).any(|window| window == terms);
+    let ordered = tokens
+        .windows(sequence.len())
+        .any(|window| window == sequence);
     PositionalSummary { window, ordered }
 }
 
