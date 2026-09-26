@@ -77,11 +77,11 @@ on-demand publication builder. Provisioned volumes are 20 GiB on the reader,
 20 GiB on its stopped canary, 10 GiB on the queue worker, 20 GiB on the stopped
 builder, and 1 GiB on the API.
 
-On September 24 the queue worker was stopped and staged with the current
+On September 25 the queue worker was stopped and staged with the current
 entrypoint and 62-handle list. Its Raw URL now names the exact production
 reader Machine, and `DAILY_UPDATE_ENABLED=1` is configured. The reader still
 binds IPv4, so the full queue checker fails and neither publication nor daily
-indexing has resumed. The [staging receipt](../experiments/search/schema9/P00/queue-stage-2026-09-24.json)
+indexing has resumed. The [staging receipt](../experiments/search/schema9/P00/queue-stage-2026-09-25.json)
 records the live Machine version and embedded-file hashes. The cost table below
 is the earlier named running-worker baseline; a stopped worker temporarily
 removes its running CPU charge, while its volume remains provisioned.

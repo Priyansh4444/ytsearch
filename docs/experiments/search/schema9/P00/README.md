@@ -24,9 +24,9 @@ indexed, or deleted data.
   different metrics and neither is relabeled as the other.
 - The Raw queue worker was running. Its queue loop was enabled, while its daily
   update loop was disabled. P00 only observed it and did not start a job.
-- On 2026-09-24 the exact worker was stopped and staged with the current queue
+- On 2026-09-25 the exact worker was stopped and staged with the current queue
   entrypoint, 62-handle list, production-Machine-specific reader URL, and daily
-  loop enabled. The [staging receipt](queue-stage-2026-09-24.json) verifies the
+  loop enabled. The [staging receipt](queue-stage-2026-09-25.json) verifies the
   live Machine configuration and embedded file hashes. The reader remains
   IPv4-only, so the full health gate fails and daily indexing has not resumed.
 - A later read-only exact handle comparison found 62 configured handles but 61

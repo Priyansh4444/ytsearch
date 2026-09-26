@@ -143,12 +143,12 @@ Raw can replace Typesense as the canonical search index.
     shapes are now in the shared benchmark matrix; the Raw backend consumed
     nearly all recorded time, but its internal bottleneck remains unproven.
     See `P00/slow-searches-2026-09-22.md`.
-    A September 24 isolated 2 GiB reader canary opened the immutable schema-6
+    A September 25 isolated 2 GiB reader canary opened the immutable schema-6
     base and passed publication protocol v1, but its 165-request private-path
     baseline failed the 200 ms gate: p95 462.734 ms, max 675.084 ms, with 11
     existing benchmark cases above 250 ms. The builder never started and
     production stayed on generation 2950; see
-    `P00/canary-baseline-2026-09-24.json`. The canary was recovered to stopped
+    `P00/canary-baseline-2026-09-25.json`. The canary was recovered to stopped
     after a short-lived Fly CLI token expired during cleanup.
     During that run the live worker's app-wide Raw DNS target consumed the
     canary's synthetic sequence-1 mutation snapshot. No generation was
@@ -849,11 +849,11 @@ Raw can replace Typesense as the canonical search index.
   and verify a newly released video's transcript is searchable. On 2026-09-10,
   the live worker had daily refresh disabled, no completion timestamp, and a
   pending publication marker.
-  On 2026-09-24 the exact worker was stopped and reconciled with the current
+  On 2026-09-25 the exact worker was stopped and reconciled with the current
   entrypoint, 62-handle list, production-Machine-specific Raw URL, and
   `DAILY_UPDATE_ENABLED=1`. It remains stopped while the reader is IPv4-only;
   the staged configuration passes, but daily execution and publication do not.
-  See `P00/queue-stage-2026-09-24.json`.
+  See `P00/queue-stage-2026-09-25.json`.
 - [ ] Restore private reader connectivity before claiming queue recovery.
   On 2026-09-07, the worker exited with code 1 during admin readiness;
   an independent builder probe resolved private DNS but received connection
