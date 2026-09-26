@@ -865,7 +865,7 @@ impl RawSearchEngine {
         targets: &[u32],
     ) -> Result<Vec<(u32, PositionalWindow)>> {
         self.evaluate_positions_for_field(terms, field, targets, |target, cursors| {
-            minimum_position_window(cursors).map(|window| (target, window))
+            minimum_position_window_slices(cursors).map(|window| (target, window))
         })
     }
 
@@ -1068,7 +1068,7 @@ impl RawSearchEngine {
         mut evaluate: F,
     ) -> Result<Vec<T>>
     where
-        F: FnMut(u32, &[PhraseCursor<'_>]) -> Option<T>,
+        F: FnMut(u32, &[&[u32]]) -> Option<T>,
     {
         if targets.is_empty() {
             return Ok(Vec::new());
@@ -1076,8 +1076,18 @@ impl RawSearchEngine {
         let full_positions = self.inner.full_positions.as_ref().ok_or_else(|| {
             Error::InvalidInput("phrase search requires complete positions".to_string())
         })?;
+        // One cursor per distinct token: a phrase that repeats "the" must not
+        // walk that token's complete position stream twice.
         let mut cursors = Vec::with_capacity(terms.len());
+        let mut cursor_terms: Vec<&str> = Vec::with_capacity(terms.len());
+        let mut slots = Vec::with_capacity(terms.len());
         for term in terms {
+            if let Some(slot) = cursor_terms.iter().position(|seen| *seen == term.as_str()) {
+                slots.push(slot);
+                continue;
+            }
+            slots.push(cursors.len());
+            cursor_terms.push(term);
             let Some(entry) = self.inner.lexicon.lookup(term)? else {
                 return Ok(Vec::new());
             };
@@ -1116,7 +1126,11 @@ impl RawSearchEngine {
             if cursors.iter().any(|cursor| cursor.id != Some(target)) {
                 continue;
             }
-            if let Some(value) = evaluate(target, &cursors) {
+            let positions = slots
+                .iter()
+                .map(|&slot| cursors[slot].positions.as_slice())
+                .collect::<Vec<_>>();
+            if let Some(value) = evaluate(target, &positions) {
                 output.push(value);
             }
         }

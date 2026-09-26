@@ -638,18 +638,18 @@ pub(super) fn positional_summary(
     PositionalSummary { window, ordered }
 }
 
-pub(super) fn ordered_phrase_positions_match(cursors: &[PhraseCursor<'_>], slop: u8) -> bool {
-    let Some(first) = cursors.first() else {
+/// `positions[i]` holds the positions of the phrase's `i`th token; repeated
+/// tokens share one list.
+pub(super) fn ordered_phrase_positions_match(positions: &[&[u32]], slop: u8) -> bool {
+    let Some(first) = positions.first() else {
         return false;
     };
-    first.positions.iter().copied().any(|start| {
+    first.iter().copied().any(|start| {
         let mut previous = start;
         let mut used_slop = 0_u32;
-        for cursor in cursors.iter().skip(1) {
-            let next_index = cursor
-                .positions
-                .partition_point(|position| *position <= previous);
-            let Some(&next) = cursor.positions.get(next_index) else {
+        for token_positions in positions.iter().skip(1) {
+            let next_index = token_positions.partition_point(|position| *position <= previous);
+            let Some(&next) = token_positions.get(next_index) else {
                 return false;
             };
             used_slop = used_slop.saturating_add(next - previous - 1);
@@ -662,16 +662,7 @@ pub(super) fn ordered_phrase_positions_match(cursors: &[PhraseCursor<'_>], slop:
     })
 }
 
-pub(super) fn minimum_position_window(cursors: &[PhraseCursor<'_>]) -> Option<PositionalWindow> {
-    minimum_position_window_slices(
-        &cursors
-            .iter()
-            .map(|cursor| cursor.positions.as_slice())
-            .collect::<Vec<_>>(),
-    )
-}
-
-fn minimum_position_window_slices(positions: &[&[u32]]) -> Option<PositionalWindow> {
+pub(super) fn minimum_position_window_slices(positions: &[&[u32]]) -> Option<PositionalWindow> {
     if positions.len() < 2 || positions.iter().any(|values| values.is_empty()) {
         return None;
     }
