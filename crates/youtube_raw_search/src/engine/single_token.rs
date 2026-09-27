@@ -511,7 +511,7 @@ impl RawSearchEngine {
         cache: &mut BlockCache,
     ) -> Result<()> {
         if compact_split_proximity_is_bounded(matches.len()) {
-            self.apply_exact_proximity(terms, fields, matches, cache)?;
+            self.apply_exact_proximity(terms, terms, fields, matches, cache)?;
             if rank == OrderedSplitRank::QueryEquivalent {
                 for candidate in matches {
                     if candidate.ordered_phrase() && candidate.exact_mask() == 0 {

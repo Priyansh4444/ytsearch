@@ -463,6 +463,7 @@ pub(super) fn parse_query(value: &str) -> Result<ParsedQuery> {
     record_unquoted_segment(&mut segment, allow_leading_exclusion, &mut parser)?;
     Ok(ParsedQuery {
         terms: parser.terms,
+        sequence: parser.sequence,
         phrases: parser.phrases,
         excluded_terms: parser.excluded_terms,
         excluded_phrases: parser.excluded_phrases,
@@ -516,8 +517,11 @@ pub(super) fn record_unquoted_segment(
             if parser.excluded_seen.insert(token.clone()) {
                 parser.excluded_terms.push(token);
             }
-        } else if parser.seen.insert(token.clone()) {
-            parser.terms.push(token);
+        } else {
+            if parser.seen.insert(token.clone()) {
+                parser.terms.push(token.clone());
+            }
+            parser.sequence.push(token);
         }
     }
     segment.clear();
@@ -609,7 +613,11 @@ pub(super) struct PositionalSummary {
     pub(super) ordered: bool,
 }
 
-pub(super) fn positional_summary(value: &str, terms: &[String]) -> PositionalSummary {
+pub(super) fn positional_summary(
+    value: &str,
+    terms: &[String],
+    sequence: &[String],
+) -> PositionalSummary {
     let tokens = ordered_tokens(value);
     let mut positions = vec![Vec::new(); terms.len()];
     for (position, token) in tokens.iter().enumerate() {
@@ -624,22 +632,24 @@ pub(super) fn positional_summary(value: &str, terms: &[String]) -> PositionalSum
     }
     let window =
         minimum_position_window_slices(&positions.iter().map(Vec::as_slice).collect::<Vec<_>>());
-    let ordered = tokens.windows(terms.len()).any(|window| window == terms);
+    let ordered = tokens
+        .windows(sequence.len())
+        .any(|window| window == sequence);
     PositionalSummary { window, ordered }
 }
 
-pub(super) fn ordered_phrase_positions_match(cursors: &[PhraseCursor<'_>], slop: u8) -> bool {
-    let Some(first) = cursors.first() else {
+/// `positions[i]` holds the positions of the phrase's `i`th token; repeated
+/// tokens share one list.
+pub(super) fn ordered_phrase_positions_match(positions: &[&[u32]], slop: u8) -> bool {
+    let Some(first) = positions.first() else {
         return false;
     };
-    first.positions.iter().copied().any(|start| {
+    first.iter().copied().any(|start| {
         let mut previous = start;
         let mut used_slop = 0_u32;
-        for cursor in cursors.iter().skip(1) {
-            let next_index = cursor
-                .positions
-                .partition_point(|position| *position <= previous);
-            let Some(&next) = cursor.positions.get(next_index) else {
+        for token_positions in positions.iter().skip(1) {
+            let next_index = token_positions.partition_point(|position| *position <= previous);
+            let Some(&next) = token_positions.get(next_index) else {
                 return false;
             };
             used_slop = used_slop.saturating_add(next - previous - 1);
@@ -652,16 +662,7 @@ pub(super) fn ordered_phrase_positions_match(cursors: &[PhraseCursor<'_>], slop:
     })
 }
 
-pub(super) fn minimum_position_window(cursors: &[PhraseCursor<'_>]) -> Option<PositionalWindow> {
-    minimum_position_window_slices(
-        &cursors
-            .iter()
-            .map(|cursor| cursor.positions.as_slice())
-            .collect::<Vec<_>>(),
-    )
-}
-
-fn minimum_position_window_slices(positions: &[&[u32]]) -> Option<PositionalWindow> {
+pub(super) fn minimum_position_window_slices(positions: &[&[u32]]) -> Option<PositionalWindow> {
     if positions.len() < 2 || positions.iter().any(|values| values.is_empty()) {
         return None;
     }
@@ -699,6 +700,23 @@ fn minimum_position_window_slices(positions: &[&[u32]]) -> Option<PositionalWind
         }
     }
     best
+}
+
+/// For each distinct term, the index of its first occurrence in `sequence`,
+/// or `None` unless both name the same token set. Only then can one
+/// all-token position walk serve both proximity and phrase evidence.
+pub(super) fn sequence_slots_for_terms(
+    terms: &[String],
+    sequence: &[String],
+) -> Option<Vec<usize>> {
+    let slots = terms
+        .iter()
+        .map(|term| sequence.iter().position(|token| token == term))
+        .collect::<Option<Vec<_>>>()?;
+    sequence
+        .iter()
+        .all(|token| terms.contains(token))
+        .then_some(slots)
 }
 
 pub(super) fn positional_window(
@@ -980,16 +998,27 @@ pub(super) fn inverse_document_frequency(documents: u32, frequency: u32) -> f32 
     (1.0 + (documents - frequency + 0.5) / (frequency + 0.5)).ln()
 }
 
+const BM25_K1: f32 = 1.2;
+const BM25_B: f32 = 0.75;
+
 pub(super) fn bm25(frequency: u32, document_tokens: u32, average_tokens: f32) -> f32 {
-    const K1: f32 = 1.2;
-    const B: f32 = 0.75;
-    let frequency = frequency as f32;
+    bm25_with_length_norm(frequency, bm25_length_norm(document_tokens, average_tokens))
+}
+
+/// The document-dependent BM25 denominator term. Streaming scans compute it
+/// once per document and share it across every matching term alternative.
+pub(super) fn bm25_length_norm(document_tokens: u32, average_tokens: f32) -> f32 {
     let normalized_length = if average_tokens > 0.0 {
         document_tokens as f32 / average_tokens
     } else {
         1.0
     };
-    frequency * (K1 + 1.0) / (frequency + K1 * (1.0 - B + B * normalized_length))
+    BM25_K1 * (1.0 - BM25_B + BM25_B * normalized_length)
+}
+
+pub(super) fn bm25_with_length_norm(frequency: u32, length_norm: f32) -> f32 {
+    let frequency = frequency as f32;
+    frequency * (BM25_K1 + 1.0) / (frequency + length_norm)
 }
 
 pub(super) fn token_position_multiplier(first_position: u32, enabled: bool) -> f32 {
@@ -1265,7 +1294,11 @@ pub(super) fn validate_manifest_files(
                 "validating raw generation file checksum"
             );
             let started = std::time::Instant::now();
-            let actual_checksum = checksum_file(&path)?;
+            let actual_checksum = if HOT_MAPPED_FILES.contains(&name) {
+                checksum_file_retained(&path)?
+            } else {
+                checksum_file(&path)?
+            };
             if actual_checksum != expected.blake3 {
                 return Err(Error::Corrupt(format!(
                     "generation file {name} failed its BLAKE3 checksum"
@@ -1282,8 +1315,28 @@ pub(super) fn validate_manifest_files(
     Ok(())
 }
 
+/// Files every broad query scans through their mappings. The startup
+/// checksum and the publication receiver leave these in the page cache;
+/// evicting them made the first searches after a restart or activation fault
+/// from the volume for seconds.
+pub(crate) const HOT_MAPPED_FILES: [&str; 6] = [
+    LEXICON_FILE,
+    FUZZY_FILE,
+    POSTINGS_FILE,
+    POSITIONS_FILE,
+    FULL_POSITIONS_FILE,
+    METADATA_FILE,
+];
+
 pub(super) fn checksum_file(path: &Path) -> Result<String> {
-    let mut input = BufReader::new(ColdReader::open(path)?);
+    checksum_reader(BufReader::new(ColdReader::open(path)?))
+}
+
+pub(super) fn checksum_file_retained(path: &Path) -> Result<String> {
+    checksum_reader(BufReader::new(File::open(path)?))
+}
+
+fn checksum_reader(mut input: impl Read) -> Result<String> {
     let mut hasher = blake3::Hasher::new();
     let mut buffer = vec![0_u8; 256 * 1024];
     loop {

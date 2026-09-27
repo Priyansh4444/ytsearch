@@ -207,8 +207,10 @@ mod broad_measure;
 mod broad_single;
 mod builder;
 mod conjunction;
+mod partition;
 mod query_support;
 mod single_token;
+mod skips;
 mod storage;
 #[cfg(test)]
 mod tests;
@@ -220,6 +222,7 @@ pub use broad_measure::{
 use builder::BuildPosting;
 pub(crate) use builder::build_index_from_lines_and_open;
 pub use builder::{build_index, slice_corpus};
+pub(crate) use query_support::HOT_MAPPED_FILES;
 use query_support::*;
 #[cfg(test)]
 use single_token::{
@@ -281,6 +284,10 @@ struct EngineInner {
     broad_single: Option<broad_single::BroadSingleIndex>,
     documents: MappedFile,
     metadata: DocumentTable,
+    // Planned on a background thread after open; scans run as one range
+    // until it is set.
+    partition: std::sync::OnceLock<Option<partition::DocumentPartition>>,
+    skips: skips::SkipDirectory,
     index_bytes: u64,
 }
 
@@ -316,6 +323,7 @@ struct PositionedPostingCursor<'a> {
     previous_id: u32,
     decoded: u32,
     expected: u32,
+    skips: Option<Arc<[skips::SkipEntry]>>,
 }
 
 struct PhraseCursor<'a> {
@@ -326,6 +334,10 @@ struct PhraseCursor<'a> {
 
 struct ParsedQuery {
     terms: Vec<String>,
+    // Unquoted tokens in query order, duplicates kept. `terms` is the distinct
+    // set used for matching; ordered-phrase evidence needs the real sequence,
+    // or "the end of the world" would be judged as "the end of world".
+    sequence: Vec<String>,
     phrases: Vec<Vec<String>>,
     excluded_terms: Vec<String>,
     excluded_phrases: Vec<Vec<String>>,
@@ -336,6 +348,7 @@ struct QueryParser {
     seen: HashSet<String>,
     excluded_seen: HashSet<String>,
     terms: Vec<String>,
+    sequence: Vec<String>,
     phrases: Vec<Vec<String>>,
     excluded_terms: Vec<String>,
     excluded_phrases: Vec<Vec<String>>,
@@ -345,6 +358,9 @@ struct PhraseFieldMatches {
     documents: Vec<u32>,
     videos: Vec<u32>,
 }
+
+/// Minimum covering windows keyed by document or video ID, in ID order.
+type PositionWindows = Vec<(u32, PositionalWindow)>;
 
 struct PositionTargets {
     documents: Vec<u32>,
@@ -366,6 +382,7 @@ type HighlightGroups = Vec<Vec<String>>;
 
 struct CandidateSearch<'a> {
     constraints: SearchConstraints<'a>,
+    sequence: &'a [String],
     initial: Option<InitialConjunction>,
     skip_exact: bool,
 }
@@ -476,7 +493,7 @@ impl MomentCounter {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[repr(u8)]
 pub(super) enum IndexedField {
     Text = 0,
@@ -642,6 +659,7 @@ impl RawSearchEngine {
             return self.search_quoted(params, parsed, fields, &excluded_documents);
         }
         let terms = parsed.terms;
+        let sequence = parsed.sequence;
 
         if terms.len() == 1 {
             if filter.is_none()
@@ -684,7 +702,13 @@ impl RawSearchEngine {
         let fast_enough = !skip_exact
             && self.reaches_result_threshold(params, &fast_matches, TYPO_RESULT_THRESHOLD)?;
         if fast_enough {
-            self.apply_exact_proximity(&terms, fields, &mut fast_matches, &mut block_cache)?;
+            self.apply_exact_proximity(
+                &terms,
+                &sequence,
+                fields,
+                &mut fast_matches,
+                &mut block_cache,
+            )?;
             return self.format_matches(params, &fast_highlights, fast_matches, &mut block_cache);
         }
 
@@ -700,6 +724,7 @@ impl RawSearchEngine {
             true,
             CandidateSearch {
                 constraints,
+                sequence: &sequence,
                 initial: Some(InitialConjunction {
                     matches: fast_matches,
                     highlights: fast_highlights,
@@ -733,6 +758,7 @@ impl RawSearchEngine {
                 false,
                 CandidateSearch {
                     constraints,
+                    sequence: &terms[..retained],
                     initial: None,
                     skip_exact: false,
                 },
@@ -749,6 +775,7 @@ impl RawSearchEngine {
                 true,
                 CandidateSearch {
                     constraints,
+                    sequence: &terms[dropped..],
                     initial: None,
                     skip_exact: false,
                 },
@@ -847,8 +874,39 @@ impl RawSearchEngine {
         targets: &[u32],
     ) -> Result<Vec<(u32, PositionalWindow)>> {
         self.evaluate_positions_for_field(terms, field, targets, |target, cursors| {
-            minimum_position_window(cursors).map(|window| (target, window))
+            minimum_position_window_slices(cursors).map(|window| (target, window))
         })
+    }
+
+    /// Proximity windows over `terms` and exact ordered-phrase IDs over
+    /// `sequence` from one walk of the position streams. `term_slots[i]` is
+    /// the index in `sequence` of `terms[i]`.
+    fn windows_and_phrases_for_field(
+        &self,
+        sequence: &[String],
+        term_slots: &[usize],
+        field: IndexedField,
+        targets: &[u32],
+    ) -> Result<(PositionWindows, Vec<u32>)> {
+        let evaluated =
+            self.evaluate_positions_for_field(sequence, field, targets, |target, positions| {
+                let term_positions = term_slots
+                    .iter()
+                    .map(|&slot| positions[slot])
+                    .collect::<SmallVec<[&[u32]; MAX_PROXIMITY_TOKENS]>>();
+                let window = minimum_position_window_slices(&term_positions);
+                let ordered = ordered_phrase_positions_match(positions, 0);
+                Some((target, window, ordered))
+            })?;
+        let windows = evaluated
+            .iter()
+            .filter_map(|&(target, window, _)| window.map(|window| (target, window)))
+            .collect();
+        let phrases = evaluated
+            .iter()
+            .filter_map(|&(target, _, ordered)| ordered.then_some(target))
+            .collect();
+        Ok((windows, phrases))
     }
 
     fn position_targets(&self, matches: &[DocMatch]) -> Result<PositionTargets> {
@@ -867,9 +925,12 @@ impl RawSearchEngine {
         Ok(PositionTargets { documents, videos })
     }
 
+    /// Applies proximity over the distinct `terms` and ordered-phrase evidence
+    /// over `sequence`, the query's tokens in order with duplicates.
     fn apply_exact_proximity(
         &self,
         terms: &[String],
+        sequence: &[String],
         fields: QueryFields,
         matches: &mut [DocMatch],
         cache: &mut BlockCache,
@@ -882,15 +943,17 @@ impl RawSearchEngine {
             return Ok(());
         }
         if matches.len() <= MAX_DIRECT_POSITION_TARGETS {
-            return self.apply_exact_proximity_from_documents(terms, fields, matches, cache);
+            return self
+                .apply_exact_proximity_from_documents(terms, sequence, fields, matches, cache);
         }
-        if self.try_apply_exact_bigram(terms, fields, matches)? {
+        // The bigram sidecar proves adjacency of exactly two distinct tokens.
+        if sequence == terms && self.try_apply_exact_bigram(terms, fields, matches)? {
             // Schema 7 makes exact adjacency and its earliest offset authoritative for
             // large two-token result sets. Non-adjacent candidates retain their BM25
             // score instead of faulting the complete positional streams back into RAM.
             return Ok(());
         }
-        self.apply_exact_proximity_from_postings(terms, fields, matches)
+        self.apply_exact_proximity_from_postings(terms, sequence, fields, matches)
     }
 
     fn try_apply_exact_bigram(
@@ -942,22 +1005,65 @@ impl RawSearchEngine {
     fn apply_exact_proximity_from_postings(
         &self,
         terms: &[String],
+        sequence: &[String],
         fields: QueryFields,
         matches: &mut [DocMatch],
     ) -> Result<()> {
         let terms = &terms[..terms.len().min(MAX_PROXIMITY_TOKENS)];
+        let sequence = &sequence[..sequence.len().min(MAX_PROXIMITY_TOKENS)];
         let targets = self.position_targets(matches)?;
-        let text_windows = if fields.text {
-            self.position_windows_for_field(terms, IndexedField::Text, &targets.documents)?
-        } else {
-            Vec::new()
-        };
-        let title_windows = if fields.title {
-            self.position_windows_for_field(terms, IndexedField::Title, &targets.videos)?
-        } else {
-            Vec::new()
-        };
-        let ordered_phrases = self.phrase_field_matches(terms, fields, &targets, 0)?;
+        let (text_windows, title_windows, ordered_phrases) =
+            match sequence_slots_for_terms(terms, sequence) {
+                // One walk per field serves both proximity and phrase evidence.
+                Some(term_slots) => {
+                    let (text_windows, text_phrases) = if fields.text {
+                        self.windows_and_phrases_for_field(
+                            sequence,
+                            &term_slots,
+                            IndexedField::Text,
+                            &targets.documents,
+                        )?
+                    } else {
+                        (Vec::new(), Vec::new())
+                    };
+                    let (title_windows, title_phrases) = if fields.title {
+                        self.windows_and_phrases_for_field(
+                            sequence,
+                            &term_slots,
+                            IndexedField::Title,
+                            &targets.videos,
+                        )?
+                    } else {
+                        (Vec::new(), Vec::new())
+                    };
+                    let phrases = PhraseFieldMatches {
+                        documents: text_phrases,
+                        videos: title_phrases,
+                    };
+                    (text_windows, title_windows, phrases)
+                }
+                None => (
+                    if fields.text {
+                        self.position_windows_for_field(
+                            terms,
+                            IndexedField::Text,
+                            &targets.documents,
+                        )?
+                    } else {
+                        Vec::new()
+                    },
+                    if fields.title {
+                        self.position_windows_for_field(
+                            terms,
+                            IndexedField::Title,
+                            &targets.videos,
+                        )?
+                    } else {
+                        Vec::new()
+                    },
+                    self.phrase_field_matches(sequence, fields, &targets, 0)?,
+                ),
+            };
         for candidate in matches {
             let text_multiplier = candidate
                 .matches_text()
@@ -988,11 +1094,13 @@ impl RawSearchEngine {
     fn apply_exact_proximity_from_documents(
         &self,
         terms: &[String],
+        sequence: &[String],
         fields: QueryFields,
         matches: &mut [DocMatch],
         cache: &mut BlockCache,
     ) -> Result<()> {
         let terms = &terms[..terms.len().min(MAX_PROXIMITY_TOKENS)];
+        let sequence = &sequence[..sequence.len().min(MAX_PROXIMITY_TOKENS)];
         for candidate in matches {
             let record = self.inner.metadata.document(candidate.document())?;
             let video = self
@@ -1005,13 +1113,13 @@ impl RawSearchEngine {
                 document
                     .get("text")
                     .and_then(Value::as_str)
-                    .map(|value| positional_summary(value, terms))
+                    .map(|value| positional_summary(value, terms, sequence))
             } else {
                 None
             };
             let title_summary = fields
                 .title
-                .then(|| positional_summary(&video.title, terms));
+                .then(|| positional_summary(&video.title, terms, sequence));
             let text_multiplier = text_summary
                 .and_then(|summary| summary.window)
                 .map(|window| proximity_multiplier(window, terms.len(), fields.prioritize_position))
@@ -1041,7 +1149,7 @@ impl RawSearchEngine {
         mut evaluate: F,
     ) -> Result<Vec<T>>
     where
-        F: FnMut(u32, &[PhraseCursor<'_>]) -> Option<T>,
+        F: FnMut(u32, &[&[u32]]) -> Option<T>,
     {
         if targets.is_empty() {
             return Ok(Vec::new());
@@ -1049,8 +1157,18 @@ impl RawSearchEngine {
         let full_positions = self.inner.full_positions.as_ref().ok_or_else(|| {
             Error::InvalidInput("phrase search requires complete positions".to_string())
         })?;
+        // One cursor per distinct token: a phrase that repeats "the" must not
+        // walk that token's complete position stream twice.
         let mut cursors = Vec::with_capacity(terms.len());
+        let mut cursor_terms: Vec<&str> = Vec::with_capacity(terms.len());
+        let mut slots = Vec::with_capacity(terms.len());
         for term in terms {
+            if let Some(slot) = cursor_terms.iter().position(|seen| *seen == term.as_str()) {
+                slots.push(slot);
+                continue;
+            }
+            slots.push(cursors.len());
+            cursor_terms.push(term);
             let Some(entry) = self.inner.lexicon.lookup(term)? else {
                 return Ok(Vec::new());
             };
@@ -1065,12 +1183,20 @@ impl RawSearchEngine {
             if frequency == 0 {
                 return Ok(Vec::new());
             }
+            let streams = skips::PositionedStreams {
+                postings: self.postings_range(offset, length)?,
+                first_positions: self.inner.positions.range(entry.term, field)?,
+                remaining_positions: full_positions.range(entry.term, field)?,
+                expected: frequency,
+            };
+            let skips = self.inner.skips.get_or_build(entry.term, field, streams);
             cursors.push(PhraseCursor {
                 postings: PositionedPostingCursor::new(
-                    self.postings_range(offset, length)?,
-                    self.inner.positions.range(entry.term, field)?,
-                    full_positions.range(entry.term, field)?,
+                    streams.postings,
+                    streams.first_positions,
+                    streams.remaining_positions,
                     frequency,
+                    skips,
                 ),
                 id: None,
                 positions: Vec::new(),
@@ -1089,7 +1215,11 @@ impl RawSearchEngine {
             if cursors.iter().any(|cursor| cursor.id != Some(target)) {
                 continue;
             }
-            if let Some(value) = evaluate(target, &cursors) {
+            let positions = slots
+                .iter()
+                .map(|&slot| cursors[slot].positions.as_slice())
+                .collect::<Vec<_>>();
+            if let Some(value) = evaluate(target, &positions) {
                 output.push(value);
             }
         }
@@ -1142,7 +1272,13 @@ impl RawSearchEngine {
             retain_not_excluded(&mut matches, search.constraints.excluded_documents);
             let enough = self.reaches_result_threshold(params, &matches, TYPO_RESULT_THRESHOLD)?;
             if enough {
-                self.apply_exact_proximity(terms, fields, &mut matches, block_cache)?;
+                self.apply_exact_proximity(
+                    terms,
+                    search.sequence,
+                    fields,
+                    &mut matches,
+                    block_cache,
+                )?;
                 return Ok(Some((matches, highlight_terms)));
             }
             if typo_distance == maximum_distance {
@@ -1152,7 +1288,13 @@ impl RawSearchEngine {
                 let has_sparse_result =
                     self.reaches_result_threshold(params, &matches, DROP_RESULT_THRESHOLD)?;
                 return if has_complete_exact_match && has_sparse_result {
-                    self.apply_exact_proximity(terms, fields, &mut matches, block_cache)?;
+                    self.apply_exact_proximity(
+                        terms,
+                        search.sequence,
+                        fields,
+                        &mut matches,
+                        block_cache,
+                    )?;
                     Ok(Some((matches, highlight_terms)))
                 } else {
                     Ok(None)
@@ -1513,26 +1655,41 @@ impl RawSearchEngine {
             .fold(0_u8, |mask, alternative| {
                 mask | alternative.fields.exact_mask
             });
+        let partitions = self.scan_document_partitions(|range| {
+            let mut groups = self.empty_group_slots();
+            let mut documents = 0_usize;
+            let mut exact_matches = Vec::new();
+            self.visit_plan_conjunction_range(&plans, range, |candidate, record| {
+                documents = documents.saturating_add(1);
+                if documents <= MAX_EXACT_PROXIMITY_MATCHES {
+                    exact_matches.push(candidate);
+                } else if documents == MAX_EXACT_PROXIMITY_MATCHES + 1 {
+                    exact_matches.clear();
+                    exact_matches.shrink_to_fit();
+                }
+                self.record_group_match_values(
+                    &mut groups,
+                    candidate,
+                    record.video,
+                    record.t_start_ms,
+                    hits_per_group,
+                    Some(full_exact_mask),
+                )
+            })?;
+            Ok((groups, documents, exact_matches))
+        })?;
         let mut groups = self.empty_group_slots();
         let mut documents = 0_usize;
         let mut exact_matches = Vec::new();
-        self.visit_plan_conjunction(&plans, |candidate, record| {
-            documents = documents.saturating_add(1);
+        for (partition_groups, partition_documents, partition_matches) in partitions {
+            partition::merge_disjoint_groups(&mut groups, partition_groups)?;
+            documents = documents.saturating_add(partition_documents);
             if documents <= MAX_EXACT_PROXIMITY_MATCHES {
-                exact_matches.push(candidate);
-            } else if documents == MAX_EXACT_PROXIMITY_MATCHES + 1 {
-                exact_matches.clear();
-                exact_matches.shrink_to_fit();
+                exact_matches.extend(partition_matches);
+            } else {
+                exact_matches = Vec::new();
             }
-            self.record_group_match_values(
-                &mut groups,
-                candidate,
-                record.video,
-                record.t_start_ms,
-                hits_per_group,
-                Some(full_exact_mask),
-            )
-        })?;
+        }
         let found = groups.iter().flatten().count();
         match broad_grouped_disposition(documents, found) {
             BroadGroupedDisposition::PreserveExact => {
@@ -1599,17 +1756,24 @@ impl RawSearchEngine {
         let dominant_exact_mask = plan.alternatives.iter().fold(0_u8, |mask, alternative| {
             mask | alternative.fields.exact_mask
         });
-        let mut groups = self.empty_group_slots();
-        self.visit_term_plan(plan, |candidate, record| {
-            self.record_group_match_values(
-                &mut groups,
-                candidate,
-                record.video,
-                record.t_start_ms,
-                hits_per_group,
-                Some(dominant_exact_mask),
-            )
+        let partitions = self.scan_document_partitions(|range| {
+            let mut groups = self.empty_group_slots();
+            self.visit_term_plan_range(plan, range, |candidate, record| {
+                self.record_group_match_values(
+                    &mut groups,
+                    candidate,
+                    record.video,
+                    record.t_start_ms,
+                    hits_per_group,
+                    Some(dominant_exact_mask),
+                )
+            })?;
+            Ok(groups)
         })?;
+        let mut groups = self.empty_group_slots();
+        for partition_groups in partitions {
+            partition::merge_disjoint_groups(&mut groups, partition_groups)?;
+        }
         if groups.iter().flatten().count() < TYPO_RESULT_THRESHOLD {
             return Ok(None);
         }

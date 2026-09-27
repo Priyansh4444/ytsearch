@@ -49,6 +49,22 @@ indexed, or deleted data.
   activated. The older 8.208 GB figure described a different retained build and
   is not the current rollback artifact.
 
+- On 2026-09-26, with the owner's approval, production reader
+  `d89303da029328` moved to the canary-validated `9f63a76` image with
+  `RAW_SEARCH_BIND=[::]:8108`. The queue worker then passed private IPv6
+  readiness and imported queued mutations through sequence 3441, but its
+  publication failed: the new reader advertises `raw-index-schema-8-v2`, the
+  worker still builds `raw-index-schema-7-v2`. Queue recovery is not complete;
+  see [`reader-promotion-2026-09-26.json`](reader-promotion-2026-09-26.json).
+- On 2026-09-27 publication was pinned back to schema 7 and the reader moved to
+  `071b775`. The worker published generation 3441 (8,489,399 documents), and
+  `@BrodieRobertson` became searchable. A canary rehearsal with the worker's
+  own CLI measured 4 vCPUs against 2; see
+  [`publication-recovery-2026-09-27.json`](publication-recovery-2026-09-27.json).
+- A replay of every distinct production search from the last 90 days, through
+  the real API, found the remaining 200 ms gaps and a cold-restart failure mode;
+  see [`production-replay-2026-09-26.md`](production-replay-2026-09-26.md).
+
 The machine-readable facts and failures are in
 [`baseline-receipt.json`](baseline-receipt.json).
 Its original source SHA and timestamps identify the first capture; the

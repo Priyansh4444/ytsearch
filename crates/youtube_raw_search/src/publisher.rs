@@ -17,7 +17,11 @@ const BACKEND: &str = "raw";
 const ACTIVE_MANIFEST: &str = "active-generation.json";
 const GENERATION_MANIFEST: &str = "manifest.json";
 const REMOTE_PUBLICATION_WORK: &str = "work/remote-publication";
-pub const RAW_GENERATION_FORMAT: &str = "raw-index-schema-8-v2";
+// Publication builds stop at schema 7 (see `BuildSchema`); the reader still
+// opens schema-8 generations for rollback.
+pub const RAW_GENERATION_FORMAT: &str = "raw-index-schema-7-v2";
+// Leaves headroom under the queue worker's 30 s activation request timeout.
+const ACTIVATION_WARM_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 const CORPUS_IDENTITY_DOMAIN: &[u8] = b"ytsearch raw corpus identity v1\0";
 
 #[derive(Clone, Debug)]
@@ -332,6 +336,7 @@ impl Publisher {
         // while the old mmap is serving queries. Startup and recovery continue
         // to use the full-checksum `RawSearchEngine::open` path.
         let engine = RawSearchEngine::open_verified_transfer(incoming_path).map_err(map_raw)?;
+        engine.warm_within(ACTIVATION_WARM_BUDGET);
         let report = report_for_existing(&engine);
 
         fs::rename(incoming_path, &final_path).map_err(map_io)?;
@@ -380,6 +385,7 @@ impl Publisher {
         reset_private_directory(&self.paths.state_directory, &candidate_path)?;
 
         let (report, engine) = self.build_generation(&snapshot, &candidate_path)?;
+        engine.warm_within(ACTIVATION_WARM_BUDGET);
         sync_directory_tree(&candidate_path)?;
         fs::rename(&candidate_path, &final_path).map_err(map_io)?;
         sync_directory(&self.paths.state_directory.join("generations"))?;

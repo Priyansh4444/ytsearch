@@ -858,6 +858,35 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Enforce the requested end-to-end 200 ms maximum on measured production requests
   on the latest schema for the canonical matrix, including `this is the`, with
   zero errors and no resource crossing 80%.
+  On 2026-09-26 a replay of all 278 distinct production searches from 90 days
+  ran on the exact canary at `95cb6cd`: warm p99 158 ms and max 235 ms, cold
+  max 261 ms (was 9,930 ms). Only the dense `and the` scan stays above 200 ms;
+  `0c53dbd` divides it across every available vCPU. See
+  `P00/production-replay-2026-09-26.md`.
+- [x] Replay real production searches: export distinct
+  `(query, youtuber, sort, page)` rows from Axiom to a private file and replay
+  them through the API with reader server timing
+  (`scripts/axiom-export-search-replay.sh`,
+  `scripts/replay-production-searches.sh`).
+- [x] Resolve the publication-format mismatch before claiming queue recovery:
+  the reader promoted on 2026-09-26 advertised `raw-index-schema-8-v2` while the
+  queue worker builds `raw-index-schema-7-v2`. Publication now stops at schema 7
+  (`99c8910`); the eleven files are byte-identical to the worker's builder. On
+  2026-09-27 the reader moved to `071b775` and the worker published generation
+  3441 (8,489,399 documents), making `@BrodieRobertson` searchable. See
+  `P00/publication-recovery-2026-09-27.json`.
+- [x] Warm published generations: the upload receiver keeps the six scanned
+  files cached and activation warms for at most 20 s (the worker's activation
+  request times out at 30 s). A canary publication's first searches fell from a
+  32 s maximum to 310 ms.
+- [ ] Publish without double residency on the 2 GiB reader. Two generations'
+  scanned files (~1.46 GB) plus the 355 MB mutation store exceed its page
+  cache, so production's generation-3441 activation still warmed for about
+  23 s after the swap. Needs a smaller hot set (schema 9) or more memory.
+- [ ] Decide the reader CPU size. On the canary, 4 shared vCPUs brought every
+  real and synthetic search under 200 ms warm (max 154 ms); 2 vCPUs leave
+  `and the` at ~225 ms, and production measured 271–279 ms during concurrent
+  daily indexing.
 - [x] Reject exactly 200 ms as well as slower requests in the publication
   baseline and isolation gates. Exercise the exact boundary with the real
   benchmark script and verify rejection occurs before publication.
@@ -899,6 +928,13 @@ Raw can replace Typesense as the canonical search index.
   refused. The deployed reader binds `0.0.0.0:8108`; the target configuration
   binds `[::]:8108`. Verify private readiness and actual queue consumption
   after the gated release. Starting the worker alone did not repair it.
+  On 2026-09-26 the owner-approved reader promotion applied `[::]:8108`; the
+  worker then passed private IPv6 readiness, the credential preflight, and the
+  full queue checker, and consumed a queued creator request. Connectivity is
+  restored. After the schema-7 publication pin, the worker published generation
+  3441 on 2026-09-27 and began its daily refresh; a completed daily run is not
+  yet observed. See `P00/reader-promotion-2026-09-26.json` and
+  `P00/publication-recovery-2026-09-27.json`.
   The 2026-09-22 isolated canary with the committed IPv6 overlay was staged,
   but a bounded 300-second private health probe failed before port 8108
   listened. Investigate cold-open startup on the 2 GiB canary before any

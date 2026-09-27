@@ -154,6 +154,7 @@ impl<'a> PositionedPostingCursor<'a> {
         first_positions: &'a [u8],
         remaining_positions: &'a [u8],
         expected: u32,
+        skips: Option<Arc<[skips::SkipEntry]>>,
     ) -> Self {
         Self {
             postings,
@@ -164,7 +165,37 @@ impl<'a> PositionedPostingCursor<'a> {
             previous_id: 0,
             decoded: 0,
             expected,
+            skips,
         }
+    }
+
+    pub(super) fn skip_entry(&self) -> skips::SkipEntry {
+        skips::SkipEntry {
+            previous_id: self.previous_id,
+            decoded: self.decoded,
+            posting_cursor: self.posting_cursor,
+            first_cursor: self.first_cursor,
+            remaining_cursor: self.remaining_positions.offset(),
+        }
+    }
+
+    /// Jumps to the last checkpoint whose postings all precede `target`.
+    fn seek_before(&mut self, target: u32) {
+        let Some(skips) = &self.skips else {
+            return;
+        };
+        let index = skips.partition_point(|entry| entry.previous_id < target);
+        let Some(entry) = index.checked_sub(1).map(|index| skips[index]) else {
+            return;
+        };
+        if entry.decoded <= self.decoded {
+            return;
+        }
+        self.previous_id = entry.previous_id;
+        self.decoded = entry.decoded;
+        self.posting_cursor = entry.posting_cursor;
+        self.first_cursor = entry.first_cursor;
+        self.remaining_positions.seek(entry.remaining_cursor);
     }
 
     pub(super) fn next_at_least(
@@ -172,6 +203,7 @@ impl<'a> PositionedPostingCursor<'a> {
         target: u32,
         positions: &mut Vec<u32>,
     ) -> Result<Option<u32>> {
+        self.seek_before(target);
         loop {
             if self.posting_cursor == self.postings.len() {
                 if self.decoded != self.expected || self.first_cursor != self.first_positions.len()
@@ -374,6 +406,8 @@ impl RawSearchEngine {
             })
             .transpose()?;
         let documents = MappedFile::open(&index_path.join(DOCUMENTS_FILE), DOCUMENTS_MAGIC)?;
+        // Responses read a few ~5 KB compressed blocks at scattered offsets.
+        documents.advise_random();
         let metadata = DocumentTable::open(&index_path.join(METADATA_FILE))?;
         let (text_bigrams, title_bigrams) = if manifest.schema_version >= 7 {
             let text = bigram::BigramIndex::open(&index_path.join(bigram::TEXT_BIGRAM_FILE))?;
@@ -429,7 +463,7 @@ impl RawSearchEngine {
                 "manifest counts do not match index files".to_string(),
             ));
         }
-        Ok(Self {
+        let engine = Self {
             inner: Arc::new(EngineInner {
                 manifest,
                 videos,
@@ -444,8 +478,100 @@ impl RawSearchEngine {
                 broad_single,
                 documents,
                 metadata,
+                partition: std::sync::OnceLock::new(),
+                skips: skips::SkipDirectory::default(),
                 index_bytes: directory_size(index_path)?,
             }),
-        })
+        };
+        // A startup open has just checksummed and cached the scanned files,
+        // so warming is cheap and serving need not wait. A publication open
+        // is warmed by the publisher before activation instead.
+        if matches!(validation, ManifestValidation::Full) {
+            warm_in_background(&engine.inner);
+        }
+        Ok(engine)
     }
+
+    /// Reads a generation's scanned files into memory and plans its scan
+    /// partitions. Publication runs this (via `warm_within`) before activation: a published
+    /// generation arrives as new, cold files, and swapping to it first made
+    /// the next searches fault from the volume (a 32 s `fire` on the canary)
+    /// while the previous, warm generation could still have served them.
+    pub(crate) fn warm(&self) {
+        let started = std::time::Instant::now();
+        prefetch_hot_mappings(&self.inner);
+        partition::DocumentPartition::plan_now(&self.inner);
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "warmed raw generation"
+        );
+    }
+}
+
+impl RawSearchEngine {
+    /// Warms before activation, but waits at most `budget`: the publisher's
+    /// activation request times out after 30 s. Whatever is left finishes in
+    /// the background after the swap.
+    pub(crate) fn warm_within(&self, budget: std::time::Duration) {
+        let (done, finished) = std::sync::mpsc::channel();
+        let engine = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("raw-warm".to_string())
+            .spawn(move || {
+                engine.warm();
+                let _ = done.send(());
+            });
+        match spawned {
+            Ok(_) => {
+                if finished.recv_timeout(budget).is_err() {
+                    tracing::warn!(
+                        budget_ms = budget.as_millis() as u64,
+                        "raw generation still warming at activation"
+                    );
+                }
+            }
+            Err(error) => tracing::warn!(%error, "raw generation warm-up did not start"),
+        }
+    }
+}
+
+/// Warms a generation opened at startup without holding the health check.
+/// The thread starts from a weak reference, so a generation retired before it
+/// runs is not pinned. Until planning finishes, scans run as one exact range.
+fn warm_in_background(inner: &Arc<EngineInner>) {
+    let inner = Arc::downgrade(inner);
+    let spawned = std::thread::Builder::new()
+        .name("raw-warm".to_string())
+        .spawn(move || {
+            if let Some(inner) = inner.upgrade() {
+                RawSearchEngine { inner }.warm();
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "raw generation warm-up did not start");
+    }
+}
+
+fn prefetch_hot_mappings(inner: &EngineInner) {
+    let started = std::time::Instant::now();
+    let mut files = vec![
+        &inner.lexicon.file,
+        &inner.fuzzy.file,
+        &inner.postings,
+        &inner.positions.file,
+        &inner.metadata.file,
+    ];
+    files.extend(
+        inner
+            .full_positions
+            .as_ref()
+            .map(|positions| &positions.file),
+    );
+    for file in files {
+        file.prefetch();
+    }
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "prefetched raw generation mappings"
+    );
 }

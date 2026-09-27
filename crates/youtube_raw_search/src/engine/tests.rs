@@ -2,7 +2,10 @@ use super::conjunction::{TermAlternative, TermPlan};
 use super::*;
 
 mod common_words;
+mod partitioned_scan;
+mod posting_skips;
 mod query_contract_v2;
+mod repeated_tokens;
 mod schema9_reference;
 
 const _: () = assert!(std::mem::size_of::<IndexedField>() == 1);
@@ -990,6 +993,7 @@ fn schema_seven_bigram_is_targeted_but_small_queries_remain_document_exact() {
     engine
         .apply_exact_proximity(
             &["create".to_string(), "effect".to_string()],
+            &["create".to_string(), "effect".to_string()],
             fields,
             &mut matches,
             &mut BlockCache::default(),
@@ -1094,7 +1098,13 @@ fn large_schema_seven_pair_absence_does_not_restore_loose_proximity() {
         .map(|document| DocMatch::new(document, 1.0, true))
         .collect::<Vec<_>>();
     present_engine
-        .apply_exact_proximity(&terms, fields, &mut present, &mut BlockCache::default())
+        .apply_exact_proximity(
+            &terms,
+            &terms,
+            fields,
+            &mut present,
+            &mut BlockCache::default(),
+        )
         .expect("apply present pair");
     assert!(present[0].ordered_phrase());
     assert!(present[0].score > 1.0);
@@ -1107,7 +1117,13 @@ fn large_schema_seven_pair_absence_does_not_restore_loose_proximity() {
         .map(|document| DocMatch::new(document, 1.0, true))
         .collect::<Vec<_>>();
     absent_engine
-        .apply_exact_proximity(&terms, fields, &mut absent, &mut BlockCache::default())
+        .apply_exact_proximity(
+            &terms,
+            &terms,
+            fields,
+            &mut absent,
+            &mut BlockCache::default(),
+        )
         .expect("apply absent pair");
     assert!(
         absent
@@ -1988,13 +2004,14 @@ fn document_local_proximity_matches_postings_at_the_direct_path_boundary() {
         engine
             .apply_exact_proximity_from_documents(
                 &terms,
+                &terms,
                 fields,
                 &mut direct,
                 &mut BlockCache::default(),
             )
             .expect("document-local proximity");
         engine
-            .apply_exact_proximity_from_postings(&terms, fields, &mut postings)
+            .apply_exact_proximity_from_postings(&terms, &terms, fields, &mut postings)
             .expect("posting proximity");
 
         for (direct, postings) in direct.iter().zip(postings) {
@@ -2914,6 +2931,22 @@ fn same_length_generation_corruption_is_rejected_at_open() {
         RawSearchEngine::open(&root.path().join("index")),
         Err(Error::Corrupt(_))
     ));
+}
+
+// Startup keeps the scanned files cached while checksumming them; the digest
+// must not depend on which reader produced it.
+#[test]
+fn retained_and_cold_checksums_agree_for_every_hot_file() {
+    let (root, engine) = test_engine();
+    drop(engine);
+    for name in HOT_MAPPED_FILES {
+        let path = root.path().join("index").join(name);
+        assert_eq!(
+            checksum_file_retained(&path).expect("retained checksum"),
+            checksum_file(&path).expect("cold checksum"),
+            "{name}"
+        );
+    }
 }
 
 #[test]

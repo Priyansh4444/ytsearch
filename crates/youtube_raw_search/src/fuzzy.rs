@@ -45,7 +45,7 @@ struct Node {
 }
 
 pub struct FuzzyIndex {
-    file: MappedFile,
+    pub(crate) file: MappedFile,
     nodes: usize,
 }
 
