@@ -72,9 +72,6 @@ impl VideoSource {
         if self.creator_id != source.creator_id {
             return Err(self.conflict("creator"));
         }
-        if self.title != source.title {
-            return Err(self.conflict("title"));
-        }
         merge_known(
             &mut self.duration_ms,
             source.duration_ms,
@@ -137,6 +134,7 @@ pub(crate) struct SortedSource {
 pub(crate) struct AuditedSource {
     sorted: SortedSource,
     videos: Vec<VideoSource>,
+    title_conflict_videos: u64,
 }
 
 impl SourceSpool {
@@ -197,17 +195,17 @@ impl SourceSpool {
         self.output.write_all(line.as_bytes())?;
         self.output.write_all(b"\n")?;
         self.next_offset = next;
-        match self.database.execute(
+        let mut insert = self.database.prepare_cached(
             "INSERT INTO documents (id, video_id, t_start_ms, source_offset, source_length)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                source.external_id,
-                source.external_video_id,
-                source.t_start_ms,
-                offset,
-                length
-            ],
-        ) {
+        )?;
+        match insert.execute(params![
+            source.external_id,
+            source.external_video_id,
+            source.t_start_ms,
+            offset,
+            length
+        ]) {
             Ok(_) => Ok(()),
             Err(rusqlite::Error::SqliteFailure(error, _))
                 if error.code == rusqlite::ErrorCode::ConstraintViolation =>
@@ -243,7 +241,7 @@ impl SortedSource {
     /// Internal scan used to establish the video audit before exposing rows.
     fn visit_sorted(
         &mut self,
-        mut visit: impl FnMut(u32, SourceDocument) -> Result<(), SpoolError>,
+        mut visit: impl FnMut(u32, SourceDocument, u64) -> Result<(), SpoolError>,
     ) -> Result<u64, SpoolError> {
         let mut statement = self.database.prepare(
             "SELECT id, video_id, t_start_ms, source_offset, source_length
@@ -277,7 +275,7 @@ impl SortedSource {
             {
                 return Err(SpoolError::Mismatch);
             }
-            visit(dense_id, source)?;
+            visit(dense_id, source, offset)?;
             count += 1;
         }
         Ok(count)
@@ -290,17 +288,34 @@ impl SortedSource {
     pub(crate) fn audit_videos(mut self) -> Result<AuditedSource, SpoolError> {
         let mut videos = Vec::new();
         let mut active: Option<VideoSource> = None;
-        self.visit_sorted(|dense_id, source| {
+        let mut selected_title_offset = 0_u64;
+        let mut current_title_conflict = false;
+        let mut title_conflict_videos = 0_u64;
+        self.visit_sorted(|dense_id, source, source_offset| {
             if active
                 .as_ref()
                 .is_some_and(|video| video.external_video_id != source.external_video_id)
             {
                 videos.push(active.take().ok_or(SpoolError::Mismatch)?);
+                current_title_conflict = false;
             }
             if let Some(video) = &mut active {
+                if video.title != source.title {
+                    if !current_title_conflict {
+                        title_conflict_videos += 1;
+                        current_title_conflict = true;
+                    }
+                    // Schema-6 chose the first title in canonical source order.
+                    // The sorted ID stream may have a different first chunk.
+                    if source_offset < selected_title_offset {
+                        video.title = source.title.clone();
+                        selected_title_offset = source_offset;
+                    }
+                }
                 video.absorb(dense_id, source)?;
             } else {
                 active = Some(VideoSource::first(dense_id, source)?);
+                selected_title_offset = source_offset;
             }
             Ok(())
         })?;
@@ -310,6 +325,7 @@ impl SortedSource {
         Ok(AuditedSource {
             sorted: self,
             videos,
+            title_conflict_videos,
         })
     }
 }
@@ -319,12 +335,17 @@ impl AuditedSource {
         &self.videos
     }
 
+    pub(crate) fn title_conflict_videos(&self) -> u64 {
+        self.title_conflict_videos
+    }
+
     /// Visit source in bytewise video ID, start time, exact document ID order.
     pub(crate) fn visit_sorted(
         &mut self,
-        visit: impl FnMut(u32, SourceDocument) -> Result<(), SpoolError>,
+        mut visit: impl FnMut(u32, SourceDocument) -> Result<(), SpoolError>,
     ) -> Result<u64, SpoolError> {
-        self.sorted.visit_sorted(visit)
+        self.sorted
+            .visit_sorted(|dense_id, source, _| visit(dense_id, source))
     }
 }
 
@@ -423,5 +444,73 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn conflicting_titles_select_first_canonical_source_not_first_sorted_chunk() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut spool = SourceSpool::create(directory.path()).unwrap();
+        let mut first: serde_json::Value = serde_json::from_str(&line("later", "one", 20)).unwrap();
+        first["title"] = "original".into();
+        spool.append_line(&first.to_string()).unwrap();
+        let mut second: serde_json::Value = serde_json::from_str(&line("early", "one", 0)).unwrap();
+        second["title"] = "one-off typo".into();
+        spool.append_line(&second.to_string()).unwrap();
+        let audited = spool.finish().unwrap().audit_videos().unwrap();
+        assert_eq!(audited.videos()[0].title, "original");
+        assert_eq!(audited.title_conflict_videos(), 1);
+    }
+
+    /// Explicit full-corpus gate. The caller supplies a local copy of the
+    /// canonical archive and ample scratch space; CI does not run it.
+    #[test]
+    #[ignore = "requires the complete canonical gzip archive and scratch space"]
+    fn audit_complete_canonical_archive() {
+        use std::io::{BufRead, BufReader};
+
+        let archive = std::env::var_os("SCHEMA9_AUDIT_SOURCE_GZIP")
+            .expect("set SCHEMA9_AUDIT_SOURCE_GZIP to a local canonical archive");
+        let scratch_root = std::env::var_os("SCHEMA9_AUDIT_SCRATCH_ROOT")
+            .expect("set SCHEMA9_AUDIT_SCRATCH_ROOT to a local disk directory");
+        let scratch = tempfile::Builder::new()
+            .prefix("schema9-source-audit-")
+            .tempdir_in(scratch_root)
+            .unwrap();
+        let input = std::fs::File::open(archive).unwrap();
+        let decoder = flate2::read::GzDecoder::new(input);
+        let mut spool = SourceSpool::create(scratch.path()).unwrap();
+        let mut count = 0_u64;
+        let mut largest_line = 0_usize;
+        for line in BufReader::new(decoder).lines() {
+            let line = line.unwrap();
+            count += 1;
+            largest_line = largest_line.max(line.len());
+            spool
+                .append_line(&line)
+                .unwrap_or_else(|error| panic!("source line {count}: {error}"));
+            if count.is_multiple_of(100_000) {
+                eprintln!("schema9_source_audit_ingested={count}");
+            }
+        }
+        let sorted = spool.finish().unwrap();
+        let videos = sorted.audit_videos().unwrap();
+        assert_eq!(
+            videos
+                .videos()
+                .last()
+                .map_or(0, |v| u64::from(v.documents.end)),
+            count
+        );
+        println!(
+            "{}",
+            serde_json::json!({
+                "documents": count,
+                "videos": videos.videos().len(),
+                "largest_source_line_bytes": largest_line,
+                "title_conflict_videos": videos.title_conflict_videos(),
+                "first_video_id": videos.videos().first().map(|v| v.external_video_id.as_str()),
+                "last_video_id": videos.videos().last().map(|v| v.external_video_id.as_str())
+            })
+        );
     }
 }
