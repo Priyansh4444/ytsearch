@@ -483,46 +483,68 @@ impl RawSearchEngine {
                 index_bytes: directory_size(index_path)?,
             }),
         };
-        partition::DocumentPartition::plan_in_background(&engine.inner);
-        prefetch_hot_mappings(&engine.inner);
+        // A startup open has just checksummed and cached the scanned files,
+        // so warming is cheap and serving need not wait. A publication open
+        // is warmed by the publisher before activation instead.
+        if matches!(validation, ManifestValidation::Full) {
+            warm_in_background(&engine.inner);
+        }
         Ok(engine)
+    }
+
+    /// Reads a generation's scanned files into memory and plans its scan
+    /// partitions. Publication calls this before activation: a published
+    /// generation arrives as new, cold files, and swapping to it first made
+    /// the next searches fault from the volume (a 32 s `fire` on the canary)
+    /// while the previous, warm generation could still have served them.
+    pub(crate) fn warm(&self) {
+        let started = std::time::Instant::now();
+        prefetch_hot_mappings(&self.inner);
+        partition::DocumentPartition::plan_now(&self.inner);
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "warmed raw generation"
+        );
     }
 }
 
-/// Reads a newly opened generation's scanned mappings ahead of the first
-/// searches. A published generation arrives as new files, so without this the
-/// first broad queries after every activation fault from the volume.
-fn prefetch_hot_mappings(inner: &Arc<EngineInner>) {
+/// Warms a generation opened at startup without holding the health check.
+/// The thread starts from a weak reference, so a generation retired before it
+/// runs is not pinned. Until planning finishes, scans run as one exact range.
+fn warm_in_background(inner: &Arc<EngineInner>) {
     let inner = Arc::downgrade(inner);
     let spawned = std::thread::Builder::new()
-        .name("raw-prefetch".to_string())
+        .name("raw-warm".to_string())
         .spawn(move || {
-            let Some(inner) = inner.upgrade() else {
-                return;
-            };
-            let started = std::time::Instant::now();
-            let mut files = vec![
-                &inner.lexicon.file,
-                &inner.fuzzy.file,
-                &inner.postings,
-                &inner.positions.file,
-                &inner.metadata.file,
-            ];
-            files.extend(
-                inner
-                    .full_positions
-                    .as_ref()
-                    .map(|positions| &positions.file),
-            );
-            for file in files {
-                file.prefetch();
+            if let Some(inner) = inner.upgrade() {
+                RawSearchEngine { inner }.warm();
             }
-            tracing::info!(
-                elapsed_ms = started.elapsed().as_millis() as u64,
-                "prefetched raw generation mappings"
-            );
         });
     if let Err(error) = spawned {
-        tracing::warn!(%error, "raw generation prefetch did not start");
+        tracing::warn!(%error, "raw generation warm-up did not start");
     }
+}
+
+fn prefetch_hot_mappings(inner: &EngineInner) {
+    let started = std::time::Instant::now();
+    let mut files = vec![
+        &inner.lexicon.file,
+        &inner.fuzzy.file,
+        &inner.postings,
+        &inner.positions.file,
+        &inner.metadata.file,
+    ];
+    files.extend(
+        inner
+            .full_positions
+            .as_ref()
+            .map(|positions| &positions.file),
+    );
+    for file in files {
+        file.prefetch();
+    }
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "prefetched raw generation mappings"
+    );
 }

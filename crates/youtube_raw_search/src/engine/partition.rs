@@ -38,41 +38,24 @@ pub(super) struct DocumentPartition {
 }
 
 impl DocumentPartition {
-    /// Plans off the open path: seek checkpoints decode every long posting
-    /// list up to the split, which on a cold page cache took 21 s and held
-    /// the reader's health check. Until the plan is set, scans stay exact as
-    /// one range. The thread starts from a weak reference, so a generation
-    /// retired before planning begins is not pinned at all.
-    pub(super) fn plan_in_background(inner: &Arc<EngineInner>) {
-        if !Self::worthwhile(inner.manifest.documents) {
-            let _ = inner.partition.set(None);
-            return;
-        }
-        let inner = Arc::downgrade(inner);
-        let spawned = std::thread::Builder::new()
-            .name("raw-partition-plan".to_string())
-            .spawn(move || {
-                let Some(inner) = inner.upgrade() else {
-                    return;
-                };
-                let plan = Self::plan(
-                    &inner.videos,
-                    inner.manifest.documents,
-                    &inner.lexicon,
-                    &inner.postings,
-                    &inner.positions,
-                )
-                .unwrap_or_else(|error| {
-                    // Scans validate the same posting streams and report
-                    // corruption on the query path.
-                    tracing::warn!(%error, "raw document partition planning failed");
-                    None
-                });
-                let _ = inner.partition.set(plan);
-            });
-        if let Err(error) = spawned {
-            tracing::warn!(%error, "raw document partition planner did not start");
-        }
+    /// Plans the partitions and sets them for later scans. Seek checkpoints
+    /// decode every long posting list up to each split, so this runs after
+    /// `prefetch_hot_mappings`: on a cold volume it took 21-39 s.
+    pub(super) fn plan_now(inner: &EngineInner) {
+        let plan = Self::plan(
+            &inner.videos,
+            inner.manifest.documents,
+            &inner.lexicon,
+            &inner.postings,
+            &inner.positions,
+        )
+        .unwrap_or_else(|error| {
+            // Scans validate the same posting streams and report corruption
+            // on the query path.
+            tracing::warn!(%error, "raw document partition planning failed");
+            None
+        });
+        let _ = inner.partition.set(plan);
     }
 
     fn parts() -> usize {

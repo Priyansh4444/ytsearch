@@ -274,3 +274,16 @@ fn many_way_partitioned_scans_match_the_whole_scan() {
     });
     assert_eq!(split, whole);
 }
+
+// Publication opens leave warming to the publisher, which must finish it
+// before activation; startup opens warm themselves in the background.
+#[test]
+fn publication_opens_are_planned_only_by_an_explicit_warm() {
+    let (root, engine) = interleaved_engine();
+    drop(engine);
+    let index = root.path().join("index");
+    let published = RawSearchEngine::open_newly_built(&index).expect("publication open");
+    assert!(published.inner.partition.get().is_none());
+    published.warm();
+    assert!(published.inner.partition.get().is_some());
+}

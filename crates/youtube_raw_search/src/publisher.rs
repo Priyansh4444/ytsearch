@@ -334,6 +334,7 @@ impl Publisher {
         // while the old mmap is serving queries. Startup and recovery continue
         // to use the full-checksum `RawSearchEngine::open` path.
         let engine = RawSearchEngine::open_verified_transfer(incoming_path).map_err(map_raw)?;
+        engine.warm();
         let report = report_for_existing(&engine);
 
         fs::rename(incoming_path, &final_path).map_err(map_io)?;
@@ -382,6 +383,7 @@ impl Publisher {
         reset_private_directory(&self.paths.state_directory, &candidate_path)?;
 
         let (report, engine) = self.build_generation(&snapshot, &candidate_path)?;
+        engine.warm();
         sync_directory_tree(&candidate_path)?;
         fs::rename(&candidate_path, &final_path).map_err(map_io)?;
         sync_directory(&self.paths.state_directory.join("generations"))?;
