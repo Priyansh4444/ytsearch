@@ -191,9 +191,20 @@ Raw can replace Typesense as the canonical search index.
     production-corpus and performance gates.
 - [ ] Prove exact query-dependent 20-second moment totals under 200 ms for the
   broadest canonical queries; do not substitute static buckets or approximation.
+  - [x] Compute exact `found` and `total_moments` from term bitsets and the
+    engine's moment reducer on the real 8.1M-document base: all 11 canonical
+    queries equal the engine; set algebra ≤3 ms and the totals walk 36 ms for
+    `and the`, 54 ms for `the` (local, single-threaded). See
+    `P01/exact-totals-and-block-priority-2026-09-27.md`.
+  - [ ] Repeat on the 2 GiB reader with schema-9 fast fields.
 - [ ] Prototype scalar-vs-batched Tier-1 fast-field histograms.
 - [ ] Prototype BMW-vs-block-priority grouped ranking with complete rank bounds
   and a retained frontier that does not rescore prior pages.
+  - [x] Simulate block-priority first-page grouped ranking with per-term
+    128-document block-max score bounds on the real base: the exact top 21
+    after scoring 0.17% (`and the`) to 15.8% (`this is the end`) of matches.
+  - [ ] Add phrase/proximity multipliers to the bounds, the retained frontier
+    for later pages, and non-relevance sorts.
 - [ ] Prototype delta-varint-vs-SIMD-BP128/Stream-VByte blocks at 64/128/256.
 - [ ] Prototype pinned in-memory sessions, honest expiry, and generation advance.
   - [x] Verify the existing reader snapshot retains exact pages/counts across

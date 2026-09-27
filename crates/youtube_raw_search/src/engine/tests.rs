@@ -2,6 +2,7 @@ use super::conjunction::{TermAlternative, TermPlan};
 use super::*;
 
 mod common_words;
+mod exact_totals_sets;
 mod partitioned_scan;
 mod posting_skips;
 mod query_contract_v2;
