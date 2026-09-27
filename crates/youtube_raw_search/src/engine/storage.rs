@@ -347,6 +347,11 @@ impl RawSearchEngine {
             // are skipped.
             validate_manifest_files(index_path, &manifest, validation)?;
         }
+        let metadata_started = std::time::Instant::now();
+        tracing::info!(
+            schema_version = manifest.schema_version,
+            "opening raw generation metadata and indexes"
+        );
         let videos: Vec<VideoMeta> =
             serde_json::from_reader(BufReader::new(File::open(index_path.join(VIDEOS_FILE))?))?;
         let channels: Vec<Value> =
@@ -391,6 +396,14 @@ impl RawSearchEngine {
         } else {
             (None, None)
         };
+        tracing::info!(
+            elapsed_ms = metadata_started.elapsed().as_millis() as u64,
+            "opened raw generation metadata and indexes"
+        );
+        let broad_started = std::time::Instant::now();
+        if manifest.schema_version >= 8 {
+            tracing::info!("opening raw broad-single index");
+        }
         let broad_single = (manifest.schema_version >= 8)
             .then(|| {
                 broad_single::BroadSingleIndex::open(
@@ -400,6 +413,12 @@ impl RawSearchEngine {
                 )
             })
             .transpose()?;
+        if broad_single.is_some() {
+            tracing::info!(
+                elapsed_ms = broad_started.elapsed().as_millis() as u64,
+                "opened raw broad-single index"
+            );
+        }
         let counts_match = manifest.documents as usize == metadata.documents
             && manifest.blocks as usize == metadata.blocks
             && manifest.videos as usize == videos.len()

@@ -1,0 +1,14 @@
+{
+  "reader_app": {
+    "machine_count": 1,
+    "raw_response_sha256": "f29666ac4b185261d4544aa41c0b086fa7d1509a0829c81e79d114221ab18371"
+  },
+  "api_app": {
+    "machine_count": 1,
+    "raw_response_sha256": "afd315bbd44ed3e51f3bd6cf79e412b4b1e45fd1bb0981bce745f29a08644b74"
+  },
+  "indexer_app": {
+    "machine_count": 2,
+    "raw_response_sha256": "15bc8cb2682a87a72ca6da5e370aea04f3363cf2a68662731c6e049b1eedb512"
+  }
+}

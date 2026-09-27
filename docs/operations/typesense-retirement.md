@@ -12,6 +12,49 @@ The table below is a historical ledger. The fail-closed executable inventory is
 [`config/fly-production-resources.json`](../../config/fly-production-resources.json);
 deprecation and preservation scripts derive their exact sets from that file.
 
+## Inventory drift observed 2026-09-23
+
+The new [read-only volume and Machine receipt](typesense-inventory-2026-09-23.json)
+supersedes the prior day's inventory. All four deprecated Machines remain
+stopped. The primary Typesense Machine `8147deb94937e8` now mounts a newly
+observed 10 GB volume `vol_rnznpxl2jqed618r` instead of configured
+`vol_v8e6yy17jo63nplv`. The cold-benchmark and legacy API replacement volumes
+reported below remain attached. The legacy indexer app now lists four volumes:
+its configured attached `vol_r68z3gl5wq7jkqd4`, configured unattached
+`vol_v8e6wk3g1l6kj15v`, and two unverified unattached replacements
+`vol_v3g1oqd9pgz603w4` and `vol_40ox6zgje9pd08k4`. The two previously
+configured historical unattached IDs are no longer in the current list.
+
+The three attached replacement volumes have no snapshots returned by Fly's
+snapshot-list command. The two new unattached indexer volumes have snapshots,
+but those are snapshots **of** the observed volumes and do not establish the
+source from which each volume was created. The volume-list fields for source
+volume and source snapshot are null. Names, dates, sizes, attachment, and
+snapshot digests do not prove contents or lineage. Keep the exact retirement
+verifier failing; do not add these IDs to the deletion allowlist until content
+and queue-state audits establish what each one holds.
+
+## Inventory drift observed 2026-09-22 (historical)
+
+The read-only exact-set verifier failed on the legacy API volume: it expected
+`vol_vwnydd578odzzo8v`, but Fly reports `vol_vgnmemxz8gkmoe14`, attached to
+the same stopped deprecated Machine `1855eddf654298`. The stopped cold-benchmark
+Machine `d8de466f330468` also has a new 10 GB attached volume
+`vol_42k57jld6k8exy74` in place of `vol_vdezd781q880qm34`. The legacy indexer
+app now lists two different unattached 10 GB volumes,
+`vol_v3g1oqd9pgz603w4` and `vol_40ox6zgje9pd08k4`, instead of the two
+historical IDs in the table below. The other attached legacy IDs remained as
+listed during this observation; the primary Typesense volume changed later.
+All four deprecated Machines were stopped during this observation.
+
+The current legacy apps still provision 61 GB in total, or $9.15 per month at
+Fly's $0.15/GB-month list rate, before snapshots and stopped root filesystems.
+The replacement volume contents and lineage have not been verified; the Fly
+volume metadata does not provide a source snapshot ID. Keep the configured
+exact-set verifier failing until a read-only content audit and queue-state
+comparison establish which volumes preserve the original data. Do not expand
+the deletion allowlist from a matching size or Machine attachment alone.
+
 ## Known Fly resources
 
 | State | App | Machine | Attached volume | Replacement |

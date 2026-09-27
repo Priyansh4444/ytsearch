@@ -4,6 +4,12 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+RAW_READER_MACHINES_JSON_FILE="$tmp/reader.json"
+export RAW_READER_MACHINES_JSON_FILE
+jq -n '[
+  {id:"reader-1",state:"started",config:{env:{RAW_SEARCH_BIND:"[::]:8108"},services:[{internal_port:8108,protocol:"tcp"}]}},
+  {id:"reader-canary",state:"stopped",config:{env:{RAW_SEARCH_BIND:"[::]:8108"},services:[{internal_port:8108,protocol:"tcp"}]}}
+]' > "$RAW_READER_MACHINES_JSON_FILE"
 entrypoint_b64="$(base64 < "$SCRIPT_DIR/cloud-index-queue-entrypoint.sh" | tr -d '\n')"
 creator_list_b64="$(base64 < "$SCRIPT_DIR/indexed-channels.txt" | tr -d '\n')"
 
@@ -61,6 +67,14 @@ fixture() {
 
 fixture stopped 300 no >"$tmp/healthy.json"
 MACHINES_JSON_FILE="$tmp/healthy.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null
+jq '.[0].config.env.RAW_SEARCH_BIND = "0.0.0.0:8108"' \
+  "$RAW_READER_MACHINES_JSON_FILE" > "$tmp/ipv4-only-reader.json"
+if RAW_READER_MACHINES_JSON_FILE="$tmp/ipv4-only-reader.json" \
+  MACHINES_JSON_FILE="$tmp/healthy.json" \
+  "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then
+  echo "IPv4-only reader must fail the private-network queue path" >&2
+  exit 1
+fi
 if MACHINES_JSON_FILE="$tmp/healthy.json" \
   REQUIRED_QUEUE_WORKER_STATES=started \
   "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then

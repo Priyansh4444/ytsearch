@@ -66,6 +66,45 @@ $40.17/month before variable indexer runtime, stopped rootfs, snapshots,
 bandwidth, and Cloudflare usage. An always-on engine plus API and the same
 volumes is about $72.36/month before those variable charges.
 
+## Current Raw app cost and worker inventory (2026-09-22)
+
+The read-only P00 inventory at generation 2950 found one always-on reader
+(`shared-cpu-2x`, 2 GiB, `sjc`), one started queue worker with the same size,
+and one started API (`shared-cpu-1x`, 512 MiB, `sjc`). The queue worker has
+`QUEUE_LOOP=1`, `MODE=update`, and
+`DAILY_UPDATE_ENABLED=0`; the second indexer machine is a stopped,
+on-demand publication builder. Provisioned volumes are 20 GiB on the reader,
+20 GiB on its stopped canary, 10 GiB on the queue worker, 20 GiB on the stopped
+builder, and 1 GiB on the API.
+
+Using Fly's published monthly list rates of $11.83 per started
+`shared-cpu-2x`/2 GiB Machine, $3.32 per started `shared-cpu-1x`/512 MiB
+Machine, and $0.15 per provisioned volume GiB, the known 30-day list-price
+baseline is:
+
+| Resource | Monthly estimate |
+| --- | ---: |
+| Raw reader, started | $11.83 |
+| Queue worker, started | $11.83 |
+| Raw API, started | $3.32 |
+| 71 GiB provisioned volumes | $10.65 |
+| Raw app subtotal | **$37.63/month** |
+| 61 GiB retained legacy Typesense volumes | $9.15 |
+| Known cross-app subtotal before retirement | **$46.78/month** |
+
+The earlier $31.16 estimate omitted the API Machine, its 1 GiB volume, and the
+stopped reader canary's 20 GiB volume. The corrected number still excludes
+stopped-machine rootfs, snapshot storage, egress, publication runtime, and
+any resources outside these six named apps. The retained legacy volume subtotal
+was rechecked on 2026-09-22; its exact volume IDs have drifted from the
+retirement ledger and require a content audit before deletion. These figures
+are list-price baselines, not an exact invoice or complete account total. Fly
+documents the rates at
+<https://fly.io/docs/about/pricing/>; the source-bound machine/count receipt is
+`docs/experiments/search/schema9/P00/capture-2026-09-22/`. The stopped builder
+remains retained for rollback and trial evidence rather than being treated as
+an active 24/7 cost.
+
 ## Design
 
 The mmap schema-v6 generation remains immutable. Mutability is implemented as

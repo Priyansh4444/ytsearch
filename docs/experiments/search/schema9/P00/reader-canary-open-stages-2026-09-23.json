@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "kind": "raw-reader-canary-open-stage-diagnostic",
+  "source_commit": "b385432348d830e57e42ab3294a3fd1367cc4a43",
+  "base_image_digest": "sha256:09b2fc639c63cbca74f05da137c455cf2eb5d32f0a256e12d1e5b711dca66dcd",
+  "reader_image_digest": "sha256:d8fb8c5c2086061f4e115eb90283138fbc344d499d1368ad2127762f3d31e3d2",
+  "canary_machine_id": "847314c22d52e8",
+  "canary_volume_id": "vol_4oj1x0oxkq82eo2r",
+  "active_generation_sequence": 2152,
+  "capture_log_sha256": "sha256:34dfdd8e8e098aae99c3bb8495176584dc7acd0897bcfb6b14320282cdeccd54",
+  "checksum_files": [
+    {
+      "file": "channels.json",
+      "bytes": 24988,
+      "elapsed_ms": 0,
+      "completed_at_utc": "2026-09-23T10:00:22.885355Z"
+    },
+    {
+      "file": "videos.json",
+      "bytes": 73988216,
+      "elapsed_ms": 2825,
+      "completed_at_utc": "2026-09-23T10:00:25.711272Z"
+    },
+    {
+      "file": "lexicon.bin",
+      "bytes": 14834953,
+      "elapsed_ms": 940,
+      "completed_at_utc": "2026-09-23T10:00:26.651694Z"
+    },
+    {
+      "file": "postings.bin",
+      "bytes": 319459254,
+      "elapsed_ms": 19039,
+      "completed_at_utc": "2026-09-23T10:00:45.691259Z"
+    },
+    {
+      "file": "positions.bin",
+      "bytes": 147564846,
+      "elapsed_ms": 8738,
+      "completed_at_utc": "2026-09-23T10:00:54.430386Z"
+    },
+    {
+      "file": "positions.full.bin",
+      "bytes": 24957079,
+      "elapsed_ms": 1540,
+      "completed_at_utc": "2026-09-23T10:00:55.971190Z"
+    },
+    {
+      "file": "documents.blocks",
+      "bytes": 681903222,
+      "elapsed_ms": 40643,
+      "completed_at_utc": "2026-09-23T10:01:36.615081Z"
+    },
+    {
+      "file": "documents.meta",
+      "bytes": 201826136,
+      "elapsed_ms": 12031,
+      "completed_at_utc": "2026-09-23T10:01:48.647030Z"
+    },
+    {
+      "file": "fuzzy.bin",
+      "bytes": 14740896,
+      "elapsed_ms": 825,
+      "completed_at_utc": "2026-09-23T10:01:49.472795Z"
+    },
+    {
+      "file": "bigrams.text.bin",
+      "bytes": 244324487,
+      "elapsed_ms": 14590,
+      "completed_at_utc": "2026-09-23T10:02:04.063836Z"
+    },
+    {
+      "file": "bigrams.title.bin",
+      "bytes": 624477,
+      "elapsed_ms": 1,
+      "completed_at_utc": "2026-09-23T10:02:04.065856Z"
+    },
+    {
+      "file": "broad-single.bin",
+      "bytes": 2738580172,
+      "elapsed_ms": 167416,
+      "completed_at_utc": "2026-09-23T10:04:51.482917Z"
+    }
+  ],
+  "checksum_file_count": 12,
+  "checksum_input_bytes": 4462828726,
+  "summed_checksum_elapsed_ms": 268588,
+  "metadata_and_index_open": {
+    "started_at_utc": "2026-09-23T10:04:51.483056Z",
+    "completed_at_utc": "2026-09-23T10:04:57.488408Z",
+    "elapsed_ms": 6005
+  },
+  "broad_single_open": {
+    "started_at_utc": "2026-09-23T10:04:57.488442Z",
+    "completed_at_utc": null,
+    "elapsed_ms": null
+  },
+  "private_ipv6_health": {
+    "status": "failed",
+    "attempts": 99,
+    "deadline_seconds": 300
+  },
+  "active_generation_opened_log_observed": false,
+  "cleanup": {
+    "canary_state": "stopped",
+    "stopped_at_utc": "2026-09-23T10:05:25.231Z",
+    "machine_lease": "released",
+    "scoped_token": "revoked"
+  },
+  "production_reader": {
+    "machine_id": "d89303da029328",
+    "state": "started",
+    "image_digest": "sha256:09b2fc639c63cbca74f05da137c455cf2eb5d32f0a256e12d1e5b711dca66dcd",
+    "bind": "0.0.0.0:8108"
+  },
+  "interpretation": "The 12 schema-8 file checksums consumed 268,588 ms of summed duration. Metadata and other indexes then opened in 6,005 ms. Eager BroadSingleIndex::open began but did not complete before the 300-second private-health deadline. The checksum byte count is logical input, not measured physical disk reads. This is a failed cold-start release gate."
+}

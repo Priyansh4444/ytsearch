@@ -1,0 +1,22 @@
+{
+  "gate": "P00-reference-unit",
+  "status": "pass",
+  "source_commit": "3ae1a1a141f4dc97a8009d7bbe81dc5394b68e03",
+  "matrix": {
+    "status": "pass",
+    "cases": 300,
+    "sha256": "3d36c847d3b9ef641c363ccffa2053975f13032ec849c02e49dae18ffd0949b9"
+  },
+  "focused_schema9": {"passed": 61, "failed": 0, "ignored": 0},
+  "raw_search_crate": {"passed": 241, "failed": 0, "ignored": 1},
+  "format": {"status": "pass"},
+  "clippy_all_targets_all_features_warnings_denied": {"status": "pass"},
+  "scope": "independent reference and fixture checks only",
+  "not_proven": [
+    "production runtime differential",
+    "schema-9 lazy engine implementation",
+    "2 GiB latency or RSS gate",
+    "publication/load behavior",
+    "full P00 ten-lane live verdict"
+  ]
+}

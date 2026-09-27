@@ -5,8 +5,9 @@ set -eu
 # machine is healthy while the queue is idle; Cloudflare starts it on approval.
 
 APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-raw-production}"
+RAW_READER_APP="${RAW_READER_APP:-ytsearch-raw-production}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-EXPECTED_RAW_SEARCH_API_URL="${EXPECTED_RAW_SEARCH_API_URL:-http://ytsearch-raw-production.internal:8108}"
+EXPECTED_RAW_SEARCH_API_URL="${EXPECTED_RAW_SEARCH_API_URL:-http://${RAW_READER_APP}.internal:8108}"
 EXPECTED_CREATOR_LIST_FILE="${EXPECTED_CREATOR_LIST_FILE:-$SCRIPT_DIR/indexed-channels.txt}"
 EXPECTED_ENTRYPOINT_FILE="${EXPECTED_ENTRYPOINT_FILE:-$SCRIPT_DIR/cloud-index-queue-entrypoint.sh}"
 REQUIRED_STATES="${REQUIRED_QUEUE_WORKER_STATES:-}"
@@ -126,3 +127,19 @@ verify_embedded_file() {
 
 verify_embedded_file /usr/local/bin/cloud-index-queue "$EXPECTED_ENTRYPOINT_FILE"
 verify_embedded_file /tmp/daily-indexed-channels.txt "$EXPECTED_CREATOR_LIST_FILE"
+
+if [ -n "${RAW_READER_MACHINES_JSON_FILE:-}" ]; then
+  reader_machines="$(cat "$RAW_READER_MACHINES_JSON_FILE")"
+else
+  reader_machines="$(flyctl machine list --app "$RAW_READER_APP" --json)"
+fi
+if ! printf '%s' "$reader_machines" | jq -e '
+  [.[] | select(.state == "started")] as $started |
+  ($started | length) == 1 and
+  $started[0].config.env.RAW_SEARCH_BIND == "[::]:8108" and
+  ([$started[0].config.services[]? |
+    select(.internal_port == 8108 and .protocol == "tcp")] | length) == 1
+' >/dev/null; then
+  echo "The started Raw reader must listen on Fly private IPv6 port 8108." >&2
+  exit 1
+fi

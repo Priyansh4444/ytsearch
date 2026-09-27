@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "kind": "raw-reader-cold-open-diagnostic",
+  "source_commit": "eeb679b5085c5b7527719b45a443f600bcf6283a",
+  "reader_image_digest": "sha256:227762e9b79b46803fd3ebc4c387e1f89ea937a8a6e97b780187b91271b6572c",
+  "canary_machine_id": "847314c22d52e8",
+  "canary_volume_id": "vol_4oj1x0oxkq82eo2r",
+  "active_generation": {
+    "sequence": 2152,
+    "directory": "generations/00000000000000002152",
+    "directory_size_human": "4.2G",
+    "broad_single_size_human": "2.6G"
+  },
+  "startup_logs_utc": {
+    "opening_mutation_store": "2026-09-23T04:40:41.868538Z",
+    "opening_active_generation": "2026-09-23T04:40:42.408600Z",
+    "active_generation_opened": "not_observed",
+    "cleanup_sigint": "2026-09-23T04:45:57Z"
+  },
+  "process_samples": [
+    {
+      "phase": "early_open",
+      "state": "D (disk sleep)",
+      "rss_kib": 8556,
+      "swap_kib": 0,
+      "read_bytes": 1343832064
+    },
+    {
+      "phase": "middle_open",
+      "state": "D (disk sleep)",
+      "rss_kib": 8556,
+      "swap_kib": 0,
+      "read_bytes": 3044249600
+    },
+    {
+      "phase": "late_open",
+      "state": "D (disk sleep)",
+      "rss_kib": 771148,
+      "swap_kib": 0,
+      "read_bytes": 5271793664
+    }
+  ],
+  "private_ipv6_health": "failed_after_300_one_second_attempts",
+  "admin_readiness": "not_reached",
+  "after_cleanup": {
+    "canary_state": "stopped",
+    "canary_lease": "none",
+    "production_reader_state": "started",
+    "production_reader_bind": "0.0.0.0:8108"
+  },
+  "conclusion": "The long startup is inside active-generation opening after SQLite opens. The source requires a full read and BLAKE3 checksum of every schema-8 generation file before binding the listener, including broad-single.bin. Disk reads progressed without swap; the probe did not measure each file's share of the delay. The canary did not reach the listener within the required bound."
+}

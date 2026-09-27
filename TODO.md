@@ -7,13 +7,151 @@ This file tracks the current requested work and end-to-end verification. Mark an
 Checked items are implemented and verified. Unchecked items are required before
 Raw can replace Typesense as the canonical search index.
 
-### Lazy exact schema-9 pivot (active; production remains generation 2145)
+### Lazy exact schema-9 pivot (active; production generation 2950 observed 2026-09-19)
+
+> P00 revalidation on 2026-09-19 found that production has advanced to
+> generation 2950. The old generation-2145 note is retained here as historical
+> context, not current runtime truth.
 
 - [x] Finish and verify the bounded-publication/4-GB-builder release gate.
 - [x] Arena three structurally distinct lazy exact designs and cross-judge them.
 - [x] Select Lucene/PISA as the base, with byte-budgeted high-DF bitmaps and
   typed adaptive-Roaring derived/facet sets as bounded grafts.
 - [x] Write the usage-first type, API, on-disk, session, and module sketch.
+- [x] Write and independently review the end-to-end P00-P11 execution plan in
+  `schema9.md`; execution was explicitly approved on 2026-09-19.
+- [ ] Complete P00 and freeze the starting state and acceptance contract.
+  - [x] Recover the saved integration branch into a persistent worktree and
+    prove its ancestry; missing temporary worktrees remain classified missing.
+  - [x] Revalidate authenticated production readiness as generation 2950 and
+    record the schema-6 manifest, machine/image/profile, queue worker, and
+    resource baseline without mutating production. A later read-only audit
+    corrected the initial base-vs-active manifest attribution; the active
+    generation has 8,422,419 documents and 35,215 videos.
+  - [x] Make the read-only P00 capture script emit a failure receipt for failed
+    or malformed Fly/HTTP probes, preserving null unknowns and exact five-probe
+    accounting. Local success/failure fixtures pass; this is not a fresh live
+    production capture.
+  - [x] Bind P00's active corpus evidence to the authenticated readiness
+    generation via the reader's active-generation pointer and that generation's
+    manifest, with schema/document/video/channel counts and a manifest digest.
+    A stale pointer fails closed. Local fixtures and a credentialed read-only
+    seven-probe inventory capture at `e528093` pass; independent full P00
+    verdict, runtime differential, and performance gates remain open.
+  - [x] Re-run the independent schema-9 reference unit at head `3ae1a1a`:
+    300-case matrix, 61 focused tests, full Raw crate, format, and Clippy all
+    pass. The receipt is `P00/unit-2026-09-22/receipt.json`; it does not close
+    production runtime, load, or latency gates.
+  - [x] Record the current Raw worker inventory and a cost baseline in
+    `docs/operations/raw-mutable-migration.md`: reader and queue worker are
+    started alongside the API, daily refresh is disabled, and the publication
+    builder is stopped. A complete Raw app inventory corrected the earlier
+    incomplete subtotal to $37.63/month before variable charges and legacy
+    Typesense resources. A read-only legacy inventory adds $9.15/month of
+    provisioned volumes, for a $46.78/month known cross-app subtotal. This is
+    a pricing estimate, not an invoice or a
+    completed migration gate.
+  - [ ] Reconcile all configured creator handles and their discovered videos.
+    The read-only generation-2950 comparison at
+    `P00/creator-gap-2026-09-22.json` found 62 canonical handles, 61 active,
+    and only `@BrodieRobertson` missing. The worker has no complete-discovery
+    manifest directory yet; neither video outcomes nor queue admission are
+    proven. Run discovery, classify every video, publish, and verify the active
+    catalog before closing this gate.
+  - [ ] Reconcile the latest exact-retirement inventory drift before any
+    Typesense deletion. The 2026-09-23 read-only receipt shows another new
+    attached primary Typesense volume, the legacy API and cold-benchmark
+    replacements, two new unattached indexer volumes, and two historical IDs
+    no longer listed. Verify contents, lineage, and queue state; keep the
+    existing fail-closed allowlist until that evidence exists.
+  - [x] Encode the exact performance timers, workload, and resource thresholds
+    in `scripts/benchmark-search-contract.json`.
+  - [ ] Resolve every failed grammar/scoring cell in the v2 query contract with
+    executable runtime/reference differential fixtures; reviewed policy examples
+    are retained but do not close the gate.
+  - [x] Create and structurally validate the immutable 300-case query matrix
+    with exact category counts and canonical digest.
+  - [x] Validate all 11 matrix query-error cases in the independent oracle,
+    with UTF-8 byte/phrase-length boundaries, quote/backslash escapes, and
+    negation/punctuation regressions. Production differential coverage remains
+    required; this does not close the full grammar gate.
+  - [x] Prove the QV-01 count-only reference on the matrix's zero-sized window:
+    exact video/moment totals and facets survive `per_page=0`, hits stay empty,
+    and `has_next_page` is false across pages and creator scope. Runtime parity,
+    `limit=0`, and cursor behavior remain open; the matrix case stays pending.
+  - [ ] Resolve its 14 explicit `decision_pending` cases with executable
+    exhaustive evidence; current reviewed-policy matrix digest is
+    `3d36c847…0949b9` (reviewed 512/513-byte boundary fixture correction).
+  - [x] Repair the matrix's contradictory 4,096-byte success fixture to the
+    frozen 512-byte contract, test the actual boundary with the reference,
+    and reject oversized success fixtures categorically in the validator.
+  - [x] Add the independent exhaustive exact-query oracle foundation with
+    validated missing-value/video metadata, phrase/negation/scope semantics,
+    anchored moment totals, deterministic pagination, and fail-closed
+    expansion modes. Full matrix coverage remains required above.
+  - [x] Extend that independent oracle with typed per-field prefix and
+    fuzzy expansion, Unicode-scalar thresholds, decimal exactness, canonical
+    alternative ordering/additive scoring, and expansion-safe negation. Split
+    and token-drop integration remain unclosed.
+  - [x] Add literal exact-split hypothesis enumeration and exclusive winner
+    selection to the fixture oracle, including more than eight candidates,
+    Unicode boundaries, enabled-field scope, and exact exclusions.
+  - [ ] Complete plural/fuzzy split alternatives, phrase/slot integration, and
+    the threshold-driven expansion ladder; literal split tests alone do not
+    close the v2 semantic gate.
+  - [x] Prove QG-06's exact-only retained-query order without the legacy cap:
+    full, every prefix, every suffix; preserve exclusions/scope and select
+    before pagination. Automatic expansion/controller semantics and runtime
+    differential evidence remain open; the matrix pending gate is unchanged.
+  - [x] Correct oracle numeric prefix suppression with ASCII/Arabic-Indic and
+    mixed-alphanumeric regression cases across all field selections.
+  - [x] Correct global slot deduplication across terms/phrases by separating
+    predicate membership from first-appearance slot reduction; repeated phrase
+    positions remain required and negative predicates never contribute scores.
+  - [x] Replace simplified field frequency scores with independent full-corpus
+    IDF, BM25, title log-frequency, first-position factors, final expansion
+    multipliers, and canonical contribution reduction; verify numeric goldens.
+  - [x] Implement oracle ranking-key reduction with unbounded exact evidence,
+    one real best document per video, timestamp/external-ID ties, and
+    generation-wide engagement normalization and blending.
+  - [x] Add exhaustive unquoted proximity and ordered-evidence reduction with
+    distinct positive slots, maximum enabled-field factor, separate ordered
+    multiplier, and no displacement/cardinality cap.
+  - [x] Clarify and implement zero-slop positive phrase factors: exact field-local
+    occurrences, repeated-token positions, canonical phrase deduplication, one
+    maximum across phrase/unquoted evidence, and one ordered multiplication.
+  - [x] Define and independently review nonzero-slop membership and ranking:
+    total gaps per positive phrase, exact negatives, and maximum occurrence
+    factor with explicit ordered preference. Policy is not runtime evidence.
+  - [x] Implement the nonzero-slop reference with boundary/score goldens,
+    exact negative phrases, deterministic ties, and five matrix queries'
+    fixture membership/page/aggregate checks. Production parity and highlights
+    remain outside this reference-unit evidence.
+  - [x] Separate exhaustive admission evidence from the winning score
+    hypothesis in the reference oracle. A split winner no longer erases a
+    literal transcript match or undercounts moments. Red regression committed
+    before the repair; partial splits, creator/field scope, negative terms,
+    phrase evidence, and score-bit stability are covered. Production runtime
+    parity and the full matrix remain open.
+  - [ ] Complete expanded-term/fuzzy-split evidence factors, then prove complete
+    ranking and runtime/reference score-bit equivalence.
+  - [ ] Re-run the public performance lane without crossing the edge rate limit.
+    The first 480-request attempt produced 360 expected HTTP 429 responses and
+    a 490.436 ms `react` outlier; retain this failed attempt in P00 evidence.
+    A 2026-09-22 read-only Axiom review found 30 of 273 Raw searches above
+    250 ms over seven days, with a 42.3-second outlier. Ten missing query
+    shapes are now in the shared benchmark matrix; the Raw backend consumed
+    nearly all recorded time, but its internal bottleneck remains unproven.
+    See `P00/slow-searches-2026-09-22.md`.
+  - [x] Revalidate the retained schema-8 artifact on the stopped builder volume;
+    record its exact path, job/corpus/manifest identity, 2.739 GB size, BLAKE3,
+    and SHA-256, then stop the temporarily started sleep-only Machine.
+  - [ ] Obtain an independent verdict at the final P00 head.
+- [x] Add synthetic counting/phrase/moment measurement forks with independent
+  oracles, retained failures, provenance, paired sampling, and CI regression checks.
+  This is measurement infrastructure, not production-corpus or latency proof.
+- [ ] Remove the throwaway measurement harness once production structural
+  differential/performance lanes supersede it; preserve its experiment evidence.
 - [ ] Prototype phrase bitmap-vs-skip candidates on a production-shaped corpus.
 - [ ] Prototype bitmap-vs-skip exact counting and derive the bitmap byte budget.
 - [ ] Prove exact query-dependent 20-second moment totals under 200 ms for the
@@ -23,6 +161,11 @@ Raw can replace Typesense as the canonical search index.
   and a retained frontier that does not rescore prior pages.
 - [ ] Prototype delta-varint-vs-SIMD-BP128/Stream-VByte blocks at 64/128/256.
 - [ ] Prototype pinned in-memory sessions, honest expiry, and generation advance.
+  - [x] Verify the existing reader snapshot retains exact pages/counts across
+    activation and releases the retired reader after its final lease drops;
+    see [foundation evidence](docs/experiments/search/generation-pin-foundation.md).
+  - [ ] Add session admission/expiry and cleanup protection; measure retained
+    generations on the 2-GB profile (the reader lease test does not prove these).
 - [ ] Build the 300-query exhaustive differential oracle for membership, score
   bits, every page, totals, summaries, fallback modes, highlights, and sorts.
 - [ ] Add schema-9 structural writer/reader only after prototype gates choose the
@@ -701,6 +844,25 @@ Raw can replace Typesense as the canonical search index.
   refused. The deployed reader binds `0.0.0.0:8108`; the target configuration
   binds `[::]:8108`. Verify private readiness and actual queue consumption
   after the gated release. Starting the worker alone did not repair it.
+  The 2026-09-22 isolated canary with the committed IPv6 overlay was staged,
+  but a bounded 300-second private health probe failed before port 8108
+  listened. Investigate cold-open startup on the 2 GiB canary before any
+  production reader update; see the P00 reader-canary smoke receipt.
+  A second instrumented canary run localized the delay to opening active
+  generation 2152 (4.2 GB, including 2.6 GB of retained schema-8 broad
+  answers); it read over 5 GB without swap but still missed the 300-second
+  listener/health gate. A third instrumented run measured 266,991 ms of
+  checksums over 4,462,828,726 logical bytes, including 163,901 ms for
+  `broad-single.bin`; generation open still had not completed when the
+  300-second probe ended. See the P00 2026-09-23 checksum receipt. Measure
+  the remaining open work, implement the lazy schema-9 cold-open design, and
+  use a representative, verified generation for the IPv6 reader release gate.
+  The fourth isolated run at `b385432` measured 268,588 ms of checksum work,
+  then 6,005 ms opening metadata and other indexes. Eager
+  `BroadSingleIndex::open` started but had not completed at the 300-second
+  health deadline. The canary stopped and production stayed unchanged; see
+  the P00 2026-09-23 open-stage receipt. Replace this eager schema-8 path with
+  the planned lazy schema-9 design and prove cold-open/resource gates.
 - [x] Apply the configured idle-shutdown deadline to failed pending-publication
   retries, which previously bypassed the check. Test clean daemon exit with
   the pending marker preserved; this bounds failed wake cost but does not fix

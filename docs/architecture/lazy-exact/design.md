@@ -145,6 +145,17 @@ trait ExactRanker {
 
 Every posting block stores a conservative `MaxRankKey` covering all ordering dimensions. A component without a proved maximum uses its global maximum, reducing pruning rather than correctness. Grouped video accumulators participate in the bound. A page is final only when no unexplored or partial block can beat its last complete rank tuple.
 
+The sketch above describes dimensions, not a derived Rust tuple ordering. The
+current comparator in `engine/query_support.rs` orders default relevance by
+exact-token count, exact mask, ordered-phrase flag, floating-point score, then
+external video ID. Position/proximity contributes to the score; it is not an
+independent lexicographic key. Engagement is blended only for the engagement
+sort today. The requested score-then-engagement default therefore needs an
+explicit versioned rank specification and judged tests; it cannot be called
+byte-identical legacy parity. The oracle must separately test preservation of
+legacy ordering and correctness against the new specification. Never use
+generation-local dense IDs as a substitute for the external-ID tie-breaker.
+
 The frontier persists inside the live session. Page N+1 resumes offsets and heaps, and counters prove it neither reopens exhausted blocks nor rescores documents consumed for earlier windows.
 
 ## Sessions and cursors

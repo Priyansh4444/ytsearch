@@ -6,6 +6,16 @@ export FLY_API_TOKEN=fake-token
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+RAW_READER_MACHINES_JSON_FILE="$tmp/reader-machines.json"
+export RAW_READER_MACHINES_JSON_FILE
+jq -n '[{
+  id:"reader-1",
+  state:"started",
+  config:{
+    env:{RAW_SEARCH_BIND:"[::]:8108"},
+    services:[{internal_port:8108,protocol:"tcp"}]
+  }
+}]' > "$RAW_READER_MACHINES_JSON_FILE"
 
 old_entrypoint="$(printf 'old entrypoint\n' | base64 | tr -d '\n')"
 old_list="$(printf '@old\n' | base64 | tr -d '\n')"

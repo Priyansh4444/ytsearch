@@ -2,6 +2,8 @@ use super::conjunction::{TermAlternative, TermPlan};
 use super::*;
 
 mod common_words;
+mod query_contract_v2;
+mod schema9_reference;
 
 const _: () = assert!(std::mem::size_of::<IndexedField>() == 1);
 const _: () = assert!(IndexedField::Text as u8 == 0);

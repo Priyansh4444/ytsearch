@@ -1,0 +1,133 @@
+{
+  "gate": "P00-starting-state",
+  "status": "fail",
+  "source_commit": "97f603168c1a3bb1d5b795cf32d6b34360d3af3f",
+  "parent_commit": "4d36ec8b2bd38f845a9770803ae583514e960287",
+  "trunk_commit": "588dfa738d90fa22316f918838e7bc074cc47f58",
+  "saved_integration_commit": "4d36ec8b2bd38f845a9770803ae583514e960287",
+  "corpus_digest": "manifest-file-digests-recorded-below",
+  "generation": "00000000000000002950",
+  "storage_schema": 6,
+  "grammar_version": 1,
+  "rank_version": 1,
+  "profile": {
+    "reader_machine": "d89303da029328",
+    "reader_memory_bytes": 2147483648,
+    "cpu_kind": "shared",
+    "cpus": 2,
+    "volume_id": "vol_v3gnjjw9elpy5ew4",
+    "volume_bytes": 20000000000
+  },
+  "production": {
+    "reader_app": "ytsearch-raw-production",
+    "reader_image_digest": "sha256:09b2fc639c63cbca74f05da137c455cf2eb5d32f0a256e12d1e5b711dca66dcd",
+    "api_machine": "8e7204a7694d28",
+    "api_image_digest": "sha256:f96f68d5f0dcae75897378f82a88182f9e6238c5ef819ca3dd3ce966ae8cd3b2",
+    "last_sequence": 2950,
+    "acknowledged_readers": 1,
+    "base_manifest": {
+      "documents": 8142650,
+      "videos": 32822,
+      "channels": 61,
+      "terms": 293152,
+      "files": {
+        "channels.json": "719e8cf0a08d74d1b9a43352be9538faa89a1958ad4fd33d4f3cb85276052685",
+        "documents.blocks": "16b17ff61dbecd1cbc065a515f0dd8d7dba473c4ae9cd23ddd8773f887bf38d5",
+        "documents.meta": "b09d63542229b2f101a487be9c8fa66cade24fe6e781ef2abc9a3673e03303c3",
+        "fuzzy.bin": "545ca96647772ed8dbd735efd46c3fe07745093cbc2d04b8086eff2f85031e78",
+        "lexicon.bin": "26a0867bfb06da3db5e49ed228ab02afb6eb7c5dee883cf10cdb547fea5a6ffa",
+        "positions.bin": "a4a5fe6d7aa1a4302a725aefc75f285b3543e7c988b3df3775a67545ec655876",
+        "positions.full.bin": "730192b8612696a3f31be659eebc6637e1825a1da3fa9af393590a338f72ee33",
+        "postings.bin": "d46e7abf62be80df1b0b7f6e341f2a71bc4991860412d2dfc0cb9335b2876a7d",
+        "videos.json": "28b21a7e42608d0a778f1d9fb82b636785f398a602befbf7ce3222ce39020fe9"
+      }
+    },
+    "manifest": {
+      "documents": 8422419,
+      "videos": 35215,
+      "channels": 61,
+      "terms": 302871,
+      "files": {
+        "channels.json": "7567c4f8778abfe906d6eca697db0bc00d4037f9b8f10e5d4dd6f55a378be76b",
+        "documents.blocks": "8f6bac0d015f44111c39ef171cc263c3fd8c26a87035b225504f84babcd94301",
+        "documents.meta": "51b6b24858068bed22cfb763cee08e0ecb5970dca6d836272a464717446cc4a9",
+        "fuzzy.bin": "d110120917510acb1a9cd4dd3cd7742d47387e35cfc07ec1d63a8a6c43b70373",
+        "lexicon.bin": "8a1ff979bd120527288482b154b22a73c186b26ae35b1eeb57432d9d6d5b7b00",
+        "positions.bin": "80c356023b050b75474d650d60b53c70b657a072b168e79380272e4dacad7501",
+        "positions.full.bin": "94d7145cf4e72e7e29e8338226b8a38f2825e784693ff20a67f242f4e0240804",
+        "postings.bin": "e532bdca38fd8e73a5f4868db7003004c3d7261e3061c7ef46337c1efbae26f9",
+        "videos.json": "a88deca1167e586e38a247cdde52aa1565b1a7e2f62e09c8a82c6920310818ed"
+      }
+    }
+  },
+  "observation_correction": {
+    "observed_at": "2026-09-22T22:38:37Z",
+    "method": "read-only Fly SSH on existing reader d89303da029328, active-generation pointer and immutable manifest",
+    "active_pointer": "generations/00000000000000002950",
+    "active_manifest_mtime_utc": "2026-08-31T09:14:14.875857122Z",
+    "prior_error": "The original P00 capture attributed /data/index/manifest.json (immutable base) to active generation 2950. The active manifest predates that capture and has different counts and file digests."
+  },
+  "resources": {
+    "reader_rss_bytes": 788799488,
+    "reader_rss_anon_bytes": 285454336,
+    "reader_rss_file_bytes": 503345152,
+    "reader_swap_bytes": 0,
+    "cgroup_usage_bytes": 1906786304,
+    "cgroup_cache_bytes": 1607548928,
+    "cgroup_rss_bytes": 299417600,
+    "volume_used_bytes": 3288002560,
+    "volume_use_percent": 17,
+    "historical_machine_oom_event": true
+  },
+  "queue_worker": {
+    "app": "ytsearch-indexer-raw-production",
+    "machine": "8e426df7e305e8",
+    "state": "started",
+    "role": "queue-indexer",
+    "source_commit": "87ba9115c388bc9bde9387ef17685bd37e2e838e",
+    "image_digest": "sha256:d6c340f5abada14dc6c134e029a27c854531a4c096a31cfdd189a83dbf39ae33",
+    "queue_loop": true,
+    "daily_update_enabled": false
+  },
+  "retained_schema8": {
+    "status": "verified_on_stopped_builder_volume_2026-09-19",
+    "machine": "080d297f070d08",
+    "path": "/var/lib/ytsearch/raw-generation-work/00000000000000002152-679b22ad23669e6d/generation/broad-single.bin",
+    "job_id": "00000000000000002152-679b22ad23669e6d",
+    "target_sequence": 2152,
+    "size_bytes": 2738580172,
+    "sha256": "b65d859033d4d983662677084d36103dd11e432a652f7d2e0506e7bba40a7733",
+    "blake3": "e05dc250790e50958f82aa9932e6eec453a7970613866bbee41a051853c13c8c",
+    "manifest_blake3": "0d0ff00af02cff0c0855986bbddbf9d3d0a997da0c574e42f75e864cf6faefe6",
+    "corpus_identity": "07cfc344a4dd75fa4f390bdbf809874cbc02be70b89a378abf09490dd8f82383",
+    "documents": 8322726,
+    "videos": 34611,
+    "channels": 68,
+    "plans": 14024,
+    "activation": "never_activated"
+  },
+  "command": "/tmp/run-p00-public-baseline.sh",
+  "started_at": "2026-09-19T11:20:19Z",
+  "finished_at": "2026-09-19T11:20:27Z",
+  "process_handle": "completed-local-process",
+  "attempted": 480,
+  "passed": 120,
+  "failed": 360,
+  "skipped": 0,
+  "samples_path": "docs/experiments/search/schema9/P00/public-api-samples.txt",
+  "samples_digest": "sha256:3079beb2e06d09832d22d80728ca2da21c2ed0a7c86572960d0fad6cd5285fe9",
+  "metrics": {
+    "rate_limited_http_429": 360,
+    "cases_with_max_over_200_ms": ["react_global"],
+    "react_global_max_ms": 490.436,
+    "resource_gate": "not_comparable_cgroup_includes_page_cache_and_exceeded_80_percent_at_observation"
+  },
+  "failure_cases": [
+    "Public workload hit the edge rate limit after 120 requests; the remaining 360 returned HTTP 429.",
+    "react_global included one 490.436 ms public request.",
+    "The production image does not expose its source commit in authenticated readiness.",
+    "The observed generation is 2950, contradicting the old planning assumption that production remained on 2145.",
+    "The original P00 capture mislabeled the immutable base manifest as active; corrected by the 2026-09-22 active-generation audit."
+  ],
+  "reviewer": "pending-independent-P00-verdict"
+}
