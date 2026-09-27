@@ -197,6 +197,13 @@ Raw can replace Typesense as the canonical search index.
   - [x] Add a file-agnostic lazy BLAKE3 unit verifier with 2–8 MiB units,
     checked ranges, short-tail handling, and once-only concurrent success or
     corruption caching. It is not yet connected to a schema-9 footer or mmap.
+  - [x] Add the private generation directory, bound mmap opener, bounded
+    fast-field decoders, canonical source parser, disk-backed source sort, and
+    fail-closed per-video source audit in draft PRs #10–#18. These pieces are
+    not wired into the production builder or reader.
+  - [ ] Prove the source audit against the complete canonical corpus and
+    captured mutation snapshot, then emit and structurally validate every
+    generation file from the audited dense IDs before publication.
 - [ ] Prove footer-only cold open reads under 200 MB, RSS under 1.5 GiB, zero
   swap/OOM, and worst-case exact page-one + totals + Tier 0 under 200 ms on 2 GB.
 - [ ] Exercise every documented website/API regression constraint against the
