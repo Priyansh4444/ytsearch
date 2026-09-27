@@ -75,6 +75,22 @@ Common-word queries prune best because a few short transcript chunks dominate
 BM25. Selective and sentence queries prune less, but their match sets are
 small already.
 
+## Corpus-wide posting size in the proposed layout
+
+`measure_proposed_schema9_posting_bytes` transcodes every posting list of the
+same generation: lists of at most 128 postings stay delta varints; longer lists
+use 128-document blocks of bit-packed deltas and (frequency − 1) with an
+8-byte block header, an 8-byte skip entry, and a 4-byte block-max bound.
+
+| Field | Schema-6 postings | Schema-9 blocks | Skips | Block-max | Schema-9 total | Bitmaps (64 MiB text budget) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Transcript | 311,695,403 | 194,332,211 | 8,812,232 | 4,406,116 | 207,550,559 | 65 terms (DF ≥ 394,515), 66,159,080 |
+| Title | 683,017 | 561,079 | 10,224 | 5,112 | 576,415 | 1,185 terms (DF ≥ 0.1%), 4,862,055 |
+
+Transcript postings shrink by a third **while gaining** the skip and bound
+data that ranking pruning needs. Sizes cover document IDs and frequencies
+only; first and remaining positions, fast fields, and payloads are separate.
+
 ## Limits of this evidence
 
 - The tier bound uses each block's true maximum tier. Per-term exact flags

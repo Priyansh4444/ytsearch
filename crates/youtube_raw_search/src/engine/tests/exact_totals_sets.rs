@@ -398,3 +398,137 @@ fn simulate_block_priority_group_ranking() {
         assert_eq!(pruned, expected, "pruned ranking differs for {query:?}");
     }
 }
+
+fn varint_len(value: u32) -> usize {
+    match value {
+        0..0x80 => 1,
+        0x80..0x4000 => 2,
+        0x4000..0x20_0000 => 3,
+        0x20_0000..0x1000_0000 => 4,
+        _ => 5,
+    }
+}
+
+fn bit_width(value: u32) -> usize {
+    (u32::BITS - value.leading_zeros()) as usize
+}
+
+/// Bytes of one posting list in the proposed schema-9 layout: delta varints
+/// up to one block; otherwise 128-document blocks of bit-packed deltas and
+/// (frequency - 1), each with an 8-byte header (first ID, two widths,
+/// count), an 8-byte skip entry (last ID, offset), and a 4-byte block-max
+/// score bound.
+fn proposed_bytes(postings: &[(u32, u32)]) -> (usize, usize, usize) {
+    const BLOCK: usize = BLOCK_DOCUMENTS as usize;
+    if postings.len() <= BLOCK {
+        let mut previous = 0;
+        let bytes = postings
+            .iter()
+            .map(|&(document, frequency)| {
+                let delta = document - previous;
+                previous = document;
+                varint_len(delta) + varint_len(frequency)
+            })
+            .sum();
+        return (bytes, 0, 0);
+    }
+    let (mut data, mut skips, mut bounds) = (0, 0, 0);
+    for block in postings.chunks(BLOCK) {
+        let deltas = block.windows(2).map(|pair| pair[1].0 - pair[0].0);
+        let delta_width = deltas.max().map_or(0, bit_width);
+        let frequency_width = block
+            .iter()
+            .map(|&(_, frequency)| frequency.saturating_sub(1))
+            .max()
+            .map_or(0, bit_width);
+        data += 8 + ((block.len() - 1) * delta_width + block.len() * frequency_width).div_ceil(8);
+        skips += 8;
+        bounds += 4;
+    }
+    (data, skips, bounds)
+}
+
+#[test]
+#[ignore = "diagnostic: needs RAW_TOTALS_INDEX pointing at a real generation"]
+fn measure_proposed_schema9_posting_bytes() {
+    let index = std::env::var("RAW_TOTALS_INDEX").expect("set RAW_TOTALS_INDEX");
+    let engine = RawSearchEngine::open(Path::new(&index)).expect("open generation");
+    let documents = engine.inner.manifest.documents as usize;
+    let videos = engine.inner.videos.len();
+    let mut totals = [[0_usize; 4]; 2];
+    let mut text_frequencies = Vec::new();
+    let mut title_frequencies = Vec::new();
+    for position in 0..engine.inner.lexicon.count {
+        let (_, entry) = engine.inner.lexicon.entry_at(position).expect("entry");
+        for (field, offset, length, frequency) in [
+            (
+                0,
+                entry.text_offset,
+                entry.text_length,
+                entry.text_frequency,
+            ),
+            (
+                1,
+                entry.title_offset,
+                entry.title_length,
+                entry.title_frequency,
+            ),
+        ] {
+            if frequency == 0 {
+                continue;
+            }
+            let bytes = engine.postings_range(offset, length).expect("postings");
+            let (mut cursor, mut id) = (0, 0_u32);
+            let mut postings = Vec::with_capacity(frequency as usize);
+            while cursor < bytes.len() {
+                id += read_varint(bytes, &mut cursor, bytes.len()).expect("delta");
+                let term_frequency = read_varint(bytes, &mut cursor, bytes.len()).expect("tf");
+                postings.push((id, term_frequency));
+            }
+            let (data, skips, bounds) = proposed_bytes(&postings);
+            totals[field][0] += length;
+            totals[field][1] += data;
+            totals[field][2] += skips;
+            totals[field][3] += bounds;
+            if field == 0 {
+                text_frequencies.push(frequency);
+            } else {
+                title_frequencies.push(frequency);
+            }
+        }
+    }
+    text_frequencies.sort_unstable_by(|left, right| right.cmp(left));
+    title_frequencies.sort_unstable_by(|left, right| right.cmp(left));
+    let text_bitmap = documents.div_ceil(8);
+    let budget = 64 * 1024 * 1024;
+    let text_bitmaps = (budget / text_bitmap).min(text_frequencies.len());
+    let title_bitmap = videos.div_ceil(8);
+    let title_bitmaps = title_frequencies
+        .iter()
+        .take_while(|&&frequency| frequency as usize * 1000 >= videos)
+        .count();
+    for (name, field, bitmaps, bitmap_bytes, threshold) in [
+        (
+            "text",
+            0,
+            text_bitmaps,
+            text_bitmap,
+            text_frequencies.get(text_bitmaps.saturating_sub(1)),
+        ),
+        (
+            "title",
+            1,
+            title_bitmaps,
+            title_bitmap,
+            title_frequencies.get(title_bitmaps.saturating_sub(1)),
+        ),
+    ] {
+        let [schema6, data, skips, bounds] = totals[field];
+        println!(
+            "{{\"field\":{name:?},\"schema6_posting_bytes\":{schema6},\"schema9_block_bytes\":{data},\"skip_bytes\":{skips},\"blockmax_bytes\":{bounds},\"schema9_total_without_bitmaps\":{},\"bitmaps\":{bitmaps},\"bitmap_bytes\":{},\"bitmap_min_df\":{}}}",
+            data + skips + bounds,
+            bitmaps * bitmap_bytes,
+            threshold.copied().unwrap_or(0)
+        );
+    }
+}

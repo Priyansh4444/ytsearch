@@ -87,6 +87,9 @@ confirm them on the reader profile before P03 freezes the format.
   codec blocks share one boundary. Bit-packed deltas for lists longer than one
   block (about 40% fewer bytes than delta varints for the six broadest terms at
   similar seek cost); delta varints for shorter lists, where they were smallest.
+  Corpus-wide, this layout stores transcript postings in 207.6 MB including
+  skips and block-max bounds, against 311.7 MB of schema-6 postings without
+  them; the 64 MiB budget holds 65 bitmaps (DF ≥ 4.8%).
 - **Block-max bounds.** Per block, the maximum of the document-dependent score
   factor (BM25 term-frequency/length part times the first-position multiplier),
   4 bytes each (about 3% of a 128-posting block). Query time multiplies by the
