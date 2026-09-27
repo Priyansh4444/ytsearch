@@ -14,6 +14,8 @@ pub const HEADER_BYTES: usize = 16;
 pub const DOCUMENT_RECORD_BYTES: usize = 24;
 pub const BLOCK_RECORD_BYTES: usize = 16;
 
+const PREFETCH_PAGE_BYTES: usize = 4096;
+
 pub struct MappedFile {
     bytes: Mmap,
 }
@@ -43,10 +45,14 @@ impl MappedFile {
         &self.bytes
     }
 
-    /// Asks the kernel to read the mapping ahead of first use. Advisory: a
-    /// failure only leaves pages to fault in on demand.
+    /// Reads the mapping into the page cache ahead of first use by touching
+    /// one byte per page; sequential faults use the kernel's mmap readahead.
+    /// `MADV_WILLNEED` is not enough: on the production kernel it returned at
+    /// once and left a newly published generation cold.
     pub fn prefetch(&self) {
-        let _ = self.bytes.advise(memmap2::Advice::WillNeed);
+        for page in self.bytes.chunks(PREFETCH_PAGE_BYTES) {
+            std::hint::black_box(page[0]);
+        }
     }
 
     /// Marks the mapping as randomly accessed so a fault reads only the
