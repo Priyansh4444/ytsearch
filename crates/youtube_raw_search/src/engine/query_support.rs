@@ -702,6 +702,23 @@ pub(super) fn minimum_position_window_slices(positions: &[&[u32]]) -> Option<Pos
     best
 }
 
+/// For each distinct term, the index of its first occurrence in `sequence`,
+/// or `None` unless both name the same token set. Only then can one
+/// all-token position walk serve both proximity and phrase evidence.
+pub(super) fn sequence_slots_for_terms(
+    terms: &[String],
+    sequence: &[String],
+) -> Option<Vec<usize>> {
+    let slots = terms
+        .iter()
+        .map(|term| sequence.iter().position(|token| token == term))
+        .collect::<Option<Vec<_>>>()?;
+    sequence
+        .iter()
+        .all(|token| terms.contains(token))
+        .then_some(slots)
+}
+
 pub(super) fn positional_window(
     windows: &[(u32, PositionalWindow)],
     id: u32,

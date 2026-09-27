@@ -353,6 +353,9 @@ struct PhraseFieldMatches {
     videos: Vec<u32>,
 }
 
+/// Minimum covering windows keyed by document or video ID, in ID order.
+type PositionWindows = Vec<(u32, PositionalWindow)>;
+
 struct PositionTargets {
     documents: Vec<u32>,
     videos: Vec<u32>,
@@ -869,6 +872,37 @@ impl RawSearchEngine {
         })
     }
 
+    /// Proximity windows over `terms` and exact ordered-phrase IDs over
+    /// `sequence` from one walk of the position streams. `term_slots[i]` is
+    /// the index in `sequence` of `terms[i]`.
+    fn windows_and_phrases_for_field(
+        &self,
+        sequence: &[String],
+        term_slots: &[usize],
+        field: IndexedField,
+        targets: &[u32],
+    ) -> Result<(PositionWindows, Vec<u32>)> {
+        let evaluated =
+            self.evaluate_positions_for_field(sequence, field, targets, |target, positions| {
+                let term_positions = term_slots
+                    .iter()
+                    .map(|&slot| positions[slot])
+                    .collect::<SmallVec<[&[u32]; MAX_PROXIMITY_TOKENS]>>();
+                let window = minimum_position_window_slices(&term_positions);
+                let ordered = ordered_phrase_positions_match(positions, 0);
+                Some((target, window, ordered))
+            })?;
+        let windows = evaluated
+            .iter()
+            .filter_map(|&(target, window, _)| window.map(|window| (target, window)))
+            .collect();
+        let phrases = evaluated
+            .iter()
+            .filter_map(|&(target, _, ordered)| ordered.then_some(target))
+            .collect();
+        Ok((windows, phrases))
+    }
+
     fn position_targets(&self, matches: &[DocMatch]) -> Result<PositionTargets> {
         let mut documents = Vec::with_capacity(matches.len());
         let mut videos = Vec::with_capacity(matches.len());
@@ -972,17 +1006,58 @@ impl RawSearchEngine {
         let terms = &terms[..terms.len().min(MAX_PROXIMITY_TOKENS)];
         let sequence = &sequence[..sequence.len().min(MAX_PROXIMITY_TOKENS)];
         let targets = self.position_targets(matches)?;
-        let text_windows = if fields.text {
-            self.position_windows_for_field(terms, IndexedField::Text, &targets.documents)?
-        } else {
-            Vec::new()
-        };
-        let title_windows = if fields.title {
-            self.position_windows_for_field(terms, IndexedField::Title, &targets.videos)?
-        } else {
-            Vec::new()
-        };
-        let ordered_phrases = self.phrase_field_matches(sequence, fields, &targets, 0)?;
+        let (text_windows, title_windows, ordered_phrases) =
+            match sequence_slots_for_terms(terms, sequence) {
+                // One walk per field serves both proximity and phrase evidence.
+                Some(term_slots) => {
+                    let (text_windows, text_phrases) = if fields.text {
+                        self.windows_and_phrases_for_field(
+                            sequence,
+                            &term_slots,
+                            IndexedField::Text,
+                            &targets.documents,
+                        )?
+                    } else {
+                        (Vec::new(), Vec::new())
+                    };
+                    let (title_windows, title_phrases) = if fields.title {
+                        self.windows_and_phrases_for_field(
+                            sequence,
+                            &term_slots,
+                            IndexedField::Title,
+                            &targets.videos,
+                        )?
+                    } else {
+                        (Vec::new(), Vec::new())
+                    };
+                    let phrases = PhraseFieldMatches {
+                        documents: text_phrases,
+                        videos: title_phrases,
+                    };
+                    (text_windows, title_windows, phrases)
+                }
+                None => (
+                    if fields.text {
+                        self.position_windows_for_field(
+                            terms,
+                            IndexedField::Text,
+                            &targets.documents,
+                        )?
+                    } else {
+                        Vec::new()
+                    },
+                    if fields.title {
+                        self.position_windows_for_field(
+                            terms,
+                            IndexedField::Title,
+                            &targets.videos,
+                        )?
+                    } else {
+                        Vec::new()
+                    },
+                    self.phrase_field_matches(sequence, fields, &targets, 0)?,
+                ),
+            };
         for candidate in matches {
             let text_multiplier = candidate
                 .matches_text()
