@@ -406,6 +406,8 @@ impl RawSearchEngine {
             })
             .transpose()?;
         let documents = MappedFile::open(&index_path.join(DOCUMENTS_FILE), DOCUMENTS_MAGIC)?;
+        // Responses read a few ~5 KB compressed blocks at scattered offsets.
+        documents.advise_random();
         let metadata = DocumentTable::open(&index_path.join(METADATA_FILE))?;
         let (text_bigrams, title_bigrams) = if manifest.schema_version >= 7 {
             let text = bigram::BigramIndex::open(&index_path.join(bigram::TEXT_BIGRAM_FILE))?;
@@ -482,6 +484,45 @@ impl RawSearchEngine {
             }),
         };
         partition::DocumentPartition::plan_in_background(&engine.inner);
+        prefetch_hot_mappings(&engine.inner);
         Ok(engine)
+    }
+}
+
+/// Reads a newly opened generation's scanned mappings ahead of the first
+/// searches. A published generation arrives as new files, so without this the
+/// first broad queries after every activation fault from the volume.
+fn prefetch_hot_mappings(inner: &Arc<EngineInner>) {
+    let inner = Arc::downgrade(inner);
+    let spawned = std::thread::Builder::new()
+        .name("raw-prefetch".to_string())
+        .spawn(move || {
+            let Some(inner) = inner.upgrade() else {
+                return;
+            };
+            let started = std::time::Instant::now();
+            let mut files = vec![
+                &inner.lexicon.file,
+                &inner.fuzzy.file,
+                &inner.postings,
+                &inner.positions.file,
+                &inner.metadata.file,
+            ];
+            files.extend(
+                inner
+                    .full_positions
+                    .as_ref()
+                    .map(|positions| &positions.file),
+            );
+            for file in files {
+                file.prefetch();
+            }
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "prefetched raw generation mappings"
+            );
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "raw generation prefetch did not start");
     }
 }

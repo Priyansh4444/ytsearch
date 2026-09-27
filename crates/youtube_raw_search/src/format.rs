@@ -42,6 +42,18 @@ impl MappedFile {
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
+
+    /// Asks the kernel to read the mapping ahead of first use. Advisory: a
+    /// failure only leaves pages to fault in on demand.
+    pub fn prefetch(&self) {
+        let _ = self.bytes.advise(memmap2::Advice::WillNeed);
+    }
+
+    /// Marks the mapping as randomly accessed so a fault reads only the
+    /// touched pages instead of the kernel's read-around window.
+    pub fn advise_random(&self) {
+        let _ = self.bytes.advise(memmap2::Advice::Random);
+    }
 }
 
 pub fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {

@@ -2933,6 +2933,22 @@ fn same_length_generation_corruption_is_rejected_at_open() {
     ));
 }
 
+// Startup keeps the scanned files cached while checksumming them; the digest
+// must not depend on which reader produced it.
+#[test]
+fn retained_and_cold_checksums_agree_for_every_hot_file() {
+    let (root, engine) = test_engine();
+    drop(engine);
+    for name in HOT_MAPPED_FILES {
+        let path = root.path().join("index").join(name);
+        assert_eq!(
+            checksum_file_retained(&path).expect("retained checksum"),
+            checksum_file(&path).expect("cold checksum"),
+            "{name}"
+        );
+    }
+}
+
 #[test]
 fn truncated_document_blocks_are_rejected_at_open() {
     let (root, engine) = test_engine();

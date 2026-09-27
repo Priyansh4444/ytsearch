@@ -1294,7 +1294,11 @@ pub(super) fn validate_manifest_files(
                 "validating raw generation file checksum"
             );
             let started = std::time::Instant::now();
-            let actual_checksum = checksum_file(&path)?;
+            let actual_checksum = if HOT_MAPPED_FILES.contains(&name) {
+                checksum_file_retained(&path)?
+            } else {
+                checksum_file(&path)?
+            };
             if actual_checksum != expected.blake3 {
                 return Err(Error::Corrupt(format!(
                     "generation file {name} failed its BLAKE3 checksum"
@@ -1311,8 +1315,27 @@ pub(super) fn validate_manifest_files(
     Ok(())
 }
 
+/// Files every broad query scans through their mappings. The startup
+/// checksum leaves these in the page cache; evicting them made the first
+/// searches after a restart fault from the volume for seconds.
+pub(super) const HOT_MAPPED_FILES: [&str; 6] = [
+    LEXICON_FILE,
+    FUZZY_FILE,
+    POSTINGS_FILE,
+    POSITIONS_FILE,
+    FULL_POSITIONS_FILE,
+    METADATA_FILE,
+];
+
 pub(super) fn checksum_file(path: &Path) -> Result<String> {
-    let mut input = BufReader::new(ColdReader::open(path)?);
+    checksum_reader(BufReader::new(ColdReader::open(path)?))
+}
+
+pub(super) fn checksum_file_retained(path: &Path) -> Result<String> {
+    checksum_reader(BufReader::new(File::open(path)?))
+}
+
+fn checksum_reader(mut input: impl Read) -> Result<String> {
     let mut hasher = blake3::Hasher::new();
     let mut buffer = vec![0_u8; 256 * 1024];
     loop {
