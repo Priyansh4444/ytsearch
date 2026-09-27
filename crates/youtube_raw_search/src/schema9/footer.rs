@@ -50,7 +50,7 @@ pub(crate) enum FileKind {
 }
 
 impl FileKind {
-    const ALL: [Self; 11] = [
+    pub(crate) const ALL: [Self; 11] = [
         Self::Terms,
         Self::Postings,
         Self::Skips,
@@ -71,7 +71,7 @@ impl FileKind {
             .ok_or(DirectoryError::UnknownFileKind(value))
     }
 
-    fn required(self) -> bool {
+    pub(crate) fn required(self) -> bool {
         self != Self::Bitmaps
     }
 
@@ -303,6 +303,8 @@ pub(crate) enum DirectoryError {
     Digest,
     #[error("observed file lengths differ from directory records")]
     FileLength,
+    #[error("unpublished generation contains an unexpected file")]
+    UnexpectedFile,
     #[error("directory identity differs from generation manifest")]
     Identity,
     #[error("directory data file cannot be read")]
