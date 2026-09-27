@@ -25,3 +25,6 @@ mod source;
 
 #[allow(dead_code)]
 mod source_spool;
+
+#[allow(dead_code)]
+mod video_writer;

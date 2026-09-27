@@ -149,6 +149,13 @@ the P03 directory finalizer runs. The finalizer's per-unit hashes do not prove
 these structural relations. A failed build remains unpublished. Query-specific
 answers never appear in a structural file.
 
+The private `videos.bin` encoder now consumes `AuditedSource` and emits the
+versioned video table with explicit missing bits, UTC year, creator ID, exact
+external ID bytes, and contiguous document ranges. A reader round trip covers
+known zero versus missing values. It is not a complete structural writer:
+documents, channels, postings, facets, payload references, and a full
+cross-file audit remain open.
+
 For active generation 2950's 8,422,419 documents, the 8-byte spine is about
 64.3 MiB; a 40-byte fixed row would require about 321 MiB for the same broad
 scan. These are disk/mapped bytes, not measured RSS or query latency. The

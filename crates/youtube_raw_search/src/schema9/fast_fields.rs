@@ -270,7 +270,7 @@ fn present<T: Copy + Default + PartialEq>(
     }
 }
 
-fn utc_year(seconds: i64) -> Option<i32> {
+pub(super) fn utc_year(seconds: i64) -> Option<i32> {
     let days = seconds.div_euclid(86_400);
     let shifted = days.checked_add(719_468)?;
     let era = shifted.div_euclid(146_097);
@@ -582,5 +582,59 @@ mod tests {
         bytes[kind_offset] = 2;
         put(&mut bytes, year_offset, &2023_i32.to_le_bytes());
         assert_eq!(decoded_video(&bytes), Err(FastFieldError::VideoValue));
+    }
+
+    #[test]
+    fn audited_video_writer_round_trips_through_bounded_reader() {
+        use super::super::{source_spool::SourceSpool, video_writer::encode_videos};
+        use std::collections::BTreeMap;
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut spool = SourceSpool::create(directory.path()).unwrap();
+        for row in [
+            serde_json::json!({"id":"a0","video_id":"a","youtuber_id":"creator","title":"title","text":"text","t_start_ms":0,"t_end_ms":1000}),
+            serde_json::json!({"id":"b0","video_id":"b","youtuber_id":"creator","title":"title","text":"text","t_start_ms":0,"t_end_ms":1000,"duration":60000,"published_at_timestamp":0,"view_count":0}),
+        ] {
+            spool.append_line(&row.to_string()).unwrap();
+        }
+        let audited = spool.finish().unwrap().audit_videos().unwrap();
+        let creators = BTreeMap::from([("creator".into(), 3)]);
+        let encoded = encode_videos(&audited, &creators, 2, 7, 81).unwrap();
+        let video_verifier = verifier(&encoded);
+        let video_table = Table::open(
+            &video_verifier,
+            encoded.len() as u64,
+            b"YTS9VID\0",
+            &VIDEO_WIDTHS,
+            2,
+            7,
+            81,
+        )
+        .unwrap();
+        let document_bytes = document_file();
+        let document_verifier = verifier(&document_bytes);
+        let fields = FastFields {
+            documents: Table::open(
+                &document_verifier,
+                document_bytes.len() as u64,
+                b"YTS9DOC\0",
+                &DOCUMENT_WIDTHS,
+                2,
+                7,
+                81,
+            )
+            .unwrap(),
+            videos: video_table,
+            video_count: 2,
+        };
+        let unknown = fields.video(VideoId::from_raw(0)).unwrap();
+        assert_eq!(unknown.kind, ContentKind::Unknown);
+        assert_eq!(unknown.views, None);
+        assert_eq!(unknown.documents, 0..1);
+        let short = fields.video(VideoId::from_raw(1)).unwrap();
+        assert_eq!(short.kind, ContentKind::Short);
+        assert_eq!(short.year, Some(1970));
+        assert_eq!(short.views, Some(0));
+        assert_eq!(short.documents, 1..2);
     }
 }
