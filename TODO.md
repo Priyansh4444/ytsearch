@@ -194,6 +194,9 @@ Raw can replace Typesense as the canonical search index.
   bits, every page, totals, summaries, fallback modes, highlights, and sorts.
 - [ ] Add schema-9 structural writer/reader only after prototype gates choose the
   representation; assert artifact size is independent of observed query plans.
+  - [x] Add a file-agnostic lazy BLAKE3 unit verifier with 2–8 MiB units,
+    checked ranges, short-tail handling, and once-only concurrent success or
+    corruption caching. It is not yet connected to a schema-9 footer or mmap.
 - [ ] Prove footer-only cold open reads under 200 MB, RSS under 1.5 GiB, zero
   swap/OOM, and worst-case exact page-one + totals + Tier 0 under 200 ms on 2 GB.
 - [ ] Exercise every documented website/API regression constraint against the
