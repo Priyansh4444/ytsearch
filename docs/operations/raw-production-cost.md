@@ -9,7 +9,7 @@ egress remains usage-dependent.
 
 | Resource | Allocation | Estimated monthly cost |
 | --- | ---: | ---: |
-| Production Raw reader/writer | `shared-cpu-2x`, 2 GB, always started (`shared-cpu-4x` from 2026-09-27; see below) | $13.58 |
+| Production Raw reader/writer | `shared-cpu-2x`, 2 GB, always started (`shared-cpu-4x`, 2.5 GB from 2026-09-27; see below) | $13.58 |
 | Temporary Raw publication canary | stopped after the failed same-reader gate; non-serving | $0 compute; up to $1.20 stopped rootfs |
 | Queue/profile API | `shared-cpu-1x`, 512 MB, always started | $3.81 |
 | All Raw, temporary, and retained Typesense volumes | 132 GB encrypted | $19.80 |
@@ -151,7 +151,7 @@ resize: any larger allocation requires a newly calculated complete-system cost
 gate and explicit authorization. Never use `performance-2x`, 4 GB as an
 automatic fallback because that Machine alone exceeds the $65 ceiling.
 
-## Four shared vCPUs for the reader (2026-09-27)
+## Four shared vCPUs and 2.5 GB for the reader (2026-09-27)
 
 The owner authorized moving the reader from `shared-cpu-2x` to
 `shared-cpu-4x` at the same 2 GB. Broad scans partition across every
@@ -164,10 +164,19 @@ available CPU, and a real-traffic replay on the exact canary showed:
 
 Fly's pricing page on 2026-09-27 listed `shared-cpu-2x`/2 GB at $19.42 and
 `shared-cpu-4x`/2 GB at $23.31 per 30 days before regional markup, so the
-change adds about $3.89 per month times the SJC multiplier. Memory, volumes,
-and every other allocation are unchanged. Cold starts also shortened (the
+change adds about $3.89 per month times the SJC multiplier.
+
+The owner separately approved 512 MB more memory. During publication the page
+cache must hold the serving generation's scanned files (~730 MB), the new
+generation's (~740 MB), and the live 370 MB mutation store; the process itself
+uses about 170 MB. At 2 GB that was 150-200 MB short, so production's
+generation-3441 activation warmed for 43 s and swapped cold after the 20 s
+budget. The listed 2-to-4 GB step for `shared-cpu-4x` is $15.50, about $7.75
+per GB, so 2.5 GB adds about $3.88 per month. Together the resize adds about
+$7.77 per month before regional markup. Volumes and every other allocation
+are unchanged. Cold starts also shortened (the
 canary became healthy in 76 s instead of 150 s). Revert with
-`flyctl machine update d89303da029328 --vm-cpus 2` and the matching
+`flyctl machine update d89303da029328 --vm-cpus 2 --vm-memory 2048` and the matching
 `fly.raw-search.toml` change if the budget requires it.
 
 ## Why SQLite remains in the control plane

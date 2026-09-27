@@ -13,7 +13,7 @@ there is no Typesense dependency in the live read or write path.
 
 | Component | Identifier | Allocation or version |
 | --- | --- | --- |
-| Raw engine | `ytsearch-raw-production` / `d89303da029328` | 2 GiB, 4 shared vCPUs (owner-approved 2026-09-27); 512 MiB swap recovery margin |
+| Raw engine | `ytsearch-raw-production` / `d89303da029328` | 2.5 GiB, 4 shared vCPUs (owner-approved 2026-09-27); 512 MiB swap recovery margin |
 | Raw API | `ytsearch-api-raw-production` / `8e7204a7694d28` | 512 MiB, 1 shared vCPU |
 | Raw indexer | `ytsearch-indexer-raw-production` / `8e426df7e305e8` | 2 GiB, 2 shared vCPUs; stopped/on demand, five-minute idle exit |
 

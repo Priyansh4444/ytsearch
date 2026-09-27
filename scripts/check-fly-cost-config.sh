@@ -14,7 +14,7 @@ require_line() {
   fi
 }
 
-require_line "$ROOT/fly.raw-search.toml" "memory = '2048mb'" "Raw must remain at 2 GiB"
+require_line "$ROOT/fly.raw-search.toml" "memory = '2560mb'" "Raw must use 2.5 GiB (owner-approved 2026-09-27)"
 require_line "$ROOT/fly.raw-search.toml" "cpu_kind = 'shared'" "Raw must use shared CPUs"
 require_line "$ROOT/fly.raw-search.toml" "cpus = 4" "Raw must use four shared vCPUs (owner-approved 2026-09-27)"
 require_line "$ROOT/fly.raw-search.toml" "RAW_SEARCH_BIND = '\[::\]:8108'" "Raw must listen on Fly private IPv6"
@@ -28,4 +28,4 @@ require_line "$SCRIPT_DIR/fly-run-queue-indexers.sh" 'DAILY_UPDATE_ENABLED:-1' "
 require_line "$SCRIPT_DIR/fly-run-queue-indexers.sh" 'DAILY_UPDATE_INITIAL_DELAY_SECONDS:-0' "first due daily pass must run on wake"
 require_line "$ROOT/wrangler.jsonc" '17 \* \* \* \*' "hourly repair wake must remain configured"
 
-echo "fly_cost_config=ok raw=shared4x/2GiB indexer=shared2x/2GiB/on-demand"
+echo "fly_cost_config=ok raw=shared4x/2.5GiB indexer=shared2x/2GiB/on-demand"
