@@ -493,7 +493,7 @@ impl RawSearchEngine {
     }
 
     /// Reads a generation's scanned files into memory and plans its scan
-    /// partitions. Publication calls this before activation: a published
+    /// partitions. Publication runs this (via `warm_within`) before activation: a published
     /// generation arrives as new, cold files, and swapping to it first made
     /// the next searches fault from the volume (a 32 s `fire` on the canary)
     /// while the previous, warm generation could still have served them.
@@ -505,6 +505,33 @@ impl RawSearchEngine {
             elapsed_ms = started.elapsed().as_millis() as u64,
             "warmed raw generation"
         );
+    }
+}
+
+impl RawSearchEngine {
+    /// Warms before activation, but waits at most `budget`: the publisher's
+    /// activation request times out after 30 s. Whatever is left finishes in
+    /// the background after the swap.
+    pub(crate) fn warm_within(&self, budget: std::time::Duration) {
+        let (done, finished) = std::sync::mpsc::channel();
+        let engine = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("raw-warm".to_string())
+            .spawn(move || {
+                engine.warm();
+                let _ = done.send(());
+            });
+        match spawned {
+            Ok(_) => {
+                if finished.recv_timeout(budget).is_err() {
+                    tracing::warn!(
+                        budget_ms = budget.as_millis() as u64,
+                        "raw generation still warming at activation"
+                    );
+                }
+            }
+            Err(error) => tracing::warn!(%error, "raw generation warm-up did not start"),
+        }
     }
 }
 

@@ -283,6 +283,10 @@ impl RemotePublication {
         mut body: Body,
     ) -> Result<RemoteJobResponse, IndexStoreError> {
         let allowlisted_name = allowlisted_file(file_name)?;
+        // Scanned files stay cached so activation can warm the generation
+        // within the publisher's request timeout; the rest are evicted to
+        // protect the serving generation's cache during the transfer.
+        let evict_after_sync = !crate::engine::HOT_MAPPED_FILES.contains(&allowlisted_name);
         let _operation = self.operation.lock().await;
         let mut job = self.load_matching_job(job_id)?;
         if job.status == RemoteJobStatus::Activated {
@@ -354,11 +358,13 @@ impl RemotePublication {
                 if received.saturating_sub(reclaimed_through) >= UPLOAD_RECLAIM_BYTES {
                     output.flush().await.map_err(map_io)?;
                     output.get_ref().sync_data().await.map_err(map_io)?;
-                    advise_uploaded_range(
-                        output.get_ref(),
-                        reclaimed_through,
-                        received - reclaimed_through,
-                    );
+                    if evict_after_sync {
+                        advise_uploaded_range(
+                            output.get_ref(),
+                            reclaimed_through,
+                            received - reclaimed_through,
+                        );
+                    }
                     reclaimed_through = received;
                 }
             }
@@ -376,11 +382,13 @@ impl RemotePublication {
             }
             output.flush().await.map_err(map_io)?;
             output.get_ref().sync_all().await.map_err(map_io)?;
-            advise_uploaded_range(
-                output.get_ref(),
-                reclaimed_through,
-                received - reclaimed_through,
-            );
+            if evict_after_sync {
+                advise_uploaded_range(
+                    output.get_ref(),
+                    reclaimed_through,
+                    received - reclaimed_through,
+                );
+            }
             Ok::<(), IndexStoreError>(())
         }
         .await;

@@ -1316,9 +1316,10 @@ pub(super) fn validate_manifest_files(
 }
 
 /// Files every broad query scans through their mappings. The startup
-/// checksum leaves these in the page cache; evicting them made the first
-/// searches after a restart fault from the volume for seconds.
-pub(super) const HOT_MAPPED_FILES: [&str; 6] = [
+/// checksum and the publication receiver leave these in the page cache;
+/// evicting them made the first searches after a restart or activation fault
+/// from the volume for seconds.
+pub(crate) const HOT_MAPPED_FILES: [&str; 6] = [
     LEXICON_FILE,
     FUZZY_FILE,
     POSTINGS_FILE,
