@@ -26,7 +26,7 @@ jq -n --arg source "$source_commit" --arg base "$base_digest" \
         RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
         RAW_SEARCH_STATE_DIRECTORY:("/data/mutable/trials/" + $source[0:12]),RUST_LOG:"youtube_raw_search=info"
       },
-      init:{swap_size_mb:512},guest:{cpu_kind:"shared",cpus:2,memory_mb:2048},
+      init:{swap_size_mb:512},guest:{cpu_kind:"shared",cpus:4,memory_mb:2048},
       metadata:{lifecycle:"temporary-canary",source_commit:$source,base_image_digest:$base},
       mounts:[{volume:"vol_1111111111111111",path:"/data/mutable"}],
       restart:{policy:"no"},dns:{skip_registration:true},services:[],checks:{},files:[

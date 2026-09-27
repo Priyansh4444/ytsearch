@@ -57,7 +57,9 @@ canary_is_stageable() {
     .config.mounts[0].volume == $volume and
     .config.mounts[0].path == $mount_path and
     .config.guest.cpu_kind == "shared" and
-    .config.guest.cpus == 2 and
+    # Staging writes the production shape (four vCPUs); a canary still at the
+    # previous two-vCPU shape remains stageable so it can be moved to it.
+    (.config.guest.cpus == 2 or .config.guest.cpus == 4) and
     .config.guest.memory_mb == 2048
   ' --arg mount_path "$RAW_CANARY_MOUNT_PATH" >/dev/null
 }
@@ -171,7 +173,7 @@ jq -n --arg image "$reader_image" --arg source "$source_commit" \
     RUST_LOG:"youtube_raw_search=info"
   },
   init:{swap_size_mb:512},
-  guest:{cpu_kind:"shared",cpus:2,memory_mb:2048},
+  guest:{cpu_kind:"shared",cpus:4,memory_mb:2048},
   metadata:{
     lifecycle:"temporary-canary",
     source_commit:$source,

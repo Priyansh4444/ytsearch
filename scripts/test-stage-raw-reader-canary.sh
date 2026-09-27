@@ -192,7 +192,8 @@ jq -e --arg state_directory "/data/mutable/trials/${source_commit:0:12}" '
     {guest_path:"/run/secrets/raw-search-admin-api-key",secret_name:"RAW_SEARCH_ADMIN_API_KEY"},
     {guest_path:"/run/secrets/raw-search-api-key",secret_name:"RAW_SEARCH_API_KEY"}
   ] and
-  (.[0].config.services | length) == 0
+  (.[0].config.services | length) == 0 and
+  .[0].config.guest == {cpu_kind:"shared",cpus:4,memory_mb:2048}
 ' "$tmp/state.json" >/dev/null
 grep -F 'https://api.test/v1/apps/ytsearch-raw-production/machines/22222222222222' \
   "$tmp/curl.log" >/dev/null

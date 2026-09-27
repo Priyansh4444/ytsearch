@@ -328,7 +328,7 @@ canary_is_safe() {
     .config.mounts[0].volume == $volume and
     .config.mounts[0].path == $mount_path and
     .config.guest.cpu_kind == "shared" and
-    .config.guest.cpus == 2 and
+    .config.guest.cpus == 4 and
     .config.guest.memory_mb == 2048 and
     .config.env.RAW_SEARCH_BASE_CHANNELS_GZIP == "/data/source/youtube_youtubers.jsonl.gz" and
     .config.env.RAW_SEARCH_BASE_CHUNKS_GZIP == "/data/source/youtube_transcript_chunks.jsonl.gz" and

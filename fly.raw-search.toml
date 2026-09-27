@@ -33,7 +33,7 @@ primary_region = 'sjc'
   # 2 GiB cgroup leaves room for the reader, file cache, and bounded publisher.
   memory = '2048mb'
   cpu_kind = 'shared'
-  cpus = 2
+  cpus = 4
 
 [checks]
   [checks.health]
