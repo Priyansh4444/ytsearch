@@ -71,6 +71,28 @@ Tier-1/2 summaries, pinned sessions and cursors (P07), and the lazy overview
 (P08) can follow the switch without changing the index format, provided P03
 already writes the facets and fast fields they read.
 
+## Proposed P01 format decisions
+
+These follow from the evidence above and the P01 surveys; P01 must still
+confirm them on the reader profile before P03 freezes the format.
+
+- **Bitmaps.** Dense transcript bitmaps for the highest-DF terms inside a
+  64 MiB payload budget: about 63 terms at this corpus size, roughly DF ≥ 5%.
+  The 28 terms above 10% DF need 29.5 MB and are where skip intersection costs
+  most (about 2.2 ms per million documents at 10% DF, synthetic). Terms between
+  1% and 5% use skip leapfrog. Title bitmaps are 4.4 KB each, so every title
+  term at ≥0.1% DF (1,149 terms, about 5 MB) fits. Exactness never depends on
+  a bitmap existing.
+- **Blocks.** 128-document posting blocks, so block-max bounds, skips, and
+  codec blocks share one boundary. Bit-packed deltas for lists longer than one
+  block (about 40% fewer bytes than delta varints for the six broadest terms at
+  similar seek cost); delta varints for shorter lists, where they were smallest.
+- **Block-max bounds.** Per block, the maximum of the document-dependent score
+  factor (BM25 term-frequency/length part times the first-position multiplier),
+  4 bytes each (about 3% of a 128-posting block). Query time multiplies by the
+  term's IDF, field weight, and alternative multiplier, and sums across terms,
+  as the ranking simulation did.
+
 ## Risks
 
 - The P00 contract still has open decisions; P04 and P06 differential tests
