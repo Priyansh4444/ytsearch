@@ -16,3 +16,6 @@ mod footer;
 
 #[allow(dead_code)]
 mod builder;
+
+#[allow(dead_code)]
+mod fast_fields;
