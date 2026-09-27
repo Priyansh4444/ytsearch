@@ -1,7 +1,7 @@
 //! Lazy, once-per-unit integrity checks for immutable generation files.
 //!
-//! The caller must keep the backing bytes immutable for this object's lifetime.
-//! Publication and cleanup must preserve that guarantee before this is wired to mmap.
+//! The backing bytes are owned by this object and must remain immutable for its
+//! lifetime. Publication and cleanup must preserve that guarantee for mmap.
 
 use std::{num::NonZeroUsize, sync::OnceLock};
 
@@ -23,8 +23,8 @@ pub(crate) enum UnitError {
     Corrupt(usize),
 }
 
-pub(crate) struct VerifiedUnits<'a> {
-    bytes: &'a [u8],
+pub(crate) struct VerifiedUnits<B: AsRef<[u8]>> {
+    bytes: B,
     unit_bytes: NonZeroUsize,
     digests: Vec<[u8; 32]>,
     checked: Vec<OnceLock<Result<(), UnitError>>>,
@@ -32,9 +32,9 @@ pub(crate) struct VerifiedUnits<'a> {
     hash_attempts: Vec<AtomicUsize>,
 }
 
-impl<'a> VerifiedUnits<'a> {
+impl<B: AsRef<[u8]>> VerifiedUnits<B> {
     pub(crate) fn new(
-        bytes: &'a [u8],
+        bytes: B,
         unit_bytes: usize,
         digests: Vec<[u8; 32]>,
     ) -> Result<Self, UnitError> {
@@ -42,7 +42,7 @@ impl<'a> VerifiedUnits<'a> {
             return Err(UnitError::InvalidUnitSize);
         }
         let unit_bytes = NonZeroUsize::new(unit_bytes).ok_or(UnitError::InvalidUnitSize)?;
-        if digests.len() != bytes.len().div_ceil(unit_bytes.get()) {
+        if digests.len() != bytes.as_ref().len().div_ceil(unit_bytes.get()) {
             return Err(UnitError::DigestCount);
         }
         let checked = (0..digests.len()).map(|_| OnceLock::new()).collect();
@@ -58,9 +58,10 @@ impl<'a> VerifiedUnits<'a> {
         })
     }
 
-    pub(crate) fn read(&self, offset: usize, length: usize) -> Result<&'a [u8], UnitError> {
+    pub(crate) fn read(&self, offset: usize, length: usize) -> Result<&[u8], UnitError> {
+        let bytes = self.bytes.as_ref();
         let end = offset.checked_add(length).ok_or(UnitError::OutOfBounds)?;
-        let range = self.bytes.get(offset..end).ok_or(UnitError::OutOfBounds)?;
+        let range = bytes.get(offset..end).ok_or(UnitError::OutOfBounds)?;
         if length == 0 {
             return Ok(range);
         }
@@ -72,10 +73,8 @@ impl<'a> VerifiedUnits<'a> {
                     #[cfg(test)]
                     self.hash_attempts[index].fetch_add(1, Ordering::Relaxed);
                     let start = index * self.unit_bytes.get();
-                    let stop = start
-                        .saturating_add(self.unit_bytes.get())
-                        .min(self.bytes.len());
-                    let actual = blake3::hash(&self.bytes[start..stop]);
+                    let stop = start.saturating_add(self.unit_bytes.get()).min(bytes.len());
+                    let actual = blake3::hash(&bytes[start..stop]);
                     if actual.as_bytes() == &self.digests[index] {
                         Ok(())
                     } else {
