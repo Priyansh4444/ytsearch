@@ -95,6 +95,15 @@ impl<'a> PositionCursor<'a> {
         Ok(())
     }
 
+    pub(crate) fn offset(&self) -> usize {
+        self.cursor
+    }
+
+    /// Resumes at a posting boundary previously reported by `offset`.
+    pub(crate) fn seek(&mut self, offset: usize) {
+        self.cursor = offset;
+    }
+
     pub(crate) fn finish(&self) -> Result<()> {
         if self.cursor != self.bytes.len() {
             return Err(Error::Corrupt(

@@ -3,6 +3,7 @@ use super::*;
 
 mod common_words;
 mod partitioned_scan;
+mod posting_skips;
 mod query_contract_v2;
 mod repeated_tokens;
 mod schema9_reference;

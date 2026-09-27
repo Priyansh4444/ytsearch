@@ -210,6 +210,7 @@ mod conjunction;
 mod partition;
 mod query_support;
 mod single_token;
+mod skips;
 mod storage;
 #[cfg(test)]
 mod tests;
@@ -285,6 +286,7 @@ struct EngineInner {
     // Planned on a background thread after open; scans run as one range
     // until it is set.
     partition: std::sync::OnceLock<Option<partition::DocumentPartition>>,
+    skips: skips::SkipDirectory,
     index_bytes: u64,
 }
 
@@ -320,6 +322,7 @@ struct PositionedPostingCursor<'a> {
     previous_id: u32,
     decoded: u32,
     expected: u32,
+    skips: Option<Arc<[skips::SkipEntry]>>,
 }
 
 struct PhraseCursor<'a> {
@@ -489,7 +492,7 @@ impl MomentCounter {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[repr(u8)]
 pub(super) enum IndexedField {
     Text = 0,
@@ -1179,12 +1182,20 @@ impl RawSearchEngine {
             if frequency == 0 {
                 return Ok(Vec::new());
             }
+            let streams = skips::PositionedStreams {
+                postings: self.postings_range(offset, length)?,
+                first_positions: self.inner.positions.range(entry.term, field)?,
+                remaining_positions: full_positions.range(entry.term, field)?,
+                expected: frequency,
+            };
+            let skips = self.inner.skips.get_or_build(entry.term, field, streams);
             cursors.push(PhraseCursor {
                 postings: PositionedPostingCursor::new(
-                    self.postings_range(offset, length)?,
-                    self.inner.positions.range(entry.term, field)?,
-                    full_positions.range(entry.term, field)?,
+                    streams.postings,
+                    streams.first_positions,
+                    streams.remaining_positions,
                     frequency,
+                    skips,
                 ),
                 id: None,
                 positions: Vec::new(),

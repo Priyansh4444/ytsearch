@@ -154,6 +154,7 @@ impl<'a> PositionedPostingCursor<'a> {
         first_positions: &'a [u8],
         remaining_positions: &'a [u8],
         expected: u32,
+        skips: Option<Arc<[skips::SkipEntry]>>,
     ) -> Self {
         Self {
             postings,
@@ -164,7 +165,37 @@ impl<'a> PositionedPostingCursor<'a> {
             previous_id: 0,
             decoded: 0,
             expected,
+            skips,
         }
+    }
+
+    pub(super) fn skip_entry(&self) -> skips::SkipEntry {
+        skips::SkipEntry {
+            previous_id: self.previous_id,
+            decoded: self.decoded,
+            posting_cursor: self.posting_cursor,
+            first_cursor: self.first_cursor,
+            remaining_cursor: self.remaining_positions.offset(),
+        }
+    }
+
+    /// Jumps to the last checkpoint whose postings all precede `target`.
+    fn seek_before(&mut self, target: u32) {
+        let Some(skips) = &self.skips else {
+            return;
+        };
+        let index = skips.partition_point(|entry| entry.previous_id < target);
+        let Some(entry) = index.checked_sub(1).map(|index| skips[index]) else {
+            return;
+        };
+        if entry.decoded <= self.decoded {
+            return;
+        }
+        self.previous_id = entry.previous_id;
+        self.decoded = entry.decoded;
+        self.posting_cursor = entry.posting_cursor;
+        self.first_cursor = entry.first_cursor;
+        self.remaining_positions.seek(entry.remaining_cursor);
     }
 
     pub(super) fn next_at_least(
@@ -172,6 +203,7 @@ impl<'a> PositionedPostingCursor<'a> {
         target: u32,
         positions: &mut Vec<u32>,
     ) -> Result<Option<u32>> {
+        self.seek_before(target);
         loop {
             if self.posting_cursor == self.postings.len() {
                 if self.decoded != self.expected || self.first_cursor != self.first_positions.len()
@@ -445,6 +477,7 @@ impl RawSearchEngine {
                 documents,
                 metadata,
                 partition: std::sync::OnceLock::new(),
+                skips: skips::SkipDirectory::default(),
                 index_bytes: directory_size(index_path)?,
             }),
         };
