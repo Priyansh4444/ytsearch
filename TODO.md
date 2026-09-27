@@ -172,6 +172,12 @@ Raw can replace Typesense as the canonical search index.
     unit fixtures pass on the `schema9-p02-sets` child branch. This does not
     select the production bitmap budget, implement seekable postings, or close
     the P02 live/performance gates.
+  - [x] Add a provisional delta-varint posting cursor with independently
+    decoded eight-posting blocks, 8/64/512/4096 structural directories,
+    monotonic seek/next semantics, and decoded-block counters. Boundary and
+    randomized unit fixtures pass on `schema9-p02-postings`. This does not
+    select the final codec, implement the on-disk schema, or close P02's
+    production-corpus and performance gates.
 - [ ] Prove exact query-dependent 20-second moment totals under 200 ms for the
   broadest canonical queries; do not substitute static buckets or approximation.
 - [ ] Prototype scalar-vs-batched Tier-1 fast-field histograms.
