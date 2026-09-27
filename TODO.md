@@ -819,6 +819,20 @@ Raw can replace Typesense as the canonical search index.
 - [ ] Enforce the requested end-to-end 200 ms maximum on measured production requests
   on the latest schema for the canonical matrix, including `this is the`, with
   zero errors and no resource crossing 80%.
+  On 2026-09-26 a replay of all 278 distinct production searches from 90 days
+  ran on the exact canary at `95cb6cd`: warm p99 158 ms and max 235 ms, cold
+  max 261 ms (was 9,930 ms). Only the dense `and the` scan stays above 200 ms;
+  `0c53dbd` divides it across every available vCPU. See
+  `P00/production-replay-2026-09-26.md`.
+- [x] Replay real production searches: export distinct
+  `(query, youtuber, sort, page)` rows from Axiom to a private file and replay
+  them through the API with reader server timing
+  (`scripts/axiom-export-search-replay.sh`,
+  `scripts/replay-production-searches.sh`).
+- [ ] Resolve the publication-format mismatch before claiming queue recovery:
+  the reader promoted on 2026-09-26 advertises `raw-index-schema-8-v2`, the
+  queue worker builds `raw-index-schema-7-v2`, and schema-8 generations have
+  not passed the 2 GiB cold-open gate.
 - [x] Reject exactly 200 ms as well as slower requests in the publication
   baseline and isolation gates. Exercise the exact boundary with the real
   benchmark script and verify rejection occurs before publication.
@@ -860,6 +874,11 @@ Raw can replace Typesense as the canonical search index.
   refused. The deployed reader binds `0.0.0.0:8108`; the target configuration
   binds `[::]:8108`. Verify private readiness and actual queue consumption
   after the gated release. Starting the worker alone did not repair it.
+  On 2026-09-26 the owner-approved reader promotion applied `[::]:8108`; the
+  worker then passed private IPv6 readiness, the credential preflight, and the
+  full queue checker, and consumed a queued creator request. Connectivity is
+  restored; publication is still blocked by the format mismatch above. See
+  `P00/reader-promotion-2026-09-26.json`.
   The 2026-09-22 isolated canary with the committed IPv6 overlay was staged,
   but a bounded 300-second private health probe failed before port 8108
   listened. Investigate cold-open startup on the 2 GiB canary before any
