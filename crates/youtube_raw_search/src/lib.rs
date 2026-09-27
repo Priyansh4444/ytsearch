@@ -8,6 +8,7 @@ mod positions;
 mod publisher;
 mod reloadable;
 mod remote_publication;
+mod schema9;
 
 pub use engine::{
     BroadMeasureFields, BroadMeasurePosition, BroadMeasureReport, BroadQueryMeasure, BuildReport,
