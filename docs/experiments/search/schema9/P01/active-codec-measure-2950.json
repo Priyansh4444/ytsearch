@@ -1,0 +1,2630 @@
+{
+  "harness_source_commit": "e22961d039955c78688a4f7d580e433b65f51363",
+  "input": {
+    "documents": 8422419,
+    "generation": 2950,
+    "lexicon_blake3": "8a1ff979bd120527288482b154b22a73c186b26ae35b1eeb57432d9d6d5b7b00",
+    "overlap_receipt_source_commit": "fd3fe1ee2e51b174d2a9e17ba2e4f144e52d822d",
+    "postings_blake3": "e532bdca38fd8e73a5f4868db7003004c3d7261e3061c7ef46337c1efbae26f9"
+  },
+  "limits": [
+    "Local release-build ID-only codec prototype; positions, frequencies, checksums, file footer, and schema-9 writer/reader are excluded.",
+    "Candidate directory serialized sizes are projected fixed layouts; in-memory capacity uses Rust Vec capacity and Entry size.",
+    "Warm sequential decode and point-seek kernels are not full query latency, publication, or a 2 GiB Fly memory measurement.",
+    "Named terms from one schema-6 generation only; no corpus-wide codec size or workload distribution claim."
+  ],
+  "probes": "256 evenly spaced universe targets plus universe sentinel; same targets for all codecs and terms",
+  "round_order": "candidate order rotates by one in each paired round; decode and seek order alternates",
+  "rounds": 7,
+  "schema_version": 1,
+  "terms": [
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 11976254,
+          "decode_samples_ns": [
+            14125552,
+            14301336,
+            11870183,
+            12035733,
+            11877914,
+            11946733,
+            11976254
+          ],
+          "directory_entries": 27886,
+          "directory_serialized_bytes": 334632,
+          "encode_median_ns": 8886032,
+          "encode_samples_ns": [
+            8429513,
+            8915568,
+            9128064,
+            8523830,
+            8969467,
+            8886032,
+            8399316
+          ],
+          "payload_bytes": 3569403,
+          "retained_capacity_bytes": 4640480,
+          "seek_257_probes_median_ns": 269891,
+          "seek_257_probes_samples_ns": [
+            297967,
+            200630,
+            284125,
+            197154,
+            279745,
+            208614,
+            269891
+          ],
+          "serialized_id_bytes": 3904035
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 10630063,
+          "decode_samples_ns": [
+            12065977,
+            11511152,
+            10352843,
+            10546167,
+            10340519,
+            10630063,
+            11150067
+          ],
+          "directory_entries": 55772,
+          "directory_serialized_bytes": 892352,
+          "encode_median_ns": 13585410,
+          "encode_samples_ns": [
+            13560305,
+            13849406,
+            13567847,
+            13388551,
+            13634865,
+            14879282,
+            13585410
+          ],
+          "payload_bytes": 1688654,
+          "retained_capacity_bytes": 2989504,
+          "seek_257_probes_median_ns": 352827,
+          "seek_257_probes_samples_ns": [
+            352827,
+            267150,
+            353839,
+            227633,
+            455953,
+            239497,
+            424925
+          ],
+          "serialized_id_bytes": 2581006
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 10115034,
+          "decode_samples_ns": [
+            10323844,
+            10083545,
+            10296386,
+            10115034,
+            12963372,
+            10075875,
+            10083114
+          ],
+          "directory_entries": 27886,
+          "directory_serialized_bytes": 446176,
+          "encode_median_ns": 12533945,
+          "encode_samples_ns": [
+            12405086,
+            12662937,
+            12533945,
+            12650576,
+            18611414,
+            12375200,
+            12409834
+          ],
+          "payload_bytes": 1804254,
+          "retained_capacity_bytes": 2543328,
+          "seek_257_probes_median_ns": 301271,
+          "seek_257_probes_samples_ns": [
+            346125,
+            188675,
+            301271,
+            259131,
+            335737,
+            273838,
+            340866
+          ],
+          "serialized_id_bytes": 2250430
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 10090340,
+          "decode_samples_ns": [
+            10090340,
+            10152480,
+            9919311,
+            10157622,
+            12710844,
+            9945622,
+            10086338
+          ],
+          "directory_entries": 13943,
+          "directory_serialized_bytes": 223088,
+          "encode_median_ns": 13148496,
+          "encode_samples_ns": [
+            12850606,
+            13296652,
+            13148496,
+            12825739,
+            18214618,
+            12966648,
+            14750371
+          ],
+          "payload_bytes": 1913800,
+          "retained_capacity_bytes": 2320240,
+          "seek_257_probes_median_ns": 250010,
+          "seek_257_probes_samples_ns": [
+            274954,
+            190747,
+            266004,
+            209933,
+            277850,
+            212958,
+            250010
+          ],
+          "serialized_id_bytes": 2136888
+        }
+      ],
+      "df": 3569359,
+      "schema6_source_posting_bytes_with_frequency": 7138762,
+      "term": "and"
+    },
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 117914,
+          "decode_samples_ns": [
+            118942,
+            121446,
+            117914,
+            118148,
+            117236,
+            117123,
+            115217
+          ],
+          "directory_entries": 119,
+          "directory_serialized_bytes": 1428,
+          "encode_median_ns": 96014,
+          "encode_samples_ns": [
+            98789,
+            96014,
+            96152,
+            93105,
+            91507,
+            90692,
+            96464
+          ],
+          "payload_bytes": 21878,
+          "retained_capacity_bytes": 34672,
+          "seek_257_probes_median_ns": 113690,
+          "seek_257_probes_samples_ns": [
+            116811,
+            113955,
+            111933,
+            112139,
+            113690,
+            109316,
+            119443
+          ],
+          "serialized_id_bytes": 23306
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 43637,
+          "decode_samples_ns": [
+            43612,
+            43958,
+            43577,
+            43657,
+            43637,
+            43771,
+            43625
+          ],
+          "directory_entries": 237,
+          "directory_serialized_bytes": 3792,
+          "encode_median_ns": 82156,
+          "encode_samples_ns": [
+            82449,
+            82156,
+            81763,
+            81789,
+            81501,
+            126739,
+            82418
+          ],
+          "payload_bytes": 23257,
+          "retained_capacity_bytes": 30416,
+          "seek_257_probes_median_ns": 35238,
+          "seek_257_probes_samples_ns": [
+            35238,
+            35166,
+            35266,
+            34932,
+            35102,
+            35625,
+            35245
+          ],
+          "serialized_id_bytes": 27049
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 42521,
+          "decode_samples_ns": [
+            42933,
+            42678,
+            51264,
+            42439,
+            42465,
+            42334,
+            42521
+          ],
+          "directory_entries": 119,
+          "directory_serialized_bytes": 1904,
+          "encode_median_ns": 77697,
+          "encode_samples_ns": [
+            77697,
+            78208,
+            84643,
+            77518,
+            77203,
+            77500,
+            78640
+          ],
+          "payload_bytes": 24097,
+          "retained_capacity_bytes": 28528,
+          "seek_257_probes_median_ns": 55052,
+          "seek_257_probes_samples_ns": [
+            54946,
+            54664,
+            55093,
+            55052,
+            55115,
+            62879,
+            54613
+          ],
+          "serialized_id_bytes": 26001
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 41905,
+          "decode_samples_ns": [
+            41690,
+            42119,
+            42057,
+            41905,
+            41917,
+            41775,
+            41664
+          ],
+          "directory_entries": 60,
+          "directory_serialized_bytes": 960,
+          "encode_median_ns": 78818,
+          "encode_samples_ns": [
+            77514,
+            77853,
+            79460,
+            79382,
+            78818,
+            79003,
+            78598
+          ],
+          "payload_bytes": 24785,
+          "retained_capacity_bytes": 28608,
+          "seek_257_probes_median_ns": 97199,
+          "seek_257_probes_samples_ns": [
+            115566,
+            97199,
+            97042,
+            102171,
+            97300,
+            96964,
+            96851
+          ],
+          "serialized_id_bytes": 25745
+        }
+      ],
+      "df": 15134,
+      "schema6_source_posting_bytes_with_frequency": 37012,
+      "term": "black"
+    },
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 101598,
+          "decode_samples_ns": [
+            101610,
+            102525,
+            101598,
+            98366,
+            125585,
+            100586,
+            98879
+          ],
+          "directory_entries": 111,
+          "directory_serialized_bytes": 1332,
+          "encode_median_ns": 85284,
+          "encode_samples_ns": [
+            85284,
+            89312,
+            82216,
+            81373,
+            94085,
+            80396,
+            86392
+          ],
+          "payload_bytes": 19645,
+          "retained_capacity_bytes": 34544,
+          "seek_257_probes_median_ns": 98466,
+          "seek_257_probes_samples_ns": [
+            100169,
+            98170,
+            97934,
+            95407,
+            125201,
+            98513,
+            98466
+          ],
+          "serialized_id_bytes": 20977
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 40841,
+          "decode_samples_ns": [
+            40646,
+            40718,
+            42669,
+            40661,
+            55247,
+            40841,
+            41061
+          ],
+          "directory_entries": 222,
+          "directory_serialized_bytes": 3552,
+          "encode_median_ns": 76337,
+          "encode_samples_ns": [
+            76487,
+            76337,
+            76189,
+            75819,
+            95391,
+            75695,
+            76549
+          ],
+          "payload_bytes": 21081,
+          "retained_capacity_bytes": 28128,
+          "seek_257_probes_median_ns": 33919,
+          "seek_257_probes_samples_ns": [
+            33907,
+            33779,
+            34044,
+            33694,
+            35968,
+            34689,
+            33919
+          ],
+          "serialized_id_bytes": 24633
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 39961,
+          "decode_samples_ns": [
+            39629,
+            40022,
+            40496,
+            39961,
+            43466,
+            39722,
+            39599
+          ],
+          "directory_entries": 111,
+          "directory_serialized_bytes": 1776,
+          "encode_median_ns": 72815,
+          "encode_samples_ns": [
+            80372,
+            73562,
+            72815,
+            72287,
+            72215,
+            74908,
+            71800
+          ],
+          "payload_bytes": 21969,
+          "retained_capacity_bytes": 28400,
+          "seek_257_probes_median_ns": 56007,
+          "seek_257_probes_samples_ns": [
+            55797,
+            56007,
+            56045,
+            55897,
+            56744,
+            56856,
+            55766
+          ],
+          "serialized_id_bytes": 23745
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 39202,
+          "decode_samples_ns": [
+            38991,
+            38961,
+            44019,
+            39357,
+            42274,
+            39202,
+            39001
+          ],
+          "directory_entries": 56,
+          "directory_serialized_bytes": 896,
+          "encode_median_ns": 72425,
+          "encode_samples_ns": [
+            73604,
+            72555,
+            72425,
+            72792,
+            72177,
+            72355,
+            71703
+          ],
+          "payload_bytes": 23121,
+          "retained_capacity_bytes": 29568,
+          "seek_257_probes_median_ns": 96128,
+          "seek_257_probes_samples_ns": [
+            96289,
+            96128,
+            95940,
+            95960,
+            96711,
+            96958,
+            95961
+          ],
+          "serialized_id_bytes": 24017
+        }
+      ],
+      "df": 14149,
+      "schema6_source_posting_bytes_with_frequency": 33794,
+      "term": "coding"
+    },
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 24063,
+          "decode_samples_ns": [
+            41184,
+            25804,
+            24063,
+            23469,
+            23231,
+            26699,
+            24001
+          ],
+          "directory_entries": 57,
+          "directory_serialized_bytes": 684,
+          "encode_median_ns": 16483,
+          "encode_samples_ns": [
+            20183,
+            18922,
+            17683,
+            16267,
+            15650,
+            16483,
+            15835
+          ],
+          "payload_bytes": 7698,
+          "retained_capacity_bytes": 9104,
+          "seek_257_probes_median_ns": 50124,
+          "seek_257_probes_samples_ns": [
+            52953,
+            51407,
+            50124,
+            49016,
+            48742,
+            68330,
+            50031
+          ],
+          "serialized_id_bytes": 8382
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 20826,
+          "decode_samples_ns": [
+            20951,
+            20826,
+            20768,
+            20894,
+            20735,
+            20722,
+            21934
+          ],
+          "directory_entries": 113,
+          "directory_serialized_bytes": 1808,
+          "encode_median_ns": 37960,
+          "encode_samples_ns": [
+            38708,
+            37677,
+            38202,
+            37196,
+            36964,
+            37960,
+            38276
+          ],
+          "payload_bytes": 9075,
+          "retained_capacity_bytes": 12048,
+          "seek_257_probes_median_ns": 35344,
+          "seek_257_probes_samples_ns": [
+            35470,
+            35344,
+            35322,
+            35293,
+            41558,
+            35227,
+            36359
+          ],
+          "serialized_id_bytes": 10883
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 20220,
+          "decode_samples_ns": [
+            20204,
+            20204,
+            20864,
+            20220,
+            20448,
+            20232,
+            20146
+          ],
+          "directory_entries": 57,
+          "directory_serialized_bytes": 912,
+          "encode_median_ns": 36234,
+          "encode_samples_ns": [
+            36234,
+            36174,
+            36901,
+            35706,
+            36490,
+            36462,
+            36161
+          ],
+          "payload_bytes": 10315,
+          "retained_capacity_bytes": 11664,
+          "seek_257_probes_median_ns": 61378,
+          "seek_257_probes_samples_ns": [
+            61308,
+            61940,
+            71984,
+            61378,
+            61454,
+            61353,
+            61327
+          ],
+          "serialized_id_bytes": 11227
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 19903,
+          "decode_samples_ns": [
+            19885,
+            19861,
+            20142,
+            19856,
+            19903,
+            19948,
+            19942
+          ],
+          "directory_entries": 29,
+          "directory_serialized_bytes": 464,
+          "encode_median_ns": 36403,
+          "encode_samples_ns": [
+            36480,
+            36746,
+            36403,
+            36172,
+            36030,
+            36454,
+            36016
+          ],
+          "payload_bytes": 11451,
+          "retained_capacity_bytes": 15312,
+          "seek_257_probes_median_ns": 88998,
+          "seek_257_probes_samples_ns": [
+            89000,
+            88942,
+            89556,
+            88998,
+            88971,
+            88921,
+            92716
+          ],
+          "serialized_id_bytes": 11915
+        }
+      ],
+      "df": 7220,
+      "schema6_source_posting_bytes_with_frequency": 14918,
+      "term": "convex"
+    },
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 452876,
+          "decode_samples_ns": [
+            454535,
+            472731,
+            452855,
+            452876,
+            454125,
+            447301,
+            450484
+          ],
+          "directory_entries": 633,
+          "directory_serialized_bytes": 7596,
+          "encode_median_ns": 374458,
+          "encode_samples_ns": [
+            382577,
+            374458,
+            377054,
+            368332,
+            366116,
+            371431,
+            375354
+          ],
+          "payload_bytes": 97770,
+          "retained_capacity_bytes": 141200,
+          "seek_257_probes_median_ns": 122752,
+          "seek_257_probes_samples_ns": [
+            125083,
+            124043,
+            122419,
+            121671,
+            122510,
+            149792,
+            122752
+          ],
+          "serialized_id_bytes": 105366
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 233282,
+          "decode_samples_ns": [
+            234140,
+            232340,
+            234671,
+            232021,
+            231594,
+            241616,
+            233282
+          ],
+          "directory_entries": 1266,
+          "directory_serialized_bytes": 20256,
+          "encode_median_ns": 400843,
+          "encode_samples_ns": [
+            408408,
+            400843,
+            405319,
+            400304,
+            399533,
+            397025,
+            406765
+          ],
+          "payload_bytes": 98378,
+          "retained_capacity_bytes": 167712,
+          "seek_257_probes_median_ns": 41060,
+          "seek_257_probes_samples_ns": [
+            41893,
+            40707,
+            41571,
+            40766,
+            61524,
+            40710,
+            41060
+          ],
+          "serialized_id_bytes": 118634
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 226452,
+          "decode_samples_ns": [
+            259598,
+            225982,
+            226345,
+            226452,
+            264344,
+            226023,
+            231507
+          ],
+          "directory_entries": 633,
+          "directory_serialized_bytes": 10128,
+          "encode_median_ns": 376756,
+          "encode_samples_ns": [
+            391132,
+            382578,
+            376756,
+            384060,
+            376614,
+            375294,
+            376301
+          ],
+          "payload_bytes": 102018,
+          "retained_capacity_bytes": 165776,
+          "seek_257_probes_median_ns": 62879,
+          "seek_257_probes_samples_ns": [
+            62825,
+            62977,
+            62879,
+            63002,
+            62727,
+            62749,
+            63523
+          ],
+          "serialized_id_bytes": 112146
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 223323,
+          "decode_samples_ns": [
+            226817,
+            265636,
+            223134,
+            240790,
+            223323,
+            223166,
+            222939
+          ],
+          "directory_entries": 317,
+          "directory_serialized_bytes": 5072,
+          "encode_median_ns": 381396,
+          "encode_samples_ns": [
+            384316,
+            375812,
+            381396,
+            373359,
+            381477,
+            382408,
+            374620
+          ],
+          "payload_bytes": 105298,
+          "retained_capacity_bytes": 168912,
+          "seek_257_probes_median_ns": 105770,
+          "seek_257_probes_samples_ns": [
+            106427,
+            106187,
+            105770,
+            105746,
+            105602,
+            105490,
+            105895
+          ],
+          "serialized_id_bytes": 110370
+        }
+      ],
+      "df": 80997,
+      "schema6_source_posting_bytes_with_frequency": 178767,
+      "term": "create"
+    },
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 56771,
+          "decode_samples_ns": [
+            57492,
+            56771,
+            65659,
+            56590,
+            57236,
+            55768,
+            55833
+          ],
+          "directory_entries": 76,
+          "directory_serialized_bytes": 912,
+          "encode_median_ns": 46161,
+          "encode_samples_ns": [
+            49129,
+            48049,
+            47499,
+            46161,
+            45913,
+            45505,
+            45127
+          ],
+          "payload_bytes": 12100,
+          "retained_capacity_bytes": 17600,
+          "seek_257_probes_median_ns": 71643,
+          "seek_257_probes_samples_ns": [
+            74009,
+            71643,
+            71501,
+            70309,
+            78432,
+            78650,
+            68094
+          ],
+          "serialized_id_bytes": 13012
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 27867,
+          "decode_samples_ns": [
+            27863,
+            27867,
+            27789,
+            27867,
+            28638,
+            27852,
+            28572
+          ],
+          "directory_entries": 152,
+          "directory_serialized_bytes": 2432,
+          "encode_median_ns": 53889,
+          "encode_samples_ns": [
+            53436,
+            60469,
+            53889,
+            52507,
+            54736,
+            52793,
+            55287
+          ],
+          "payload_bytes": 14899,
+          "retained_capacity_bytes": 18304,
+          "seek_257_probes_median_ns": 36105,
+          "seek_257_probes_samples_ns": [
+            36409,
+            36208,
+            36105,
+            35829,
+            37024,
+            36012,
+            35955
+          ],
+          "serialized_id_bytes": 17331
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 27167,
+          "decode_samples_ns": [
+            27568,
+            27167,
+            27021,
+            27070,
+            27181,
+            27174,
+            27107
+          ],
+          "directory_entries": 76,
+          "directory_serialized_bytes": 1216,
+          "encode_median_ns": 51521,
+          "encode_samples_ns": [
+            51662,
+            51306,
+            51445,
+            51521,
+            52622,
+            51066,
+            52032
+          ],
+          "payload_bytes": 15851,
+          "retained_capacity_bytes": 20160,
+          "seek_257_probes_median_ns": 54081,
+          "seek_257_probes_samples_ns": [
+            54073,
+            54081,
+            54073,
+            54119,
+            54128,
+            54033,
+            54085
+          ],
+          "serialized_id_bytes": 17067
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 26719,
+          "decode_samples_ns": [
+            27189,
+            26871,
+            26744,
+            26539,
+            26585,
+            26719,
+            26637
+          ],
+          "directory_entries": 38,
+          "directory_serialized_bytes": 608,
+          "encode_median_ns": 51321,
+          "encode_samples_ns": [
+            51456,
+            51321,
+            51450,
+            50923,
+            51006,
+            51326,
+            51161
+          ],
+          "payload_bytes": 16820,
+          "retained_capacity_bytes": 20064,
+          "seek_257_probes_median_ns": 105719,
+          "seek_257_probes_samples_ns": [
+            105853,
+            105775,
+            105669,
+            105604,
+            105719,
+            105460,
+            130707
+          ],
+          "serialized_id_bytes": 17428
+        }
+      ],
+      "df": 9670,
+      "schema6_source_posting_bytes_with_frequency": 21770,
+      "term": "css"
+    },
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 69649,
+          "decode_samples_ns": [
+            69258,
+            84421,
+            78219,
+            77636,
+            69457,
+            69649,
+            69062
+          ],
+          "directory_entries": 71,
+          "directory_serialized_bytes": 852,
+          "encode_median_ns": 54669,
+          "encode_samples_ns": [
+            58869,
+            58863,
+            55965,
+            54427,
+            53540,
+            54669,
+            51868
+          ],
+          "payload_bytes": 14257,
+          "retained_capacity_bytes": 17520,
+          "seek_257_probes_median_ns": 103275,
+          "seek_257_probes_samples_ns": [
+            108089,
+            103804,
+            103275,
+            100136,
+            102066,
+            105354,
+            99535
+          ],
+          "serialized_id_bytes": 15109
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 26291,
+          "decode_samples_ns": [
+            26193,
+            26439,
+            26291,
+            45940,
+            26187,
+            26112,
+            28477
+          ],
+          "directory_entries": 142,
+          "directory_serialized_bytes": 2272,
+          "encode_median_ns": 51058,
+          "encode_samples_ns": [
+            50738,
+            50445,
+            51070,
+            51058,
+            50814,
+            51157,
+            56436
+          ],
+          "payload_bytes": 14251,
+          "retained_capacity_bytes": 16608,
+          "seek_257_probes_median_ns": 35203,
+          "seek_257_probes_samples_ns": [
+            35456,
+            35203,
+            35268,
+            35524,
+            35165,
+            35158,
+            35173
+          ],
+          "serialized_id_bytes": 16523
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 25541,
+          "decode_samples_ns": [
+            25541,
+            25979,
+            25443,
+            25518,
+            25480,
+            26283,
+            25974
+          ],
+          "directory_entries": 71,
+          "directory_serialized_bytes": 1136,
+          "encode_median_ns": 48627,
+          "encode_samples_ns": [
+            48627,
+            48371,
+            48835,
+            50136,
+            49533,
+            48081,
+            47941
+          ],
+          "payload_bytes": 14611,
+          "retained_capacity_bytes": 29808,
+          "seek_257_probes_median_ns": 57173,
+          "seek_257_probes_samples_ns": [
+            63865,
+            57230,
+            57173,
+            57075,
+            57034,
+            61735,
+            56958
+          ],
+          "serialized_id_bytes": 15747
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 25207,
+          "decode_samples_ns": [
+            25261,
+            25073,
+            25992,
+            25430,
+            25086,
+            25207,
+            25174
+          ],
+          "directory_entries": 36,
+          "directory_serialized_bytes": 576,
+          "encode_median_ns": 47622,
+          "encode_samples_ns": [
+            48326,
+            47606,
+            53283,
+            47622,
+            48866,
+            47546,
+            47500
+          ],
+          "payload_bytes": 15059,
+          "retained_capacity_bytes": 29248,
+          "seek_257_probes_median_ns": 93291,
+          "seek_257_probes_samples_ns": [
+            93249,
+            93274,
+            93427,
+            93467,
+            93291,
+            93224,
+            101014
+          ],
+          "serialized_id_bytes": 15635
+        }
+      ],
+      "df": 9062,
+      "schema6_source_posting_bytes_with_frequency": 23319,
+      "term": "dead"
+    },
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 113624,
+          "decode_samples_ns": [
+            115849,
+            130959,
+            112474,
+            112750,
+            117766,
+            113624,
+            111520
+          ],
+          "directory_entries": 123,
+          "directory_serialized_bytes": 1476,
+          "encode_median_ns": 90990,
+          "encode_samples_ns": [
+            98236,
+            92584,
+            91966,
+            90990,
+            88539,
+            88444,
+            89422
+          ],
+          "payload_bytes": 22646,
+          "retained_capacity_bytes": 34736,
+          "seek_257_probes_median_ns": 111188,
+          "seek_257_probes_samples_ns": [
+            113355,
+            112208,
+            112257,
+            111188,
+            110927,
+            108188,
+            109190
+          ],
+          "serialized_id_bytes": 24122
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 45003,
+          "decode_samples_ns": [
+            45162,
+            45000,
+            44925,
+            44967,
+            45003,
+            45044,
+            45037
+          ],
+          "directory_entries": 245,
+          "directory_serialized_bytes": 3920,
+          "encode_median_ns": 84629,
+          "encode_samples_ns": [
+            84070,
+            84254,
+            84629,
+            84671,
+            84897,
+            83887,
+            85001
+          ],
+          "payload_bytes": 23620,
+          "retained_capacity_bytes": 28496,
+          "seek_257_probes_median_ns": 34376,
+          "seek_257_probes_samples_ns": [
+            34388,
+            34268,
+            34473,
+            34498,
+            34351,
+            34376,
+            34374
+          ],
+          "serialized_id_bytes": 27540
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 43994,
+          "decode_samples_ns": [
+            44035,
+            44028,
+            43994,
+            43870,
+            43809,
+            43950,
+            44443
+          ],
+          "directory_entries": 123,
+          "directory_serialized_bytes": 1968,
+          "encode_median_ns": 80311,
+          "encode_samples_ns": [
+            80757,
+            80462,
+            81521,
+            80311,
+            80159,
+            79789,
+            79992
+          ],
+          "payload_bytes": 24460,
+          "retained_capacity_bytes": 26544,
+          "seek_257_probes_median_ns": 54715,
+          "seek_257_probes_samples_ns": [
+            54723,
+            54711,
+            55141,
+            54658,
+            54676,
+            57921,
+            54715
+          ],
+          "serialized_id_bytes": 26428
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 43300,
+          "decode_samples_ns": [
+            43109,
+            43103,
+            43300,
+            44197,
+            43255,
+            43993,
+            43978
+          ],
+          "directory_entries": 62,
+          "directory_serialized_bytes": 992,
+          "encode_median_ns": 81192,
+          "encode_samples_ns": [
+            89155,
+            81040,
+            81382,
+            89061,
+            81097,
+            81192,
+            80200
+          ],
+          "payload_bytes": 25356,
+          "retained_capacity_bytes": 50144,
+          "seek_257_probes_median_ns": 96827,
+          "seek_257_probes_samples_ns": [
+            96602,
+            96370,
+            96904,
+            97671,
+            96827,
+            96479,
+            106840
+          ],
+          "serialized_id_bytes": 26348
+        }
+      ],
+      "df": 15648,
+      "schema6_source_posting_bytes_with_frequency": 38294,
+      "term": "effect"
+    },
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 89180,
+          "decode_samples_ns": [
+            93780,
+            96014,
+            105127,
+            88024,
+            87452,
+            89180,
+            86858
+          ],
+          "directory_entries": 95,
+          "directory_serialized_bytes": 1140,
+          "encode_median_ns": 74471,
+          "encode_samples_ns": [
+            77305,
+            75870,
+            75268,
+            73865,
+            74471,
+            73711,
+            72754
+          ],
+          "payload_bytes": 18152,
+          "retained_capacity_bytes": 34288,
+          "seek_257_probes_median_ns": 109649,
+          "seek_257_probes_samples_ns": [
+            112976,
+            107756,
+            123585,
+            107409,
+            109649,
+            115277,
+            106530
+          ],
+          "serialized_id_bytes": 19292
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 34840,
+          "decode_samples_ns": [
+            35023,
+            34809,
+            34810,
+            34923,
+            34742,
+            35140,
+            34840
+          ],
+          "directory_entries": 190,
+          "directory_serialized_bytes": 3040,
+          "encode_median_ns": 66833,
+          "encode_samples_ns": [
+            66721,
+            66643,
+            67101,
+            67117,
+            67069,
+            66833,
+            66797
+          ],
+          "payload_bytes": 18742,
+          "retained_capacity_bytes": 27616,
+          "seek_257_probes_median_ns": 35432,
+          "seek_257_probes_samples_ns": [
+            35485,
+            35301,
+            35432,
+            35306,
+            49647,
+            36387,
+            35369
+          ],
+          "serialized_id_bytes": 21782
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 33923,
+          "decode_samples_ns": [
+            33901,
+            34235,
+            33854,
+            33921,
+            33923,
+            34121,
+            34054
+          ],
+          "directory_entries": 95,
+          "directory_serialized_bytes": 1520,
+          "encode_median_ns": 63750,
+          "encode_samples_ns": [
+            63750,
+            63520,
+            64583,
+            63488,
+            64083,
+            63506,
+            63941
+          ],
+          "payload_bytes": 19385,
+          "retained_capacity_bytes": 28144,
+          "seek_257_probes_median_ns": 58106,
+          "seek_257_probes_samples_ns": [
+            61986,
+            58039,
+            58134,
+            58043,
+            58128,
+            58073,
+            58106
+          ],
+          "serialized_id_bytes": 20905
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 33695,
+          "decode_samples_ns": [
+            33996,
+            33695,
+            33509,
+            46765,
+            33739,
+            33638,
+            33536
+          ],
+          "directory_entries": 48,
+          "directory_serialized_bytes": 768,
+          "encode_median_ns": 63999,
+          "encode_samples_ns": [
+            64102,
+            63916,
+            64626,
+            63786,
+            64825,
+            63890,
+            63999
+          ],
+          "payload_bytes": 20105,
+          "retained_capacity_bytes": 29440,
+          "seek_257_probes_median_ns": 99937,
+          "seek_257_probes_samples_ns": [
+            100126,
+            99891,
+            100174,
+            99937,
+            99970,
+            99766,
+            99911
+          ],
+          "serialized_id_bytes": 20873
+        }
+      ],
+      "df": 12116,
+      "schema6_source_posting_bytes_with_frequency": 30268,
+      "term": "fire"
+    },
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 43820,
+          "decode_samples_ns": [
+            44659,
+            47624,
+            44382,
+            43381,
+            42166,
+            43820,
+            42439
+          ],
+          "directory_entries": 50,
+          "directory_serialized_bytes": 600,
+          "encode_median_ns": 35304,
+          "encode_samples_ns": [
+            39194,
+            38549,
+            39456,
+            34953,
+            34197,
+            35304,
+            34926
+          ],
+          "payload_bytes": 9679,
+          "retained_capacity_bytes": 17184,
+          "seek_257_probes_median_ns": 82747,
+          "seek_257_probes_samples_ns": [
+            83519,
+            82747,
+            94631,
+            78093,
+            80309,
+            76247,
+            88089
+          ],
+          "serialized_id_bytes": 10279
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 18418,
+          "decode_samples_ns": [
+            19506,
+            18418,
+            18434,
+            18250,
+            18269,
+            22019,
+            18181
+          ],
+          "directory_entries": 99,
+          "directory_serialized_bytes": 1584,
+          "encode_median_ns": 36852,
+          "encode_samples_ns": [
+            36777,
+            36914,
+            37618,
+            36645,
+            36817,
+            44799,
+            36852
+          ],
+          "payload_bytes": 10613,
+          "retained_capacity_bytes": 16944,
+          "seek_257_probes_median_ns": 34642,
+          "seek_257_probes_samples_ns": [
+            34706,
+            34746,
+            34642,
+            34502,
+            34480,
+            41589,
+            34413
+          ],
+          "serialized_id_bytes": 12197
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 17781,
+          "decode_samples_ns": [
+            19879,
+            17725,
+            17838,
+            17784,
+            17764,
+            17781,
+            17702
+          ],
+          "directory_entries": 50,
+          "directory_serialized_bytes": 800,
+          "encode_median_ns": 35159,
+          "encode_samples_ns": [
+            36216,
+            35205,
+            35110,
+            35159,
+            34910,
+            35634,
+            35074
+          ],
+          "payload_bytes": 10997,
+          "retained_capacity_bytes": 16160,
+          "seek_257_probes_median_ns": 52236,
+          "seek_257_probes_samples_ns": [
+            52362,
+            52236,
+            52272,
+            52374,
+            52136,
+            52181,
+            52202
+          ],
+          "serialized_id_bytes": 11797
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 17787,
+          "decode_samples_ns": [
+            19600,
+            17583,
+            59103,
+            17787,
+            28194,
+            17557,
+            17452
+          ],
+          "directory_entries": 25,
+          "directory_serialized_bytes": 400,
+          "encode_median_ns": 34841,
+          "encode_samples_ns": [
+            34510,
+            35101,
+            34841,
+            35724,
+            39940,
+            34311,
+            34398
+          ],
+          "payload_bytes": 11341,
+          "retained_capacity_bytes": 15760,
+          "seek_257_probes_median_ns": 84450,
+          "seek_257_probes_samples_ns": [
+            89503,
+            84633,
+            84390,
+            84434,
+            102426,
+            84450,
+            84284
+          ],
+          "serialized_id_bytes": 11741
+        }
+      ],
+      "df": 6334,
+      "schema6_source_posting_bytes_with_frequency": 16013,
+      "term": "hole"
+    },
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 5805571,
+          "decode_samples_ns": [
+            5805571,
+            5844260,
+            5836445,
+            5793561,
+            5794603,
+            5838975,
+            5787125
+          ],
+          "directory_entries": 13693,
+          "directory_serialized_bytes": 164316,
+          "encode_median_ns": 4112697,
+          "encode_samples_ns": [
+            4149653,
+            4138184,
+            4261932,
+            4004772,
+            4112697,
+            4011618,
+            4096010
+          ],
+          "payload_bytes": 1752741,
+          "retained_capacity_bytes": 2316240,
+          "seek_257_probes_median_ns": 149684,
+          "seek_257_probes_samples_ns": [
+            152210,
+            94387,
+            168125,
+            95726,
+            161696,
+            128259,
+            149684
+          ],
+          "serialized_id_bytes": 1917057
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 5083056,
+          "decode_samples_ns": [
+            5115901,
+            5067165,
+            5078287,
+            5101788,
+            5073438,
+            5124156,
+            5083056
+          ],
+          "directory_entries": 27386,
+          "directory_serialized_bytes": 438176,
+          "encode_median_ns": 7328951,
+          "encode_samples_ns": [
+            7410953,
+            7322038,
+            7300200,
+            7235986,
+            7328951,
+            7357637,
+            7394649
+          ],
+          "payload_bytes": 1091288,
+          "retained_capacity_bytes": 2011040,
+          "seek_257_probes_median_ns": 221476,
+          "seek_257_probes_samples_ns": [
+            223524,
+            142601,
+            257864,
+            213396,
+            288931,
+            171238,
+            221476
+          ],
+          "serialized_id_bytes": 1529464
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 4942924,
+          "decode_samples_ns": [
+            4922382,
+            4941876,
+            4966242,
+            4942924,
+            4994008,
+            4937099,
+            4956006
+          ],
+          "directory_entries": 13693,
+          "directory_serialized_bytes": 219088,
+          "encode_median_ns": 6990272,
+          "encode_samples_ns": [
+            6878893,
+            7138422,
+            7021662,
+            6990272,
+            6952908,
+            7005955,
+            6946510
+          ],
+          "payload_bytes": 1149143,
+          "retained_capacity_bytes": 1791952,
+          "seek_257_probes_median_ns": 167163,
+          "seek_257_probes_samples_ns": [
+            209413,
+            113485,
+            167163,
+            168015,
+            193192,
+            140580,
+            155822
+          ],
+          "serialized_id_bytes": 1368231
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 4863410,
+          "decode_samples_ns": [
+            4862946,
+            4911664,
+            4863410,
+            4854638,
+            4885923,
+            4875130,
+            4844767
+          ],
+          "directory_entries": 6847,
+          "directory_serialized_bytes": 109552,
+          "encode_median_ns": 7319717,
+          "encode_samples_ns": [
+            7257484,
+            7398826,
+            7322379,
+            7026979,
+            7319717,
+            7292348,
+            7486725
+          ],
+          "payload_bytes": 1202231,
+          "retained_capacity_bytes": 1682416,
+          "seek_257_probes_median_ns": 158898,
+          "seek_257_probes_samples_ns": [
+            206906,
+            123418,
+            158898,
+            163005,
+            156137,
+            163988,
+            158669
+          ],
+          "serialized_id_bytes": 1311783
+        }
+      ],
+      "df": 1752691,
+      "schema6_source_posting_bytes_with_frequency": 3505432,
+      "term": "in"
+    },
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 7384245,
+          "decode_samples_ns": [
+            9188415,
+            9131148,
+            7384245,
+            7319288,
+            7323752,
+            7618779,
+            7301441
+          ],
+          "directory_entries": 17100,
+          "directory_serialized_bytes": 205200,
+          "encode_median_ns": 5132946,
+          "encode_samples_ns": [
+            4780759,
+            5233982,
+            4788159,
+            5105763,
+            5163971,
+            5132946,
+            5307650
+          ],
+          "payload_bytes": 2188804,
+          "retained_capacity_bytes": 4467904,
+          "seek_257_probes_median_ns": 189922,
+          "seek_257_probes_samples_ns": [
+            191032,
+            121236,
+            205884,
+            117668,
+            189922,
+            121902,
+            195409
+          ],
+          "serialized_id_bytes": 2394004
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 6467519,
+          "decode_samples_ns": [
+            6360362,
+            6697848,
+            6455932,
+            6418797,
+            6732315,
+            6467519,
+            6540222
+          ],
+          "directory_entries": 34199,
+          "directory_serialized_bytes": 547184,
+          "encode_median_ns": 8833046,
+          "encode_samples_ns": [
+            8828509,
+            8853925,
+            8888743,
+            8823021,
+            8781742,
+            9013344,
+            8833046
+          ],
+          "payload_bytes": 1277480,
+          "retained_capacity_bytes": 2644336,
+          "seek_257_probes_median_ns": 237431,
+          "seek_257_probes_samples_ns": [
+            258578,
+            218149,
+            276749,
+            190465,
+            237431,
+            174878,
+            314744
+          ],
+          "serialized_id_bytes": 1824664
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 6218010,
+          "decode_samples_ns": [
+            6207544,
+            7491082,
+            6202951,
+            6224617,
+            6456343,
+            6218010,
+            6197320
+          ],
+          "directory_entries": 17100,
+          "directory_serialized_bytes": 273600,
+          "encode_median_ns": 8487914,
+          "encode_samples_ns": [
+            8456739,
+            8533416,
+            8468775,
+            8356234,
+            8508115,
+            8487914,
+            8736128
+          ],
+          "payload_bytes": 1354584,
+          "retained_capacity_bytes": 2632896,
+          "seek_257_probes_median_ns": 186089,
+          "seek_257_probes_samples_ns": [
+            175050,
+            123921,
+            186349,
+            198412,
+            186089,
+            120421,
+            193004
+          ],
+          "serialized_id_bytes": 1628184
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 6101122,
+          "decode_samples_ns": [
+            6078015,
+            6216402,
+            6095679,
+            6089746,
+            6101122,
+            6111354,
+            6132527
+          ],
+          "directory_entries": 8550,
+          "directory_serialized_bytes": 136800,
+          "encode_median_ns": 8556410,
+          "encode_samples_ns": [
+            8334563,
+            8629436,
+            8501046,
+            8481539,
+            8568385,
+            8626680,
+            8556410
+          ],
+          "payload_bytes": 1426136,
+          "retained_capacity_bytes": 2758240,
+          "seek_257_probes_median_ns": 164372,
+          "seek_257_probes_samples_ns": [
+            180190,
+            159234,
+            177941,
+            164372,
+            162788,
+            134279,
+            222553
+          ],
+          "serialized_id_bytes": 1562936
+        }
+      ],
+      "df": 2188736,
+      "schema6_source_posting_bytes_with_frequency": 4377540,
+      "term": "is"
+    },
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 1799670,
+          "decode_samples_ns": [
+            1850895,
+            1827632,
+            1799670,
+            1789423,
+            1798450,
+            1797260,
+            1820110
+          ],
+          "directory_entries": 4404,
+          "directory_serialized_bytes": 52848,
+          "encode_median_ns": 1260783,
+          "encode_samples_ns": [
+            1213222,
+            1260783,
+            1263219,
+            1255115,
+            1308852,
+            1345071,
+            1247203
+          ],
+          "payload_bytes": 564951,
+          "retained_capacity_bytes": 1119040,
+          "seek_257_probes_median_ns": 68981,
+          "seek_257_probes_samples_ns": [
+            68981,
+            51313,
+            82649,
+            51920,
+            98015,
+            55040,
+            83276
+          ],
+          "serialized_id_bytes": 617799
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 1631303,
+          "decode_samples_ns": [
+            1638486,
+            1622113,
+            1633089,
+            1630960,
+            1633340,
+            1627723,
+            1631303
+          ],
+          "directory_entries": 8807,
+          "directory_serialized_bytes": 140912,
+          "encode_median_ns": 2515417,
+          "encode_samples_ns": [
+            2512079,
+            2571829,
+            2515417,
+            2513860,
+            2495962,
+            2524774,
+            2567928
+          ],
+          "payload_bytes": 479040,
+          "retained_capacity_bytes": 927344,
+          "seek_257_probes_median_ns": 63323,
+          "seek_257_probes_samples_ns": [
+            60782,
+            50095,
+            73632,
+            63323,
+            71412,
+            50998,
+            77362
+          ],
+          "serialized_id_bytes": 619952
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 1594950,
+          "decode_samples_ns": [
+            1594950,
+            1620783,
+            1595331,
+            1607485,
+            1590103,
+            1588125,
+            1586333
+          ],
+          "directory_entries": 4404,
+          "directory_serialized_bytes": 70464,
+          "encode_median_ns": 2346039,
+          "encode_samples_ns": [
+            2374383,
+            2355908,
+            2333350,
+            2346039,
+            2353225,
+            2320683,
+            2332883
+          ],
+          "payload_bytes": 498120,
+          "retained_capacity_bytes": 922432,
+          "seek_257_probes_median_ns": 72826,
+          "seek_257_probes_samples_ns": [
+            72826,
+            67951,
+            85499,
+            68417,
+            92524,
+            67188,
+            88941
+          ],
+          "serialized_id_bytes": 568584
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 1606078,
+          "decode_samples_ns": [
+            1571584,
+            1673812,
+            1637877,
+            1605394,
+            1562022,
+            1606078,
+            1707194
+          ],
+          "directory_entries": 2202,
+          "directory_serialized_bytes": 35232,
+          "encode_median_ns": 2235638,
+          "encode_samples_ns": [
+            2249290,
+            2235638,
+            2231409,
+            2200723,
+            2293054,
+            2250423,
+            2230862
+          ],
+          "payload_bytes": 514367,
+          "retained_capacity_bytes": 952736,
+          "seek_257_probes_median_ns": 118058,
+          "seek_257_probes_samples_ns": [
+            118058,
+            107105,
+            136693,
+            114457,
+            129621,
+            107476,
+            131421
+          ],
+          "serialized_id_bytes": 549599
+        }
+      ],
+      "df": 563615,
+      "schema6_source_posting_bytes_with_frequency": 1128566,
+      "term": "one"
+    },
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 177742,
+          "decode_samples_ns": [
+            216436,
+            180609,
+            175774,
+            177742,
+            175382,
+            174238,
+            198155
+          ],
+          "directory_entries": 354,
+          "directory_serialized_bytes": 4248,
+          "encode_median_ns": 124144,
+          "encode_samples_ns": [
+            126906,
+            126573,
+            125081,
+            124144,
+            124056,
+            122306,
+            121847
+          ],
+          "payload_bytes": 49333,
+          "retained_capacity_bytes": 71200,
+          "seek_257_probes_median_ns": 81677,
+          "seek_257_probes_samples_ns": [
+            86829,
+            83498,
+            81677,
+            80495,
+            100437,
+            79528,
+            79357
+          ],
+          "serialized_id_bytes": 53581
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 129799,
+          "decode_samples_ns": [
+            129730,
+            129371,
+            134757,
+            129607,
+            132945,
+            129941,
+            129799
+          ],
+          "directory_entries": 707,
+          "directory_serialized_bytes": 11312,
+          "encode_median_ns": 215369,
+          "encode_samples_ns": [
+            215369,
+            219410,
+            214143,
+            217858,
+            221823,
+            212872,
+            213927
+          ],
+          "payload_bytes": 49967,
+          "retained_capacity_bytes": 93232,
+          "seek_257_probes_median_ns": 39914,
+          "seek_257_probes_samples_ns": [
+            39983,
+            39993,
+            39914,
+            39522,
+            39935,
+            39582,
+            39908
+          ],
+          "serialized_id_bytes": 61279
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 126390,
+          "decode_samples_ns": [
+            126523,
+            126355,
+            126291,
+            126818,
+            126159,
+            132964,
+            126390
+          ],
+          "directory_entries": 354,
+          "directory_serialized_bytes": 5664,
+          "encode_median_ns": 200436,
+          "encode_samples_ns": [
+            204430,
+            199991,
+            203072,
+            199204,
+            200436,
+            200020,
+            205198
+          ],
+          "payload_bytes": 54175,
+          "retained_capacity_bytes": 87584,
+          "seek_257_probes_median_ns": 58942,
+          "seek_257_probes_samples_ns": [
+            59291,
+            58784,
+            58980,
+            58797,
+            58942,
+            58729,
+            59143
+          ],
+          "serialized_id_bytes": 59839
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 126327,
+          "decode_samples_ns": [
+            126327,
+            133882,
+            125035,
+            127241,
+            124561,
+            126968,
+            124325
+          ],
+          "directory_entries": 177,
+          "directory_serialized_bytes": 2832,
+          "encode_median_ns": 203704,
+          "encode_samples_ns": [
+            203548,
+            201210,
+            208783,
+            203704,
+            209058,
+            205770,
+            202382
+          ],
+          "payload_bytes": 57441,
+          "retained_capacity_bytes": 88848,
+          "seek_257_probes_median_ns": 106159,
+          "seek_257_probes_samples_ns": [
+            106601,
+            105910,
+            106354,
+            106183,
+            106124,
+            105984,
+            106159
+          ],
+          "serialized_id_bytes": 60273
+        }
+      ],
+      "df": 45194,
+      "schema6_source_posting_bytes_with_frequency": 94527,
+      "term": "react"
+    },
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 18047153,
+          "decode_samples_ns": [
+            19010877,
+            18635846,
+            18467000,
+            14276955,
+            18047153,
+            14198881,
+            15545995
+          ],
+          "directory_entries": 33410,
+          "directory_serialized_bytes": 400920,
+          "encode_median_ns": 9935549,
+          "encode_samples_ns": [
+            9423727,
+            10488921,
+            11180683,
+            9883125,
+            9935549,
+            9771709,
+            10641155
+          ],
+          "payload_bytes": 4276450,
+          "retained_capacity_bytes": 8923168,
+          "seek_257_probes_median_ns": 317034,
+          "seek_257_probes_samples_ns": [
+            329887,
+            230743,
+            345487,
+            242366,
+            317034,
+            248853,
+            319750
+          ],
+          "serialized_id_bytes": 4677370
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 12508052,
+          "decode_samples_ns": [
+            12707631,
+            12431529,
+            12448245,
+            20343601,
+            12430839,
+            12874058,
+            12508052
+          ],
+          "directory_entries": 66819,
+          "directory_serialized_bytes": 1069104,
+          "encode_median_ns": 16113066,
+          "encode_samples_ns": [
+            16086749,
+            16137940,
+            16132148,
+            17558008,
+            16064764,
+            16024656,
+            16113066
+          ],
+          "payload_bytes": 1876624,
+          "retained_capacity_bytes": 3166256,
+          "seek_257_probes_median_ns": 350406,
+          "seek_257_probes_samples_ns": [
+            352772,
+            237139,
+            350406,
+            223492,
+            362569,
+            245391,
+            365415
+          ],
+          "serialized_id_bytes": 2945728
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 12223905,
+          "decode_samples_ns": [
+            12098264,
+            12223905,
+            12187103,
+            12238256,
+            12228062,
+            12085361,
+            12259719
+          ],
+          "directory_entries": 33410,
+          "directory_serialized_bytes": 534560,
+          "encode_median_ns": 14741701,
+          "encode_samples_ns": [
+            14802744,
+            14741701,
+            14920619,
+            14779756,
+            14587754,
+            14617168,
+            14517866
+          ],
+          "payload_bytes": 2008240,
+          "retained_capacity_bytes": 2631712,
+          "seek_257_probes_median_ns": 333953,
+          "seek_257_probes_samples_ns": [
+            345385,
+            212783,
+            338270,
+            225050,
+            406911,
+            232198,
+            333953
+          ],
+          "serialized_id_bytes": 2542800
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 11925482,
+          "decode_samples_ns": [
+            11904423,
+            12087210,
+            12019839,
+            11897520,
+            11922603,
+            11925482,
+            11977192
+          ],
+          "directory_entries": 16705,
+          "directory_serialized_bytes": 267280,
+          "encode_median_ns": 16106879,
+          "encode_samples_ns": [
+            16106879,
+            16410197,
+            16247283,
+            16064641,
+            15893651,
+            15724123,
+            16138768
+          ],
+          "payload_bytes": 2133952,
+          "retained_capacity_bytes": 4461584,
+          "seek_257_probes_median_ns": 261694,
+          "seek_257_probes_samples_ns": [
+            304039,
+            174920,
+            282775,
+            241892,
+            261694,
+            208224,
+            266077
+          ],
+          "serialized_id_bytes": 2401232
+        }
+      ],
+      "df": 4276415,
+      "schema6_source_posting_bytes_with_frequency": 8552865,
+      "term": "the"
+    },
+    {
+      "codecs": [
+        {
+          "block": 128,
+          "codec": "delta_varint",
+          "decode_median_ns": 5879930,
+          "decode_samples_ns": [
+            6858394,
+            6780135,
+            5843319,
+            6229255,
+            5879930,
+            5872476,
+            5849647
+          ],
+          "directory_entries": 13701,
+          "directory_serialized_bytes": 164412,
+          "encode_median_ns": 4087537,
+          "encode_samples_ns": [
+            3832724,
+            4060356,
+            4241355,
+            4087537,
+            4078687,
+            4234988,
+            4196601
+          ],
+          "payload_bytes": 1753752,
+          "retained_capacity_bytes": 2316368,
+          "seek_257_probes_median_ns": 161924,
+          "seek_257_probes_samples_ns": [
+            246059,
+            111910,
+            181879,
+            98580,
+            174249,
+            109416,
+            161924
+          ],
+          "serialized_id_bytes": 1918164
+        },
+        {
+          "block": 64,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 5143866,
+          "decode_samples_ns": [
+            5143866,
+            5174068,
+            5102300,
+            5072833,
+            5303062,
+            5071809,
+            5299829
+          ],
+          "directory_entries": 27401,
+          "directory_serialized_bytes": 438416,
+          "encode_median_ns": 7370246,
+          "encode_samples_ns": [
+            7253824,
+            7370246,
+            7352127,
+            7398022,
+            7441406,
+            7373200,
+            7299291
+          ],
+          "payload_bytes": 1107580,
+          "retained_capacity_bytes": 1749136,
+          "seek_257_probes_median_ns": 175984,
+          "seek_257_probes_samples_ns": [
+            271908,
+            155716,
+            188427,
+            138811,
+            171998,
+            175984,
+            211941
+          ],
+          "serialized_id_bytes": 1545996
+        },
+        {
+          "block": 128,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 4973040,
+          "decode_samples_ns": [
+            4973040,
+            4953096,
+            4939539,
+            4955072,
+            5127166,
+            5004489,
+            5416753
+          ],
+          "directory_entries": 13701,
+          "directory_serialized_bytes": 219216,
+          "encode_median_ns": 6970708,
+          "encode_samples_ns": [
+            6950717,
+            7030761,
+            7029503,
+            6969072,
+            7060309,
+            6970708,
+            6891292
+          ],
+          "payload_bytes": 1177988,
+          "retained_capacity_bytes": 1529936,
+          "seek_257_probes_median_ns": 202615,
+          "seek_257_probes_samples_ns": [
+            211275,
+            178284,
+            252586,
+            204509,
+            189872,
+            130328,
+            202615
+          ],
+          "serialized_id_bytes": 1397204
+        },
+        {
+          "block": 256,
+          "codec": "bitpacked_delta",
+          "decode_median_ns": 4896891,
+          "decode_samples_ns": [
+            4883201,
+            4905284,
+            4876826,
+            4893317,
+            4897282,
+            4924606,
+            4896891
+          ],
+          "directory_entries": 6851,
+          "directory_serialized_bytes": 109616,
+          "encode_median_ns": 7308740,
+          "encode_samples_ns": [
+            7216123,
+            7252582,
+            7181166,
+            7308740,
+            7357547,
+            7350209,
+            7457889
+          ],
+          "payload_bytes": 1244772,
+          "retained_capacity_bytes": 1420336,
+          "seek_257_probes_median_ns": 198358,
+          "seek_257_probes_samples_ns": [
+            203380,
+            172915,
+            209688,
+            155459,
+            201549,
+            157077,
+            198358
+          ],
+          "serialized_id_bytes": 1354388
+        }
+      ],
+      "df": 1753657,
+      "schema6_source_posting_bytes_with_frequency": 3507409,
+      "term": "this"
+    }
+  ]
+}
