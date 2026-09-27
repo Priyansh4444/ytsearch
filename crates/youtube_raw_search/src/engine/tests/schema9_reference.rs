@@ -31,6 +31,7 @@ use scoring::{ScoringContext, ScoringDocument};
 enum ContentKind {
     Video,
     Short,
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1191,6 +1192,7 @@ fn evaluate_query_exhaustively(
         let kind = match video.content_kind {
             ContentKind::Video => "video",
             ContentKind::Short => "short",
+            ContentKind::Unknown => "unknown",
         };
         *by_content_kind.entry(kind).or_insert(0) += 1;
     }
@@ -1794,6 +1796,23 @@ fn fixture_preserves_missing_and_real_zero() {
             .iter()
             .any(|document| document.views == Present::Value(0))
     );
+}
+
+#[test]
+fn unknown_kind_is_an_exact_third_summary_category() {
+    let source = [
+        serde_json::json!({"id":"a","video_id":"a","creator":"c","title":"term","text":"term","timestamp_ms":0,"content_kind":"unknown"}),
+        serde_json::json!({"id":"b","video_id":"b","creator":"c","title":"term","text":"term","timestamp_ms":0,"content_kind":"video"}),
+    ]
+    .into_iter()
+    .map(|document| document.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+    let corpus = FixtureCorpus::from_jsonl(&source).unwrap();
+    let result = evaluate_exhaustively(&corpus, &request("term", 10)).unwrap();
+    assert_eq!(result.total_videos, 2);
+    assert_eq!(result.by_content_kind.get("unknown"), Some(&1));
+    assert_eq!(result.by_content_kind.get("video"), Some(&1));
 }
 
 #[test]

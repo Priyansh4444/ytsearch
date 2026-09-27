@@ -50,8 +50,9 @@ Canonical chunks carry optional `duration` in milliseconds and optional
 `published_at_timestamp` in whole Unix **seconds**. Kind is derived from a
 proven duration: `Short` for 0 through 60,000 ms, `Video` above 60,000 ms,
 and `Unknown` when duration is absent. A known zero duration remains known.
-The independent reference currently lacks `Unknown`; parity cannot be claimed
-until that fixture contract is repaired. Year is derived from a known Unix
+The independent reference accepts `Unknown` as a third exact summary category;
+parity against active mutations still requires a captured source snapshot and
+full differential. Year is derived from a known Unix
 timestamp using UTC Gregorian rules. A missing timestamp implies missing year.
 Schema-6 `IndexDocument` defaults views, likes, and comments to zero, erasing
 absence. The schema-9 writer must read raw archive/mutation field presence;
