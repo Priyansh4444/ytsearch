@@ -1,0 +1,131 @@
+{
+  "analysis": {
+    "lexicon_version": 1,
+    "term_count": 302871,
+    "text": {
+      "bitmap_budget_capacity": [
+        {
+          "budget_mib": 16,
+          "whole_bitmaps": 15
+        },
+        {
+          "budget_mib": 32,
+          "whole_bitmaps": 31
+        },
+        {
+          "budget_mib": 64,
+          "whole_bitmaps": 63
+        },
+        {
+          "budget_mib": 128,
+          "whole_bitmaps": 127
+        }
+      ],
+      "dense_bitmap_bytes_per_term": 1052808,
+      "density_bands": [
+        {
+          "minimum_df": 8423,
+          "minimum_ppm": 1000,
+          "terms_at_or_above": 1469
+        },
+        {
+          "minimum_df": 84225,
+          "minimum_ppm": 10000,
+          "terms_at_or_above": 196
+        },
+        {
+          "minimum_df": 842242,
+          "minimum_ppm": 100000,
+          "terms_at_or_above": 28
+        },
+        {
+          "minimum_df": 4211210,
+          "minimum_ppm": 500000,
+          "terms_at_or_above": 1
+        },
+        {
+          "minimum_df": 7580178,
+          "minimum_ppm": 900000,
+          "terms_at_or_above": 0
+        }
+      ],
+      "max_df": 4276415,
+      "nonzero_terms": 298707,
+      "p50_df": 2,
+      "p90_df": 49,
+      "p99_df": 3143,
+      "terms": 302871,
+      "universe": 8422419
+    },
+    "title": {
+      "bitmap_budget_capacity": [
+        {
+          "budget_mib": 16,
+          "whole_bitmaps": 3806
+        },
+        {
+          "budget_mib": 32,
+          "whole_bitmaps": 7612
+        },
+        {
+          "budget_mib": 64,
+          "whole_bitmaps": 15224
+        },
+        {
+          "budget_mib": 128,
+          "whole_bitmaps": 30448
+        }
+      ],
+      "dense_bitmap_bytes_per_term": 4408,
+      "density_bands": [
+        {
+          "minimum_df": 36,
+          "minimum_ppm": 1000,
+          "terms_at_or_above": 1149
+        },
+        {
+          "minimum_df": 353,
+          "minimum_ppm": 10000,
+          "terms_at_or_above": 85
+        },
+        {
+          "minimum_df": 3522,
+          "minimum_ppm": 100000,
+          "terms_at_or_above": 7
+        },
+        {
+          "minimum_df": 17608,
+          "minimum_ppm": 500000,
+          "terms_at_or_above": 0
+        },
+        {
+          "minimum_df": 31694,
+          "minimum_ppm": 900000,
+          "terms_at_or_above": 0
+        }
+      ],
+      "max_df": 7153,
+      "nonzero_terms": 29106,
+      "p50_df": 0,
+      "p90_df": 0,
+      "p99_df": 12,
+      "terms": 302871,
+      "universe": 35215
+    }
+  },
+  "analyzer_source_commit": "78f18ce8bcf14dfbef80ecc0db7c360970fd0052",
+  "limits": [
+    "Schema-6 active lexicon frequencies; schema-9 format and bitmap choice remain open.",
+    "No term bytes or posting payloads are exported.",
+    "Bitmap capacity is payload only; directories, allocation, and query concurrency are excluded."
+  ],
+  "schema_version": 1,
+  "source": {
+    "documents": 8422419,
+    "generation": 2950,
+    "lexicon_bytes": 14978769,
+    "lexicon_sha256": "7641ce43647ae24bba7706115bf2d22e5c1280f4292e3657bb985568841b9c9e",
+    "manifest_sha256": "b97c8727ccabdbb5a45ac44010f337633849bf527e8d8a516f458d403411d7b5",
+    "videos": 35215
+  }
+}

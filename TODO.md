@@ -154,6 +154,18 @@ Raw can replace Typesense as the canonical search index.
   differential/performance lanes supersede it; preserve its experiment evidence.
 - [ ] Prototype phrase bitmap-vs-skip candidates on a production-shaped corpus.
 - [ ] Prototype bitmap-vs-skip exact counting and derive the bitmap byte budget.
+  - [x] Record read-only term-DF distributions from active schema-6 generation
+    2950's checksummed lexicon. The report establishes real-corpus density and
+    payload-only bitmap capacities; it does not select a bitmap threshold or
+    prove a 2 GiB query/session budget.
+  - [x] Record exact posting intersections for canonical broad and selective
+    term pairs from the same active generation, with independently checked
+    lexicon/postings SHA-256 and explicit document versus video universes.
+    This is structural overlap evidence, not timing or mixed-field semantics.
+  - [x] Measure exact pair counting on copied active schema-6 postings with
+    independently checked intersections, both sparse methods, paired dense
+    bitmap scans, and construction/residency receipts. The local count kernels
+    do not establish a schema-9 threshold or the 2 GiB reader byte budget.
 - [ ] Prove exact query-dependent 20-second moment totals under 200 ms for the
   broadest canonical queries; do not substitute static buckets or approximation.
 - [ ] Prototype scalar-vs-batched Tier-1 fast-field histograms.
