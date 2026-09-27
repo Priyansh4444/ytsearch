@@ -29,6 +29,14 @@ The existing schema-6 builder assigns IDs in input order and does not establish
 this global order. The exact source `TranscriptChunk.id` survives in the
 canonical archive; the schema-9 writer must prove that every source document
 has one unique, stable external ID. Missing or ambiguous IDs fail publication.
+The private source spool appends each validated JSON line to a scratch file and
+uses a disk-backed SQLite unique key to reject duplicate external IDs. Its
+ordered scan uses `(external_video_id, t_start_ms, external_document_id)` so
+dense video and document IDs can be assigned without retaining the corpus in
+memory. The spool is rejected after any append error. It does not yet resolve
+per-video metadata conflicts or prove that a mutation snapshot is complete;
+both remain publication gates. Scratch space and sort runtime must be measured
+on the real corpus before this path can be used for production builds.
 
 Canonical chunks carry optional `duration` in milliseconds and optional
 `published_at_timestamp` in whole Unix **seconds**. Kind is derived from a

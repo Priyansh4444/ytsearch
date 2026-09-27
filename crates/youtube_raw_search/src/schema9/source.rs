@@ -3,7 +3,7 @@
 use serde_json::{Map, Value};
 use youtube_time::parse_rfc3339_timestamp;
 
-const MAX_SOURCE_LINE_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_SOURCE_LINE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SourceKind {
