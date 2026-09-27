@@ -328,8 +328,8 @@ canary_is_safe() {
     .config.mounts[0].volume == $volume and
     .config.mounts[0].path == $mount_path and
     .config.guest.cpu_kind == "shared" and
-    .config.guest.cpus == 2 and
-    .config.guest.memory_mb == 2048 and
+    .config.guest.cpus == 4 and
+    .config.guest.memory_mb == 2560 and
     .config.env.RAW_SEARCH_BASE_CHANNELS_GZIP == "/data/source/youtube_youtubers.jsonl.gz" and
     .config.env.RAW_SEARCH_BASE_CHUNKS_GZIP == "/data/source/youtube_transcript_chunks.jsonl.gz" and
     .config.env.RAW_SEARCH_BIND == "[::]:8108" and
@@ -814,7 +814,7 @@ jq -cn --arg source_commit "$source_commit" --arg run_id "$run_id" \
   --argjson maximum_ms "$MAX_ACCEPTABLE_MS" --argjson maximum_rss "$MAX_RSS_BYTES" \
   --argjson maximum_cgroup_memory "$MAX_CGROUP_MEMORY_BYTES" \
   --argjson maximum_builder_cgroup_memory "$MAX_BUILDER_CGROUP_MEMORY_BYTES" \
-  --argjson reader_memory_mb 2048 \
+  --argjson reader_memory_mb 2560 \
   --argjson builder_memory_mb "$RAW_PUBLICATION_BUILDER_MEMORY_MB" \
   --argjson publication_timeout_seconds "$PUBLICATION_TIMEOUT_SECONDS" \
   --argjson publication_load_seconds "$PUBLICATION_LOAD_SECONDS" \

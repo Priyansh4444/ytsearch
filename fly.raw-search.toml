@@ -29,11 +29,12 @@ primary_region = 'sjc'
   initial_size = '20gb'
 
 [[vm]]
-  # Keep routine deploys aligned with the cost-gated live allocation. The
-  # 2 GiB cgroup leaves room for the reader, file cache, and bounded publisher.
-  memory = '2048mb'
+  # Keep routine deploys aligned with the cost-gated live allocation. 2.5 GiB
+  # holds two generations' scanned files and the mutation store in page cache
+  # during publication; four vCPUs let broad scans partition (2026-09-27).
+  memory = '2560mb'
   cpu_kind = 'shared'
-  cpus = 2
+  cpus = 4
 
 [checks]
   [checks.health]
