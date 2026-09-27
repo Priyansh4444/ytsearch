@@ -33,6 +33,48 @@ pub(super) struct DocumentPartition {
 }
 
 impl DocumentPartition {
+    /// Plans off the open path: seek checkpoints decode every long posting
+    /// list up to the split, which on a cold page cache took 21 s and held
+    /// the reader's health check. Until the plan is set, scans stay exact as
+    /// one range. The thread starts from a weak reference, so a generation
+    /// retired before planning begins is not pinned at all.
+    pub(super) fn plan_in_background(inner: &Arc<EngineInner>) {
+        if !Self::worthwhile(inner.manifest.documents) {
+            let _ = inner.partition.set(None);
+            return;
+        }
+        let inner = Arc::downgrade(inner);
+        let spawned = std::thread::Builder::new()
+            .name("raw-partition-plan".to_string())
+            .spawn(move || {
+                let Some(inner) = inner.upgrade() else {
+                    return;
+                };
+                let plan = Self::plan(
+                    &inner.videos,
+                    inner.manifest.documents,
+                    &inner.lexicon,
+                    &inner.postings,
+                    &inner.positions,
+                )
+                .unwrap_or_else(|error| {
+                    // Scans validate the same posting streams and report
+                    // corruption on the query path.
+                    tracing::warn!(%error, "raw document partition planning failed");
+                    None
+                });
+                let _ = inner.partition.set(plan);
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "raw document partition planner did not start");
+        }
+    }
+
+    fn worthwhile(documents: u32) -> bool {
+        std::thread::available_parallelism().map_or(1, NonZeroUsize::get) >= 2
+            && u64::from(documents) >= PARTITIONED_SCAN_MIN_DOCUMENTS
+    }
+
     pub(super) fn plan(
         videos: &[VideoMeta],
         documents: u32,
@@ -40,8 +82,7 @@ impl DocumentPartition {
         postings: &MappedFile,
         positions: &PositionIndex,
     ) -> Result<Option<Self>> {
-        let parallelism = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
-        if parallelism < 2 || u64::from(documents) < PARTITIONED_SCAN_MIN_DOCUMENTS {
+        if !Self::worthwhile(documents) {
             return Ok(None);
         }
         let target = u32::try_from(u64::from(documents) * PARTITION_HEAD_SHARE_PERCENT / 100)
@@ -210,7 +251,7 @@ impl RawSearchEngine {
         F: Fn(std::ops::Range<u32>) -> Result<T> + Sync,
     {
         let documents = self.inner.manifest.documents;
-        let Some(partition) = &self.inner.partition else {
+        let Some(partition) = self.inner.partition.get().and_then(Option::as_ref) else {
             return Ok(vec![scan(0..documents)?]);
         };
         let split = partition.split;
@@ -230,7 +271,8 @@ impl RawSearchEngine {
     ) -> Option<&HashMap<u32, TextSeekCheckpoint>> {
         self.inner
             .partition
-            .as_ref()
+            .get()
+            .and_then(Option::as_ref)
             .filter(|partition| start > 0 && partition.split == start)
             .map(|partition| &partition.text_checkpoints)
     }

@@ -429,14 +429,7 @@ impl RawSearchEngine {
                 "manifest counts do not match index files".to_string(),
             ));
         }
-        let partition = partition::DocumentPartition::plan(
-            &videos,
-            manifest.documents,
-            &lexicon,
-            &postings,
-            &positions,
-        )?;
-        Ok(Self {
+        let engine = Self {
             inner: Arc::new(EngineInner {
                 manifest,
                 videos,
@@ -451,9 +444,11 @@ impl RawSearchEngine {
                 broad_single,
                 documents,
                 metadata,
-                partition,
+                partition: std::sync::OnceLock::new(),
                 index_bytes: directory_size(index_path)?,
             }),
-        })
+        };
+        partition::DocumentPartition::plan_in_background(&engine.inner);
+        Ok(engine)
     }
 }

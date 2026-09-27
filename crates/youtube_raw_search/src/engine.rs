@@ -282,7 +282,9 @@ struct EngineInner {
     broad_single: Option<broad_single::BroadSingleIndex>,
     documents: MappedFile,
     metadata: DocumentTable,
-    partition: Option<partition::DocumentPartition>,
+    // Planned on a background thread after open; scans run as one range
+    // until it is set.
+    partition: std::sync::OnceLock<Option<partition::DocumentPartition>>,
     index_bytes: u64,
 }
 
