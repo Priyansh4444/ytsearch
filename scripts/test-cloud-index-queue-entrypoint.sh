@@ -303,4 +303,56 @@ process_queue_once > "$test_dir/coalesced.out" 2> "$test_dir/coalesced.err"
   exit 1
 }
 
+# A daily catalog pass whose only failures are retryable per-video gaps
+# (exit 75) completes and publishes; any other catalog failure fails it.
+daily_list="$test_dir/daily-creators.txt"
+printf '@example\n' > "$daily_list"
+DAILY_UPDATE_LIST_FILE="$daily_list"
+RAW_SEARCH_API_URL=http://raw.invalid:8108
+RAW_SEARCH_ADMIN_API_KEY=test-admin-key
+BACKENDS=raw
+daily_events="$test_dir/daily-events.log"
+log_queue_event() { printf '%s\n' "$2" >> "$daily_events"; }
+publication_log="$test_dir/daily-publications.log"
+publish_raw_generation() { printf 'publish\n' >> "$publication_log"; }
+for stub_status in 75 0; do
+  : > "$daily_events"; : > "$publication_log"
+  index_catalog_backend() { return "$stub_status"; }
+  if ! index_daily_update_for_backends > /dev/null 2>&1; then
+    echo "a daily pass with catalog status $stub_status must complete" >&2
+    exit 1
+  fi
+  grep -Fx publish "$publication_log" >/dev/null || {
+    echo "a completed daily pass must publish" >&2
+    exit 1
+  }
+done
+: > "$daily_events"
+index_catalog_backend() { return 75; }
+index_daily_update_for_backends > /dev/null 2>&1
+grep -Fx daily_update_backend_gaps "$daily_events" >/dev/null || {
+  echo "a gaps-only daily pass must be logged as completed with gaps" >&2
+  exit 1
+}
+for stub_status in 1 69; do
+  index_catalog_backend() { return "$stub_status"; }
+  if index_daily_update_for_backends > /dev/null 2>&1; then
+    echo "a daily pass with catalog status $stub_status must fail" >&2
+    exit 1
+  fi
+done
+
+# A bot challenge or rate limit (exit 69) keeps the queue request for retry.
+: > "$QUEUE_RETRY_STATE_FILE"
+blocked_status_log="$test_dir/blocked-status.log"
+pull_queue_tsv() { printf 'request-blocked\t@example\tworker\traw\n'; }
+set_queue_status() { printf '%s %s\n' "$1" "$2" >> "$blocked_status_log"; }
+queue_request() { echo "unexpected queue acknowledgement" >&2; return 1; }
+index_youtuber_for_queue_target() { return 69; }
+process_queue_once > /dev/null 2>&1 || true
+grep -Fx "request-blocked queued" "$blocked_status_log" >/dev/null || {
+  echo "an upstream-blocked request must return to the queue" >&2
+  exit 1
+}
+
 echo "cloud queue transport and retry behavior passed"

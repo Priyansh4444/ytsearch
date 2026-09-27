@@ -213,9 +213,13 @@ async fn main() -> ExitCode {
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error @ (CliError::RetryableGaps(_) | CliError::UpstreamBlocked(_))) => {
+        Err(error @ CliError::RetryableGaps(_)) => {
             eprintln!("{error}");
-            ExitCode::from(75)
+            ExitCode::from(EXIT_RETRYABLE_GAPS)
+        }
+        Err(error @ CliError::UpstreamBlocked(_)) => {
+            eprintln!("{error}");
+            ExitCode::from(EXIT_UPSTREAM_BLOCKED)
         }
         Err(error) => {
             eprintln!("{error}");
@@ -1265,6 +1269,40 @@ async fn index_youtuber(
     Ok(())
 }
 
+/// The run finished; only per-video gaps with a scheduled retry remain.
+const EXIT_RETRYABLE_GAPS: u8 = 75;
+/// A bot challenge or rate limit stopped the run before every video was tried.
+const EXIT_UPSTREAM_BLOCKED: u8 = 69;
+
+/// A catalog run is complete when every creator was attempted and the only
+/// failures are retryable per-video gaps: those stay in the failure ledger
+/// with their own backoff, and a later pass retries them. Any other creator
+/// failure fails the run.
+fn catalog_outcome(failures: Vec<(String, CliError)>) -> Result<(), CliError> {
+    if failures.is_empty() {
+        return Ok(());
+    }
+    let only_gaps = failures
+        .iter()
+        .all(|(_, error)| matches!(error, CliError::RetryableGaps(_)));
+    let summary = failures
+        .iter()
+        .map(|(handle, error)| format!("{handle}: {error}"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if only_gaps {
+        Err(CliError::RetryableGaps(format!(
+            "{} YouTuber(s) retained retryable video gaps after every requested creator was attempted: {summary}",
+            failures.len()
+        )))
+    } else {
+        Err(CliError::Message(format!(
+            "{} YouTuber(s) failed after every requested creator was attempted: {summary}",
+            failures.len()
+        )))
+    }
+}
+
 async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), CliError> {
     let publication_search = command
         .search
@@ -1325,11 +1363,14 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
             }
             Ok((failed_handle, Err(error))) => {
                 tracing::error!(handle = %failed_handle, %error, "YouTuber indexing failed; continuing with remaining creators");
-                failures.push(format!("{failed_handle}: {error}"));
+                failures.push((failed_handle, error));
             }
             Err(error) => {
                 tracing::error!(%error, "YouTuber indexing task failed; continuing with remaining creators");
-                failures.push(format!("indexing task: {error}"));
+                failures.push((
+                    "indexing task".to_string(),
+                    CliError::Message(error.to_string()),
+                ));
             }
         }
     }
@@ -1337,15 +1378,7 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
     if PublicationPolicy::from_defer_flag(command.defer_publish).publishes_after_run() {
         publish_and_wait(&publication_search).await?;
     }
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(CliError::Message(format!(
-            "{} YouTuber(s) failed after every requested creator was attempted: {}",
-            failures.len(),
-            failures.join(" | ")
-        )))
-    }
+    catalog_outcome(failures)
 }
 
 fn effective_channel_jobs(requested: usize, video_jobs: usize) -> usize {
@@ -2500,6 +2533,49 @@ fn print_validated_youtuber(youtuber: &ValidatedYoutuber) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A new upload whose captions are not published yet must not fail the
+    // daily catalog pass: every creator was attempted and the gap is retried
+    // on its own backoff.
+    #[test]
+    fn catalog_with_only_retryable_gaps_completes_with_gaps() {
+        assert!(catalog_outcome(Vec::new()).is_ok());
+        let gaps = vec![
+            (
+                "@one".to_string(),
+                CliError::RetryableGaps("1 gap".to_string()),
+            ),
+            (
+                "@two".to_string(),
+                CliError::RetryableGaps("2 gaps".to_string()),
+            ),
+        ];
+        assert!(matches!(
+            catalog_outcome(gaps),
+            Err(CliError::RetryableGaps(message)) if message.contains("@one") && message.contains("@two")
+        ));
+    }
+
+    #[test]
+    fn catalog_with_any_hard_failure_fails() {
+        let mixed = vec![
+            (
+                "@one".to_string(),
+                CliError::RetryableGaps("1 gap".to_string()),
+            ),
+            (
+                "@two".to_string(),
+                CliError::Message("reader unavailable".to_string()),
+            ),
+        ];
+        assert!(matches!(catalog_outcome(mixed), Err(CliError::Message(_))));
+    }
+
+    #[test]
+    fn gaps_and_upstream_blocks_use_distinct_exit_codes() {
+        assert_ne!(EXIT_RETRYABLE_GAPS, EXIT_UPSTREAM_BLOCKED);
+        assert_eq!(EXIT_RETRYABLE_GAPS, 75);
+    }
 
     #[tokio::test]
     async fn publication_activation_gate_validates_and_unblocks() {
