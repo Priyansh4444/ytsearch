@@ -17,7 +17,9 @@ const BACKEND: &str = "raw";
 const ACTIVE_MANIFEST: &str = "active-generation.json";
 const GENERATION_MANIFEST: &str = "manifest.json";
 const REMOTE_PUBLICATION_WORK: &str = "work/remote-publication";
-pub const RAW_GENERATION_FORMAT: &str = "raw-index-schema-8-v2";
+// Publication builds stop at schema 7 (see `BuildSchema`); the reader still
+// opens schema-8 generations for rollback.
+pub const RAW_GENERATION_FORMAT: &str = "raw-index-schema-7-v2";
 const CORPUS_IDENTITY_DOMAIN: &[u8] = b"ytsearch raw corpus identity v1\0";
 
 #[derive(Clone, Debug)]

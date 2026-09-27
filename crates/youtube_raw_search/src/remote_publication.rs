@@ -26,7 +26,7 @@ pub(crate) type RemoteJobResponse = RawPublicationJob;
 
 const BACKEND: &str = "raw";
 const STATE_VERSION: u8 = 1;
-const GENERATION_SCHEMA_VERSION: u8 = 8;
+const GENERATION_SCHEMA_VERSION: u8 = 7;
 const STATE_FILE: &str = "job.json";
 const SNAPSHOT_FILE: &str = "mutations.sqlite3";
 const GENERATION_DIRECTORY: &str = "generation";
@@ -49,7 +49,9 @@ const LEGACY_SCHEMA_SIX_FILES: [&str; 9] = [
     "documents.meta",
     "fuzzy.bin",
 ];
-const LEGACY_SCHEMA_SEVEN_FILES: [&str; 11] = [
+// Jobs persisted by a reader that advertised a schema-8 format stay readable,
+// so a restart can retire them instead of failing to load its state.
+const LEGACY_SCHEMA_EIGHT_FILES: [&str; 12] = [
     "channels.json",
     "videos.json",
     "lexicon.bin",
@@ -61,6 +63,7 @@ const LEGACY_SCHEMA_SEVEN_FILES: [&str; 11] = [
     "fuzzy.bin",
     "bigrams.text.bin",
     "bigrams.title.bin",
+    "broad-single.bin",
 ];
 const LEGACY_SCHEMA_SEVEN_V1_FORMAT: &str = "raw-index-schema-7-v1";
 
@@ -666,8 +669,8 @@ fn validate_persisted_job(job: &PersistedJob) -> Result<(), IndexStoreError> {
     let (schema_version, generation_files): (u8, &[&str]) =
         match job.compatibility.generation_format.as_str() {
             crate::RAW_GENERATION_FORMAT => (GENERATION_SCHEMA_VERSION, &RAW_GENERATION_FILES),
-            "raw-index-schema-8-v1" => (8, &RAW_GENERATION_FILES),
-            LEGACY_SCHEMA_SEVEN_V1_FORMAT => (7, &LEGACY_SCHEMA_SEVEN_FILES),
+            "raw-index-schema-8-v1" | "raw-index-schema-8-v2" => (8, &LEGACY_SCHEMA_EIGHT_FILES),
+            LEGACY_SCHEMA_SEVEN_V1_FORMAT => (7, &RAW_GENERATION_FILES),
             "raw-index-schema-6-v1" => (6, &LEGACY_SCHEMA_SIX_FILES),
             _ => {
                 return Err(IndexStoreError::InvalidInput(

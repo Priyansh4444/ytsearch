@@ -391,7 +391,7 @@ mod tests {
     fn verified_receipt_does_not_hide_corrupted_output() {
         let (root, job, builder) = fixture();
         record_verified_build(root.path(), &job).unwrap();
-        fs::write(root.path().join("generation/broad-single.bin"), b"corrupt").unwrap();
+        fs::write(root.path().join("generation/postings.bin"), b"corrupt").unwrap();
         assert!(resume_verified_build(root.path(), &job, &builder).is_err());
     }
 

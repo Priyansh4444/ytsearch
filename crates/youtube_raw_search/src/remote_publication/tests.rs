@@ -337,7 +337,13 @@ async fn restart_retires_a_schema_seven_v1_prepared_job_and_prepares_v2() {
 
 #[tokio::test]
 async fn restart_retires_a_schema_seven_v1_manifest_accepted_job() {
-    for (legacy_format, schema) in [("raw-index-schema-7-v1", 7), ("raw-index-schema-8-v1", 8)] {
+    // Schema-8 jobs are what a reader advertising schema-8-v2 persisted before
+    // publication was pinned back to schema 7.
+    for (legacy_format, schema) in [
+        ("raw-index-schema-7-v1", 7),
+        ("raw-index-schema-8-v1", 8),
+        ("raw-index-schema-8-v2", 8),
+    ] {
         let fixture = fixture();
         replace(
             &fixture.store,
@@ -361,8 +367,9 @@ async fn restart_retires_a_schema_seven_v1_manifest_accepted_job() {
         legacy.status = RemoteJobStatus::ManifestAccepted;
         let mut manifest = manifest;
         manifest.schema_version = schema;
-        if schema == 7 {
-            manifest.files.remove("broad-single.bin");
+        if schema == 8 {
+            let entry = manifest.files["postings.bin"].clone();
+            manifest.files.insert("broad-single.bin".to_string(), entry);
         }
         legacy.manifest = Some(manifest);
         legacy.completed_files.insert("channels.json".to_string());
