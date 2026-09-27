@@ -79,10 +79,11 @@ fn checkpoints_at(
         engine.inner.postings.bytes(),
         &engine.inner.positions,
         engine.inner.manifest.documents,
-        split,
+        &[split],
         0,
     )
     .expect("checkpoints")
+    .remove(0)
 }
 
 #[test]
@@ -202,4 +203,74 @@ fn partitioned_scans_match_whole_scans_at_every_boundary() {
             assert_eq!(split, whole, "term split at {boundary}");
         }
     }
+}
+
+// One decoding pass records every split's resume point; each must equal the
+// point a separate single-split pass records.
+#[test]
+fn multi_split_checkpoints_match_single_split_passes() {
+    let (_root, engine) = interleaved_engine();
+    let boundaries = partition::video_disjoint_boundaries(&engine.inner.videos);
+    assert!(boundaries.len() >= 3);
+    let combined = partition::text_seek_checkpoints(
+        &engine.inner.lexicon,
+        engine.inner.postings.bytes(),
+        &engine.inner.positions,
+        engine.inner.manifest.documents,
+        &boundaries,
+        0,
+    )
+    .expect("combined checkpoints");
+    for (boundary, checkpoints) in boundaries.iter().zip(&combined) {
+        assert_eq!(
+            *checkpoints,
+            checkpoints_at(&engine, *boundary),
+            "split {boundary}"
+        );
+    }
+}
+
+#[test]
+fn many_way_partitioned_scans_match_the_whole_scan() {
+    let (_root, engine) = interleaved_engine();
+    let documents = engine.inner.manifest.documents;
+    let fields = query_fields(None, true).expect("query fields");
+    let boundaries = partition::video_disjoint_boundaries(&engine.inner.videos);
+    let checkpoints = partition::text_seek_checkpoints(
+        &engine.inner.lexicon,
+        engine.inner.postings.bytes(),
+        &engine.inner.positions,
+        documents,
+        &boundaries,
+        0,
+    )
+    .expect("checkpoints");
+    let starts = std::iter::once(0).chain(boundaries.iter().copied());
+    let ends = boundaries.iter().copied().chain(std::iter::once(documents));
+    let ranges = starts
+        .zip(ends)
+        .map(|(start, end)| start..end)
+        .collect::<Vec<_>>();
+    assert!(ranges.len() >= 4);
+
+    let terms = vec!["and".to_string(), "the".to_string()];
+    let (plans, highlights) = engine
+        .conjunction_plans(&terms, fields, true, 0)
+        .expect("conjunction plans");
+    let params = grouped_query("and the");
+    let whole = grouped_response(
+        &engine,
+        &params,
+        &highlights,
+        std::slice::from_ref(&(0..documents)),
+        |range, visit| engine.visit_plan_conjunction_range(&plans, range, visit),
+    );
+    let split = grouped_response(&engine, &params, &highlights, &ranges, |range, visit| {
+        let resume = boundaries
+            .binary_search(&range.start)
+            .ok()
+            .map(|index| &checkpoints[index]);
+        engine.visit_plan_conjunction_from(&plans, range, resume, visit)
+    });
+    assert_eq!(split, whole);
 }

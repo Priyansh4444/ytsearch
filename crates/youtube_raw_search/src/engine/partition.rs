@@ -1,7 +1,9 @@
-//! Two-way document partitioning for broad grouped scans.
+//! Document partitioning for broad grouped scans.
 //!
-//! The reader serves one backend search at a time on a two-vCPU Machine, so a
-//! broad scan can use the idle core. Partitions split only where no video's
+//! The reader serves one backend search at a time, so a broad scan can use
+//! every core: one partition per available CPU, up to `MAX_PARTITIONS`.
+//! Adding vCPUs therefore shortens broad scans as the corpus grows.
+//! Partitions split only where no video's
 //! documents straddle the boundary: each video is grouped and moment-counted
 //! by exactly one scan, in its original document order, which keeps responses
 //! identical to a single scan.
@@ -11,12 +13,13 @@ use std::num::NonZeroUsize;
 
 // Below this size thread setup outweighs the saved scan time.
 const PARTITIONED_SCAN_MIN_DOCUMENTS: u64 = 1_000_000;
-// Seek checkpoints remove the tail's decode-only prefix, so halves balance.
-const PARTITION_HEAD_SHARE_PERCENT: u64 = 50;
+// Seek checkpoints remove each later partition's decode-only prefix, so
+// equal document shares balance.
+const MAX_PARTITIONS: usize = 8;
 // Shorter posting lists are cheap to seek by decoding.
 const SEEK_CHECKPOINT_MIN_POSTINGS: u32 = 20_000;
 
-/// Text cursor state after every posting below the partition split.
+/// Text cursor state after every posting below a partition start.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct TextSeekCheckpoint {
     pub(super) posting_cursor: usize,
@@ -28,8 +31,10 @@ pub(super) struct TextSeekCheckpoint {
 }
 
 pub(super) struct DocumentPartition {
-    pub(super) split: u32,
-    pub(super) text_checkpoints: HashMap<u32, TextSeekCheckpoint>,
+    /// Ascending starts of every partition after the first.
+    pub(super) splits: Vec<u32>,
+    /// Per split, keyed by term: where a text cursor resumes.
+    pub(super) text_checkpoints: Vec<HashMap<u32, TextSeekCheckpoint>>,
 }
 
 impl DocumentPartition {
@@ -70,9 +75,14 @@ impl DocumentPartition {
         }
     }
 
+    fn parts() -> usize {
+        std::thread::available_parallelism()
+            .map_or(1, NonZeroUsize::get)
+            .min(MAX_PARTITIONS)
+    }
+
     fn worthwhile(documents: u32) -> bool {
-        std::thread::available_parallelism().map_or(1, NonZeroUsize::get) >= 2
-            && u64::from(documents) >= PARTITIONED_SCAN_MIN_DOCUMENTS
+        Self::parts() >= 2 && u64::from(documents) >= PARTITIONED_SCAN_MIN_DOCUMENTS
     }
 
     pub(super) fn plan(
@@ -85,29 +95,38 @@ impl DocumentPartition {
         if !Self::worthwhile(documents) {
             return Ok(None);
         }
-        let target = u32::try_from(u64::from(documents) * PARTITION_HEAD_SHARE_PERCENT / 100)
-            .map_err(|_| Error::Corrupt("partition target overflows".to_string()))?;
-        let Some(split) = nearest_boundary(&video_disjoint_boundaries(videos), documents, target)
-        else {
+        let parts = Self::parts() as u64;
+        let boundaries = video_disjoint_boundaries(videos);
+        let mut splits = Vec::with_capacity(parts as usize - 1);
+        for part in 1..parts {
+            let target = u32::try_from(u64::from(documents) * part / parts)
+                .map_err(|_| Error::Corrupt("partition target overflows".to_string()))?;
+            if let Some(split) = nearest_boundary(&boundaries, documents, target)
+                && splits.last().is_none_or(|last| *last < split)
+            {
+                splits.push(split);
+            }
+        }
+        if splits.is_empty() {
             return Ok(None);
-        };
+        }
         let started = std::time::Instant::now();
         let text_checkpoints = text_seek_checkpoints(
             lexicon,
             postings.bytes(),
             positions,
             documents,
-            split,
+            &splits,
             SEEK_CHECKPOINT_MIN_POSTINGS,
         )?;
         tracing::info!(
-            split,
-            checkpoints = text_checkpoints.len(),
+            ?splits,
+            checkpoints = text_checkpoints.first().map_or(0, HashMap::len),
             elapsed_ms = started.elapsed().as_millis() as u64,
             "planned raw document partition"
         );
         Ok(Some(Self {
-            split,
+            splits,
             text_checkpoints,
         }))
     }
@@ -143,17 +162,18 @@ fn nearest_boundary(boundaries: &[u32], documents: u32, target: u32) -> Option<u
         .min_by_key(|boundary| boundary.abs_diff(target))
 }
 
-/// Decodes each long text posting list up to `split` with the same validation
-/// as `TextAlternativeCursor::advance_to`, recording where a cursor resumes.
+/// Decodes each long text posting list once, with the same validation as
+/// `TextAlternativeCursor::advance_to`, recording where a cursor resumes at
+/// each of the ascending `splits`.
 pub(super) fn text_seek_checkpoints(
     lexicon: &Lexicon,
     postings: &[u8],
     positions: &PositionIndex,
     documents: u32,
-    split: u32,
+    splits: &[u32],
     min_postings: u32,
-) -> Result<HashMap<u32, TextSeekCheckpoint>> {
-    let mut checkpoints = HashMap::new();
+) -> Result<Vec<HashMap<u32, TextSeekCheckpoint>>> {
+    let mut checkpoints = vec![HashMap::new(); splits.len()];
     for index in 0..lexicon.count {
         let (_, entry) = lexicon.entry_at(index)?;
         if entry.text_frequency < min_postings {
@@ -174,8 +194,9 @@ pub(super) fn text_seek_checkpoints(
             previous_document: 0,
             decoded: 0,
         };
+        let mut next_split = 0;
         let mut cursor = 0;
-        while cursor < bytes.len() {
+        while cursor < bytes.len() && next_split < splits.len() {
             let delta = read_varint(bytes, &mut cursor, bytes.len())?;
             if checkpoint.decoded > 0 && delta == 0 {
                 return Err(Error::Corrupt(
@@ -191,8 +212,9 @@ pub(super) fn text_seek_checkpoints(
                     "text posting document is out of bounds".to_string(),
                 ));
             }
-            if document >= split {
-                break;
+            while next_split < splits.len() && document >= splits[next_split] {
+                checkpoints[next_split].insert(entry.term, checkpoint);
+                next_split += 1;
             }
             read_varint(bytes, &mut cursor, bytes.len())?;
             position_cursor = position_cursor.and_then(|mut position| {
@@ -215,7 +237,10 @@ pub(super) fn text_seek_checkpoints(
                 ));
             }
         }
-        checkpoints.insert(entry.term, checkpoint);
+        // Splits past the list's last posting resume after all of it.
+        for split_checkpoints in &mut checkpoints[next_split..] {
+            split_checkpoints.insert(entry.term, checkpoint);
+        }
     }
     Ok(checkpoints)
 }
@@ -254,14 +279,38 @@ impl RawSearchEngine {
         let Some(partition) = self.inner.partition.get().and_then(Option::as_ref) else {
             return Ok(vec![scan(0..documents)?]);
         };
-        let split = partition.split;
-        let (head, tail) = std::thread::scope(|scope| {
-            let tail = scope.spawn(|| scan(split..documents));
-            let head = scan(0..split);
-            (head, tail.join())
-        });
-        let tail = tail.map_err(|_| Error::Corrupt("partitioned search panicked".to_string()))?;
-        Ok(vec![head?, tail?])
+        let starts = std::iter::once(0).chain(partition.splits.iter().copied());
+        let ends = partition
+            .splits
+            .iter()
+            .copied()
+            .chain(std::iter::once(documents));
+        let ranges = starts
+            .zip(ends)
+            .map(|(start, end)| start..end)
+            .collect::<Vec<_>>();
+        let (first, rest) = ranges
+            .split_first()
+            .ok_or_else(|| Error::Corrupt("document partition is empty".to_string()))?;
+        std::thread::scope(|scope| {
+            let spawned = rest
+                .iter()
+                .map(|range| {
+                    let scan = &scan;
+                    scope.spawn(move || scan(range.clone()))
+                })
+                .collect::<Vec<_>>();
+            let mut results = Vec::with_capacity(ranges.len());
+            results.push(scan(first.clone()));
+            for handle in spawned {
+                results.push(
+                    handle
+                        .join()
+                        .map_err(|_| Error::Corrupt("partitioned search panicked".to_string()))?,
+                );
+            }
+            results.into_iter().collect()
+        })
     }
 
     /// Checkpoints that let a scan starting at `start` skip decoding.
@@ -273,7 +322,9 @@ impl RawSearchEngine {
             .partition
             .get()
             .and_then(Option::as_ref)
-            .filter(|partition| start > 0 && partition.split == start)
-            .map(|partition| &partition.text_checkpoints)
+            .and_then(|partition| {
+                let index = partition.splits.binary_search(&start).ok()?;
+                partition.text_checkpoints.get(index)
+            })
     }
 }
