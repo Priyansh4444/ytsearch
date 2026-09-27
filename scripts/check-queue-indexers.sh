@@ -5,9 +5,7 @@ set -eu
 # machine is healthy while the queue is idle; Cloudflare starts it on approval.
 
 APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-raw-production}"
-RAW_READER_APP="${RAW_READER_APP:-ytsearch-raw-production}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-EXPECTED_RAW_SEARCH_API_URL="${EXPECTED_RAW_SEARCH_API_URL:-http://${RAW_READER_APP}.internal:8108}"
 EXPECTED_CREATOR_LIST_FILE="${EXPECTED_CREATOR_LIST_FILE:-$SCRIPT_DIR/indexed-channels.txt}"
 EXPECTED_ENTRYPOINT_FILE="${EXPECTED_ENTRYPOINT_FILE:-$SCRIPT_DIR/cloud-index-queue-entrypoint.sh}"
 REQUIRED_STATES="${REQUIRED_QUEUE_WORKER_STATES:-}"
@@ -16,6 +14,9 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required." >&2
   exit 1
 fi
+RAW_READER_APP="$(jq -er '.resources.raw_reader.app' "$SCRIPT_DIR/../config/fly-production-resources.json")"
+RAW_READER_MACHINE_ID="$(jq -er '.resources.raw_reader.machine_id' "$SCRIPT_DIR/../config/fly-production-resources.json")"
+EXPECTED_RAW_SEARCH_API_URL="http://${RAW_READER_MACHINE_ID}.vm.${RAW_READER_APP}.internal:8108"
 
 if [ -z "${MACHINES_JSON_FILE:-}" ] && ! command -v flyctl >/dev/null 2>&1; then
   echo "flyctl is required when MACHINES_JSON_FILE is not provided." >&2
@@ -128,14 +129,28 @@ verify_embedded_file() {
 verify_embedded_file /usr/local/bin/cloud-index-queue "$EXPECTED_ENTRYPOINT_FILE"
 verify_embedded_file /tmp/daily-indexed-channels.txt "$EXPECTED_CREATOR_LIST_FILE"
 
+if [ "${QUEUE_READER_CHECK_MODE:-required}" = "deferred" ]; then
+  if [ "$REQUIRED_STATES" != "created,stopped" ]; then
+    echo "Reader readiness may be deferred only for a stopped worker stage." >&2
+    exit 1
+  fi
+  echo "queue_reader_check=deferred worker_stage_only=1"
+  exit 0
+fi
+if [ "${QUEUE_READER_CHECK_MODE:-required}" != "required" ]; then
+  echo "QUEUE_READER_CHECK_MODE must be required or deferred." >&2
+  exit 1
+fi
+
 if [ -n "${RAW_READER_MACHINES_JSON_FILE:-}" ]; then
   reader_machines="$(cat "$RAW_READER_MACHINES_JSON_FILE")"
 else
   reader_machines="$(flyctl machine list --app "$RAW_READER_APP" --json)"
 fi
-if ! printf '%s' "$reader_machines" | jq -e '
+if ! printf '%s' "$reader_machines" | jq -e --arg machine_id "$RAW_READER_MACHINE_ID" '
   [.[] | select(.state == "started")] as $started |
   ($started | length) == 1 and
+  $started[0].id == $machine_id and
   $started[0].config.env.RAW_SEARCH_BIND == "[::]:8108" and
   ([$started[0].config.services[]? |
     select(.internal_port == 8108 and .protocol == "tcp")] | length) == 1

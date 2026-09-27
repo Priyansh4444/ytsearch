@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "kind": "raw-queue-worker-stopped-stage",
+  "observed_utc_date": "2026-09-25",
+  "machine_id": "8e426df7e305e8",
+  "instance_id": "01M3B26QWMHTW3HJPQDF820RMH",
+  "volume_id": "vol_4m3p79pqxz2ngl1v",
+  "state": "stopped",
+  "source_commit": "b4cbd4b",
+  "image": "registry.fly.io/ytsearch-indexer-raw-production:raw-indexer-87ba9115c388-c8f632671799@sha256:d6c340f5abada14dc6c134e029a27c854531a4c096a31cfdd189a83dbf39ae33",
+  "raw_search_api_url": "http://d89303da029328.vm.ytsearch-raw-production.internal:8108",
+  "daily_update_enabled": "1",
+  "daily_update_interval_seconds": "86400",
+  "pending_marker": "/var/lib/ytsearch/raw-publication.pending",
+  "embedded_files": {
+    "/usr/local/bin/cloud-index-queue": {
+      "sha256": "4196c21fa5fe26b3aefc543b5061d631b4c748b131f2048a42153abf28293d09",
+      "matches_repository": true
+    },
+    "/tmp/daily-indexed-channels.txt": {
+      "sha256": "193d4bbd4824fe66cf728bf880795ca732fdf15ef1722d800d0ebced708b1243",
+      "matches_repository": true
+    }
+  },
+  "stopped_stage_checker_passed": true,
+  "full_checker_passed": false,
+  "full_checker_failure": "started Raw reader still binds 0.0.0.0:8108; private IPv6 readiness not proven",
+  "daily_indexing_observed": false,
+  "pending_publication_resolved": false,
+  "pending_marker_last_read_before_stop": "1787984338",
+  "pending_marker_not_manually_modified": true,
+  "pending_marker_current_contents_verified_after_stage": false,
+  "source_commit_full": "b4cbd4b903ba87f7110b57ae5b61f9146212082d"
+}

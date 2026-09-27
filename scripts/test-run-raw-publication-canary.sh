@@ -24,7 +24,7 @@ jq -n --arg source "$source_commit" --arg base "$base_digest" \
         RAW_SEARCH_BASE_CHUNKS_GZIP:"/data/source/youtube_transcript_chunks.jsonl.gz",
         RAW_SEARCH_BIND:"[::]:8108",RAW_SEARCH_INDEX_PATH:"/data/index",
         RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
-        RAW_SEARCH_STATE_DIRECTORY:"/data/mutable",RUST_LOG:"youtube_raw_search=info"
+        RAW_SEARCH_STATE_DIRECTORY:("/data/mutable/trials/" + $source[0:12]),RUST_LOG:"youtube_raw_search=info"
       },
       init:{swap_size_mb:512},guest:{cpu_kind:"shared",cpus:2,memory_mb:2048},
       metadata:{lifecycle:"temporary-canary",source_commit:$source,base_image_digest:$base},
@@ -61,6 +61,15 @@ jq -n --arg source "$source_commit" --arg base "$base_digest" \
       restart:{policy:"no"},dns:{skip_registration:true},services:[],checks:{},files:[]
     }
   }]' > "$tmp/builder-list.json"
+jq '. += [{
+  id:"12121212121212",state:"started",
+  config:{env:{
+    YTSEARCH_MACHINE_ROLE:"queue-indexer",
+    QUEUE_TARGET_BACKEND:"raw",
+    RAW_SEARCH_API_URL:"http://10101010101010.vm.ytsearch-raw-production.internal:8108"
+  }}
+}]' "$tmp/builder-list.json" > "$tmp/builder-list.next.json"
+mv "$tmp/builder-list.next.json" "$tmp/builder-list.json"
 
 cat > "$tmp/bin/flyctl" <<'SH'
 #!/usr/bin/env bash
@@ -355,6 +364,20 @@ fi
 [[ "$(grep -c '^protocol$' "$tmp/components.log")" == 1 ]]
 [[ "$(grep -c '^benchmark:strict$' "$tmp/components.log")" == 1 ]]
 [[ "$(grep -c '^publisher$' "$tmp/components.log")" == 1 ]]
+
+reset_state
+jq '.[1].config.env.RAW_SEARCH_API_URL = "http://ytsearch-raw-production.internal:8108"' \
+  "$tmp/builder-list.json" > "$tmp/builder-list.next.json"
+mv "$tmp/builder-list.next.json" "$tmp/builder-list.json"
+if env "${common_env[@]}" CANARY_RUN_ID=app-wide-worker OUTPUT_DIR="$tmp/app-wide-worker" \
+  "$runner" > "$tmp/app-wide-worker.stdout" 2>&1; then
+  printf 'canary must reject an app-wide queue worker target before starting\n' >&2
+  exit 1
+fi
+[[ "$(grep -c 'POST .*/start$' "$tmp/curl.log" || :)" == 0 ]]
+jq '.[1].config.env.RAW_SEARCH_API_URL = "http://10101010101010.vm.ytsearch-raw-production.internal:8108"' \
+  "$tmp/builder-list.json" > "$tmp/builder-list.next.json"
+mv "$tmp/builder-list.next.json" "$tmp/builder-list.json"
 
 reset_state
 env "${common_env[@]}" RAW_CANARY_MIGRATION_MODE=record-old-generation \

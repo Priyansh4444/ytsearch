@@ -33,7 +33,9 @@ if [[ "${0##*/}" == curl ]]; then
   done
   [[ -n "$output" && -n "$auth_header" && -n "$url" ]]
   [[ "$(stat -c '%a' "$auth_header")" == 600 ]]
-  grep -Fx 'Authorization: Bearer test-secret-token' "$auth_header" >/dev/null
+  if ! grep -Fx 'Authorization: Bearer test-secret-token' "$auth_header" >/dev/null; then
+    grep -Fx 'Authorization: Bearer test-refreshed-token' "$auth_header" >/dev/null
+  fi
   if [[ "$url" != */lease || "$method" == DELETE ]]; then
     [[ -n "$lease_header" && "$(stat -c '%a' "$lease_header")" == 600 ]]
     grep -Fx 'fly-machine-lease-nonce: test-lease-nonce' "$lease_header" >/dev/null
@@ -146,6 +148,7 @@ if [[ "${0##*/}" == flyctl ]]; then
   printf '%s\n' "$*" >> "$FAKE_FLY_LOG"
   case "$*" in
     'secrets sync --stage --app test-app') exit 0 ;;
+    'auth token') printf 'test-refreshed-token\n'; exit 0 ;;
     *) printf 'unexpected fake flyctl command: %s\n' "$*" >&2; exit 93 ;;
   esac
 fi
@@ -348,6 +351,41 @@ grep -Fx 'Authorization: Bearer test-secret-token' \
 FAKE_MODE=normal
 export FAKE_MODE
 fly_machine_session_release "$FAKE_SESSION_DIRECTORY"
+
+new_session expired-auth-refresh
+acquire_session
+FAKE_MODE=expired-auth
+export FAKE_MODE
+export FLY_MACHINE_SESSION_ALLOW_CLI_TOKEN_REFRESH=1
+fly_machine_session_get "$FAKE_SESSION_DIRECTORY" \
+  "$temporary_directory/refreshed-auth-get.json"
+grep -Fx 'Authorization: Bearer test-refreshed-token' \
+  "$FAKE_SESSION_DIRECTORY/auth.header" >/dev/null
+[[ "$(grep -c 'GET .*machines/0123456789abcd' "$FAKE_CURL_LOG")" == 2 ]]
+[[ "$(grep -c '^auth token$' "$FAKE_FLY_LOG")" == 1 ]]
+jq '.state = "started"' "$FAKE_MACHINE_STATE" > "$FAKE_MACHINE_STATE.next"
+mv "$FAKE_MACHINE_STATE.next" "$FAKE_MACHINE_STATE"
+fly_machine_session_stop "$FAKE_SESSION_DIRECTORY"
+fly_machine_session_release "$FAKE_SESSION_DIRECTORY"
+unset FLY_MACHINE_SESSION_ALLOW_CLI_TOKEN_REFRESH
+
+new_session expired-auth-update-refresh
+acquire_session
+FAKE_MODE=expired-auth-update
+export FAKE_MODE
+export FLY_MACHINE_SESSION_ALLOW_CLI_TOKEN_REFRESH=1
+if fly_machine_session_update "$FAKE_SESSION_DIRECTORY" "$temporary_directory/config.json" \
+  104052994 >/dev/null 2>&1; then
+  printf 'a rejected mutation must not replay after credential refresh\n' >&2
+  exit 1
+fi
+[[ "$(grep -c 'POST .*machines/0123456789abcd$' "$FAKE_CURL_LOG")" == 1 ]]
+grep -Fx 'Authorization: Bearer test-refreshed-token' \
+  "$FAKE_SESSION_DIRECTORY/auth.header" >/dev/null
+FAKE_MODE=normal
+export FAKE_MODE
+fly_machine_session_release "$FAKE_SESSION_DIRECTORY"
+unset FLY_MACHINE_SESSION_ALLOW_CLI_TOKEN_REFRESH
 
 new_session incomplete-get
 acquire_session

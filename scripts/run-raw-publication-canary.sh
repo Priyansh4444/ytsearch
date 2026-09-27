@@ -335,7 +335,7 @@ canary_is_safe() {
     .config.env.RAW_SEARCH_BIND == "[::]:8108" and
     .config.env.RAW_SEARCH_INDEX_PATH == "/data/index" and
     .config.env.RAW_SEARCH_REQUIRE_FILE_SECRETS == "1" and
-    .config.env.RAW_SEARCH_STATE_DIRECTORY == "/data/mutable" and
+    .config.env.RAW_SEARCH_STATE_DIRECTORY == ("/data/mutable/trials/" + $source[0:12]) and
     .config.env.RUST_LOG == "youtube_raw_search=info" and
     ((.config.env | keys | sort) == [
       "RAW_SEARCH_BASE_CHANNELS_GZIP",
@@ -430,6 +430,28 @@ if [[ "$builder_resolved_image" != "$EXPECTED_RAW_BUILDER_IMAGE" ]]; then
 fi
 if [[ "$(jq -r '.config.metadata.base_image_digest // ""' <<<"$builder")" != "$base_image_digest" ]]; then
   printf 'reader and builder are not bound to the same corpus image digest\n' >&2
+  exit 1
+fi
+
+# A started canary was observed through the app-wide .internal name by the
+# live queue worker despite dns.skip_registration. Require the production
+# worker to target the exact production reader before starting the canary.
+queue_app="$(jq -er '.resources.raw_queue_worker.app' "$FLY_PRODUCTION_INVENTORY_RESOLVED_PATH")"
+queue_machine_id="$(jq -er '.resources.raw_queue_worker.machine_id' "$FLY_PRODUCTION_INVENTORY_RESOLVED_PATH")"
+production_reader_id="$(jq -er '.resources.raw_reader.machine_id' "$FLY_PRODUCTION_INVENTORY_RESOLVED_PATH")"
+production_reader_app="$(jq -er '.resources.raw_reader.app' "$FLY_PRODUCTION_INVENTORY_RESOLVED_PATH")"
+expected_queue_target="http://${production_reader_id}.vm.${production_reader_app}.internal:8108"
+queue_machine="$(flyctl machine list --app "$queue_app" --json |
+  jq -ce --arg id "$queue_machine_id" '
+    [.[] | select(.id == $id)] |
+    if length == 1 then .[0] else error("exact Raw queue worker not found") end
+  ')"
+if ! jq -e --arg target "$expected_queue_target" '
+  .config.env.YTSEARCH_MACHINE_ROLE == "queue-indexer" and
+  .config.env.QUEUE_TARGET_BACKEND == "raw" and
+  .config.env.RAW_SEARCH_API_URL == $target
+' <<<"$queue_machine" >/dev/null; then
+  printf 'refusing canary start while the Raw queue worker can route to a canary\n' >&2
   exit 1
 fi
 

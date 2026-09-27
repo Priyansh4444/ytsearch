@@ -4,6 +4,16 @@ set -eu
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
 
+raw_reader_target="$(jq -er '
+  .resources.raw_reader as $reader |
+  select($reader.machine_id | test("^[0-9a-f]{14}$")) |
+  "http://" + $reader.machine_id + ".vm." + $reader.app + ".internal:8108"
+' "$(dirname "$0")/../config/fly-production-resources.json")"
+if [ -n "${RAW_SEARCH_API_URL:-}" ] && [ "$RAW_SEARCH_API_URL" != "$raw_reader_target" ]; then
+  echo "RAW_SEARCH_API_URL must target the exact production reader Machine." >&2
+  exit 1
+fi
+
 APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-raw-production}"
 FLY_REGION="${FLY_REGION:-sjc}"
 QUEUE_TARGET_BACKEND="${QUEUE_TARGET_BACKEND:-}"
@@ -162,7 +172,7 @@ exec flyctl machine run \
   --env "YTSEARCH_MACHINE_ROLE=queue-indexer" \
   --env "BACKENDS=$BACKENDS" \
   --env "QUEUE_TARGET_BACKEND=$QUEUE_TARGET_BACKEND" \
-  --env "RAW_SEARCH_API_URL=${RAW_SEARCH_API_URL:-http://ytsearch-raw-production.internal:8108}" \
+  --env "RAW_SEARCH_API_URL=$raw_reader_target" \
   --env "RAW_PUBLICATION_TIMEOUT_SECONDS=${RAW_PUBLICATION_TIMEOUT_SECONDS:-3600}" \
   --env "RAW_PUBLICATION_WORK_DIRECTORY=${RAW_PUBLICATION_WORK_DIRECTORY:-$INDEXER_DATA_DIRECTORY/raw-generation-work}" \
   --env "RAW_PUBLICATION_MIN_FREE_BYTES=${RAW_PUBLICATION_MIN_FREE_BYTES:-8000000000}" \

@@ -4,7 +4,6 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPOSITORY_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-raw-production}"
-RAW_SEARCH_URL="${RAW_SEARCH_API_URL:-http://ytsearch-raw-production.internal:8108}"
 CREATOR_LIST_FILE="${CREATOR_LIST_FILE:-$SCRIPT_DIR/indexed-channels.txt}"
 ENTRYPOINT_FILE="${ENTRYPOINT_FILE:-$SCRIPT_DIR/cloud-index-queue-entrypoint.sh}"
 APPLY="${APPLY_QUEUE_WORKER_RECONCILIATION:-0}"
@@ -16,6 +15,15 @@ for command in jq base64 git; do
     exit 1
   }
 done
+RAW_SEARCH_URL="$(jq -er '
+  .resources.raw_reader as $reader |
+  select($reader.machine_id | test("^[0-9a-f]{14}$")) |
+  "http://" + $reader.machine_id + ".vm." + $reader.app + ".internal:8108"
+' "$REPOSITORY_ROOT/config/fly-production-resources.json")"
+if [ -n "${RAW_SEARCH_API_URL:-}" ] && [ "$RAW_SEARCH_API_URL" != "$RAW_SEARCH_URL" ]; then
+  echo "RAW_SEARCH_API_URL must target the exact production reader Machine." >&2
+  exit 1
+fi
 if [ -z "${MACHINES_JSON_FILE:-}" ]; then
   command -v flyctl >/dev/null 2>&1 || {
     echo "flyctl is required when MACHINES_JSON_FILE is not provided." >&2
@@ -421,7 +429,8 @@ if [ "$START_AFTER_RECONCILIATION" = "1" ]; then
     exit 1
   fi
 else
-  REQUIRED_QUEUE_WORKER_STATES=created,stopped "$SCRIPT_DIR/check-queue-indexers.sh"
+  QUEUE_READER_CHECK_MODE=deferred REQUIRED_QUEUE_WORKER_STATES=created,stopped \
+    "$SCRIPT_DIR/check-queue-indexers.sh"
 fi
 
 reconciliation_succeeded=1

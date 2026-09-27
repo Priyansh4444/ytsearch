@@ -176,12 +176,15 @@ jq -e --arg machine "$machine_id" '.apply == false and .machine == $machine' \
 
 env "${common_env[@]}" APPLY_RAW_READER_CANARY=stage-exact-isolated-canary \
   "$SCRIPT_DIR/stage-raw-reader-canary.sh" > "$tmp/applied.json"
-jq -e --arg image "$image@sha256:$resolved_digest" '
+jq -e --arg image "$image@sha256:$resolved_digest" \
+  --arg state_directory "/data/mutable/trials/${source_commit:0:12}" '
   .kind == "raw-reader-canary" and .resolved_image == $image and
-  .state == "stopped" and .isolated == true and .memory_mb == 2048
+  .state == "stopped" and .isolated == true and .memory_mb == 2048 and
+  .state_directory == $state_directory
 ' "$tmp/applied.json" >/dev/null
-jq -e '
+jq -e --arg state_directory "/data/mutable/trials/${source_commit:0:12}" '
   .[0].state == "stopped" and
+  .[0].config.env.RAW_SEARCH_STATE_DIRECTORY == $state_directory and
   (.[0].config.env | has("STALE_QUEUE_MODE") | not) and
   (.[0].config.init | has("entrypoint") | not) and
   (.[0].config.init | has("cmd") | not) and

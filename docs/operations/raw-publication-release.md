@@ -89,6 +89,13 @@ APPLY_RAW_PUBLICATION_BUILDER=configure-exact-inert-builder \
 ```
 
 Staging never starts either Machine.
+The reader uses `/data/mutable/trials/<source-commit-prefix>` as its state
+directory. A new source commit opens the immutable base index until that trial
+publishes a generation. This keeps the earlier schema-8 canary state and its
+rollback artifact outside the trial. Before the trial, verify the exact base
+image's `/data/index/manifest.json` schema and counts; the current immutable
+base digest has schema 6, 8,142,650 documents, 32,822 videos, and 61 channels.
+Do not interpret a successful base-generation canary as schema-9 validation.
 Builder reconciliation replaces the obsolete repair configuration as one exact
 Machine config; stale queue environment variables, embedded scripts, file
 mappings, services, and checks are not carried into the publication role. The
@@ -116,6 +123,41 @@ The gate permits up to 300 one-second health probes for a cold reader start.
 This is an integrity-check allowance, not a search-latency allowance: the
 2 GB canary took 193 seconds to fully checksum and open active generation 2145
 on August 31, 2026. Search cases still fail closed above 200 ms.
+
+When the operator uses a short-lived token from `flyctl auth token` as
+`FLY_API_TOKEN`, set `FLY_MACHINE_SESSION_ALLOW_CLI_TOKEN_REFRESH=1` for the
+gate. The Machine session helper then obtains a fresh CLI token after an
+authentication rejection. It only replays reads; a rejected mutation still
+requires an authoritative state check. A scoped token supplied directly in
+`FLY_API_TOKEN` keeps the default fail-closed behavior.
+
+The September 25 canary at source `4444ee366532` opened the immutable schema-6
+base and passed the authenticated publication protocol check, but failed before
+starting the builder. Its 165-request baseline had zero errors, p95 462.734 ms,
+and maximum 675.084 ms. Eleven existing benchmark cases exceeded 250 ms;
+`and the` reached 675.084 ms and `the` reached 532.820 ms. See
+`docs/experiments/search/schema9/P00/canary-baseline-2026-09-25.json` for the
+source-bound samples. The canary was stopped and its lease released after the
+CLI token expired during cleanup. This is a failed performance gate, not
+permission to switch the production reader.
+
+The same trial exposed an isolation failure: while the canary was started, the
+live queue worker using `ytsearch-raw-production.internal` downloaded the
+canary's synthetic protocol operation at sequence 1 into its own work volume.
+The worker rejected a generation compatibility mismatch and did not publish
+it. The source-bound receipt records the exact operation and copied work
+database hash. `dns.skip_registration` and an empty service list did not keep
+the app-wide name safe for this worker in the observed run. The queue target
+must be the exact production Machine name,
+`d89303da029328.vm.ytsearch-raw-production.internal`, and the canary runner
+now checks this before starting. Reconcile and verify the live worker first;
+keep the canary stopped until then. [Fly's private DNS documentation](https://fly.io/docs/networking/private-networking/)
+describes the exact Machine name as a way to address one Machine.
+`scripts/reconcile-raw-queue-worker.sh` can stage the stopped worker with this
+target while the production reader still has its IPv4 bind. Its stopped-stage
+check reports `queue_reader_check=deferred worker_stage_only=1`; this is only a
+configuration check. Start the worker and run the ordinary full queue checker
+after the production reader serves private IPv6 and publication is safe.
 
 ### Broad-query memory gate
 
@@ -179,8 +221,9 @@ The six-hour reader lease is a worst-case mutual-exclusion and recovery
 envelope derived from both complete builder runs, restarts, health checks, and
 cleanup. It does not keep a stopped Machine running for six hours; normal
 cleanup stops the Machines and releases both leases immediately.
-Machine API requests refresh the persisted `flyctl` login once after an HTTP
-401 or 403. Safe reads retry once. Mutations return the original rejection so
+With `FLY_MACHINE_SESSION_ALLOW_CLI_TOKEN_REFRESH=1`, Machine API requests
+refresh the persisted `flyctl` login once after an HTTP 401 or 403. Safe reads
+retry once. Mutations return the original rejection so
 their caller must resolve Machine state before deciding whether to issue a new
 request. This keeps cleanup viable when the original bearer expires during a
 long cold start without blindly replaying a mutation.

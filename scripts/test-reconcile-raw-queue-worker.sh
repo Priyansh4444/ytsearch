@@ -9,7 +9,7 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 RAW_READER_MACHINES_JSON_FILE="$tmp/reader-machines.json"
 export RAW_READER_MACHINES_JSON_FILE
 jq -n '[{
-  id:"reader-1",
+    id:"d89303da029328",
   state:"started",
   config:{
     env:{RAW_SEARCH_BIND:"[::]:8108"},
@@ -55,7 +55,7 @@ INDEXER_IMAGE="registry.invalid/current:two" \
 
 jq -e '
   .image == "registry.invalid/current:two"
-  and .env.RAW_SEARCH_API_URL == "http://ytsearch-raw-production.internal:8108"
+  and .env.RAW_SEARCH_API_URL == "http://d89303da029328.vm.ytsearch-raw-production.internal:8108"
   and .env.QUEUE_ONE_REQUEST_PER_PASS == "0"
   and .env.LIMIT == "1000"
   and .env.DAILY_UPDATE_ENABLED == "1"
@@ -91,6 +91,15 @@ cmp -s "$SCRIPT_DIR/cloud-index-queue-entrypoint.sh" "$tmp/entrypoint"
 jq -r 'first(.files[] | select(.guest_path == "/tmp/daily-indexed-channels.txt")) | .raw_value' \
   "$tmp/config.json" | base64 -d > "$tmp/creators"
 cmp -s "$SCRIPT_DIR/indexed-channels.txt" "$tmp/creators"
+
+if RAW_SEARCH_API_URL="http://ytsearch-raw-production.internal:8108" \
+  MACHINES_JSON_FILE="$tmp/machines.json" \
+  RECONCILED_CONFIG_FILE="$tmp/app-wide-config.json" \
+  INDEXER_IMAGE="registry.invalid/current:two" \
+  "$SCRIPT_DIR/reconcile-raw-queue-worker.sh" >/dev/null 2>&1; then
+  echo "reconciliation must reject an app-wide Raw reader URL" >&2
+  exit 1
+fi
 
 jq '.[0].config.env.YTSEARCH_MACHINE_ROLE = "queue-indexer-migration-hold"' \
   "$tmp/machines.json" > "$tmp/held.json"

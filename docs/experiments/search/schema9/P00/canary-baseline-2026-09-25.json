@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "kind": "raw-reader-canary-failed-baseline",
+  "observed_utc_date": "2026-09-25",
+  "source_commit": "4444ee3665320a670dc86a79777991bc107609e1",
+  "base_image_digest": "sha256:09b2fc639c63cbca74f05da137c455cf2eb5d32f0a256e12d1e5b711dca66dcd",
+  "reader_image_digest": "sha256:865cfaee906ced537869587662d2e0bd6387148a184bd9bed1079b8860443b3c",
+  "reader_machine": "847314c22d52e8",
+  "builder_machine": "080d297f070d08",
+  "opened_base_schema": 6,
+  "opened_base_documents": 8142650,
+  "opened_base_videos": 32822,
+  "benchmark_contract": "scripts/benchmark-search-cases.tsv",
+  "required_max_ms_exclusive": 200,
+  "baseline": {
+    "phase": "baseline",
+    "samples": 165,
+    "errors": 0,
+    "contract_mismatches": 0,
+    "p50_ms": 102.589,
+    "p95_ms": 462.734,
+    "p99_ms": 661.0939999999999,
+    "max_ms": 675.0840000000001
+  },
+  "source_jsonl_sha256": "b094610bab797a4c990fa9e67243d1deade0de2ea0e649744b37714714bf6dbf",
+  "cases_above_250_ms": [
+    {
+      "case": "and_the_spaced",
+      "query": "and the",
+      "creator": null,
+      "samples_ms": [
+        655.843,
+        661.094,
+        675.084
+      ],
+      "max_ms": 675.084
+    },
+    {
+      "case": "the_common",
+      "query": "the",
+      "creator": null,
+      "samples_ms": [
+        532.82,
+        509.266,
+        513.924
+      ],
+      "max_ms": 532.82
+    },
+    {
+      "case": "this_that_spaced",
+      "query": "this that",
+      "creator": null,
+      "samples_ms": [
+        258.375,
+        381.922,
+        483.822
+      ],
+      "max_ms": 483.822
+    },
+    {
+      "case": "cursor_typo_scoped",
+      "query": "curspr",
+      "creator": "@cursor_ai",
+      "samples_ms": [
+        104.974,
+        482.744,
+        99.532
+      ],
+      "max_ms": 482.744
+    },
+    {
+      "case": "in_the_spaced",
+      "query": "in the",
+      "creator": null,
+      "samples_ms": [
+        462.734,
+        449.539,
+        441.51
+      ],
+      "max_ms": 462.734
+    },
+    {
+      "case": "for_the_spaced",
+      "query": "for the",
+      "creator": null,
+      "samples_ms": [
+        376.689,
+        353.039,
+        347.232
+      ],
+      "max_ms": 376.689
+    },
+    {
+      "case": "this_is_the_common",
+      "query": "this is the",
+      "creator": null,
+      "samples_ms": [
+        368.236,
+        366.776,
+        371.954
+      ],
+      "max_ms": 371.954
+    },
+    {
+      "case": "you_know_spaced",
+      "query": "you know",
+      "creator": null,
+      "samples_ms": [
+        312.309,
+        222.196,
+        233.194
+      ],
+      "max_ms": 312.309
+    },
+    {
+      "case": "this_is_the_end",
+      "query": "this is the end",
+      "creator": null,
+      "samples_ms": [
+        274.613,
+        267.078,
+        283.179
+      ],
+      "max_ms": 283.179
+    },
+    {
+      "case": "can_you_spaced",
+      "query": "can you",
+      "creator": null,
+      "samples_ms": [
+        241.884,
+        254.322,
+        268.312
+      ],
+      "max_ms": 268.312
+    },
+    {
+      "case": "the_beginning_of_hte_end",
+      "query": "the beginning of hte end",
+      "creator": null,
+      "samples_ms": [
+        248.729,
+        257.435,
+        239.747
+      ],
+      "max_ms": 257.435
+    }
+  ],
+  "case_count_above_250_ms": 11,
+  "publication_attempted": false,
+  "production_reader_changed": false,
+  "canary_final_state": "stopped",
+  "observations": [
+    "Private IPv6 listener became ready on [::]:8108.",
+    "Authenticated publication protocol check completed before the baseline.",
+    "The local admin credential file was stale; the deployed reader credential was used in memory for the second run.",
+    "The Fly CLI token expired during cleanup; the exact retained lease was recovered with a fresh CLI token, and the canary was stopped and the lease released."
+  ],
+  "builder_image_digest": "sha256:76bf7042170219d8e883d3577d888d851191ac4aca5b2ce1dab8cd090cd821f5",
+  "protocol": {
+    "version": "v1",
+    "invalid_mutations_rejected": true,
+    "mutation_created": true,
+    "initial_last_sequence": 0,
+    "final_last_sequence": 1
+  },
+  "queue_worker_isolation_finding": {
+    "worker_machine": "8e426df7e305e8",
+    "configured_target": "http://ytsearch-raw-production.internal:8108",
+    "synthetic_operation_id": "protocol-channel-4444ee366532-1790297574",
+    "synthetic_operation_sequence": 1,
+    "work_database_sha256": "485d47970af4c60d8100be69b31feb2bd60f6ba03441665d1c1189fc813fed32",
+    "work_database_tables": {
+      "operations": 1,
+      "channel_mutations": 1,
+      "video_mutations": 0
+    },
+    "observed_worker_log_utc": "2026-09-25T00:57:58Z",
+    "worker_log_event": "Downloading Raw mutation snapshot through sequence 1",
+    "interpretation": "The worker consumed the canary protocol snapshot while the canary was started. The app-wide Raw DNS target cannot be treated as canary isolation; exact production Machine DNS pinning is required before another canary run.",
+    "production_publication_observed": false
+  }
+}
