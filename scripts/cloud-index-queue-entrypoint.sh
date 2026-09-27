@@ -20,6 +20,8 @@ QUEUE_POLL_INTERVAL_SECONDS="${QUEUE_POLL_INTERVAL_SECONDS:-60}"
 QUEUE_LOOP="${QUEUE_LOOP:-0}"
 DAILY_UPDATE_ENABLED="${DAILY_UPDATE_ENABLED:-0}"
 DAILY_UPDATE_INTERVAL_SECONDS="${DAILY_UPDATE_INTERVAL_SECONDS:-86400}"
+# A failed daily pass is retried after this delay instead of on the next poll.
+DAILY_UPDATE_FAILURE_RETRY_SECONDS="${DAILY_UPDATE_FAILURE_RETRY_SECONDS:-3600}"
 DAILY_UPDATE_INITIAL_DELAY_SECONDS="${DAILY_UPDATE_INITIAL_DELAY_SECONDS:-86400}"
 EXISTING_TAIL="${EXISTING_TAIL:-0}"
 ACK_FAILED_REQUESTS="${ACK_FAILED_REQUESTS:-0}"
@@ -92,6 +94,12 @@ validate_update_schedule() {
   case "$DAILY_UPDATE_INTERVAL_SECONDS" in
     ''|*[!0-9]*)
       echo "cloud-queue-indexer: DAILY_UPDATE_INTERVAL_SECONDS must be an integer" >&2
+      exit 1
+      ;;
+  esac
+  case "$DAILY_UPDATE_FAILURE_RETRY_SECONDS" in
+    ''|*[!0-9]*)
+      echo "cloud-queue-indexer: DAILY_UPDATE_FAILURE_RETRY_SECONDS must be an integer" >&2
       exit 1
       ;;
   esac
@@ -684,7 +692,14 @@ index_daily_update_for_backends() {
         log_queue_event error daily_update_marker_failed "" "" "" "raw" "failed"
         return 1
       fi
-      if ! index_catalog_backend raw raw "$raw_jobs"; then
+      catalog_status=0
+      index_catalog_backend raw raw "$raw_jobs" || catalog_status=$?
+      if [ "$catalog_status" -eq 75 ]; then
+        # Every creator was attempted; only per-video gaps with a scheduled
+        # retry remain (for example captions not yet published on a new
+        # upload). The failure ledger retries them on later passes.
+        log_queue_event warn daily_update_backend_gaps "" "" "" "raw" "completed_with_gaps"
+      elif [ "$catalog_status" -ne 0 ]; then
         failed=1
         log_queue_event error daily_update_backend_failed "" "" "" "raw" "failed"
       fi
@@ -858,9 +873,10 @@ process_queue_once() {
           set_queue_status "$request_id" queued || true
           log_queue_event error index_request_failed_ack_error "$request_id" "$handle" "$source_backend" "$active_backends" "queued"
         fi
-      elif [ "$index_status" -eq 75 ]; then
-        # The CLI reports only retryable per-video gaps as failures. Put the
-        # request back into the runnable queue so a later pass can complete it.
+      elif [ "$index_status" -eq 75 ] || [ "$index_status" -eq 69 ]; then
+        # 75: only retryable per-video gaps remain. 69: a bot challenge or rate
+        # limit stopped the run. Either way put the request back into the
+        # runnable queue so a later pass can complete it.
         unresolved=$((unresolved + 1))
         remember_queue_retry "$request_id" "$TRANSCRIPT_FAILURE_RETRY_SECONDS"
         set_queue_status "$request_id" queued || true
@@ -961,6 +977,8 @@ if [ "$QUEUE_LOOP" = "1" ]; then
           echo "cloud-queue-indexer: next daily update after epoch=$next_daily_update"
         else
           log_queue_event error daily_update_failed "" "" "" "$BACKENDS" "failed"
+          next_daily_update=$(( $(date +%s) + DAILY_UPDATE_FAILURE_RETRY_SECONDS ))
+          echo "cloud-queue-indexer: daily update failed; retrying after epoch=$next_daily_update"
         fi
         set_index_activity "" || true
       fi
