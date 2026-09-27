@@ -8,10 +8,10 @@ use super::{
     verified_units::VerifiedUnits,
 };
 
-const HEADER_BYTES: usize = 64;
-const DESCRIPTOR_BYTES: usize = 32;
-const DOCUMENT_WIDTHS: [u32; 6] = [8, 4, 1, 8, 4, 0];
-const VIDEO_WIDTHS: [u32; 14] = [4, 1, 4, 4, 8, 8, 8, 8, 1, 8, 4, 0, 4, 4];
+pub(super) const HEADER_BYTES: usize = 64;
+pub(super) const DESCRIPTOR_BYTES: usize = 32;
+pub(super) const DOCUMENT_WIDTHS: [u32; 6] = [8, 4, 1, 8, 4, 0];
+pub(super) const VIDEO_WIDTHS: [u32; 14] = [4, 1, 4, 4, 8, 8, 8, 8, 1, 8, 4, 0, 4, 4];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Section {
@@ -636,5 +636,36 @@ mod tests {
         assert_eq!(short.year, Some(1970));
         assert_eq!(short.views, Some(0));
         assert_eq!(short.documents, 1..2);
+    }
+
+    #[test]
+    fn audited_document_writer_round_trips_through_bounded_spine() {
+        use super::super::{document_writer::encode_documents, source_spool::SourceSpool};
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut spool = SourceSpool::create(directory.path()).unwrap();
+        for row in [
+            serde_json::json!({"id":"b","video_id":"v","youtuber_id":"c","title":"title","text":"two words","t_start_ms":20,"t_end_ms":30}),
+            serde_json::json!({"id":"a","video_id":"v","youtuber_id":"c","title":"title","text":"one","t_start_ms":0,"t_end_ms":10}),
+        ] {
+            spool.append_line(&row.to_string()).unwrap();
+        }
+        let mut source = spool.finish().unwrap().audit_videos().unwrap();
+        let encoded = encode_documents(&mut source, 7, 81).unwrap();
+        let verifier = verifier(&encoded);
+        let table = Table::open(
+            &verifier,
+            encoded.len() as u64,
+            b"YTS9DOC\0",
+            &DOCUMENT_WIDTHS,
+            2,
+            7,
+            81,
+        )
+        .unwrap();
+        assert_eq!(u32_at(table.row(0, 0, 8).unwrap(), 4).unwrap(), 0);
+        assert_eq!(u32_at(table.row(0, 1, 8).unwrap(), 4).unwrap(), 20);
+        assert_eq!(table.row(2, 0, 1).unwrap(), &[0b11]);
+        assert_eq!(table.row(2, 1, 1).unwrap(), &[0b01]);
     }
 }

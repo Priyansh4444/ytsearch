@@ -3,13 +3,10 @@
 use std::collections::BTreeMap;
 
 use super::{
-    fast_fields::utc_year,
+    fast_fields::{VIDEO_WIDTHS, utc_year},
     source_spool::{AuditedSource, VideoSource},
+    table_writer::encode_table,
 };
-
-const HEADER_BYTES: usize = 64;
-const DESCRIPTOR_BYTES: usize = 32;
-const WIDTHS: [u32; 14] = [4, 1, 4, 4, 8, 8, 8, 8, 1, 8, 4, 0, 4, 4];
 
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum VideoWriteError {
@@ -121,32 +118,15 @@ fn encode_video_rows(
     if next_document != document_count {
         return Err(VideoWriteError::Order);
     }
-    let descriptor_end = HEADER_BYTES + WIDTHS.len() * DESCRIPTOR_BYTES;
-    let mut output = vec![0_u8; descriptor_end];
-    output[..8].copy_from_slice(b"YTS9VID\0");
-    output[8..10].copy_from_slice(&9_u16.to_le_bytes());
-    output[10..12].copy_from_slice(&1_u16.to_le_bytes());
-    output[12..14].copy_from_slice(&(HEADER_BYTES as u16).to_le_bytes());
-    output[14..16].copy_from_slice(&(DESCRIPTOR_BYTES as u16).to_le_bytes());
-    output[16..24].copy_from_slice(&u64::from(row_count).to_le_bytes());
-    output[24..28].copy_from_slice(&(WIDTHS.len() as u32).to_le_bytes());
-    output[32..40].copy_from_slice(&generation.to_le_bytes());
-    output[40..48].copy_from_slice(&mutation_sequence.to_le_bytes());
-    for (index, section) in sections.iter().enumerate() {
-        let descriptor = HEADER_BYTES + index * DESCRIPTOR_BYTES;
-        let offset = u64::try_from(output.len()).map_err(|_| VideoWriteError::Size)?;
-        let length = u64::try_from(section.len()).map_err(|_| VideoWriteError::Size)?;
-        if WIDTHS[index] != 0 && length != u64::from(row_count) * u64::from(WIDTHS[index]) {
-            return Err(VideoWriteError::Size);
-        }
-        let _ = offset.checked_add(length).ok_or(VideoWriteError::Size)?;
-        output[descriptor..descriptor + 2].copy_from_slice(&((index + 1) as u16).to_le_bytes());
-        output[descriptor + 4..descriptor + 8].copy_from_slice(&WIDTHS[index].to_le_bytes());
-        output[descriptor + 8..descriptor + 16].copy_from_slice(&offset.to_le_bytes());
-        output[descriptor + 16..descriptor + 24].copy_from_slice(&length.to_le_bytes());
-        output.extend_from_slice(section);
-    }
-    Ok(output)
+    encode_table(
+        b"YTS9VID\0",
+        &VIDEO_WIDTHS,
+        sections,
+        row_count,
+        generation,
+        mutation_sequence,
+    )
+    .map_err(|_| VideoWriteError::Size)
 }
 
 #[cfg(test)]
