@@ -1,5 +1,8 @@
 # Broad single-token query index
 
+Deprecated with schema 8 on 2026-09-27; see
+[raw-schema-deprecation.md](../operations/raw-schema-deprecation.md).
+
 ## Problem
 
 The schema-7 broad path bounds retained memory but still visits every matching

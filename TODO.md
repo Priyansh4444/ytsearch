@@ -824,8 +824,11 @@ Raw can replace Typesense as the canonical search index.
   the exact shared2/2 GB canary. Two independent processes reproduced an
   11.18-second cold `fire` traversal; the identical second profile took 8 ms.
   Accept query-plan materialization and reject relying on the volume page cache.
-- [ ] Complete schema-8 broad-query materialization before another reader
-  deployment.
+- [x] Retire schema-8 broad-query materialization (2026-09-27). It was never
+  activated; publication and the CLI build stop at schema 7, and the reader
+  keeps schema-8 read support only until the retained artifact is retired.
+  See `docs/operations/raw-schema-deprecation.md`. The open items below are
+  superseded, not completed.
   - [x] Add the checked `broad-single.bin` format, six typed profiles, exact
     score bits/flags/totals, strict corruption validation, schema-aware
     publication allowlists, and schema 5-7 reader fallback.

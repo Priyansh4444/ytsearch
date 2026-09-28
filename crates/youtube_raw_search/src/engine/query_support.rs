@@ -1233,7 +1233,7 @@ pub(super) fn directory_size(path: &Path) -> Result<u64> {
 
 pub(super) fn generation_files(schema_version: u8) -> Result<&'static [&'static str]> {
     match schema_version {
-        5 | 6 => Ok(&GENERATION_FILES_SCHEMA_6),
+        6 => Ok(&GENERATION_FILES_SCHEMA_6),
         7 => Ok(&GENERATION_FILES_SCHEMA_7),
         8 => Ok(&GENERATION_FILES_SCHEMA_8),
         _ => Err(Error::Corrupt(format!(
