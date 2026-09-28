@@ -608,7 +608,6 @@ fn report_for_existing(engine: &RawSearchEngine) -> BuildReport {
         videos: engine.video_count(),
         channels: engine.channel_count(),
         terms: engine.term_count(),
-        broad_plans: 0,
         index_bytes: engine.index_size(),
         elapsed_ms: 0,
     }

@@ -11,7 +11,6 @@ mod metrics;
 use metrics::{PublicationIoMeasurement, WriterClass, record_reader, record_seek, record_writer};
 
 const DEFAULT_RECLAIM_BYTES: u64 = 8 * 1024 * 1024;
-const LARGE_SPOOL_RECLAIM_BYTES: u64 = 128 * 1024 * 1024;
 const SEQUENTIAL_RECLAIM_BYTES: u64 = 8 * 1024 * 1024;
 #[cfg(target_os = "linux")]
 const BACKGROUND_CPU_NICE: libc::c_int = 10;
@@ -83,12 +82,6 @@ impl ColdWriter {
 
     pub(crate) fn create_posting_shard(path: &Path) -> io::Result<Self> {
         Self::create_classified(path, 1024 * 1024, WriterClass::PostingShard)
-    }
-
-    /// Keeps durability semantics while amortizing barriers for a large,
-    /// disposable spool that is deleted before generation activation.
-    pub(crate) fn create_large_spool(path: &Path) -> io::Result<Self> {
-        Self::create_classified(path, LARGE_SPOOL_RECLAIM_BYTES, WriterClass::General)
     }
 
     fn create_classified(path: &Path, reclaim_bytes: u64, class: WriterClass) -> io::Result<Self> {

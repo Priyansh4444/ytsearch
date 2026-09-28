@@ -232,6 +232,7 @@ impl RawSearchEngine {
         Ok(matches)
     }
 
+    #[cfg(test)]
     pub(super) fn visit_term_plan<F>(&self, plan: &TermPlan, visit: F) -> Result<()>
     where
         F: FnMut(DocMatch, SearchDocumentRecord) -> Result<()>,

@@ -234,37 +234,7 @@ pub fn build_index(
         .lines()
         .map(|line| line.map_err(Error::from));
     let channels = read_json_lines(channels_path)?;
-    build_index_from_lines(chunk_lines, channels, index_path, BuildSchema::Seven)
-}
-
-/// Schema-8 fixtures for the reader's legacy broad-single path, which stays
-/// until the retained schema-8 artifact is retired. Nothing ships schema 8.
-#[cfg(test)]
-pub(super) fn build_legacy_schema_eight_index(
-    chunks_path: &Path,
-    channels_path: &Path,
-    index_path: &Path,
-) -> Result<BuildReport> {
-    let chunk_lines = BufReader::new(ColdReader::open(chunks_path)?)
-        .lines()
-        .map(|line| line.map_err(Error::from));
-    let channels = read_json_lines(channels_path)?;
-    build_index_from_lines(chunk_lines, channels, index_path, BuildSchema::Eight)
-}
-
-/// The generation layout a build stops at.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BuildSchema {
-    /// Postings, positions, and bigram sidecars; what publication produces
-    /// (`raw-index-schema-7-v2`).
-    Seven,
-    /// Schema 7 plus materialized broad single-token answers. Deprecated: no
-    /// build path produces it outside legacy-reader tests. Every publication
-    /// is a full rebuild, and this phase and its multi-gigabyte artifact never
-    /// passed the 2 GiB reader's gates.
-    // Only legacy-reader test fixtures build it.
-    #[cfg_attr(not(test), allow(dead_code))]
-    Eight,
+    build_index_from_lines(chunk_lines, channels, index_path)
 }
 
 /// Builds and opens a private candidate without hashing its generation files a
@@ -280,7 +250,7 @@ pub(crate) fn build_index_from_lines_and_open<I>(
 where
     I: Iterator<Item = Result<String>>,
 {
-    let report = build_index_from_lines(chunk_lines, channels, index_path, BuildSchema::Seven)?;
+    let report = build_index_from_lines(chunk_lines, channels, index_path)?;
     let engine = RawSearchEngine::open_newly_built(index_path)?;
     Ok((report, engine))
 }
@@ -289,7 +259,6 @@ fn build_index_from_lines<I>(
     chunk_lines: I,
     channels: Vec<Value>,
     index_path: &Path,
-    schema: BuildSchema,
 ) -> Result<BuildReport>
 where
     I: Iterator<Item = Result<String>>,
@@ -524,56 +493,26 @@ where
             })
             .collect::<Result<BTreeMap<_, _>>>()?,
     };
-    if schema == BuildSchema::Seven {
-        manifest.files = build_manifest_files(index_path, 7)?;
-    }
+    manifest.files = build_manifest_files(index_path, 7)?;
     let mut manifest_output = ColdWriter::create(&index_path.join(MANIFEST_FILE))?;
     serde_json::to_writer_pretty(&mut manifest_output, &manifest)?;
     manifest_output.finish()?;
-    let report = |manifest: &Manifest, broad_plans| -> Result<BuildReport> {
-        let payload_bytes = manifest
-            .files
-            .values()
-            .try_fold(0_u64, |total, file| total.checked_add(file.bytes))
-            .ok_or_else(|| Error::Corrupt("manifest file bytes overflow u64".to_string()))?;
-        let index_bytes = payload_bytes
-            .checked_add(fs::metadata(index_path.join(MANIFEST_FILE))?.len())
-            .ok_or_else(|| Error::Corrupt("generation file bytes overflow u64".to_string()))?;
-        Ok(BuildReport {
-            documents: u64::from(document_count),
-            videos: videos.len(),
-            channels: channels.len(),
-            terms: term_count,
-            broad_plans,
-            index_bytes,
-            elapsed_ms: started.elapsed().as_millis(),
-        })
-    };
-    if schema == BuildSchema::Seven {
-        return report(&manifest, 0);
-    }
-
-    let broad_started = Instant::now();
-    let base_elapsed_ms = started.elapsed().as_millis();
-    let preliminary = RawSearchEngine::open_newly_built(index_path)?;
-    let broad_plans = broad_single::build_index(
-        &preliminary,
-        &index_path.join(broad_single::BROAD_SINGLE_FILE),
-    )?;
-    drop(preliminary);
-    tracing::info!(
-        base_elapsed_ms,
-        broad_elapsed_ms = broad_started.elapsed().as_millis(),
-        broad_plans,
-        broad_bytes = fs::metadata(index_path.join(broad_single::BROAD_SINGLE_FILE))?.len(),
-        "raw schema-eight build phases"
-    );
-    manifest.schema_version = 8;
-    manifest.files = build_manifest_files(index_path, 8)?;
-    let mut manifest_output = ColdWriter::create(&index_path.join(MANIFEST_FILE))?;
-    serde_json::to_writer_pretty(&mut manifest_output, &manifest)?;
-    manifest_output.finish()?;
-    report(&manifest, broad_plans)
+    let payload_bytes = manifest
+        .files
+        .values()
+        .try_fold(0_u64, |total, file| total.checked_add(file.bytes))
+        .ok_or_else(|| Error::Corrupt("manifest file bytes overflow u64".to_string()))?;
+    let index_bytes = payload_bytes
+        .checked_add(fs::metadata(index_path.join(MANIFEST_FILE))?.len())
+        .ok_or_else(|| Error::Corrupt("generation file bytes overflow u64".to_string()))?;
+    Ok(BuildReport {
+        documents: u64::from(document_count),
+        videos: videos.len(),
+        channels: channels.len(),
+        terms: term_count,
+        index_bytes,
+        elapsed_ms: started.elapsed().as_millis(),
+    })
 }
 
 pub fn slice_corpus(

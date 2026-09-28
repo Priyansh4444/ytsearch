@@ -255,67 +255,6 @@ impl FuzzyIndex {
         Ok(collector.finish())
     }
 
-    pub fn broad_prefixes(
-        &self,
-        minimum_documents: u64,
-        average_documents_per_video: u32,
-    ) -> Result<Vec<String>> {
-        let mut prefixes = Vec::new();
-        let mut prefix = Vec::with_capacity(MAX_QUERY_BYTES);
-        for child in self.children(self.node(0)?)? {
-            self.collect_broad_prefixes(
-                child,
-                minimum_documents,
-                average_documents_per_video,
-                &mut prefix,
-                &mut prefixes,
-            )?;
-        }
-        prefixes.sort_unstable();
-        prefixes.dedup();
-        Ok(prefixes)
-    }
-
-    fn collect_broad_prefixes(
-        &self,
-        node_id: u32,
-        minimum_documents: u64,
-        average_documents_per_video: u32,
-        prefix: &mut Vec<u8>,
-        output: &mut Vec<String>,
-    ) -> Result<PrefixTopTerms> {
-        let node = self.node(node_id)?;
-        prefix.push(node.label);
-        let mut top = PrefixTopTerms::default();
-        if node.terminal != NO_TERM {
-            top.insert(PrefixTerm {
-                term: node.terminal,
-                text_frequency: node.text_frequency,
-                title_frequency: node.title_frequency,
-            });
-        }
-        for child in self.children(node)? {
-            top.merge(self.collect_broad_prefixes(
-                child,
-                minimum_documents,
-                average_documents_per_video,
-                prefix,
-                output,
-            )?);
-        }
-        if prefix_plan_is_broad(
-            &top,
-            node.terminal,
-            minimum_documents,
-            average_documents_per_video,
-        ) && let Ok(prefix) = std::str::from_utf8(prefix)
-        {
-            output.push(prefix.to_string());
-        }
-        prefix.pop();
-        Ok(top)
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn walk(
         &self,
@@ -438,120 +377,6 @@ impl FuzzyIndex {
         }
         Ok(node.first_child..end)
     }
-}
-
-#[derive(Clone, Copy)]
-struct PrefixTerm {
-    term: u32,
-    text_frequency: u32,
-    title_frequency: u32,
-}
-
-#[derive(Default)]
-struct PrefixTopTerms {
-    text: Vec<PrefixTerm>,
-    title: Vec<PrefixTerm>,
-    combined: Vec<PrefixTerm>,
-}
-
-#[derive(Clone, Copy)]
-enum PrefixFrequency {
-    Text,
-    Title,
-    Combined,
-}
-
-impl PrefixTopTerms {
-    fn insert(&mut self, term: PrefixTerm) {
-        retain_prefix_term(&mut self.text, term, PrefixFrequency::Text);
-        retain_prefix_term(&mut self.title, term, PrefixFrequency::Title);
-        retain_prefix_term(&mut self.combined, term, PrefixFrequency::Combined);
-    }
-
-    fn merge(&mut self, other: Self) {
-        for term in other.text {
-            retain_prefix_term(&mut self.text, term, PrefixFrequency::Text);
-        }
-        for term in other.title {
-            retain_prefix_term(&mut self.title, term, PrefixFrequency::Title);
-        }
-        for term in other.combined {
-            retain_prefix_term(&mut self.combined, term, PrefixFrequency::Combined);
-        }
-    }
-}
-
-fn retain_prefix_term(values: &mut Vec<PrefixTerm>, term: PrefixTerm, mode: PrefixFrequency) {
-    const LIMIT: usize = 4;
-    if values.iter().any(|value| value.term == term.term) {
-        return;
-    }
-    values.push(term);
-    values.sort_unstable_by(|left, right| compare_prefix_term(right, left, mode));
-    values.truncate(LIMIT);
-}
-
-fn compare_prefix_term(
-    left: &PrefixTerm,
-    right: &PrefixTerm,
-    mode: PrefixFrequency,
-) -> std::cmp::Ordering {
-    prefix_ranking_frequency(*left, mode)
-        .cmp(&prefix_ranking_frequency(*right, mode))
-        .then_with(|| right.term.cmp(&left.term))
-}
-
-fn prefix_ranking_frequency(term: PrefixTerm, mode: PrefixFrequency) -> u64 {
-    match mode {
-        PrefixFrequency::Text => u64::from(term.text_frequency),
-        PrefixFrequency::Title => u64::from(term.title_frequency) * TITLE_FREQUENCY_WEIGHT,
-        PrefixFrequency::Combined => {
-            u64::from(term.text_frequency)
-                + u64::from(term.title_frequency) * TITLE_FREQUENCY_WEIGHT
-        }
-    }
-}
-
-fn prefix_plan_is_broad(
-    top: &PrefixTopTerms,
-    exact_term: u32,
-    minimum_documents: u64,
-    average_documents_per_video: u32,
-) -> bool {
-    [
-        (&top.text, PrefixFrequency::Text),
-        (&top.title, PrefixFrequency::Title),
-        (&top.combined, PrefixFrequency::Combined),
-    ]
-    .into_iter()
-    .any(|(terms, mode)| {
-        let mut selected = Vec::with_capacity(4);
-        if exact_term != NO_TERM
-            && let Some(exact) = terms.iter().find(|term| term.term == exact_term)
-        {
-            selected.push(*exact);
-        }
-        selected.extend(
-            terms
-                .iter()
-                .filter(|term| term.term != exact_term)
-                .take(4_usize.saturating_sub(selected.len()))
-                .copied(),
-        );
-        selected
-            .into_iter()
-            .map(|term| match mode {
-                PrefixFrequency::Text => u64::from(term.text_frequency),
-                PrefixFrequency::Title => u64::from(term.title_frequency)
-                    .saturating_mul(u64::from(average_documents_per_video)),
-                PrefixFrequency::Combined => u64::from(term.text_frequency).saturating_add(
-                    u64::from(term.title_frequency)
-                        .saturating_mul(u64::from(average_documents_per_video)),
-                ),
-            })
-            .sum::<u64>()
-            >= minimum_documents
-    })
 }
 
 struct RankedCandidate {
@@ -703,17 +528,6 @@ mod tests {
                 .iter()
                 .any(|value| value.term == 5 && value.distance == 2)
         );
-    }
-
-    #[test]
-    fn broad_prefixes_include_non_terminal_keys_without_collecting_every_prefix() {
-        let (_root, index) = fixture();
-        let prefixes = index.broad_prefixes(46, 1).expect("broad prefixes");
-        for expected in ["b", "bl", "bla", "black", "q", "quantum"] {
-            assert!(prefixes.iter().any(|prefix| prefix == expected));
-        }
-        assert!(!prefixes.iter().any(|prefix| prefix == "blackh"));
-        assert!(prefixes.is_sorted());
     }
 
     #[test]
