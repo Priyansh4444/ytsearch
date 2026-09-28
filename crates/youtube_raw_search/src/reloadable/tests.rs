@@ -48,7 +48,10 @@ fn replacement_changes_reader_and_cache_generation_atomically() {
     assert_eq!(reloadable.search(&params).unwrap()["found"], 1);
 
     reloadable
-        .replace(engine(&root, "new", "currenttoken"), 7)
+        .replace(
+            engine(&root, "new", "currenttoken").warmed_for_activation(),
+            7,
+        )
         .unwrap();
 
     assert_eq!(reloadable.cache_generation(), 7);
@@ -87,7 +90,10 @@ fn pinned_reader_keeps_pages_and_counts_on_one_generation_after_activation() {
     );
 
     reloadable
-        .replace(engine_with_documents(&root, "new", "orbit", 2), 42)
+        .replace(
+            engine_with_documents(&root, "new", "orbit", 2).warmed_for_activation(),
+            42,
+        )
         .unwrap();
 
     assert_eq!(generation, 41);
@@ -125,7 +131,7 @@ fn snapshot_pairing_remains_consistent_in_activation_race_smoke_test() {
     std::thread::scope(|scope| {
         scope.spawn(|| {
             barrier.wait();
-            reloadable.replace(next, 2).unwrap();
+            reloadable.replace(next.warmed_for_activation(), 2).unwrap();
         });
         barrier.wait();
         for _ in 0..1_000 {

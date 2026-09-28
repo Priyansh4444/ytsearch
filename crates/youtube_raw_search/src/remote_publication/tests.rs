@@ -634,3 +634,15 @@ fn found(engine: &RawSearchEngine, query: &str) -> u64 {
         .as_u64()
         .unwrap()
 }
+
+// The receiver's schema must be the one the reader advertises and the
+// publisher builds; they once disagreed (7 vs 8) and every publication failed.
+#[test]
+fn receiver_schema_matches_the_advertised_generation_format() {
+    let advertised = crate::RAW_GENERATION_FORMAT
+        .strip_prefix("raw-index-schema-")
+        .and_then(|rest| rest.split('-').next())
+        .and_then(|number| number.parse::<u8>().ok())
+        .expect("format names its schema");
+    assert_eq!(GENERATION_SCHEMA_VERSION, advertised);
+}

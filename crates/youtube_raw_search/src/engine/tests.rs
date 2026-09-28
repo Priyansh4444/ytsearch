@@ -3,6 +3,7 @@ use super::*;
 
 mod common_words;
 mod exact_totals_sets;
+mod format_invariants;
 mod partitioned_scan;
 mod posting_skips;
 mod query_contract_v2;
