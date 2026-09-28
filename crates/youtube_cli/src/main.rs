@@ -1307,7 +1307,10 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
     let publication_search = command
         .search
         .client(command.collection.collection.clone())?;
-    let handles = read_youtuber_list(&command.list_file)?;
+    let handles = reconciliation_manifest::resume_order(
+        &command.transcript.transcript_cache_dir,
+        read_youtuber_list(&command.list_file)?,
+    )?;
     let reconciliation_run_id = begin_catalog_run(&command.transcript.transcript_cache_dir)?;
     println!("Started catalog reconciliation run: {reconciliation_run_id}");
     let channel_jobs = effective_channel_jobs(command.channel_jobs, command.jobs);
@@ -1357,8 +1360,15 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
         };
         match result {
             Ok((_, Ok(()))) => {}
-            Ok((_, Err(error @ CliError::UpstreamBlocked(_)))) => {
+            Ok((blocked_handle, Err(error @ CliError::UpstreamBlocked(_)))) => {
                 tasks.abort_all();
+                reconciliation_manifest::remember_blocked_creator(
+                    &command.transcript.transcript_cache_dir,
+                    Some(&blocked_handle),
+                )?;
+                println!(
+                    "Catalog pass blocked at {blocked_handle}; the next pass resumes after it"
+                );
                 return Err(error);
             }
             Ok((failed_handle, Err(error))) => {
@@ -1375,6 +1385,11 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
         }
     }
 
+    // Every creator was attempted, so the next pass starts from the top.
+    reconciliation_manifest::remember_blocked_creator(
+        &command.transcript.transcript_cache_dir,
+        None,
+    )?;
     if PublicationPolicy::from_defer_flag(command.defer_publish).publishes_after_run() {
         publish_and_wait(&publication_search).await?;
     }
