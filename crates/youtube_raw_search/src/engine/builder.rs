@@ -234,6 +234,21 @@ pub fn build_index(
         .lines()
         .map(|line| line.map_err(Error::from));
     let channels = read_json_lines(channels_path)?;
+    build_index_from_lines(chunk_lines, channels, index_path, BuildSchema::Seven)
+}
+
+/// Schema-8 fixtures for the reader's legacy broad-single path, which stays
+/// until the retained schema-8 artifact is retired. Nothing ships schema 8.
+#[cfg(test)]
+pub(super) fn build_legacy_schema_eight_index(
+    chunks_path: &Path,
+    channels_path: &Path,
+    index_path: &Path,
+) -> Result<BuildReport> {
+    let chunk_lines = BufReader::new(ColdReader::open(chunks_path)?)
+        .lines()
+        .map(|line| line.map_err(Error::from));
+    let channels = read_json_lines(channels_path)?;
     build_index_from_lines(chunk_lines, channels, index_path, BuildSchema::Eight)
 }
 
@@ -243,9 +258,12 @@ pub(crate) enum BuildSchema {
     /// Postings, positions, and bigram sidecars; what publication produces
     /// (`raw-index-schema-7-v2`).
     Seven,
-    /// Schema 7 plus materialized broad single-token answers. Not published:
-    /// every publication is a full rebuild, and this phase and its
-    /// multi-gigabyte artifact have not passed the 2 GiB reader's gates.
+    /// Schema 7 plus materialized broad single-token answers. Deprecated: no
+    /// build path produces it outside legacy-reader tests. Every publication
+    /// is a full rebuild, and this phase and its multi-gigabyte artifact never
+    /// passed the 2 GiB reader's gates.
+    // Only legacy-reader test fixtures build it.
+    #[cfg_attr(not(test), allow(dead_code))]
     Eight,
 }
 

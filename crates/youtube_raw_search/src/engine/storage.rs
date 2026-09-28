@@ -360,9 +360,12 @@ impl RawSearchEngine {
     fn open_with_validation(index_path: &Path, validation: ManifestValidation) -> Result<Self> {
         let manifest: Manifest =
             serde_json::from_reader(BufReader::new(File::open(index_path.join(MANIFEST_FILE))?))?;
-        if !matches!(manifest.schema_version, 5..=8) {
+        // Schema 5 (no complete positions or manifest checksums) is retired:
+        // no production generation uses it. Schema 6 remains the immutable
+        // base index; published generations are schema 7.
+        if !matches!(manifest.schema_version, 6..=8) {
             return Err(Error::Corrupt(format!(
-                "unsupported schema version {}",
+                "unsupported schema version {}; this reader opens schemas 6-8",
                 manifest.schema_version
             )));
         }
@@ -373,7 +376,7 @@ impl RawSearchEngine {
                 "newly built index does not use schema version 7".to_string(),
             ));
         }
-        if manifest.schema_version >= 6 {
+        {
             // Builder-verified opens still check the complete file list and all
             // byte lengths. Only the redundant content reads and BLAKE3 work
             // are skipped.
@@ -396,15 +399,11 @@ impl RawSearchEngine {
             POSITIONS_MAGIC,
             lexicon.count,
         )?;
-        let full_positions = (manifest.schema_version >= 6)
-            .then(|| {
-                PositionIndex::open(
-                    &index_path.join(FULL_POSITIONS_FILE),
-                    FULL_POSITIONS_MAGIC,
-                    lexicon.count,
-                )
-            })
-            .transpose()?;
+        let full_positions = PositionIndex::open(
+            &index_path.join(FULL_POSITIONS_FILE),
+            FULL_POSITIONS_MAGIC,
+            lexicon.count,
+        )?;
         let documents = MappedFile::open(&index_path.join(DOCUMENTS_FILE), DOCUMENTS_MAGIC)?;
         // Responses read a few ~5 KB compressed blocks at scattered offsets.
         documents.advise_random();
@@ -554,19 +553,14 @@ fn warm_in_background(inner: &Arc<EngineInner>) {
 
 fn prefetch_hot_mappings(inner: &EngineInner) {
     let started = std::time::Instant::now();
-    let mut files = vec![
+    let files = [
         &inner.lexicon.file,
         &inner.fuzzy.file,
         &inner.postings,
         &inner.positions.file,
+        &inner.full_positions.file,
         &inner.metadata.file,
     ];
-    files.extend(
-        inner
-            .full_positions
-            .as_ref()
-            .map(|positions| &positions.file),
-    );
     for file in files {
         file.prefetch();
     }

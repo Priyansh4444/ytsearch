@@ -278,7 +278,7 @@ struct EngineInner {
     fuzzy: FuzzyIndex,
     postings: MappedFile,
     positions: PositionIndex,
-    full_positions: Option<PositionIndex>,
+    full_positions: PositionIndex,
     text_bigrams: Option<bigram::BigramIndex>,
     title_bigrams: Option<bigram::BigramIndex>,
     broad_single: Option<broad_single::BroadSingleIndex>,
@@ -795,11 +795,6 @@ impl RawSearchEngine {
         fields: QueryFields,
         excluded_documents: &[u32],
     ) -> Result<Value> {
-        if self.inner.full_positions.is_none() {
-            return Err(Error::InvalidInput(
-                "quoted phrase search requires a schema v6 index".to_string(),
-            ));
-        }
         let exact_term_matches = self.exact_term_matches(&parsed.terms, fields)?;
         let mut matches = intersect_all_borrowed(&exact_term_matches);
         retain_not_excluded(&mut matches, excluded_documents);
@@ -935,11 +930,7 @@ impl RawSearchEngine {
         matches: &mut [DocMatch],
         cache: &mut BlockCache,
     ) -> Result<()> {
-        if terms.len() < 2
-            || matches.is_empty()
-            || !exact_proximity_is_bounded(matches.len())
-            || self.inner.full_positions.is_none()
-        {
+        if terms.len() < 2 || matches.is_empty() || !exact_proximity_is_bounded(matches.len()) {
             return Ok(());
         }
         if matches.len() <= MAX_DIRECT_POSITION_TARGETS {
@@ -1154,9 +1145,7 @@ impl RawSearchEngine {
         if targets.is_empty() {
             return Ok(Vec::new());
         }
-        let full_positions = self.inner.full_positions.as_ref().ok_or_else(|| {
-            Error::InvalidInput("phrase search requires complete positions".to_string())
-        })?;
+        let full_positions = &self.inner.full_positions;
         // One cursor per distinct token: a phrase that repeats "the" must not
         // walk that token's complete position stream twice.
         let mut cursors = Vec::with_capacity(terms.len());
@@ -1348,11 +1337,6 @@ impl RawSearchEngine {
                 .map(DocMatch::document)
                 .collect()
         };
-        if !phrases.is_empty() && self.inner.full_positions.is_none() {
-            return Err(Error::InvalidInput(
-                "negative phrase search requires a schema v6 index".to_string(),
-            ));
-        }
         for phrase in phrases {
             excluded = union_sorted_ids(excluded, self.excluded_phrase_documents(phrase, fields)?);
         }

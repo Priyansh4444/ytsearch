@@ -16,6 +16,16 @@ use std::{fs::OpenOptions, io::Write};
 use tempfile::TempDir;
 
 fn test_engine() -> (TempDir, RawSearchEngine) {
+    test_engine_built_by(build_index)
+}
+
+fn legacy_schema_eight_engine() -> (TempDir, RawSearchEngine) {
+    test_engine_built_by(builder::build_legacy_schema_eight_index)
+}
+
+fn test_engine_built_by(
+    build: fn(&Path, &Path, &Path) -> Result<BuildReport>,
+) -> (TempDir, RawSearchEngine) {
     let root = TempDir::new().expect("temp dir");
     let chunks_path = root.path().join("chunks.jsonl");
     let channels_path = root.path().join("channels.jsonl");
@@ -35,7 +45,7 @@ fn test_engine() -> (TempDir, RawSearchEngine) {
         json!({"id":"one","name":"One","handle":"@one"})
     )
     .expect("write channel");
-    build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+    build(&chunks_path, &channels_path, &index_path).expect("build raw index");
     let engine = RawSearchEngine::open(&index_path).expect("open raw index");
     (root, engine)
 }
@@ -293,7 +303,8 @@ fn materialized_broad_plan_matches_the_posting_reducer_response() {
         }
     }
     File::create(&channels_path).expect("channels");
-    build_index(&chunks_path, &channels_path, &index_path).expect("build index");
+    builder::build_legacy_schema_eight_index(&chunks_path, &channels_path, &index_path)
+        .expect("build index");
     let engine = RawSearchEngine::open(&index_path).expect("open baseline");
     let cases = [1, 3, 5, 6, 250].map(|limit| {
         let mut params = grouped_query("react");
@@ -581,8 +592,6 @@ fn schema_six_reconstructs_complete_positions_from_aligned_sidecars() {
     let remaining = engine
         .inner
         .full_positions
-        .as_ref()
-        .expect("schema 6 positions")
         .range(entry.term, IndexedField::Text)
         .expect("remaining positions");
     let mut positions = Vec::new();
@@ -2708,7 +2717,7 @@ fn title_postings_are_document_sorted_across_interleaved_videos() {
 
 #[test]
 fn schema_eight_manifest_checksums_and_opens_acceleration_sidecars() {
-    let (root, engine) = test_engine();
+    let (root, engine) = legacy_schema_eight_engine();
     let index = root.path().join("index");
     let manifest: Manifest =
         serde_json::from_reader(File::open(index.join(MANIFEST_FILE)).expect("manifest"))
@@ -2747,7 +2756,7 @@ fn schema_eight_manifest_checksums_and_opens_acceleration_sidecars() {
 
 #[test]
 fn schema_six_reader_remains_compatible_without_bigram_sidecars() {
-    let (root, engine) = test_engine();
+    let (root, engine) = legacy_schema_eight_engine();
     let expected = engine.search(&grouped_query("memory mapped")).unwrap();
     drop(engine);
     let index = root.path().join("index");
@@ -2788,7 +2797,8 @@ fn newly_built_open_only_accepts_the_checksumming_builder_schema() {
     let mut manifest: Value =
         serde_json::from_reader(File::open(&manifest_path).expect("manifest"))
             .expect("manifest JSON");
-    manifest["schema_version"] = json!(5);
+    // Schema 6 is readable (the immutable base) but no builder produces it.
+    manifest["schema_version"] = json!(6);
     serde_json::to_writer(
         File::create(&manifest_path).expect("rewrite manifest"),
         &manifest,
@@ -2968,21 +2978,9 @@ fn truncated_document_blocks_are_rejected_at_open() {
 }
 
 #[test]
-fn schema_five_reader_is_a_response_compatible_rollback() {
+fn retired_schema_five_generations_are_rejected_at_open() {
     let (root, engine) = test_engine();
-    let expected = ["memory", "bun", "*"]
-        .into_iter()
-        .map(|query| {
-            (
-                query,
-                engine
-                    .search(&grouped_query(query))
-                    .expect("schema 6 search"),
-            )
-        })
-        .collect::<Vec<_>>();
     drop(engine);
-
     let index_path = root.path().join("index");
     let manifest_path = index_path.join(MANIFEST_FILE);
     let mut manifest: Value =
@@ -3000,32 +2998,10 @@ fn schema_five_reader_is_a_response_compatible_rollback() {
     .expect("write schema 5 manifest");
     fs::remove_file(index_path.join(FULL_POSITIONS_FILE)).expect("remove v6 sidecar");
 
-    let rollback = RawSearchEngine::open(&index_path).expect("open schema 5 rollback");
-    for (query, expected) in expected {
-        assert_eq!(
-            rollback
-                .search(&grouped_query(query))
-                .expect("schema 5 search"),
-            expected,
-            "schema 5 response changed for {query}"
-        );
-    }
     assert!(matches!(
-        rollback.search(&grouped_query(r#""memory mapped""#)),
-        Err(Error::InvalidInput(_))
+        RawSearchEngine::open(&index_path),
+        Err(Error::Corrupt(message)) if message.contains("unsupported schema version 5")
     ));
-    assert!(matches!(
-        rollback.search(&grouped_query(r#"bun -"memory mapped""#)),
-        Err(Error::InvalidInput(_))
-    ));
-    assert_eq!(
-        rollback
-            .search(&grouped_query(r#"bun -"memory""#))
-            .expect("single-token negative quote"),
-        rollback
-            .search(&grouped_query("bun -memory"))
-            .expect("negative term")
-    );
 }
 
 #[test]

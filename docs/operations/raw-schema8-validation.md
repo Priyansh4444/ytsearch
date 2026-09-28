@@ -1,4 +1,8 @@
-# Schema 8 validation: pending
+# Schema 8 validation: abandoned
+
+Schema 8 is deprecated as of 2026-09-27; nothing builds it and it was never
+activated. See [raw-schema-deprecation.md](raw-schema-deprecation.md). The
+record below is kept as evidence.
 
 Baseline release source: `94d01790b558fce23d61554c31c710a5c0a009f9`.
 These observations do not establish production readiness.

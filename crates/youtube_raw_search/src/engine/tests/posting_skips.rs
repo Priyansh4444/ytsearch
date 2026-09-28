@@ -34,11 +34,7 @@ fn text_streams<'a>(engine: &'a RawSearchEngine, term: &str) -> skips::Positione
         .lookup(term)
         .expect("lookup")
         .expect("term");
-    let full = engine
-        .inner
-        .full_positions
-        .as_ref()
-        .expect("full positions");
+    let full = &engine.inner.full_positions;
     skips::PositionedStreams {
         postings: engine
             .postings_range(entry.text_offset, entry.text_length)
