@@ -874,6 +874,10 @@ Raw can replace Typesense as the canonical search index.
   max 261 ms (was 9,930 ms). Only the dense `and the` scan stays above 200 ms;
   `0c53dbd` divides it across every available vCPU. See
   `P00/production-replay-2026-09-26.md`.
+  On 2026-09-27, after the reader moved to four shared vCPUs and 2.5 GiB, the
+  canonical matrix plus sentence probes on production (generation 3887, worker
+  stopped) measured 213/213 HTTP 200, maximum 181 ms (`and the`), and no
+  request above 200 ms. Resource and concurrent-load gates remain.
 - [x] Replay real production searches: export distinct
   `(query, youtuber, sort, page)` rows from Axiom to a private file and replay
   them through the API with reader server timing
@@ -890,14 +894,23 @@ Raw can replace Typesense as the canonical search index.
   files cached and activation warms for at most 20 s (the worker's activation
   request times out at 30 s). A canary publication's first searches fell from a
   32 s maximum to 310 ms.
-- [ ] Publish without double residency on the 2 GiB reader. Two generations'
-  scanned files (~1.46 GB) plus the 355 MB mutation store exceed its page
-  cache, so production's generation-3441 activation still warmed for about
-  23 s after the swap. Needs a smaller hot set (schema 9) or more memory.
-- [ ] Decide the reader CPU size. On the canary, 4 shared vCPUs brought every
-  real and synthetic search under 200 ms warm (max 154 ms); 2 vCPUs leave
-  `and the` at ~225 ms, and production measured 271–279 ms during concurrent
-  daily indexing.
+- [x] Publish without double residency on the 2 GiB reader. Two generations'
+  scanned files (~1.46 GB) plus the 355 MB mutation store exceeded its page
+  cache, so production's generation-3441 activation warmed for 43 s and
+  swapped cold. The owner approved 2.5 GiB on 2026-09-27 (`8d0703c`); the next
+  production activation (generation 4414, 23:44 UTC) warmed in 17.8 s, inside
+  the 20 s budget, and swapped warm. The margin is small; schema 9's smaller
+  hot set should widen it.
+- [x] Decide the reader CPU size. On the canary, 4 shared vCPUs brought every
+  real and synthetic search under 200 ms warm (max 154 ms); 2 vCPUs left
+  `and the` at ~225 ms. The owner approved `shared-cpu-4x` with 2.5 GiB
+  (about +$7.77/month); production was resized on 2026-09-27 at 12:48 UTC and
+  then measured a 181 ms maximum.
+- [x] Stop one caption-less new upload from failing the daily pass. A catalog
+  run with only retryable per-video gaps now exits 75 and completes the daily
+  update; a failed pass backs off for an hour instead of rerunning the full
+  pass and publication on the next poll (`7a2bd5d`, worker image
+  `raw-indexer-7a2bd5d31dc9-aac63fa5cf18`, deployed 2026-09-27 22:41 UTC).
 - [x] Reject exactly 200 ms as well as slower requests in the publication
   baseline and isolation gates. Exercise the exact boundary with the real
   benchmark script and verify rejection occurs before publication.
