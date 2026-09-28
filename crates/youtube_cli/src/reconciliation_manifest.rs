@@ -127,6 +127,57 @@ fn reconciliation_run_id() -> std::io::Result<String> {
     Ok(run_id)
 }
 
+const BLOCKED_CREATOR_FILE: &str = "blocked-creator";
+
+/// Orders a catalog pass to resume after the creator where the previous pass
+/// was stopped by YouTube (bot challenge or rate limit). Without this, a pass
+/// blocked at the same creator every time never reaches the creators listed
+/// after it. The blocked creator moves to the end of the order.
+pub(super) fn resume_order(
+    transcript_cache_directory: &Path,
+    handles: Vec<String>,
+) -> std::io::Result<Vec<String>> {
+    let path = transcript_cache_directory
+        .join(".reconciliation")
+        .join(BLOCKED_CREATOR_FILE);
+    let blocked = match fs::read_to_string(&path) {
+        Ok(value) => value.trim().to_string(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(handles),
+        Err(error) => return Err(error),
+    };
+    Ok(rotate_after(handles, &blocked))
+}
+
+fn rotate_after(mut handles: Vec<String>, blocked: &str) -> Vec<String> {
+    if let Some(index) = handles
+        .iter()
+        .position(|handle| handle.eq_ignore_ascii_case(blocked))
+    {
+        handles.rotate_left(index + 1);
+    }
+    handles
+}
+
+/// Records where a catalog pass was blocked, or clears it after a pass that
+/// attempted every creator.
+pub(super) fn remember_blocked_creator(
+    transcript_cache_directory: &Path,
+    handle: Option<&str>,
+) -> std::io::Result<()> {
+    let directory = transcript_cache_directory.join(".reconciliation");
+    let path = directory.join(BLOCKED_CREATOR_FILE);
+    match handle {
+        Some(handle) => {
+            fs::create_dir_all(&directory)?;
+            write_atomic(&directory, &path, handle.as_bytes())
+        }
+        None => match fs::remove_file(&path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        },
+    }
+}
+
 fn write_atomic(directory: &Path, path: &Path, body: &[u8]) -> std::io::Result<()> {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -155,6 +206,32 @@ fn write_atomic(directory: &Path, path: &Path, body: &[u8]) -> std::io::Result<(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_blocked_pass_resumes_after_the_blocked_creator() {
+        let root = tempfile::TempDir::new().expect("temp dir");
+        let handles = ["@a", "@b", "@c", "@d"].map(String::from).to_vec();
+        assert_eq!(
+            super::resume_order(root.path(), handles.clone()).expect("order"),
+            handles
+        );
+        super::remember_blocked_creator(root.path(), Some("@B")).expect("remember");
+        assert_eq!(
+            super::resume_order(root.path(), handles.clone()).expect("order"),
+            ["@c", "@d", "@a", "@b"]
+        );
+        super::remember_blocked_creator(root.path(), None).expect("clear");
+        assert_eq!(
+            super::resume_order(root.path(), handles.clone()).expect("order"),
+            handles
+        );
+        super::remember_blocked_creator(root.path(), Some("@gone")).expect("remember");
+        assert_eq!(
+            super::resume_order(root.path(), handles.clone()).expect("order"),
+            handles,
+            "a creator no longer listed leaves the order unchanged"
+        );
+    }
+
     use super::*;
 
     fn temporary_directory(name: &str) -> PathBuf {
