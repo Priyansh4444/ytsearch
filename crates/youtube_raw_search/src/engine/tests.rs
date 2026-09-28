@@ -1,6 +1,7 @@
 use super::conjunction::{TermAlternative, TermPlan};
 use super::*;
 
+mod accelerators;
 mod common_words;
 mod exact_totals_sets;
 mod format_invariants;

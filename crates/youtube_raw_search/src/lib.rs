@@ -11,7 +11,8 @@ mod remote_publication;
 mod schema9;
 
 pub use engine::{
-    BuildReport, RawSearchEngine, SliceReport, WarmEngine, build_index, slice_corpus,
+    BuildReport, RawSearchEngine, SliceReport, WarmEngine, accelerate_generation, build_index,
+    slice_corpus,
 };
 pub use mutable::{
     MutationSnapshot, MutationSnapshotExport, MutationStore, StoredChannelMutation,

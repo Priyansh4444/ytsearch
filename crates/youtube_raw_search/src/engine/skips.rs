@@ -7,6 +7,8 @@
 //! stream offsets after every `SKIP_INTERVAL` postings, so a seek decodes at
 //! most one interval. Checkpoints are built on first use of a term/field,
 //! with the same validation as a full walk, and bounded by a byte budget.
+//! A schema-9 generation stores transcript checkpoints in `accelerators.bin`;
+//! they are validated against the term's streams and used instead.
 
 use super::*;
 use std::sync::{Mutex, OnceLock};
@@ -43,8 +45,11 @@ impl SkipDirectory {
         term: u32,
         field: IndexedField,
         streams: PositionedStreams<'_>,
+        sidecar: Option<&super::accelerators::Accelerators>,
     ) -> Option<Arc<[SkipEntry]>> {
-        if streams.expected < SKIP_MIN_POSTINGS {
+        let sidecar =
+            sidecar.filter(|sidecar| field == IndexedField::Text && sidecar.contains(term));
+        if sidecar.is_none() && streams.expected < SKIP_MIN_POSTINGS {
             return None;
         }
         let slot = {
@@ -64,6 +69,17 @@ impl SkipDirectory {
             if reserved.saturating_add(estimate) > SKIP_BUDGET_BYTES {
                 release();
                 return None;
+            }
+            if let Some(sidecar) = sidecar {
+                match sidecar.checkpoints(term, streams) {
+                    Ok(Some(entries)) => return Some(entries),
+                    Ok(None) => {}
+                    Err(error) => {
+                        release();
+                        tracing::warn!(%error, term, "raw accelerator checkpoints rejected");
+                        return None;
+                    }
+                }
             }
             match build_skip_entries(streams, SKIP_INTERVAL) {
                 Ok(entries) => Some(entries.into()),

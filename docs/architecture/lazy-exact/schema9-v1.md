@@ -20,8 +20,11 @@ existing decoder and its corruption checks still apply.
 
 | File | Contents | Replaces |
 | --- | --- | --- |
-| `accelerators.bin` | For each text term with at least 4,096 postings: seek checkpoints every 64 postings (the runtime `SkipEntry`), and the maximum document-dependent score factor in every 128-document ID window that holds a posting | Lazy checkpoints built on first use; the exhaustive scan's need to score every match |
+| `accelerators.bin` | For each text term with at least 4,096 postings, per 128-posting block: the block's last document, its maximum document-dependent score factor (BM25 frequency/length part times the first-position multiplier), and the cursor state after the block (the runtime `SkipEntry`) | Lazy checkpoints built on first use; the exhaustive scan's need to score every match |
 | `bitmaps.bin` | Dense transcript bitmaps for the highest-DF text terms within a 64 MiB budget, and title bitmaps over videos for terms at ≥0.1% of videos | Decoding the broadest posting lists to count matches |
+
+Bounds are per posting block rather than per document window so that bounds
+and seek checkpoints share one boundary and the file stays small.
 
 Both are listed in the manifest with lengths and BLAKE3 digests like every
 other file. The reader opens schemas 6, 7, and 9; schema 9 without its fast
@@ -44,6 +47,35 @@ lies. Everything else keeps the schema-7 path.
    checkpoints. Scoring stops when no unscored window can outrank the last
    group the page needs. The chosen groups are then completed from all of
    their documents, so their best document and top hits match the scan.
+
+## Step 1: sidecars (landed)
+
+`youtube-raw-search accelerate <schema-7-dir>` adds both files to a complete
+schema-7 generation and atomically rewrites its manifest as schema 9; a crash
+leaves the valid schema-7 manifest. The reader opens schema 9, validates both
+directories structurally, and uses stored transcript checkpoints for phrase
+and proximity seeks instead of building them at run time. No query path reads
+bounds or bitmaps yet.
+
+Tests (`engine/tests/accelerators.rs`) check stored checkpoints against the
+runtime builder, block bounds against an independent decode, bitmaps against
+posting sets, rejection of corrupt sidecars, and identical responses from a
+schema-7 and schema-9 build of the same corpus.
+
+On the 8,142,650-document schema-7 candidate (2026-09-28, local):
+
+| | Value |
+| --- | --- |
+| Build time | 4.2 s (warm page cache), deterministic output |
+| `accelerators.bin` | 27,948,628 bytes |
+| `bitmaps.bin` | 71,042,344 bytes (text and title bitmaps) |
+| Differential | 1,453 API requests (every Axiom production row, plus relevance, newest, and views sorts on pages 1–2 for each unique query and creator): all identical apart from `time_to_first_result_ms` |
+
+The differential runs through the real API binary with
+`scripts/raw-schema-differential.sh <replay.tsv> <schema-7-dir> <schema-9-dir> <out>`
+(it exits non-zero on any difference; a different-corpus control fails 120 of
+120 cases); each later
+step must repeat it with zero differences.
 
 ## Evidence already in hand
 
