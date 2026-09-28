@@ -10,7 +10,9 @@ mod reloadable;
 mod remote_publication;
 mod schema9;
 
-pub use engine::{BuildReport, RawSearchEngine, SliceReport, build_index, slice_corpus};
+pub use engine::{
+    BuildReport, RawSearchEngine, SliceReport, WarmEngine, build_index, slice_corpus,
+};
 pub use mutable::{
     MutationSnapshot, MutationSnapshotExport, MutationStore, StoredChannelMutation,
     StoredVideoMutation, VideoMutationSummary,

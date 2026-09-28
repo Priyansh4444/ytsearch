@@ -140,10 +140,10 @@ fn publication_atomically_replaces_adds_and_deletes_videos() {
 
     let published = publisher.publish(&store).unwrap().unwrap();
 
-    assert_eq!(found(&published.engine, "legacyuniquetoken"), 0);
-    assert_eq!(found(&published.engine, "replacement blackhole"), 1);
-    assert_eq!(found(&published.engine, "brandnew searchable"), 1);
-    assert_eq!(found(&published.engine, "deleteuniquetoken"), 0);
+    assert_eq!(found(published.engine.engine(), "legacyuniquetoken"), 0);
+    assert_eq!(found(published.engine.engine(), "replacement blackhole"), 1);
+    assert_eq!(found(published.engine.engine(), "brandnew searchable"), 1);
+    assert_eq!(found(published.engine.engine(), "deleteuniquetoken"), 0);
     assert_eq!(publisher.active_index_path().unwrap(), published.path);
     assert_eq!(
         store.operation("add-video").unwrap().state,
@@ -252,7 +252,7 @@ fn detached_install_is_exact_monotonic_and_does_not_acknowledge_wal() {
         .unwrap();
 
     assert_eq!(publisher.active_sequence().unwrap(), detached.sequence);
-    assert_eq!(found(&installed.engine, "replacement blackhole"), 1);
+    assert_eq!(found(installed.engine.engine(), "replacement blackhole"), 1);
     assert_eq!(
         store.operation("add-video").unwrap().state,
         youtube_index_store::IndexOperationState::Durable,

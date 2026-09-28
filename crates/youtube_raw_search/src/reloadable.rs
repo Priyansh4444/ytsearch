@@ -1,4 +1,4 @@
-use crate::RawSearchEngine;
+use crate::{RawSearchEngine, WarmEngine};
 use serde_json::Value;
 use std::sync::{
     Arc, RwLock,
@@ -38,7 +38,10 @@ impl ReloadableEngine {
         Ok((Arc::clone(&engine), sequence))
     }
 
-    pub fn replace(&self, engine: RawSearchEngine, sequence: u64) -> Result<(), BackendError> {
+    /// Swaps in a warmed engine. A cold engine cannot be passed: see
+    /// `RawSearchEngine::warmed_for_activation`.
+    pub fn replace(&self, engine: WarmEngine, sequence: u64) -> Result<(), BackendError> {
+        let engine = engine.into_engine();
         let mut active = self
             .engine
             .write()

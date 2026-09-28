@@ -12,6 +12,7 @@ use tokio::io::AsyncWriteExt;
 const BACKEND: &str = "raw";
 const ADMIN_KEY_HEADER: &str = "x-raw-admin-key";
 const DEFAULT_PUBLICATION_TRANSFER_TIMEOUT: Duration = Duration::from_secs(45 * 60);
+use crate::ADMIN_REQUEST_TIMEOUT;
 
 #[derive(Clone, Debug)]
 pub struct RawIndexAdminConfig {
@@ -26,7 +27,7 @@ impl RawIndexAdminConfig {
         Self {
             base_url: base_url.into(),
             api_key: api_key.into(),
-            timeout: Duration::from_secs(30),
+            timeout: ADMIN_REQUEST_TIMEOUT,
             publication_timeout: DEFAULT_PUBLICATION_TRANSFER_TIMEOUT,
         }
     }

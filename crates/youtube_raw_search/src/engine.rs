@@ -209,6 +209,7 @@ use single_token::{
     MAX_COMPACT_SPLIT_POSTING_WORK, MAX_COMPACT_SPLIT_PROXIMITY_MATCHES, SplitWorkBudget,
     compact_split_proximity_is_bounded,
 };
+pub use storage::WarmEngine;
 
 #[derive(Clone, Copy)]
 struct DocumentRecord {

@@ -487,11 +487,40 @@ impl RawSearchEngine {
     }
 }
 
+/// Longest an activation waits for warm-up. It must leave headroom under the
+/// publisher's admin request timeout, which activation shares.
+pub(crate) const ACTIVATION_WARM_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+const _: () = assert!(
+    ACTIVATION_WARM_BUDGET.as_secs() + 5 <= youtube_index_store::ADMIN_REQUEST_TIMEOUT.as_secs(),
+    "activation warm-up must finish well inside the admin request timeout"
+);
+
+/// An engine whose scanned files were read ahead and whose scan partitions
+/// were planned before it serves. `ReloadableEngine::replace` accepts only
+/// this, so no activation path can swap in a cold generation.
+pub struct WarmEngine(RawSearchEngine);
+
+impl WarmEngine {
+    pub fn engine(&self) -> &RawSearchEngine {
+        &self.0
+    }
+
+    pub(crate) fn into_engine(self) -> RawSearchEngine {
+        self.0
+    }
+}
+
 impl RawSearchEngine {
-    /// Warms before activation, but waits at most `budget`: the publisher's
-    /// activation request times out after 30 s. Whatever is left finishes in
-    /// the background after the swap.
-    pub(crate) fn warm_within(&self, budget: std::time::Duration) {
+    /// Warms for activation within `ACTIVATION_WARM_BUDGET`; anything left
+    /// finishes in the background after the swap.
+    pub fn warmed_for_activation(self) -> WarmEngine {
+        self.warm_within(ACTIVATION_WARM_BUDGET);
+        WarmEngine(self)
+    }
+
+    /// Warms, but waits at most `budget`. Whatever is left finishes in the
+    /// background.
+    fn warm_within(&self, budget: std::time::Duration) {
         let (done, finished) = std::sync::mpsc::channel();
         let engine = self.clone();
         let spawned = std::thread::Builder::new()

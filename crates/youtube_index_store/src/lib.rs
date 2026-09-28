@@ -57,9 +57,18 @@ pub struct BackendReadiness {
     pub publication_api_version: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_commit: Option<String>,
+    /// Generation format the reader accepts from publishers. Workers compare
+    /// it at preflight, before spending an hour building an unusable one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_format: Option<String>,
 }
 
 pub const RAW_PUBLICATION_API_VERSION: u16 = 1;
+
+/// Timeout the publisher client applies to every non-transfer admin request,
+/// including activation. The reader's activation work must finish well
+/// inside it.
+pub const ADMIN_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RawGenerationCompatibility {

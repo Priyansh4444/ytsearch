@@ -541,6 +541,17 @@ fn require_publication_build_space(work_root: &Path) -> Result<(), CliError> {
 }
 
 fn require_remote_publication_api(readiness: &BackendReadiness) -> Result<(), CliError> {
+    // A reader that reports its accepted generation format must match the
+    // format this worker builds; otherwise every publication would build for
+    // an hour and then fail its compatibility check.
+    if let Some(format) = readiness.generation_format.as_deref()
+        && format != youtube_raw_search::RAW_GENERATION_FORMAT
+    {
+        return Err(CliError::Message(format!(
+            "Raw reader accepts generation format {format}, but this worker builds {}; deploy matching reader and worker images before indexing",
+            youtube_raw_search::RAW_GENERATION_FORMAT
+        )));
+    }
     if readiness.publication_api_version == Some(RAW_PUBLICATION_API_VERSION) {
         return Ok(());
     }
@@ -2761,6 +2772,7 @@ mod tests {
             acknowledged_readers: 1,
             publication_api_version: None,
             source_commit: None,
+            generation_format: None,
         };
 
         let error = require_remote_publication_api(&readiness).unwrap_err();
@@ -2770,6 +2782,18 @@ mod tests {
         );
 
         readiness.publication_api_version = Some(RAW_PUBLICATION_API_VERSION);
+        require_remote_publication_api(&readiness).unwrap();
+
+        // The 2026-09-27 outage: the reader expected schema-8-v2 while the
+        // worker built schema-7-v2, found only after an hour-long build.
+        readiness.generation_format = Some("raw-index-schema-8-v2".to_string());
+        let error = require_remote_publication_api(&readiness).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("deploy matching reader and worker images")
+        );
+        readiness.generation_format = Some(youtube_raw_search::RAW_GENERATION_FORMAT.to_string());
         require_remote_publication_api(&readiness).unwrap();
     }
 

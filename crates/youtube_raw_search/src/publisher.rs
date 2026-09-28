@@ -1,6 +1,6 @@
 use crate::{
-    BuildReport, MutationSnapshot, MutationStore, RawSearchEngine, cache_io::ColdReader,
-    engine::build_index_from_lines_and_open,
+    BuildReport, MutationSnapshot, MutationStore, RawSearchEngine, WarmEngine,
+    cache_io::ColdReader, engine::build_index_from_lines_and_open,
 };
 use flate2::read::MultiGzDecoder;
 use serde::{Deserialize, Serialize};
@@ -20,8 +20,6 @@ const REMOTE_PUBLICATION_WORK: &str = "work/remote-publication";
 // Publication builds stop at schema 7 (see `BuildSchema`); the reader still
 // opens schema-8 generations for rollback.
 pub const RAW_GENERATION_FORMAT: &str = "raw-index-schema-7-v2";
-// Leaves headroom under the queue worker's 30 s activation request timeout.
-const ACTIVATION_WARM_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 const CORPUS_IDENTITY_DOMAIN: &[u8] = b"ytsearch raw corpus identity v1\0";
 
 #[derive(Clone, Debug)]
@@ -35,7 +33,8 @@ pub struct PublisherPaths {
 pub struct PublishedGeneration {
     pub sequence: u64,
     pub path: PathBuf,
-    pub engine: RawSearchEngine,
+    /// Only a warmed engine can be published and swapped in.
+    pub engine: WarmEngine,
     pub report: BuildReport,
 }
 
@@ -335,9 +334,10 @@ impl Publisher {
         // and fsyncs every streamed file. Avoid rereading the full generation
         // while the old mmap is serving queries. Startup and recovery continue
         // to use the full-checksum `RawSearchEngine::open` path.
-        let engine = RawSearchEngine::open_verified_transfer(incoming_path).map_err(map_raw)?;
-        engine.warm_within(ACTIVATION_WARM_BUDGET);
-        let report = report_for_existing(&engine);
+        let engine = RawSearchEngine::open_verified_transfer(incoming_path)
+            .map_err(map_raw)?
+            .warmed_for_activation();
+        let report = report_for_existing(engine.engine());
 
         fs::rename(incoming_path, &final_path).map_err(map_io)?;
         sync_directory(&self.paths.state_directory.join("generations"))?;
@@ -369,10 +369,12 @@ impl Publisher {
         let final_path = self.paths.state_directory.join(&generation_name);
         ensure_generation_path(&self.paths.state_directory, &final_path)?;
         if final_path.exists() {
-            let engine = RawSearchEngine::open(&final_path).map_err(map_raw)?;
+            let engine = RawSearchEngine::open(&final_path)
+                .map_err(map_raw)?
+                .warmed_for_activation();
             self.activate(snapshot.through_sequence, &generation_name)?;
             store.mark_published(snapshot.through_sequence)?;
-            let report = report_for_existing(&engine);
+            let report = report_for_existing(engine.engine());
             return Ok(Some(PublishedGeneration {
                 sequence: snapshot.through_sequence,
                 path: final_path,
@@ -385,7 +387,7 @@ impl Publisher {
         reset_private_directory(&self.paths.state_directory, &candidate_path)?;
 
         let (report, engine) = self.build_generation(&snapshot, &candidate_path)?;
-        engine.warm_within(ACTIVATION_WARM_BUDGET);
+        let engine = engine.warmed_for_activation();
         sync_directory_tree(&candidate_path)?;
         fs::rename(&candidate_path, &final_path).map_err(map_io)?;
         sync_directory(&self.paths.state_directory.join("generations"))?;
@@ -486,8 +488,10 @@ fn open_exact_generation(
             "generation {sequence} exists with a different manifest"
         )));
     }
-    let engine = RawSearchEngine::open(&path).map_err(map_raw)?;
-    let report = report_for_existing(&engine);
+    let engine = RawSearchEngine::open(&path)
+        .map_err(map_raw)?
+        .warmed_for_activation();
+    let report = report_for_existing(engine.engine());
     Ok(PublishedGeneration {
         sequence,
         path,
