@@ -827,7 +827,9 @@ Raw can replace Typesense as the canonical search index.
 - [x] Retire schema-8 broad-query materialization (2026-09-27). It was never
   activated; publication and the CLI build stop at schema 7, and the reader
   keeps schema-8 read support only until the retained artifact is retired.
-  See `docs/operations/raw-schema-deprecation.md`. The open items below are
+  On 2026-09-28 the owner approved retirement: both copies of the artifact
+  were verified and deleted, and schema-8 read support was removed. See
+  `docs/operations/raw-schema-deprecation.md`. The open items below are
   superseded, not completed.
   - [x] Add the checked `broad-single.bin` format, six typed profiles, exact
     score bits/flags/totals, strict corruption validation, schema-aware

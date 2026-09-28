@@ -16,16 +16,6 @@ use std::{fs::OpenOptions, io::Write};
 use tempfile::TempDir;
 
 fn test_engine() -> (TempDir, RawSearchEngine) {
-    test_engine_built_by(build_index)
-}
-
-fn legacy_schema_eight_engine() -> (TempDir, RawSearchEngine) {
-    test_engine_built_by(builder::build_legacy_schema_eight_index)
-}
-
-fn test_engine_built_by(
-    build: fn(&Path, &Path, &Path) -> Result<BuildReport>,
-) -> (TempDir, RawSearchEngine) {
     let root = TempDir::new().expect("temp dir");
     let chunks_path = root.path().join("chunks.jsonl");
     let channels_path = root.path().join("channels.jsonl");
@@ -45,7 +35,7 @@ fn test_engine_built_by(
         json!({"id":"one","name":"One","handle":"@one"})
     )
     .expect("write channel");
-    build(&chunks_path, &channels_path, &index_path).expect("build raw index");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
     let engine = RawSearchEngine::open(&index_path).expect("open raw index");
     (root, engine)
 }
@@ -274,90 +264,6 @@ fn grouped_query(query: &str) -> SearchParams {
         use_cache: None,
         cache_ttl: None,
         ..SearchParams::default()
-    }
-}
-
-#[test]
-fn materialized_broad_plan_matches_the_posting_reducer_response() {
-    let root = TempDir::new().expect("temp dir");
-    let chunks_path = root.path().join("chunks.jsonl");
-    let channels_path = root.path().join("channels.jsonl");
-    let index_path = root.path().join("index");
-    let mut chunks = File::create(&chunks_path).expect("chunks");
-    for video in 0..6 {
-        for moment in 0..8 {
-            writeln!(
-                chunks,
-                "{}",
-                json!({
-                    "id": format!("video-{video}-{moment}"),
-                    "video_id": format!("video-{video}"),
-                    "title": if video == 0 { "React internals" } else { "Runtime internals" },
-                    "text": format!("{}react rendering example {video}", "filler ".repeat(7 - moment)),
-                    "youtuber_handle": format!("@creator{video}"),
-                    "youtuber_name": format!("Creator {video}"),
-                    "t_start_ms": moment * 30_000,
-                })
-            )
-            .expect("chunk");
-        }
-    }
-    File::create(&channels_path).expect("channels");
-    builder::build_legacy_schema_eight_index(&chunks_path, &channels_path, &index_path)
-        .expect("build index");
-    let engine = RawSearchEngine::open(&index_path).expect("open baseline");
-    let cases = [1, 3, 5, 6, 250].map(|limit| {
-        let mut params = grouped_query("react");
-        params.group_limit = Some(limit);
-        let expected = engine.search(&params).expect("baseline response");
-        (params, expected)
-    });
-
-    let fields = query_fields(Some("text,title"), true).unwrap();
-    let (plans, _) = engine
-        .conjunction_plans(&["react".to_string()], fields, true, 0)
-        .unwrap();
-    let plan = &plans[0];
-    let dominant_exact_mask = plan.alternatives.iter().fold(0_u8, |mask, alternative| {
-        mask | alternative.fields.exact_mask
-    });
-    let mut groups = engine.empty_group_slots();
-    engine
-        .visit_term_plan(plan, |candidate, record| {
-            engine.record_group_match_values(
-                &mut groups,
-                candidate,
-                record.video,
-                record.t_start_ms,
-                5,
-                Some(dominant_exact_mask),
-            )
-        })
-        .unwrap();
-    broad_single::write_index(
-        &index_path.join(broad_single::BROAD_SINGLE_FILE),
-        &[broad_single::BroadBuildPlan {
-            token: "react".to_string(),
-            profile: broad_single::BroadProfile::CombinedPosition,
-            groups,
-        }],
-    )
-    .unwrap();
-    drop(engine);
-    let manifest_path = index_path.join(MANIFEST_FILE);
-    let mut manifest: Manifest =
-        serde_json::from_reader(File::open(&manifest_path).unwrap()).unwrap();
-    manifest.files = build_manifest_files(&index_path, 8).unwrap();
-    serde_json::to_writer_pretty(File::create(&manifest_path).unwrap(), &manifest).unwrap();
-
-    let accelerated = RawSearchEngine::open(&index_path).expect("open accelerated index");
-    for (params, expected) in cases {
-        assert_eq!(
-            accelerated.search(&params).unwrap(),
-            expected,
-            "depth {:?}",
-            params.group_limit
-        );
     }
 }
 
@@ -2716,47 +2622,8 @@ fn title_postings_are_document_sorted_across_interleaved_videos() {
 }
 
 #[test]
-fn schema_eight_manifest_checksums_and_opens_acceleration_sidecars() {
-    let (root, engine) = legacy_schema_eight_engine();
-    let index = root.path().join("index");
-    let manifest: Manifest =
-        serde_json::from_reader(File::open(index.join(MANIFEST_FILE)).expect("manifest"))
-            .expect("manifest JSON");
-    assert_eq!(manifest.schema_version, 8);
-    assert_eq!(manifest.files.len(), GENERATION_FILES_SCHEMA_8.len());
-    for name in [
-        bigram::TEXT_BIGRAM_FILE,
-        bigram::TITLE_BIGRAM_FILE,
-        broad_single::BROAD_SINGLE_FILE,
-    ] {
-        let file = manifest.files.get(name).expect("sidecar manifest entry");
-        assert_eq!(file.bytes, fs::metadata(index.join(name)).unwrap().len());
-        assert_eq!(file.blake3, checksum_file(&index.join(name)).unwrap());
-    }
-    assert_eq!(
-        engine
-            .inner
-            .text_bigrams
-            .as_ref()
-            .expect("text bigrams")
-            .universe(),
-        manifest.documents.max(1)
-    );
-    assert_eq!(
-        engine
-            .inner
-            .title_bigrams
-            .as_ref()
-            .expect("title bigrams")
-            .universe(),
-        manifest.videos.max(1)
-    );
-    assert!(engine.inner.broad_single.is_some());
-}
-
-#[test]
 fn schema_six_reader_remains_compatible_without_bigram_sidecars() {
-    let (root, engine) = legacy_schema_eight_engine();
+    let (root, engine) = test_engine();
     let expected = engine.search(&grouped_query("memory mapped")).unwrap();
     drop(engine);
     let index = root.path().join("index");
@@ -2766,11 +2633,7 @@ fn schema_six_reader_remains_compatible_without_bigram_sidecars() {
             .expect("manifest JSON");
     manifest["schema_version"] = json!(6);
     let files = manifest["files"].as_object_mut().expect("manifest files");
-    for name in [
-        bigram::TEXT_BIGRAM_FILE,
-        bigram::TITLE_BIGRAM_FILE,
-        broad_single::BROAD_SINGLE_FILE,
-    ] {
+    for name in [bigram::TEXT_BIGRAM_FILE, bigram::TITLE_BIGRAM_FILE] {
         files.remove(name);
         fs::remove_file(index.join(name)).unwrap();
     }
@@ -2974,6 +2837,27 @@ fn truncated_document_blocks_are_rejected_at_open() {
     assert!(matches!(
         RawSearchEngine::open(&root.path().join("index")),
         Err(Error::Corrupt(_))
+    ));
+}
+
+#[test]
+fn retired_schema_eight_generations_are_rejected_at_open() {
+    let (root, engine) = test_engine();
+    drop(engine);
+    let manifest_path = root.path().join("index").join(MANIFEST_FILE);
+    let mut manifest: Value =
+        serde_json::from_reader(File::open(&manifest_path).expect("manifest"))
+            .expect("manifest JSON");
+    manifest["schema_version"] = json!(8);
+    serde_json::to_writer_pretty(
+        File::create(&manifest_path).expect("rewrite manifest"),
+        &manifest,
+    )
+    .expect("write schema 8 manifest");
+
+    assert!(matches!(
+        RawSearchEngine::open(&root.path().join("index")),
+        Err(Error::Corrupt(message)) if message.contains("unsupported schema version 8")
     ));
 }
 

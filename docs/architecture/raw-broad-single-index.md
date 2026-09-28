@@ -1,6 +1,6 @@
 # Broad single-token query index
 
-Deprecated with schema 8 on 2026-09-27; see
+Removed with schema 8 on 2026-09-28; kept as design history. See
 [raw-schema-deprecation.md](../operations/raw-schema-deprecation.md).
 
 ## Problem

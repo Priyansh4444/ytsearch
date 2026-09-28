@@ -360,17 +360,17 @@ impl RawSearchEngine {
     fn open_with_validation(index_path: &Path, validation: ManifestValidation) -> Result<Self> {
         let manifest: Manifest =
             serde_json::from_reader(BufReader::new(File::open(index_path.join(MANIFEST_FILE))?))?;
-        // Schema 5 (no complete positions or manifest checksums) is retired:
-        // no production generation uses it. Schema 6 remains the immutable
-        // base index; published generations are schema 7.
-        if !matches!(manifest.schema_version, 6..=8) {
+        // Schemas 5 and 8 are retired (no production generation used them).
+        // Schema 6 remains the immutable base index; published generations
+        // are schema 7.
+        if !matches!(manifest.schema_version, 6..=7) {
             return Err(Error::Corrupt(format!(
-                "unsupported schema version {}; this reader opens schemas 6-8",
+                "unsupported schema version {}; this reader opens schemas 6-7",
                 manifest.schema_version
             )));
         }
         if matches!(validation, ManifestValidation::VerifiedByBuilder)
-            && !matches!(manifest.schema_version, 7 | 8)
+            && manifest.schema_version != 7
         {
             return Err(Error::Corrupt(
                 "newly built index does not use schema version 7".to_string(),
@@ -433,25 +433,6 @@ impl RawSearchEngine {
             elapsed_ms = metadata_started.elapsed().as_millis() as u64,
             "opened raw generation metadata and indexes"
         );
-        let broad_started = std::time::Instant::now();
-        if manifest.schema_version >= 8 {
-            tracing::info!("opening raw broad-single index");
-        }
-        let broad_single = (manifest.schema_version >= 8)
-            .then(|| {
-                broad_single::BroadSingleIndex::open(
-                    &index_path.join(broad_single::BROAD_SINGLE_FILE),
-                    videos.len(),
-                    manifest.documents,
-                )
-            })
-            .transpose()?;
-        if broad_single.is_some() {
-            tracing::info!(
-                elapsed_ms = broad_started.elapsed().as_millis() as u64,
-                "opened raw broad-single index"
-            );
-        }
         let counts_match = manifest.documents as usize == metadata.documents
             && manifest.blocks as usize == metadata.blocks
             && manifest.videos as usize == videos.len()
@@ -474,7 +455,6 @@ impl RawSearchEngine {
                 full_positions,
                 text_bigrams,
                 title_bigrams,
-                broad_single,
                 documents,
                 metadata,
                 partition: std::sync::OnceLock::new(),
