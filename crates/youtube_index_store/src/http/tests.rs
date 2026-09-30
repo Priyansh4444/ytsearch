@@ -154,6 +154,46 @@ fn empty_error_responses_preserve_the_http_status() {
     );
 }
 
+#[tokio::test]
+async fn prepare_outlasts_the_admin_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let digest = "0".repeat(64);
+    let body = serde_json::json!({
+        "job_id": "00000000000000000001-0123456789abcdef",
+        "target_sequence": 1,
+        "snapshot_bytes": 4096,
+        "snapshot_blake3": digest,
+        "compatibility": {
+            "generation_format": "raw-index-schema-7-v2",
+            "corpus_identity": digest,
+            "base_chunks_blake3": digest,
+            "base_channels_blake3": digest
+        },
+        "status": "prepared",
+        "completed_files": []
+    })
+    .to_string();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /admin/publications/prepare "));
+        // Slower than the admin timeout, as a large snapshot export is.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        respond(&mut socket, "201 Created", &body).await;
+    });
+    let mut config = RawIndexAdminConfig::new(format!("http://{address}"), "secret")
+        .with_publication_timeout(Duration::from_secs(10));
+    config.timeout = Duration::from_millis(100);
+    let client = RawIndexAdminClient::new(config).unwrap();
+    let job = client
+        .prepare_publication()
+        .await
+        .expect("prepare waits for the export");
+    assert_eq!(job.target_sequence, 1);
+    server.await.unwrap();
+}
+
 #[test]
 fn publication_job_responses_are_validated_before_filesystem_use() {
     let digest = "0".repeat(64);
