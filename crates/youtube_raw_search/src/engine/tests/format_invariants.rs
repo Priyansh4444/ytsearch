@@ -28,8 +28,16 @@ fn published_files_match_the_reader_schema_file_list() {
 }
 
 #[test]
+fn schema_nine_is_schema_seven_plus_sidecars() {
+    let mut expected = names(&GENERATION_FILES_SCHEMA_7);
+    expected.insert(crate::engine::accelerators::ACCELERATORS_FILE.to_string());
+    expected.insert(crate::engine::accelerators::BITMAPS_FILE.to_string());
+    assert_eq!(names(&GENERATION_FILES_SCHEMA_9), expected);
+}
+
+#[test]
 fn every_hot_file_belongs_to_every_readable_schema() {
-    for schema in [6, 7] {
+    for schema in [6, 7, 9] {
         let files = names(generation_files(schema).expect("readable schema"));
         for hot in HOT_MAPPED_FILES {
             assert!(files.contains(hot), "{hot} missing from schema {schema}");

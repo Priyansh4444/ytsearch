@@ -1235,6 +1235,7 @@ pub(super) fn generation_files(schema_version: u8) -> Result<&'static [&'static 
     match schema_version {
         6 => Ok(&GENERATION_FILES_SCHEMA_6),
         7 => Ok(&GENERATION_FILES_SCHEMA_7),
+        9 => Ok(&GENERATION_FILES_SCHEMA_9),
         _ => Err(Error::Corrupt(format!(
             "unsupported schema version {schema_version}"
         ))),

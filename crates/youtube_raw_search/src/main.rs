@@ -1,11 +1,11 @@
 use std::{env, net::SocketAddr, path::PathBuf, process::ExitCode, sync::Arc};
 use youtube_raw_search::{
     AdminState, MutationStore, Publisher, PublisherPaths, RawSearchEngine, ReloadableEngine,
-    admin_router, build_index, slice_corpus,
+    accelerate_generation, admin_router, build_index, slice_corpus,
 };
 use youtube_search_service::{SearchBackend, ServerConfig};
 
-const USAGE: &str = "usage: youtube-raw-search build <chunks.jsonl> <channels.jsonl> <index-dir> | serve [index-dir] | serve-mutable | slice <input.jsonl> <output.jsonl> <max-videos>";
+const USAGE: &str = "usage: youtube-raw-search build <chunks.jsonl> <channels.jsonl> <index-dir> | accelerate <schema-7-index-dir> | serve [index-dir] | serve-mutable | slice <input.jsonl> <output.jsonl> <max-videos>";
 const DEFAULT_BIND: &str = "[::]:8108";
 
 #[tokio::main]
@@ -36,6 +36,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let index = required_path(args.next(), "index directory")?;
             let report = build_index(&chunks, &channels, &index)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Some("accelerate") => {
+            let index = required_path(args.next(), "index directory")?;
+            accelerate_generation(&index)?;
         }
         Some("serve") => {
             let index_path = args

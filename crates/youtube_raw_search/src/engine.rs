@@ -102,6 +102,22 @@ const GENERATION_FILES_SCHEMA_7: [&str; 11] = [
     bigram::TEXT_BIGRAM_FILE,
     bigram::TITLE_BIGRAM_FILE,
 ];
+// Schema 9 is schema 7 plus build-time accelerators that change no response.
+const GENERATION_FILES_SCHEMA_9: [&str; 13] = [
+    CHANNELS_FILE,
+    VIDEOS_FILE,
+    LEXICON_FILE,
+    POSTINGS_FILE,
+    POSITIONS_FILE,
+    FULL_POSITIONS_FILE,
+    DOCUMENTS_FILE,
+    METADATA_FILE,
+    FUZZY_FILE,
+    bigram::TEXT_BIGRAM_FILE,
+    bigram::TITLE_BIGRAM_FILE,
+    accelerators::ACCELERATORS_FILE,
+    accelerators::BITMAPS_FILE,
+];
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BuildReport {
@@ -187,6 +203,7 @@ enum ManifestValidation {
     VerifiedByBuilder,
 }
 
+mod accelerators;
 mod bigram;
 mod builder;
 mod conjunction;
@@ -198,6 +215,7 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
+pub use accelerators::accelerate_generation;
 #[cfg(test)]
 use builder::BuildPosting;
 pub(crate) use builder::build_index_from_lines_and_open;
@@ -262,6 +280,13 @@ struct EngineInner {
     full_positions: PositionIndex,
     text_bigrams: Option<bigram::BigramIndex>,
     title_bigrams: Option<bigram::BigramIndex>,
+    // Schema 9 only.
+    accelerators: Option<accelerators::Accelerators>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by the schema-9 query fast paths")
+    )]
+    bitmaps: Option<accelerators::Bitmaps>,
     documents: MappedFile,
     metadata: DocumentTable,
     // Planned on a background thread after open; scans run as one range
@@ -1158,7 +1183,12 @@ impl RawSearchEngine {
                 remaining_positions: full_positions.range(entry.term, field)?,
                 expected: frequency,
             };
-            let skips = self.inner.skips.get_or_build(entry.term, field, streams);
+            let skips = self.inner.skips.get_or_build(
+                entry.term,
+                field,
+                streams,
+                self.inner.accelerators.as_ref(),
+            );
             cursors.push(PhraseCursor {
                 postings: PositionedPostingCursor::new(
                     streams.postings,

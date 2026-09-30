@@ -362,18 +362,18 @@ impl RawSearchEngine {
             serde_json::from_reader(BufReader::new(File::open(index_path.join(MANIFEST_FILE))?))?;
         // Schemas 5 and 8 are retired (no production generation used them).
         // Schema 6 remains the immutable base index; published generations
-        // are schema 7.
-        if !matches!(manifest.schema_version, 6..=7) {
+        // are schema 7, or schema 9 (7 plus accelerators).
+        if !matches!(manifest.schema_version, 6 | 7 | 9) {
             return Err(Error::Corrupt(format!(
-                "unsupported schema version {}; this reader opens schemas 6-7",
+                "unsupported schema version {}; this reader opens schemas 6, 7, and 9",
                 manifest.schema_version
             )));
         }
         if matches!(validation, ManifestValidation::VerifiedByBuilder)
-            && manifest.schema_version != 7
+            && !matches!(manifest.schema_version, 7 | 9)
         {
             return Err(Error::Corrupt(
-                "newly built index does not use schema version 7".to_string(),
+                "newly built index does not use schema version 7 or 9".to_string(),
             ));
         }
         {
@@ -429,6 +429,22 @@ impl RawSearchEngine {
         } else {
             (None, None)
         };
+        let (accelerators, bitmaps) = if manifest.schema_version >= 9 {
+            (
+                Some(accelerators::Accelerators::open(
+                    &index_path.join(accelerators::ACCELERATORS_FILE),
+                    lexicon.count,
+                )?),
+                Some(accelerators::Bitmaps::open(
+                    &index_path.join(accelerators::BITMAPS_FILE),
+                    lexicon.count,
+                    manifest.documents,
+                    manifest.videos,
+                )?),
+            )
+        } else {
+            (None, None)
+        };
         tracing::info!(
             elapsed_ms = metadata_started.elapsed().as_millis() as u64,
             "opened raw generation metadata and indexes"
@@ -455,6 +471,8 @@ impl RawSearchEngine {
                 full_positions,
                 text_bigrams,
                 title_bigrams,
+                accelerators,
+                bitmaps,
                 documents,
                 metadata,
                 partition: std::sync::OnceLock::new(),

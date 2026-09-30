@@ -131,7 +131,7 @@ fn short_lists_walk_without_checkpoints() {
     let directory = skips::SkipDirectory::default();
     assert!(
         directory
-            .get_or_build(0, IndexedField::Text, streams)
+            .get_or_build(0, IndexedField::Text, streams, None)
             .is_none()
     );
 }
