@@ -138,7 +138,19 @@ impl RemotePublication {
         Ok(publication)
     }
 
+    /// Exports the mutation store and records a prepared job. The export
+    /// grows with the store (964 MB in production), so it can outlive the
+    /// request: axum drops a handler whose client disconnects, which left the
+    /// job unrecorded and made every retry start the export again. Running
+    /// it as a detached task lets a retried prepare return the recorded job.
     pub(crate) async fn prepare(&self) -> Result<RemoteJobResponse, IndexStoreError> {
+        let publication = self.clone();
+        tokio::spawn(async move { publication.prepare_detached().await })
+            .await
+            .map_err(|error| map_io(std::io::Error::other(error)))?
+    }
+
+    async fn prepare_detached(&self) -> Result<RemoteJobResponse, IndexStoreError> {
         let _operation = self.operation.lock().await;
         if self.state_path().exists() {
             let existing = self.load_job()?;

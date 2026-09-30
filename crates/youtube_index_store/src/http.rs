@@ -130,11 +130,15 @@ impl RawIndexAdminClient {
         format!("{}{path}", self.base_url)
     }
 
+    /// Prepare exports the reader's whole mutation store, which grows with
+    /// every indexed video, so it gets the transfer timeout. Under the admin
+    /// timeout, a 964 MB export failed two daily publications in production.
     pub async fn prepare_publication(&self) -> Result<RawPublicationJob, IndexStoreError> {
         let job = self
             .execute(
                 self.client
-                    .post(self.endpoint("/admin/publications/prepare")),
+                    .post(self.endpoint("/admin/publications/prepare"))
+                    .timeout(self.publication_timeout),
             )
             .await?;
         validate_publication_job_response(&job)?;

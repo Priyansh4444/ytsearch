@@ -4,7 +4,7 @@ use axum::body::Body;
 use flate2::{Compression, write::GzEncoder};
 use serde::Serialize;
 use serde_json::json;
-use std::io::Write;
+use std::{io::Write, time::Duration};
 use tempfile::TempDir;
 use youtube_index_store::{ChannelDocument, IndexOperationState, VideoReplacement};
 use youtube_ingest::TranscriptChunk;
@@ -532,6 +532,29 @@ async fn restart_preserves_an_incompatible_job_with_a_malformed_manifest() {
             .state,
         IndexOperationState::Durable
     );
+}
+
+#[tokio::test]
+async fn prepare_records_its_job_after_the_request_is_dropped() {
+    let fixture = fixture();
+    let sequence = replace(&fixture.store, "video-n", "snapshotonly", "operation-n");
+    // One poll starts the export; dropping the future is what the server
+    // does when the client times out and disconnects.
+    let abandoned = tokio::time::timeout(Duration::ZERO, fixture.publication.prepare()).await;
+    assert!(abandoned.is_err(), "the export must still be running");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !fixture.publication.state_path().exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "abandoned prepare never recorded its job"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let recorded = fixture.publication.load_job().unwrap();
+    assert_eq!(recorded.target_sequence, sequence);
+    assert_eq!(recorded.status, RemoteJobStatus::Prepared);
+    let retried = fixture.publication.prepare().await.unwrap();
+    assert_eq!(retried.job_id, recorded.job_id);
 }
 
 #[tokio::test]
