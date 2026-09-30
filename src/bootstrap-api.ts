@@ -120,7 +120,10 @@ function decodeIndexStatus(input: unknown): IndexStatus {
   return {
     handle: string(value.handle),
     status: literal(value.status, ["pending", "queued", "running", "failed", "rejected", "idle"]),
-    channel: value.channel === undefined ? undefined : decodeChannel(value.channel),
+    channel:
+      value.channel === undefined || value.channel === null
+        ? undefined
+        : decodeChannel(value.channel),
     request_id: optionalString(value.request_id),
     target_backend: optionalString(value.target_backend),
   };
@@ -140,8 +143,10 @@ function string(input: unknown): string {
   return input;
 }
 
+// The API serializes absent optional fields as JSON null (Rust `Option`
+// without `skip_serializing_if`), so null and undefined both mean absent.
 function optionalString(input: unknown): string | undefined {
-  return input === undefined ? undefined : string(input);
+  return input === undefined || input === null ? undefined : string(input);
 }
 
 function number(input: unknown): number {

@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runCopyToClipboard, runSearchTranscripts } from "./client-runtime";
+import {
+  runCopyToClipboard,
+  runDashboardData,
+  runRequestIndex,
+  runSearchTranscripts,
+} from "./client-runtime";
 
 const emptySearchResponse = {
   query: "rust",
@@ -52,6 +57,65 @@ describe("browser client runtime", () => {
         sort: "relevance",
       }),
     ).rejects.toThrow("Search returned an invalid response (HTTP 200)");
+  });
+
+  // Payloads as the production API serializes them (absent options are null).
+  it("accepts an index request whose optional note is null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          request: {
+            id: "req-1",
+            handle: "@t3dotgg",
+            note: null,
+            requested_at: 1790793038,
+            source_backend: "raw",
+            status: "pending",
+          },
+        }),
+      ),
+    );
+
+    await expect(runRequestIndex("https://api.example.com", "@t3dotgg")).resolves.toEqual({
+      id: "req-1",
+      handle: "@t3dotgg",
+      note: undefined,
+      requested_at: 1790793038,
+      source_backend: "raw",
+      status: "pending",
+    });
+  });
+
+  it("reads an idle index status with null fields on the dashboard", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(
+          url.endsWith("/api/health")
+            ? Response.json({ ok: true })
+            : url.endsWith("/api/youtubers")
+              ? Response.json({ channels: [] })
+              : Response.json({
+                  channel: null,
+                  handle: "",
+                  request_id: null,
+                  status: "idle",
+                  target_backend: null,
+                }),
+        ),
+      ),
+    );
+
+    const dashboard = await runDashboardData("https://api.example.com");
+    expect(dashboard.errors).toEqual([]);
+    expect(dashboard.indexStatus).toEqual({
+      handle: "",
+      status: "idle",
+      channel: undefined,
+      request_id: undefined,
+      target_backend: undefined,
+    });
   });
 
   it("uses the platform clipboard without loading a framework runtime", async () => {

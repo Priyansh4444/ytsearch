@@ -279,8 +279,10 @@ function string(input: unknown): string {
   return input;
 }
 
+// The API serializes absent optional fields as JSON null (Rust `Option`
+// without `skip_serializing_if`), so null and undefined both mean absent.
 function optionalString(input: unknown): string | undefined {
-  return input === undefined ? undefined : string(input);
+  return input === undefined || input === null ? undefined : string(input);
 }
 
 function optionalNullableString(input: unknown): string | null | undefined {
