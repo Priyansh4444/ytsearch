@@ -10,6 +10,11 @@
     "run_worker_first": ["/api/*"],
   },
   "routes": [{ "pattern": "search.pronsh.dev", "custom_domain": true }],
+  // Run the fetch handler next to the API in Fly sjc: every /api/* request is
+  // a proxied round trip there, and at a distant edge (e.g. MAN) the proxy
+  // leg cost ~0.8 s. Assets are still served from the nearest edge. The API
+  // host is anycast, so host/hostname probes cannot place it; pin the region.
+  "placement": { "region": "aws:us-west-1" },
   "vars": {
     "PUBLIC_APP_ORIGIN": "https://search.pronsh.dev",
     "API_BASE_URL": "https://ytsearch-api-raw-production.fly.dev",
