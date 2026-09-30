@@ -103,7 +103,7 @@ const GENERATION_FILES_SCHEMA_7: [&str; 11] = [
     bigram::TITLE_BIGRAM_FILE,
 ];
 // Schema 9 is schema 7 plus build-time accelerators that change no response.
-const GENERATION_FILES_SCHEMA_9: [&str; 13] = [
+const GENERATION_FILES_SCHEMA_9: [&str; 14] = [
     CHANNELS_FILE,
     VIDEOS_FILE,
     LEXICON_FILE,
@@ -117,6 +117,7 @@ const GENERATION_FILES_SCHEMA_9: [&str; 13] = [
     bigram::TITLE_BIGRAM_FILE,
     accelerators::ACCELERATORS_FILE,
     accelerators::BITMAPS_FILE,
+    plan_bounds::PLAN_BOUNDS_FILE,
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -205,9 +206,11 @@ enum ManifestValidation {
 
 mod accelerators;
 mod bigram;
+mod broad_fast;
 mod builder;
 mod conjunction;
 mod partition;
+mod plan_bounds;
 mod query_support;
 mod single_token;
 mod skips;
@@ -282,11 +285,8 @@ struct EngineInner {
     title_bigrams: Option<bigram::BigramIndex>,
     // Schema 9 only.
     accelerators: Option<accelerators::Accelerators>,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the schema-9 query fast paths")
-    )]
     bitmaps: Option<accelerators::Bitmaps>,
+    plan_bounds: Option<plan_bounds::PlanBounds>,
     documents: MappedFile,
     metadata: DocumentTable,
     // Planned on a background thread after open; scans run as one range
@@ -1649,6 +1649,27 @@ impl RawSearchEngine {
             .fold(0_u8, |mask, alternative| {
                 mask | alternative.fields.exact_mask
             });
+        // Schema 9 answers a complete broad search without scoring every
+        // match; the other dispositions keep the scan below.
+        if let Some(order) = broad_fast::accelerated_group_order(params.sort_by.as_deref())
+            && let Some(analysis) = self.analyze_broad_plans(&plans, order)?
+            && matches!(
+                broad_grouped_disposition(analysis.totals.documents, analysis.totals.found),
+                BroadGroupedDisposition::Complete
+            )
+            && let Some(response) = self.accelerated_broad_page(
+                params,
+                &plans,
+                &analysis,
+                order,
+                &highlights,
+                hits_per_group,
+                full_exact_mask,
+                cache,
+            )?
+        {
+            return Ok(Some(BroadGroupedSearch::Complete(response)));
+        }
         let partitions = self.scan_document_partitions(|range| {
             let mut groups = self.empty_group_slots();
             let mut documents = 0_usize;
@@ -1727,6 +1748,26 @@ impl RawSearchEngine {
         let dominant_exact_mask = plan.alternatives.iter().fold(0_u8, |mask, alternative| {
             mask | alternative.fields.exact_mask
         });
+        if let Some(order) = broad_fast::accelerated_group_order(params.sort_by.as_deref())
+            && let Some(analysis) = self.analyze_broad_plans(&plans, order)?
+        {
+            if analysis.totals.found < TYPO_RESULT_THRESHOLD {
+                return Ok(None);
+            }
+            let mut cache = BlockCache::default();
+            if let Some(response) = self.accelerated_broad_page(
+                params,
+                &plans,
+                &analysis,
+                order,
+                &highlights,
+                hits_per_group,
+                dominant_exact_mask,
+                &mut cache,
+            )? {
+                return Ok(Some(response));
+            }
+        }
         let partitions = self.scan_document_partitions(|range| {
             let mut groups = self.empty_group_slots();
             self.visit_term_plan_range(plan, range, |candidate, record| {
@@ -1864,8 +1905,21 @@ impl RawSearchEngine {
             params.sort_by.as_deref(),
             offset.saturating_add(limit),
         );
-        let mut grouped_hits = Vec::with_capacity(limit.min(groups.len()));
-        for mut group in groups.into_iter().skip(offset).take(limit) {
+        let page = groups.into_iter().skip(offset).take(limit).collect();
+        self.format_group_page(found, total_moments, page, highlight_groups, cache)
+    }
+
+    /// Formats one page of groups, already in response order.
+    fn format_group_page(
+        &self,
+        found: usize,
+        total_moments: usize,
+        page: Vec<VideoMatches>,
+        highlight_groups: &[Vec<String>],
+        cache: &mut BlockCache,
+    ) -> Result<Value> {
+        let mut grouped_hits = Vec::with_capacity(page.len());
+        for mut group in page {
             let group_found = visible_group_moments(&group);
             group.documents.sort_unstable_by(descending_doc_score);
             let video_id = self.inner.videos[group.video as usize].id.clone();

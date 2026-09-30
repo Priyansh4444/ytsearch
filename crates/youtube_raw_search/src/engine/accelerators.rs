@@ -36,6 +36,7 @@ pub(super) struct AcceleratorConfig {
     pub(super) text_bitmap_budget_bytes: usize,
     /// Title terms on at least this many per mille of videos get a bitmap.
     pub(super) title_bitmap_min_per_mille: u64,
+    pub(super) plan_bounds: super::plan_bounds::PlanBoundConfig,
 }
 
 impl AcceleratorConfig {
@@ -44,6 +45,10 @@ impl AcceleratorConfig {
         block_postings: 128,
         text_bitmap_budget_bytes: 64 * 1024 * 1024,
         title_bitmap_min_per_mille: 1,
+        plan_bounds: super::plan_bounds::PlanBoundConfig {
+            window_documents: 512,
+            min_documents: super::conjunction::STREAMING_CONJUNCTION_MIN_DOCUMENTS,
+        },
     };
 }
 
@@ -89,8 +94,13 @@ pub(super) fn upgrade_to_schema_nine(index_path: &Path, config: AcceleratorConfi
     }
     let engine = RawSearchEngine::open_newly_built(index_path)?;
     write_accelerators(&engine, index_path, config)?;
+    super::plan_bounds::write_plan_bounds(&engine, index_path, config.plan_bounds)?;
     drop(engine);
-    for name in [ACCELERATORS_FILE, BITMAPS_FILE] {
+    for name in [
+        ACCELERATORS_FILE,
+        BITMAPS_FILE,
+        super::plan_bounds::PLAN_BOUNDS_FILE,
+    ] {
         let path = index_path.join(name);
         manifest.files.insert(
             name.to_string(),
@@ -413,10 +423,6 @@ impl Accelerators {
         Some((blocks, postings, offset))
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the schema-9 query fast paths")
-    )]
     /// Block bounds of one term, or `None` for a short list. Documents must
     /// increase strictly; a violation is corruption.
     pub(super) fn blocks(&self, term: u32) -> Result<Option<Vec<BlockBound>>> {
@@ -496,10 +502,6 @@ impl Accelerators {
 }
 
 /// Validated view of `bitmaps.bin`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "read by the schema-9 query fast paths")
-)]
 pub(super) struct Bitmaps {
     file: MappedFile,
     /// Sorted by (term, field): payload offset.
@@ -557,10 +559,6 @@ impl Bitmaps {
         })
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the schema-9 query fast paths")
-    )]
     /// The term's bitmap words for `field`, if one was materialized.
     pub(super) fn words(
         &self,

@@ -40,6 +40,8 @@ struct TextAlternativeCursor<'a> {
     decoded: u32,
     current: Option<(u32, u32, u32)>,
     idf: f32,
+    // Seek checkpoints, attached only for pruned schema-9 scans.
+    skips: Option<Arc<[skips::SkipEntry]>>,
 }
 
 struct TitleVideoCursor<'a> {
@@ -54,7 +56,7 @@ struct TitlePlanCursor<'a> {
     pending: std::collections::BinaryHeap<std::cmp::Reverse<(u32, usize)>>,
 }
 
-struct StreamingTermPlan<'a> {
+pub(super) struct StreamingTermPlan<'a> {
     text: Vec<TextAlternativeCursor<'a>>,
     title: TitlePlanCursor<'a>,
     current_document: Option<u32>,
@@ -217,6 +219,167 @@ impl RawSearchEngine {
         }
 
         Ok((plans, highlights))
+    }
+
+    /// The IDF every cursor of `entry` scores with.
+    pub(super) fn alternative_idf(&self, entry: TermEntry) -> f32 {
+        let effective_frequency = self
+            .estimated_entry_documents(entry)
+            .min(u64::from(self.inner.manifest.documents));
+        inverse_document_frequency(
+            self.inner.manifest.documents,
+            u32::try_from(effective_frequency)
+                .unwrap_or(u32::MAX)
+                .max(1),
+        )
+    }
+
+    /// The title contribution of each video (with documents) whose title
+    /// matches `alternative`, in title-posting order.
+    pub(super) fn title_video_scores(
+        &self,
+        alternative: &TermAlternative,
+    ) -> Result<Vec<(u32, f32)>> {
+        let entry = alternative.entry;
+        let bytes = self.postings_range(entry.title_offset, entry.title_length)?;
+        let position_bytes = alternative
+            .fields
+            .prioritize_position
+            .then(|| self.inner.positions.range(entry.term, IndexedField::Title))
+            .transpose()?;
+        let idf = self.alternative_idf(entry);
+        let mut scores = Vec::new();
+        let mut cursor = 0;
+        let mut position_cursor = 0;
+        let mut video_id = 0_u32;
+        let mut postings = 0_u32;
+        while cursor < bytes.len() {
+            video_id = video_id.saturating_add(read_varint(bytes, &mut cursor, bytes.len())?);
+            let frequency = read_varint(bytes, &mut cursor, bytes.len())?;
+            let first_position = position_bytes
+                .map(|positions| read_varint(positions, &mut position_cursor, positions.len()))
+                .transpose()?
+                .unwrap_or_default();
+            let video = self.inner.videos.get(video_id as usize).ok_or_else(|| {
+                Error::Corrupt("title posting video is out of bounds".to_string())
+            })?;
+            if !video.documents.is_empty() {
+                scores.push((
+                    video_id,
+                    idf * TITLE_QUERY_WEIGHT
+                        * (1.0 + (frequency as f32).ln())
+                        * token_position_multiplier(
+                            first_position,
+                            alternative.fields.prioritize_position,
+                        )
+                        * alternative.score_multiplier,
+                ));
+            }
+            postings = postings.saturating_add(1);
+        }
+        if postings != entry.title_frequency
+            || position_bytes.is_some_and(|positions| position_cursor != positions.len())
+        {
+            return Err(Error::Corrupt(
+                "title posting/position count does not match lexicon".to_string(),
+            ));
+        }
+        Ok(scores)
+    }
+
+    /// Streams for `plans` whose text cursors seek through posting
+    /// checkpoints, for scans that visit a sparse set of document ranges in
+    /// ascending order.
+    pub(super) fn seeking_streams<'a>(
+        &'a self,
+        plans: &'a [TermPlan],
+    ) -> Result<Vec<StreamingTermPlan<'a>>> {
+        let mut streams = Vec::with_capacity(plans.len());
+        for plan in plans {
+            let mut stream = StreamingTermPlan::new(self, plan)?;
+            for cursor in &mut stream.text {
+                let entry = cursor.alternative.entry;
+                let positioned = skips::PositionedStreams {
+                    postings: cursor.postings,
+                    first_positions: self.inner.positions.range(entry.term, IndexedField::Text)?,
+                    remaining_positions: self
+                        .inner
+                        .full_positions
+                        .range(entry.term, IndexedField::Text)?,
+                    expected: entry.text_frequency,
+                };
+                cursor.skips = self.inner.skips.get_or_build(
+                    entry.term,
+                    IndexedField::Text,
+                    positioned,
+                    self.inner.accelerators.as_ref(),
+                );
+            }
+            streams.push(stream);
+        }
+        Ok(streams)
+    }
+
+    /// Visits the matches of `plans` (one plan or a conjunction) in
+    /// `documents`, which must start at or after every earlier range visited
+    /// with the same streams. Candidates equal those of the full scans.
+    pub(super) fn visit_seeking_range<F>(
+        &self,
+        streams: &mut [StreamingTermPlan<'_>],
+        documents: std::ops::Range<u32>,
+        mut visit: F,
+    ) -> Result<()>
+    where
+        F: FnMut(DocMatch, SearchDocumentRecord) -> Result<()>,
+    {
+        for stream in streams.iter_mut() {
+            stream.seek(documents.start)?;
+        }
+        if let [stream] = streams {
+            while let Some(document) = stream.current_document() {
+                if document >= documents.end {
+                    break;
+                }
+                let record = self.inner.metadata.search_document(document)?;
+                let length_norm = self.document_length_norm(record.tokens);
+                let candidate = stream.take_current(length_norm)?;
+                visit(candidate, record)?;
+            }
+            return Ok(());
+        }
+        loop {
+            let mut target = 0;
+            for stream in streams.iter() {
+                let Some(document) = stream.current_document() else {
+                    return Ok(());
+                };
+                target = target.max(document);
+            }
+            if target >= documents.end {
+                return Ok(());
+            }
+            for stream in streams.iter_mut() {
+                stream.seek(target)?;
+            }
+            if streams
+                .iter()
+                .any(|stream| stream.current_document() != Some(target))
+            {
+                continue;
+            }
+            let record = self.inner.metadata.search_document(target)?;
+            let length_norm = self.document_length_norm(record.tokens);
+            let mut stream_matches = streams.iter_mut();
+            let mut combined = stream_matches
+                .next()
+                .ok_or_else(|| Error::Corrupt("streaming conjunction is empty".to_string()))?
+                .take_current(length_norm)?;
+            for stream in stream_matches {
+                let next = stream.take_current(length_norm)?;
+                combined = combine_plan_matches(target, combined, next);
+            }
+            visit(combined, record)?;
+        }
     }
 
     fn document_length_norm(&self, document_tokens: u32) -> f32 {
@@ -754,9 +917,6 @@ impl<'a> TextAlternativeCursor<'a> {
 
     fn new(engine: &'a RawSearchEngine, alternative: &'a TermAlternative) -> Result<Self> {
         let entry = alternative.entry;
-        let effective_frequency = engine
-            .estimated_entry_documents(entry)
-            .min(u64::from(engine.inner.manifest.documents));
         Ok(Self {
             engine,
             alternative,
@@ -771,12 +931,8 @@ impl<'a> TextAlternativeCursor<'a> {
             previous_document: 0,
             decoded: 0,
             current: None,
-            idf: inverse_document_frequency(
-                engine.inner.manifest.documents,
-                u32::try_from(effective_frequency)
-                    .unwrap_or(u32::MAX)
-                    .max(1),
-            ),
+            idf: engine.alternative_idf(entry),
+            skips: None,
         })
     }
 
@@ -843,6 +999,31 @@ impl<'a> TextAlternativeCursor<'a> {
         self.previous_document = checkpoint.previous_document;
         self.decoded = checkpoint.decoded;
         self.current = None;
+    }
+
+    /// `advance_to`, first jumping to the last checkpoint before `target`.
+    fn seek(&mut self, target: u32) -> Result<()> {
+        if self
+            .current
+            .is_some_and(|(document, _, _)| document >= target)
+        {
+            return Ok(());
+        }
+        if let Some(skips) = &self.skips {
+            let index = skips.partition_point(|entry| entry.previous_id < target);
+            if let Some(entry) = index.checked_sub(1).map(|index| skips[index])
+                && entry.decoded > self.decoded
+            {
+                self.posting_cursor = entry.posting_cursor;
+                if self.positions.is_some() {
+                    self.position_cursor = entry.first_cursor;
+                }
+                self.previous_document = entry.previous_id;
+                self.decoded = entry.decoded;
+                self.current = None;
+            }
+        }
+        self.advance_to(target)
     }
 
     fn contribution(&self, length_norm: f32) -> Option<DocMatch> {
@@ -959,6 +1140,21 @@ impl<'a> StreamingTermPlan<'a> {
         Ok(())
     }
 
+    fn seek(&mut self, target: u32) -> Result<()> {
+        if self
+            .current_document
+            .is_some_and(|document| document >= target)
+        {
+            return Ok(());
+        }
+        for cursor in &mut self.text {
+            cursor.seek(target)?;
+        }
+        self.title.advance_to(target);
+        self.refresh_current_document();
+        Ok(())
+    }
+
     fn take_current(&mut self, length_norm: f32) -> Result<DocMatch> {
         let document = self
             .current_document
@@ -1001,64 +1197,13 @@ impl<'a> TitlePlanCursor<'a> {
             if !alternative.fields.title {
                 continue;
             }
-            let entry = alternative.entry;
-            let bytes = engine.postings_range(entry.title_offset, entry.title_length)?;
-            let position_bytes = alternative
-                .fields
-                .prioritize_position
-                .then(|| {
-                    engine
-                        .inner
-                        .positions
-                        .range(entry.term, IndexedField::Title)
-                })
-                .transpose()?;
-            let effective_frequency = engine
-                .estimated_entry_documents(entry)
-                .min(u64::from(engine.inner.manifest.documents));
-            let idf = inverse_document_frequency(
-                engine.inner.manifest.documents,
-                u32::try_from(effective_frequency)
-                    .unwrap_or(u32::MAX)
-                    .max(1),
-            );
-            let mut cursor = 0;
-            let mut position_cursor = 0;
-            let mut video_id = 0_u32;
-            let mut postings = 0_u32;
-            while cursor < bytes.len() {
-                video_id = video_id.saturating_add(read_varint(bytes, &mut cursor, bytes.len())?);
-                let frequency = read_varint(bytes, &mut cursor, bytes.len())?;
-                let first_position = position_bytes
-                    .map(|positions| read_varint(positions, &mut position_cursor, positions.len()))
-                    .transpose()?
-                    .unwrap_or_default();
-                let video = engine.inner.videos.get(video_id as usize).ok_or_else(|| {
-                    Error::Corrupt("title posting video is out of bounds".to_string())
-                })?;
-                if !video.documents.is_empty() {
-                    videos.push(TitleVideoCursor {
-                        documents: &video.documents,
-                        document_index: 0,
-                        score: idf
-                            * TITLE_QUERY_WEIGHT
-                            * (1.0 + (frequency as f32).ln())
-                            * token_position_multiplier(
-                                first_position,
-                                alternative.fields.prioritize_position,
-                            )
-                            * alternative.score_multiplier,
-                        exact_mask: alternative.fields.exact_mask,
-                    });
-                }
-                postings = postings.saturating_add(1);
-            }
-            if postings != entry.title_frequency
-                || position_bytes.is_some_and(|positions| position_cursor != positions.len())
-            {
-                return Err(Error::Corrupt(
-                    "title posting/position count does not match lexicon".to_string(),
-                ));
+            for (video, score) in engine.title_video_scores(alternative)? {
+                videos.push(TitleVideoCursor {
+                    documents: &engine.inner.videos[video as usize].documents,
+                    document_index: 0,
+                    score,
+                    exact_mask: alternative.fields.exact_mask,
+                });
             }
         }
         let pending = videos

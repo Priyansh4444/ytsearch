@@ -32,6 +32,7 @@ fn schema_nine_is_schema_seven_plus_sidecars() {
     let mut expected = names(&GENERATION_FILES_SCHEMA_7);
     expected.insert(crate::engine::accelerators::ACCELERATORS_FILE.to_string());
     expected.insert(crate::engine::accelerators::BITMAPS_FILE.to_string());
+    expected.insert(crate::engine::plan_bounds::PLAN_BOUNDS_FILE.to_string());
     assert_eq!(names(&GENERATION_FILES_SCHEMA_9), expected);
 }
 
