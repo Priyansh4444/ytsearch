@@ -129,9 +129,9 @@ pub struct RawGenerationUpload {
     pub manifest: RawGenerationManifest,
 }
 
-/// Files of a published schema-7 generation. Publication does not ship the
-/// schema-8 `broad-single.bin` answers; see `RAW_GENERATION_FORMAT`.
-pub const RAW_GENERATION_FILES: [&str; 11] = [
+/// Files of a published schema-9 generation: schema 7 plus the accelerator
+/// sidecars. See `RAW_GENERATION_FORMAT`.
+pub const RAW_GENERATION_FILES: [&str; 14] = [
     "channels.json",
     "videos.json",
     "lexicon.bin",
@@ -143,6 +143,9 @@ pub const RAW_GENERATION_FILES: [&str; 11] = [
     "fuzzy.bin",
     "bigrams.text.bin",
     "bigrams.title.bin",
+    "accelerators.bin",
+    "bitmaps.bin",
+    "plan-bounds.bin",
 ];
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

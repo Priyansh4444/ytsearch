@@ -21,7 +21,7 @@ fn format_schema(format: &str) -> u8 {
 #[test]
 fn published_files_match_the_reader_schema_file_list() {
     assert_eq!(
-        names(&GENERATION_FILES_SCHEMA_7),
+        names(&GENERATION_FILES_SCHEMA_9),
         names(&youtube_index_store::RAW_GENERATION_FILES),
         "publication must upload exactly the files the reader validates"
     );
@@ -47,17 +47,24 @@ fn every_hot_file_belongs_to_every_readable_schema() {
 }
 
 #[test]
-fn the_advertised_format_is_the_schema_the_builder_writes() {
-    let (root, engine) = test_engine();
-    drop(engine);
-    let manifest: Manifest = serde_json::from_reader(
-        File::open(root.path().join("index").join(MANIFEST_FILE)).expect("manifest"),
-    )
-    .expect("manifest JSON");
+fn the_advertised_format_is_the_schema_publication_builds() {
+    let root = TempDir::new().expect("temp dir");
+    let index = root.path().join("candidate");
+    let chunks = [
+        json!({"id":"a-1","video_id":"a","title":"Rust performance","text":"a compact search index","youtuber_handle":"@one","t_start_ms":0,"t_end_ms":1000}),
+        json!({"id":"b-1","video_id":"b","title":"Runtimes","text":"the search runtime","youtuber_handle":"@two","t_start_ms":0,"t_end_ms":1000}),
+    ]
+    .map(|chunk| Ok(chunk.to_string()));
+    let (_, engine) = build_index_from_lines_and_open(chunks.into_iter(), Vec::new(), &index)
+        .expect("publication build");
     assert_eq!(
-        manifest.schema_version,
+        engine.inner.manifest.schema_version,
         format_schema(crate::RAW_GENERATION_FORMAT),
-        "RAW_GENERATION_FORMAT must name the schema build_index writes"
+        "RAW_GENERATION_FORMAT must name the schema publication builds"
     );
-    assert!(generation_files(manifest.schema_version).is_ok());
+    assert_eq!(
+        names(generation_files(engine.inner.manifest.schema_version).expect("readable")),
+        names(&youtube_index_store::RAW_GENERATION_FILES),
+        "publication must upload exactly the files its schema lists"
+    );
 }
