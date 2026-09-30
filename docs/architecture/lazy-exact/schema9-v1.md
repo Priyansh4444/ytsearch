@@ -100,14 +100,29 @@ and block-priority returned the exact first 21 groups after scoring 0.17–16%
 of matches (see
 [P01 evidence](../../experiments/search/schema9/P01/exact-totals-and-block-priority-2026-09-27.md)).
 
-## Rollout guards
+## Rollout guards and switch order
 
-- The reader advertises `raw-index-schema-9-v1`; worker preflight rejects any
-  other build format (see
-  [raw-operational-invariants.md](../raw-operational-invariants.md)).
-- Generation activation stays warm-before-swap.
-- A differential runner compares schema-9 and schema-7 responses for every
-  production replay query before any canary or production switch.
+Publication builds schema 9 and advertises `raw-index-schema-9-v1`. The reader
+opens schemas 6, 7, and 9, so an active schema-7 generation keeps serving until
+the first schema-9 publication replaces it.
+
+1. **Reader first.** The new reader advertises schema 9. The old worker, which
+   builds schema 7, fails its preflight against it before building, so no
+   hour-long build is wasted. At startup the reader retires any persisted
+   `raw-index-schema-7-v2` job (a derived artifact; the mutation store stays
+   authoritative).
+2. **Worker second**, through `scripts/reconcile-raw-queue-worker.sh`. Its
+   next publication builds, uploads, warms, and activates a schema-9
+   generation.
+3. **Rollback.** A pre-switch reader cannot open schema 9. Rolling the reader
+   back after a schema-9 activation needs the active pointer moved to a
+   retained schema-7 generation first; rolling forward (fixing the new
+   reader) is the default.
+
+Every publication-format consumer is tied together by tests (see
+[raw-operational-invariants.md](../raw-operational-invariants.md)), and
+`scripts/raw-schema-differential.sh` must report zero differences between the
+schema-7 and schema-9 builds of the same corpus before a switch.
 
 ## Deferred to later versions
 

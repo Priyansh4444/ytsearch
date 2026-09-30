@@ -237,11 +237,11 @@ pub fn build_index(
     build_index_from_lines(chunk_lines, channels, index_path)
 }
 
-/// Builds and opens a private candidate without hashing its generation files a
-/// second time. Manifest construction at the end of `build_index_from_lines`
-/// has already read and hashed every immutable file, and this wrapper does not
-/// expose a point where another caller can modify the candidate between those
-/// checks and the structural open.
+/// Builds a publication candidate (schema 9: schema 7 plus accelerators) and
+/// opens it without hashing its generation files a second time. Manifest
+/// construction has already read and hashed every immutable file, and this
+/// wrapper does not expose a point where another caller can modify the
+/// candidate between those checks and the structural open.
 pub(crate) fn build_index_from_lines_and_open<I>(
     chunk_lines: I,
     channels: Vec<Value>,
@@ -250,7 +250,12 @@ pub(crate) fn build_index_from_lines_and_open<I>(
 where
     I: Iterator<Item = Result<String>>,
 {
-    let report = build_index_from_lines(chunk_lines, channels, index_path)?;
+    let mut report = build_index_from_lines(chunk_lines, channels, index_path)?;
+    super::accelerators::upgrade_to_schema_nine(
+        index_path,
+        super::accelerators::AcceleratorConfig::PRODUCTION,
+    )?;
+    report.index_bytes = directory_size(index_path)?;
     let engine = RawSearchEngine::open_newly_built(index_path)?;
     Ok((report, engine))
 }

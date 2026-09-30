@@ -335,12 +335,22 @@ async fn restart_retires_a_schema_seven_v1_prepared_job_and_prepares_v2() {
     }
 }
 
+/// A schema-9 manifest reduced to its schema-7 files.
+fn without_sidecars(mut manifest: GenerationManifest) -> GenerationManifest {
+    for sidecar in ["accelerators.bin", "bitmaps.bin", "plan-bounds.bin"] {
+        assert!(manifest.files.remove(sidecar).is_some(), "{sidecar}");
+    }
+    manifest
+}
+
 #[tokio::test]
 async fn restart_retires_a_schema_seven_v1_manifest_accepted_job() {
     // Schema-8 jobs are what a reader advertising schema-8-v2 persisted before
-    // publication was pinned back to schema 7.
+    // publication was pinned back to schema 7; schema-7-v2 jobs are what a
+    // reader persisted before the schema-9 switch.
     for (legacy_format, schema) in [
         ("raw-index-schema-7-v1", 7),
+        ("raw-index-schema-7-v2", 7),
         ("raw-index-schema-8-v1", 8),
         ("raw-index-schema-8-v2", 8),
     ] {
@@ -365,7 +375,7 @@ async fn restart_retires_a_schema_seven_v1_manifest_accepted_job() {
             &legacy.compatibility,
         );
         legacy.status = RemoteJobStatus::ManifestAccepted;
-        let mut manifest = manifest;
+        let mut manifest = without_sidecars(manifest);
         manifest.schema_version = schema;
         if schema == 8 {
             let entry = manifest.files["postings.bin"].clone();
@@ -406,7 +416,8 @@ async fn restart_retires_a_valid_incompatible_manifest_accepted_job() {
         "operation-accepted-migration",
     );
     let prepared = fixture.publication.prepare().await.unwrap();
-    let (_generation, mut manifest) = detached_for_job(&fixture, &prepared);
+    let (_generation, manifest) = detached_for_job(&fixture, &prepared);
+    let mut manifest = without_sidecars(manifest);
     manifest.schema_version = 6;
     manifest.files.remove("bigrams.text.bin");
     manifest.files.remove("bigrams.title.bin");
