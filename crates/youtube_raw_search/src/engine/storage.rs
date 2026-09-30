@@ -429,7 +429,7 @@ impl RawSearchEngine {
         } else {
             (None, None)
         };
-        let (accelerators, bitmaps) = if manifest.schema_version >= 9 {
+        let (accelerators, bitmaps, plan_bounds) = if manifest.schema_version >= 9 {
             (
                 Some(accelerators::Accelerators::open(
                     &index_path.join(accelerators::ACCELERATORS_FILE),
@@ -441,9 +441,14 @@ impl RawSearchEngine {
                     manifest.documents,
                     manifest.videos,
                 )?),
+                Some(plan_bounds::PlanBounds::open(
+                    &index_path.join(plan_bounds::PLAN_BOUNDS_FILE),
+                    lexicon.count,
+                    manifest.documents,
+                )?),
             )
         } else {
-            (None, None)
+            (None, None, None)
         };
         tracing::info!(
             elapsed_ms = metadata_started.elapsed().as_millis() as u64,
@@ -473,6 +478,7 @@ impl RawSearchEngine {
                 title_bigrams,
                 accelerators,
                 bitmaps,
+                plan_bounds,
                 documents,
                 metadata,
                 partition: std::sync::OnceLock::new(),

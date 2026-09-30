@@ -13,10 +13,15 @@ const TEST_CONFIG: AcceleratorConfig = AcceleratorConfig {
     block_postings: 4,
     text_bitmap_budget_bytes: 64,
     title_bitmap_min_per_mille: 100,
+    plan_bounds: crate::engine::plan_bounds::PlanBoundConfig {
+        window_documents: 8,
+        min_documents: 1,
+    },
 };
 
-const WORDS: [&str; 12] = [
-    "the", "and", "is", "this", "end", "of", "fire", "react", "problem", "that", "world", "code",
+const WORDS: [&str; 16] = [
+    "the", "and", "is", "this", "there", "end", "they", "of", "then", "fire", "react", "problem",
+    "that", "world", "code", "coder",
 ];
 
 /// Builds the same skewed corpus twice: a schema-7 generation and a copy
@@ -254,4 +259,327 @@ fn only_schema_seven_generations_are_upgraded() {
     let error = upgrade_to_schema_nine(&root.path().join("nine"), TEST_CONFIG)
         .expect_err("schema 9 must not be upgraded twice");
     assert!(error.to_string().contains("found schema 9"), "{error}");
+}
+
+/// The complete scan's grouped response for `plans`, as the broad paths
+/// build it before schema 9.
+fn scanned_group_response(
+    engine: &RawSearchEngine,
+    params: &SearchParams,
+    plans: &[conjunction::TermPlan],
+    highlights: &[Vec<String>],
+    dominant_exact_mask: u8,
+) -> (Value, usize) {
+    let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
+    let mut groups = engine.empty_group_slots();
+    let mut documents = 0;
+    let mut record = |candidate: DocMatch, record: SearchDocumentRecord| {
+        documents += 1;
+        engine.record_group_match_values(
+            &mut groups,
+            candidate,
+            record.video,
+            record.t_start_ms,
+            hits_per_group,
+            Some(dominant_exact_mask),
+        )
+    };
+    if let [plan] = plans {
+        engine
+            .visit_term_plan(plan, &mut record)
+            .expect("plan scan");
+    } else {
+        engine
+            .visit_plan_conjunction(plans, &mut record)
+            .expect("conjunction scan");
+    }
+    let response = engine
+        .format_group_slots(params, highlights, groups, &mut BlockCache::default())
+        .expect("format scan");
+    (response, documents)
+}
+
+#[test]
+fn accelerated_broad_pages_equal_the_complete_scan() {
+    broad_fast::TEST_WINDOWS.set(Some((4, 2)));
+    let (root, _seven, nine) = schema_pair();
+    compare_accelerated_pages(&nine);
+
+    // The same generation scanned as four video-disjoint partitions.
+    let partitioned =
+        RawSearchEngine::open_newly_built(&root.path().join("nine")).expect("open schema 9");
+    let boundaries = partition::video_disjoint_boundaries(&partitioned.inner.videos);
+    let splits = [1, 2, 3]
+        .map(|quarter| boundaries[boundaries.len() * quarter / 4])
+        .to_vec();
+    assert!(splits.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(
+        partitioned
+            .inner
+            .partition
+            .set(Some(partition::DocumentPartition {
+                text_checkpoints: vec![HashMap::new(); splits.len()],
+                splits,
+            }))
+            .is_ok()
+    );
+    compare_accelerated_pages(&partitioned);
+}
+
+fn compare_accelerated_pages(nine: &RawSearchEngine) {
+    let fields = query_fields(Some("text,title"), true).expect("fields");
+    let sorts = [
+        None,
+        Some("published_at_timestamp:desc"),
+        Some("published_at_timestamp:asc"),
+        Some("view_count:desc"),
+        Some("like_count:desc"),
+        Some("comment_count:desc"),
+        Some("_text_match:desc"),
+    ];
+    let windows = [(Some(0), Some(10)), (Some(3), Some(4)), (None, None)];
+    let mut pages = 0;
+    let mut pruned_rankings = 0;
+    let mut declined = 0;
+    for query in [
+        "the",
+        "and",
+        "is",
+        "the and",
+        "and the",
+        "this is the",
+        "the end",
+        "code th",
+        "is the world",
+        "fire code",
+        "problem that",
+        "end of the",
+    ] {
+        let terms = parse_query(query).expect("parse").terms;
+        let (mut plans, highlights) = nine
+            .conjunction_plans(&terms, fields, true, 0)
+            .expect("plans");
+        if plans.is_empty() {
+            continue;
+        }
+        plans.sort_unstable_by_key(|plan| plan.estimated_documents);
+        let dominant = plans
+            .iter()
+            .flat_map(|plan| &plan.alternatives)
+            .fold(0, |mask, alternative| mask | alternative.fields.exact_mask);
+        for sort in sorts {
+            let order = broad_fast::accelerated_group_order(sort).expect("supported");
+            let Some(analysis) = nine.analyze_broad_plans(&plans, order).expect("analysis") else {
+                // Only relevance declines, and only for a multi-alternative
+                // plan without a covering stored bound.
+                assert_eq!(order, broad_fast::GroupOrder::Relevance, "{query:?}");
+                declined += 1;
+                continue;
+            };
+            for (offset, limit) in windows {
+                for group_limit in [1, 3] {
+                    let params = SearchParams {
+                        sort_by: sort.map(str::to_string),
+                        offset,
+                        limit,
+                        page: offset.is_none().then_some(2),
+                        per_page: offset.is_none().then_some(5),
+                        group_limit: Some(group_limit),
+                        ..grouped_query(query)
+                    };
+                    let (expected, documents) =
+                        scanned_group_response(nine, &params, &plans, &highlights, dominant);
+                    assert_eq!(analysis.totals.documents, documents, "{query:?}");
+                    let actual = nine
+                        .accelerated_broad_page(
+                            &params,
+                            &plans,
+                            &analysis,
+                            order,
+                            &highlights,
+                            usize::from(group_limit),
+                            dominant,
+                            &mut BlockCache::default(),
+                        )
+                        .expect("fast path")
+                        .expect("fixture ties stay under the field-sort cap");
+                    assert_eq!(
+                        actual, expected,
+                        "{query:?} sort {sort:?} window {offset:?}/{limit:?}"
+                    );
+                    pages += 1;
+                    if order == broad_fast::GroupOrder::Relevance {
+                        let (scored, candidates) = broad_fast::LAST_RELEVANCE_WINDOWS.get();
+                        pruned_rankings += usize::from(scored < candidates);
+                    }
+                }
+            }
+        }
+    }
+    assert!(pages > 300, "{pages} pages compared");
+    assert!(
+        declined < 10,
+        "{declined} relevance queries lacked plan bounds"
+    );
+    assert!(pruned_rankings > 0, "no relevance ranking skipped a window");
+}
+
+#[test]
+fn engagement_sort_keeps_the_scan() {
+    assert!(broad_fast::accelerated_group_order(Some("engagement_score:desc")).is_none());
+}
+
+#[test]
+#[ignore = "diagnostic: needs RAW_TOTALS_INDEX pointing at a schema-9 generation"]
+fn measure_accelerated_broad_relevance() {
+    let index = std::env::var("RAW_TOTALS_INDEX").expect("set RAW_TOTALS_INDEX");
+    let engine = RawSearchEngine::open(Path::new(&index)).expect("open generation");
+    engine.warm();
+    let fields = query_fields(Some("text,title"), true).expect("fields");
+    for query in [
+        "the",
+        "and the",
+        "in the",
+        "this is the",
+        "you know",
+        "i think",
+    ] {
+        let terms = parse_query(query).expect("parse").terms;
+        let (mut plans, highlights) = engine.conjunction_plans(&terms, fields, true, 0).unwrap();
+        plans.sort_unstable_by_key(|plan| plan.estimated_documents);
+        let alternatives = plans
+            .iter()
+            .map(|plan| plan.alternatives.len())
+            .collect::<Vec<_>>();
+        let started = std::time::Instant::now();
+        let mut analysis = engine
+            .analyze_broad_plans(&plans, broad_fast::GroupOrder::Relevance)
+            .unwrap()
+            .unwrap();
+        let analysis_ms = started.elapsed().as_secs_f64() * 1e3;
+        if std::env::var_os("RAW_EXACT_PLAN_BOUNDS").is_some() {
+            // Replace each window's bound with the sum over plans of the
+            // plan's true maximum score in the window.
+            let window = 512;
+            let mut bounds = vec![0.0_f64; analysis.window_bounds.len()];
+            for plan in &plans {
+                let mut maxima = vec![0.0_f32; bounds.len()];
+                engine
+                    .visit_term_plan(plan, |candidate, _| {
+                        let slot = &mut maxima[(candidate.document() / window) as usize];
+                        *slot = slot.max(candidate.score);
+                        Ok(())
+                    })
+                    .unwrap();
+                for (bound, maximum) in bounds.iter_mut().zip(maxima) {
+                    *bound += f64::from(maximum);
+                }
+            }
+            analysis.window_bounds = bounds;
+        }
+        let dominant = plans
+            .iter()
+            .flat_map(|plan| &plan.alternatives)
+            .fold(0, |mask, alternative| mask | alternative.fields.exact_mask);
+        let started = std::time::Instant::now();
+        engine
+            .accelerated_broad_page(
+                &grouped_query(query),
+                &plans,
+                &analysis,
+                broad_fast::GroupOrder::Relevance,
+                &highlights,
+                3,
+                dominant,
+                &mut BlockCache::default(),
+            )
+            .unwrap();
+        let page_ms = started.elapsed().as_secs_f64() * 1e3;
+        let (scored, candidates) = broad_fast::LAST_RELEVANCE_WINDOWS.get();
+        println!(
+            "{{\"query\":{query:?},\"alternatives\":{alternatives:?},\"documents\":{},\"analysis_ms\":{analysis_ms:.1},\"page_ms\":{page_ms:.1},\"scored_windows\":{scored},\"candidate_windows\":{candidates}}}",
+            analysis.totals.documents
+        );
+    }
+}
+
+#[test]
+fn plan_bounds_cover_each_window_within_one_step() {
+    let (_root, _seven, nine) = schema_pair();
+    let bounds = nine.inner.plan_bounds.as_ref().expect("plan bounds");
+    let window = bounds.window_documents();
+    assert_eq!(window, TEST_CONFIG.plan_bounds.window_documents);
+    let fields = query_fields(Some("text,title"), true).expect("fields");
+    let mut checked = 0;
+    for index in 0..nine.inner.lexicon.count {
+        let (term, entry) = nine.inner.lexicon.entry_at(index).unwrap();
+        let Some(bound) = bounds.get(entry.term) else {
+            continue;
+        };
+        let (plans, _) = nine
+            .conjunction_plans(&[term.to_string()], fields, true, 0)
+            .unwrap();
+        assert!(bound.covers(&plans[0]), "{term}");
+        let windows = nine.inner.manifest.documents.div_ceil(window) as usize;
+        let mut maxima = vec![0.0_f32; windows];
+        nine.visit_term_plan(&plans[0], |candidate, _| {
+            let slot = &mut maxima[(candidate.document() / window) as usize];
+            *slot = slot.max(candidate.score);
+            Ok(())
+        })
+        .unwrap();
+        let top = maxima.iter().copied().fold(0.0_f32, f32::max);
+        let step = f64::from(top) / 255.0 * 1.001;
+        for (stored, actual) in bound.maxima().zip(&maxima) {
+            assert!(stored >= f64::from(*actual), "{term}: {stored} < {actual}");
+            assert!(
+                stored <= f64::from(*actual) + step,
+                "{term}: {stored} is loose"
+            );
+        }
+        // Fewer alternatives or disabled position boosts only lower scores.
+        let (unboosted, _) = nine
+            .conjunction_plans(
+                &[term.to_string()],
+                query_fields(Some("text"), false).unwrap(),
+                true,
+                0,
+            )
+            .unwrap();
+        if let Some(plan) = unboosted.first()
+            && plan.alternatives.len() > 1
+            && bound.covers(plan)
+        {
+            nine.visit_term_plan(plan, |candidate, _| {
+                let stored = bound
+                    .maxima()
+                    .nth((candidate.document() / window) as usize)
+                    .unwrap();
+                assert!(stored >= f64::from(candidate.score) * (1.0 - 1e-6));
+                Ok(())
+            })
+            .unwrap();
+        }
+        checked += 1;
+    }
+    assert!(checked > 0, "fixture must store plan bounds");
+}
+
+#[test]
+fn corrupt_plan_bounds_are_rejected() {
+    let (root, _seven, nine) = schema_pair();
+    let terms = nine.inner.lexicon.count;
+    let documents = nine.inner.manifest.documents;
+    drop(nine);
+    let path = root
+        .path()
+        .join("nine")
+        .join(crate::engine::plan_bounds::PLAN_BOUNDS_FILE);
+    let mut bytes = fs::read(&path).unwrap();
+    // The first entry's alternative count.
+    bytes[HEADER_BYTES + 8 + 4] = 1;
+    fs::write(&path, &bytes).unwrap();
+    assert!(crate::engine::plan_bounds::PlanBounds::open(&path, terms, documents).is_err());
+    // A different window count must not be accepted either.
+    assert!(crate::engine::plan_bounds::PlanBounds::open(&path, terms, documents + 64).is_err());
 }
