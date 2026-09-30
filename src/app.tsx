@@ -514,7 +514,11 @@ const App: Component = () => {
           </Show>
         </section>
 
-        <section class={hasSearchSurface() ? "pb-8" : "hidden"}>
+        {/* A request for a creator that is not indexed yet has no search surface,
+            but its confirmation must still show. */}
+        <section
+          class={hasSearchSurface() || queuedIndexRequest() !== undefined ? "pb-8" : "hidden"}
+        >
           <Show when={queuedIndexRequest()}>
             {(request) => (
               <Loading>

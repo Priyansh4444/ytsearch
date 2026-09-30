@@ -237,8 +237,9 @@ describe("App", () => {
 
     await waitFor(() => expect(mocks.requestIndex).toHaveBeenCalledWith("@newcreator"));
     expect(await screen.findByText("Awaiting approval")).toBeInTheDocument();
-    expect(
-      screen.getByText(/request-1 is waiting for administrator approval/i),
-    ).toBeInTheDocument();
+    const confirmation = screen.getByText(/request-1 is waiting for administrator approval/i);
+    expect(confirmation).toBeInTheDocument();
+    // jsdom applies no Tailwind CSS, so check the hiding class directly.
+    expect(confirmation.closest("section")).not.toHaveClass("hidden");
   });
 });
