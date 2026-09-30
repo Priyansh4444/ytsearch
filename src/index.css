@@ -136,6 +136,23 @@ select {
   border-color: var(--color-vesper-yellow);
 }
 
+/* Expanded moment rows keep the same content-visibility bounding the card
+   already uses: offscreen rows skip style/layout/paint instead of building a
+   layout object each. `auto` remembers each row's real height after its first
+   render; the 6rem fallback approximates one transcript row. Containment can
+   snap an inner 1px divider (the feedback column border) one device pixel off
+   its uncontained position on rows with fractional internal geometry. */
+.moment-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 6rem;
+}
+
+/* content-visibility paints within the row, so the row's flush-edge buttons
+   would lose the global focus ring drawn 3px outside them. Draw it inside. */
+.moment-row :focus-visible {
+  outline-offset: -2px;
+}
+
 .video-poster {
   position: relative;
   display: block;
