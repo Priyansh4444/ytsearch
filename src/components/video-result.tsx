@@ -219,6 +219,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
                   video={props.video}
                   rank={props.rank}
                   selected={hit.id === selectedId()}
+                  bounded={showAllMoments()}
                   onSelect={() => selectHit(hit)}
                 />
               )}
@@ -311,6 +312,9 @@ const TranscriptExcerpt: Component<{
   video: SearchVideoResult;
   rank: number;
   selected?: boolean;
+  // Only the expanded list is long enough for offscreen excerpts to justify
+  // content-visibility; collapsed cards keep their exact previous render path.
+  bounded?: boolean;
   onSelect?: () => void;
 }> = (props) => {
   const [feedback, setFeedback] = createSignal<"useful" | "not_useful">();
@@ -327,7 +331,9 @@ const TranscriptExcerpt: Component<{
 
   return (
     <div
-      class={`grid min-w-0 max-w-full grid-cols-[minmax(0,1fr)_auto] items-stretch border bg-vesper-bg transition-colors ${
+      class={`${
+        props.bounded ? "moment-row " : ""
+      }grid min-w-0 max-w-full grid-cols-[minmax(0,1fr)_auto] items-stretch border bg-vesper-bg transition-colors ${
         props.selected
           ? "border-vesper-yellow"
           : "border-vesper-border hover:border-vesper-yellow/70"
