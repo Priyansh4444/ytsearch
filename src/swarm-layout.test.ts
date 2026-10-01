@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { magneticOffset, ovalSwarmPositions } from "./swarm-layout";
+import { magneticOffset, ovalSwarmPosition } from "./swarm-layout";
+
+const ovalSwarmPositions = (total: number) =>
+  Array.from({ length: total }, (_, index) => ovalSwarmPosition(index, total));
 
 describe("oval swarm layout", () => {
   it("places every creator on one of two safe oval rings", () => {

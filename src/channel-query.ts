@@ -6,7 +6,7 @@ import type { IndexedChannel } from "./types";
  * `@`-prefixed string per channel). There is deliberately no unkeyed
  * convenience wrapper: building the index per call is the exact trap this
  * module exists to avoid. */
-export type ChannelKeyIndex = {
+type ChannelKeyIndex = {
   readonly channel: IndexedChannel;
   readonly handleKey: string;
   readonly nameKey: string;
@@ -28,8 +28,7 @@ export function channelSuggestionsByKeys(
   if (!value.startsWith("@")) return [];
   const needle = value.slice(1).split(/\s+/, 1)[0] ?? "";
   const out: IndexedChannel[] = [];
-  for (let i = 0; i < index.length; i++) {
-    const entry = index[i]!;
+  for (const entry of index) {
     if (entry.handleKey.includes(needle) || entry.nameKey.includes(needle)) {
       out.push(entry.channel);
     }

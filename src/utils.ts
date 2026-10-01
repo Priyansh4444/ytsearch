@@ -1,7 +1,7 @@
 import { loadClientRuntime } from "./client-runtime-loader";
 import { flush } from "solid-js";
 
-export type HighlightPart = {
+type HighlightPart = {
   text: string;
   highlighted: boolean;
 };
@@ -35,11 +35,8 @@ export function withViewTransition(update: () => void): void {
     return;
   }
 
-  const documentWithTransitions = document as Document & {
-    startViewTransition?: (callback: () => void) => unknown;
-  };
-  if (documentWithTransitions.startViewTransition) {
-    documentWithTransitions.startViewTransition(updateAndFlush);
+  if ("startViewTransition" in document) {
+    document.startViewTransition(updateAndFlush);
     return;
   }
   updateAndFlush();

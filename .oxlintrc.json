@@ -5,6 +5,28 @@
   },
   "plugins": ["typescript"],
   "rules": {
-    "no-console": "warn"
+    "no-console": "warn",
+    "no-empty-function": "error",
+    "no-lone-blocks": "error",
+    "no-unneeded-ternary": "error",
+    "no-unreachable": "error",
+    "no-unused-expressions": "error",
+    "no-unused-labels": "error",
+    "no-unused-private-class-members": "error",
+    "no-unused-vars": "error",
+    "no-useless-catch": "error",
+    "no-useless-concat": "error",
+    "no-useless-constructor": "error",
+    "no-useless-rename": "error",
+    "no-useless-return": "error",
+    "typescript/no-unnecessary-boolean-literal-compare": "error",
+    "typescript/no-unnecessary-condition": "error",
+    "typescript/no-unnecessary-template-expression": "error",
+    "typescript/no-unnecessary-type-arguments": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "unicorn/no-useless-fallback-in-spread": "error",
+    "unicorn/no-useless-length-check": "error",
+    "unicorn/no-useless-promise-resolve-reject": "error",
+    "unicorn/no-useless-spread": "error"
   }
 }

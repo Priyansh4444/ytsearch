@@ -55,9 +55,8 @@ function divide(numerator: number, denominator: number): number {
 }
 
 function distribution(sorted: number[]) {
-  if (sorted.length === 0) return { min: 0, median: 0, max: 0 };
+  const at = (index: number) => sorted[index] ?? 0;
   const middle = Math.floor(sorted.length / 2);
-  const median =
-    sorted.length % 2 === 0 ? (sorted[middle - 1]! + sorted[middle]!) / 2 : sorted[middle]!;
-  return { min: sorted[0]!, median, max: sorted.at(-1)! };
+  const median = sorted.length % 2 === 0 ? (at(middle - 1) + at(middle)) / 2 : at(middle);
+  return { min: at(0), median, max: at(sorted.length - 1) };
 }

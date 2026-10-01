@@ -178,7 +178,7 @@ function reconcileSearchMachineEffect(env: Env, now: Date): Effect.Effect<void> 
     if (!scheduleEnforced(env)) {
       yield* Effect.sync(() =>
         logEvent("raw_search_schedule_mode_invalid", {
-          configured_mode: env.SEARCH_SCHEDULE_MODE ?? "missing",
+          configured_mode: env.SEARCH_SCHEDULE_MODE,
           schedule_phase: schedule.phase,
           machine_state: state,
         }),

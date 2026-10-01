@@ -119,7 +119,8 @@ export async function runDashboardData(
 }
 
 export async function runCopyToClipboard(value: string): Promise<void> {
-  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
+  // The Clipboard API is absent outside secure contexts.
+  if ("clipboard" in navigator) return navigator.clipboard.writeText(value);
   const textarea = document.createElement("textarea");
   textarea.value = value;
   textarea.style.position = "fixed";

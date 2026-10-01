@@ -92,7 +92,6 @@ const result = {
     acceptedRequests.length > 0 &&
     failedRequests.length === 0 &&
     pageErrors.length === 0 &&
-    homeDimensions !== undefined &&
     homeDimensions.scrollHeight <= homeDimensions.clientHeight &&
     homeDimensions.scrollWidth <= homeDimensions.clientWidth,
   publicUrl,

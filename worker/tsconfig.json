@@ -7,6 +7,9 @@
     "noEmit": true,
     "skipLibCheck": true,
     "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "types": ["../worker-configuration.d.ts"]
   },
   "include": ["index.ts"]

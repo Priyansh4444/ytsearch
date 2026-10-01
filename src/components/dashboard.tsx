@@ -18,9 +18,9 @@ export const Dashboard: Component = () => {
   });
   const snapshotPending = () => isPending(() => snapshot());
   const refetch = () => setRefreshVersion((version) => version + 1);
-  const metrics = createMemo(() => calculateDashboardMetrics(snapshot()?.channels ?? []));
+  const metrics = createMemo(() => calculateDashboardMetrics(snapshot().channels));
   const channels = createMemo(() =>
-    [...(snapshot()?.channels ?? [])].sort(
+    [...snapshot().channels].sort(
       (left, right) =>
         right.indexed_chunk_count - left.indexed_chunk_count ||
         right.indexed_video_count - left.indexed_video_count,
@@ -71,10 +71,10 @@ export const Dashboard: Component = () => {
           </button>
         </header>
 
-        <Show when={snapshot()?.errors.length}>
+        <Show when={snapshot().errors.length}>
           <section class="border border-vesper-red/40 bg-vesper-red/5 p-4" role="alert">
             <p class="font-medium text-vesper-red">Some metrics are unavailable</p>
-            <For each={snapshot()?.errors ?? []}>
+            <For each={snapshot().errors}>
               {(error) => <p class="mt-1 break-words text-sm text-vesper-muted">{error}</p>}
             </For>
           </section>
@@ -99,30 +99,30 @@ export const Dashboard: Component = () => {
           <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <MetricCard
               label="API"
-              value={snapshot()?.apiHealthy ? "Operational" : "Unavailable"}
-              tone={snapshot()?.apiHealthy ? "green" : "red"}
-              detail={latency(snapshot()?.latencyMs.health)}
+              value={snapshot().apiHealthy ? "Operational" : "Unavailable"}
+              tone={snapshot().apiHealthy ? "green" : "red"}
+              detail={latency(snapshot().latencyMs.health)}
             />
             <MetricCard
               label="Catalog API"
-              value={snapshot()?.channelsAvailable ? "Online" : "Unavailable"}
-              tone={snapshot()?.channelsAvailable ? "green" : "red"}
-              detail={latency(snapshot()?.latencyMs.channels)}
+              value={snapshot().channelsAvailable ? "Online" : "Unavailable"}
+              tone={snapshot().channelsAvailable ? "green" : "red"}
+              detail={latency(snapshot().latencyMs.channels)}
             />
             <MetricCard
               label="Indexer"
-              value={indexerLabel(snapshot()?.indexStatus?.status, metrics().remainingVideos)}
-              tone={indexerTone(snapshot()?.indexStatus?.status, metrics().remainingVideos)}
+              value={indexerLabel(snapshot().indexStatus?.status, metrics().remainingVideos)}
+              tone={indexerTone(snapshot().indexStatus?.status, metrics().remainingVideos)}
               detail={indexerDetail(
-                snapshot()?.indexStatus?.status,
-                snapshot()?.indexStatus?.handle,
+                snapshot().indexStatus?.status,
+                snapshot().indexStatus?.handle,
                 metrics().remainingVideos,
-                snapshot()?.latencyMs.indexStatus,
+                snapshot().latencyMs.indexStatus,
               )}
             />
             <MetricCard
               label="Last refreshed"
-              value={snapshot() ? new Date(snapshot()!.fetchedAt).toLocaleTimeString() : "Loading…"}
+              value={new Date(snapshot().fetchedAt).toLocaleTimeString()}
               detail={navigator.onLine ? "Browser online" : "Browser offline"}
             />
           </div>

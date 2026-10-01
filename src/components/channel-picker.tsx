@@ -2,7 +2,7 @@ import { For, Show, createEffect, createMemo, onCleanup, onSettled } from "solid
 import type { Component } from "solid-js";
 import type { IndexedChannel } from "../types";
 import { routeForHandle } from "../utils";
-import { magneticOffset, ovalSwarmPositions } from "../swarm-layout";
+import { magneticOffset, ovalSwarmPosition } from "../swarm-layout";
 import { ChannelAvatar } from "./channel-profile";
 
 type SwarmItem = {
@@ -127,14 +127,10 @@ export const ChannelPicker: Component<{
 };
 
 function positionChannels(channels: IndexedChannel[]): SwarmItem[] {
-  const positions = ovalSwarmPositions(channels.length);
-  return channels.map((channel, index) => {
-    const position = positions[index];
-    return {
-      channel,
-      ...position,
-    };
-  });
+  return channels.map((channel, index) => ({
+    channel,
+    ...ovalSwarmPosition(index, channels.length),
+  }));
 }
 
 function resetMagnet(element: HTMLAnchorElement) {

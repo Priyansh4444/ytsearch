@@ -1,4 +1,4 @@
-export interface SearchErrorPresentation {
+interface SearchErrorPresentation {
   readonly title: string;
   readonly message: string;
 }
