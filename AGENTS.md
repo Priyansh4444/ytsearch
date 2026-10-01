@@ -54,11 +54,6 @@ Rust crates:
 - `crates/youtube_client`: YouTube metadata client.
 - `crates/youtube_sources`: YouTube metadata source used by ingestion.
 - `crates/youtube_time`: shared timestamp helpers used by ingest and sources.
-
-Experiment-only crates, NOT part of any shipped path: `crates/youtube_semantic`
-and `crates/youtube_serialization_bench`. They exist to be run by the
-`autoresearch/` harness (`autoresearch/program.md`); nothing in the API, CLI, or
-indexer depends on them.
 - `crates/youtube_ytdlp`: caption extraction via `yt-dlp`.
 - `crates/youtube_transcribe`: optional local audio transcription through `voxtype`; the cloud indexer does not have Voxtype by default.
 

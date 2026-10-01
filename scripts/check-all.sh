@@ -34,10 +34,12 @@ scripts/test-require-committed-rust-build-inputs.sh
 scripts/test-cloud-index-queue-entrypoint.sh
 scripts/check-fly-cost-config.sh
 scripts/test-index-conference-playlists.sh
-scripts/test-compare-autoresearch-search.sh
 scripts/test-idle-gap-fill.sh
 scripts/test-benchmark-search-tools.sh
 scripts/test-refresh-query-log.sh
+scripts/test-fly-set-indexer-secrets.sh
+python3 -B scripts/test-analyze-raw-lexicon-df.py
+python3 -B scripts/test-analyze-raw-posting-overlap.py
 
 for script in scripts/*.sh; do
   case "$(head -n 1 "$script")" in

@@ -14,8 +14,6 @@ app.config.timestamp_*.js
 /node_modules
 /target
 /coverage
-/autoresearch/runs
-/autoresearch/vector-results.tsv
 /test-results
 /playwright-report
 /temp_research
