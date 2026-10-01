@@ -152,7 +152,7 @@ fn latest_video_mutation_is_the_only_published_input() {
     let snapshot = store.snapshot().unwrap();
     assert_eq!(snapshot.videos.len(), 1);
     assert!(snapshot.videos[0].chunks.is_none());
-    assert_eq!(snapshot.videos[0].sequence, deletion.sequence.unwrap());
+    assert_eq!(snapshot.through_sequence, deletion.sequence.unwrap());
     assert_eq!(
         store
             .video_mutation_summary("video-1")

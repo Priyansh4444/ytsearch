@@ -303,7 +303,10 @@ async fn handle_form_mutations_keep_canonical_channel_counts_and_scope() {
 
     publish_remotely(root.path(), &state).await;
 
-    let published = state.engine.active().unwrap().channel_stats("creator");
+    let Json(published) =
+        channel_stats(State(state.clone()), Path("creator".to_string()), headers())
+            .await
+            .unwrap();
     assert_eq!(published.indexed_videos, 2);
     assert_eq!(published.indexed_chunks, 2);
 }

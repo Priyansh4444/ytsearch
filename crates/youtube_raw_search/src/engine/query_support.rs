@@ -268,7 +268,7 @@ pub(super) fn retain_not_excluded(matches: &mut Vec<DocMatch>, excluded: &[u32])
     });
 }
 
-pub(super) fn intersect_sorted_borrowed(left: Vec<DocMatch>, right: &[DocMatch]) -> Vec<DocMatch> {
+fn intersect_sorted_borrowed(left: Vec<DocMatch>, right: &[DocMatch]) -> Vec<DocMatch> {
     let mut output = Vec::with_capacity(left.len().min(right.len()));
     let mut left_index = 0_usize;
     let mut right_index = 0_usize;
@@ -470,7 +470,7 @@ pub(super) fn parse_query(value: &str) -> Result<ParsedQuery> {
     })
 }
 
-pub(super) fn record_quoted_segment(
+fn record_quoted_segment(
     segment: &mut String,
     excluded: bool,
     parser: &mut QueryParser,
@@ -507,7 +507,7 @@ pub(super) fn record_quoted_segment(
     Ok(())
 }
 
-pub(super) fn record_unquoted_segment(
+fn record_unquoted_segment(
     segment: &mut String,
     allow_leading_exclusion: bool,
     parser: &mut QueryParser,
@@ -528,10 +528,7 @@ pub(super) fn record_unquoted_segment(
     Ok(())
 }
 
-pub(super) fn take_negative_phrase_marker(
-    segment: &mut String,
-    allow_leading_exclusion: bool,
-) -> bool {
+fn take_negative_phrase_marker(segment: &mut String, allow_leading_exclusion: bool) -> bool {
     let Some(marker_index) = segment.len().checked_sub(1) else {
         return false;
     };
@@ -552,10 +549,7 @@ pub(super) fn take_negative_phrase_marker(
     valid
 }
 
-pub(super) fn signed_tokens(
-    value: &str,
-    allow_leading_exclusion: bool,
-) -> Result<Vec<(String, bool)>> {
+fn signed_tokens(value: &str, allow_leading_exclusion: bool) -> Result<Vec<(String, bool)>> {
     let mut output = Vec::new();
     let mut token = String::new();
     let mut excluded = false;
@@ -878,7 +872,7 @@ pub(super) fn validate_search_params(params: &SearchParams) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn validate_query_and_window(params: &SearchParams) -> Result<()> {
+fn validate_query_and_window(params: &SearchParams) -> Result<()> {
     let query = params.q.trim();
     if query.is_empty() {
         return Err(Error::InvalidInput("q cannot be empty".to_string()));
@@ -1190,7 +1184,7 @@ pub(super) fn matched_highlight_terms(value: &str, groups: &[Vec<String>]) -> Ve
     selected
 }
 
-pub(super) fn escape_html(value: &str, output: &mut String) {
+fn escape_html(value: &str, output: &mut String) {
     for character in value.chars() {
         match character {
             '&' => output.push_str("&amp;"),

@@ -1,4 +1,4 @@
-use crate::{RawSearchEngine, WarmEngine};
+use crate::{RawSearchEngine, engine::WarmEngine};
 use serde_json::Value;
 use std::sync::{
     Arc, RwLock,
@@ -19,7 +19,7 @@ impl ReloadableEngine {
         }
     }
 
-    pub fn active(&self) -> Result<Arc<RawSearchEngine>, BackendError> {
+    pub(crate) fn active(&self) -> Result<Arc<RawSearchEngine>, BackendError> {
         self.engine
             .read()
             .map(|engine| Arc::clone(&engine))
@@ -29,7 +29,7 @@ impl ReloadableEngine {
     /// Pins one immutable engine and its activation sequence under the same
     /// read lock. Administrative audits can then enumerate a catalog without
     /// mixing generations during a concurrent atomic replacement.
-    pub fn snapshot(&self) -> Result<(Arc<RawSearchEngine>, u64), BackendError> {
+    pub(crate) fn snapshot(&self) -> Result<(Arc<RawSearchEngine>, u64), BackendError> {
         let engine = self
             .engine
             .read()
@@ -40,7 +40,7 @@ impl ReloadableEngine {
 
     /// Swaps in a warmed engine. A cold engine cannot be passed: see
     /// `RawSearchEngine::warmed_for_activation`.
-    pub fn replace(&self, engine: WarmEngine, sequence: u64) -> Result<(), BackendError> {
+    pub(crate) fn replace(&self, engine: WarmEngine, sequence: u64) -> Result<(), BackendError> {
         let engine = engine.into_engine();
         let mut active = self
             .engine
@@ -51,7 +51,7 @@ impl ReloadableEngine {
         Ok(())
     }
 
-    pub fn sequence(&self) -> u64 {
+    pub(crate) fn sequence(&self) -> u64 {
         self.sequence.load(Ordering::Acquire)
     }
 }

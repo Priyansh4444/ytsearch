@@ -163,7 +163,7 @@ fn set_video_documents(bits: &mut DocumentBits, documents: &[u32]) {
 pub(super) struct BroadTotals {
     pub(super) documents: usize,
     pub(super) found: usize,
-    pub(super) total_moments: usize,
+    total_moments: usize,
 }
 
 struct PlanAnalysis {
@@ -180,7 +180,7 @@ pub(super) struct BroadAnalysis {
     /// Matched videos, ascending.
     videos: Vec<u32>,
     window_documents: u32,
-    pub(super) window_masks: Vec<u8>,
+    window_masks: Vec<u8>,
     pub(super) window_bounds: Vec<f64>,
 }
 

@@ -1,7 +1,12 @@
 [[production]]
 package = "youtube_api"
 bin = "youtube-api"
-reason = "deployed staging search API"
+reason = "public search API"
+
+[[production]]
+package = "youtube_raw_search"
+bin = "youtube-raw-search"
+reason = "search reader and publication builder"
 
 [[production]]
 package = "youtube_cli"

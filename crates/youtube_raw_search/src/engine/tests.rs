@@ -2579,8 +2579,6 @@ fn newly_built_and_fully_verified_opens_have_response_parity() {
         );
     }
     assert_eq!(newly_built.document_count(), verified.document_count());
-    assert_eq!(newly_built.video_count(), verified.video_count());
-    assert_eq!(newly_built.term_count(), verified.term_count());
     assert_eq!(newly_built.index_size(), verified.index_size());
 }
 

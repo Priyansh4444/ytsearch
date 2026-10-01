@@ -6,7 +6,6 @@ publish = false
 
 [dependencies]
 axum = "0.8"
-bytes = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["net", "signal"] }

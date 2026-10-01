@@ -98,14 +98,14 @@ pub struct RawGenerationFile {
 pub struct RawGenerationManifest {
     pub schema_version: u8,
     pub documents: u32,
-    pub videos: u32,
-    pub channels: u32,
-    pub terms: u32,
-    pub blocks: u32,
+    videos: u32,
+    channels: u32,
+    terms: u32,
+    blocks: u32,
     pub average_document_tokens: f32,
-    pub max_view_count: u64,
-    pub max_like_count: u64,
-    pub max_comment_count: u64,
+    max_view_count: u64,
+    max_like_count: u64,
+    max_comment_count: u64,
     pub files: BTreeMap<String, RawGenerationFile>,
 }
 

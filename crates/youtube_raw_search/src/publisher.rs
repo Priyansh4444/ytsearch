@@ -1,6 +1,8 @@
 use crate::{
-    BuildReport, MutationSnapshot, MutationStore, RawSearchEngine, WarmEngine,
-    cache_io::ColdReader, engine::build_index_from_lines_and_open,
+    MutationStore, RawSearchEngine,
+    cache_io::ColdReader,
+    engine::{WarmEngine, build_publication_candidate},
+    mutable::MutationSnapshot,
 };
 use flate2::read::MultiGzDecoder;
 use serde::{Deserialize, Serialize};
@@ -31,14 +33,6 @@ pub struct PublisherPaths {
     pub state_directory: PathBuf,
 }
 
-pub struct PublishedGeneration {
-    pub sequence: u64,
-    pub path: PathBuf,
-    /// Only a warmed engine can be published and swapped in.
-    pub engine: WarmEngine,
-    pub report: BuildReport,
-}
-
 pub type GenerationCompatibility = RawGenerationCompatibility;
 
 #[derive(Clone, Debug)]
@@ -51,8 +45,6 @@ pub struct GenerationBuilder {
 pub struct DetachedGeneration {
     pub sequence: u64,
     pub path: PathBuf,
-    pub report: BuildReport,
-    pub compatibility: GenerationCompatibility,
 }
 
 pub struct Publisher {
@@ -126,17 +118,14 @@ impl GenerationBuilder {
         }
         let snapshot = snapshot_store.snapshot()?;
         let sequence = snapshot.through_sequence;
-        let (report, engine) = self.build_snapshot(&snapshot, output_path)?;
-        drop(engine);
+        self.build_snapshot(&snapshot, output_path)?;
         sync_directory_tree(output_path)?;
-        // Detached output crosses a process and storage boundary. Unlike the
-        // publisher's private candidate, it must pass full manifest hashes.
+        // Detached output crosses a process and storage boundary, so it must
+        // pass full manifest hashes.
         drop(RawSearchEngine::open(output_path).map_err(map_raw)?);
         Ok(DetachedGeneration {
             sequence,
             path: output_path.to_path_buf(),
-            report,
-            compatibility,
         })
     }
 
@@ -144,7 +133,7 @@ impl GenerationBuilder {
         &self,
         snapshot: &MutationSnapshot,
         candidate_path: &Path,
-    ) -> Result<(BuildReport, RawSearchEngine), IndexStoreError> {
+    ) -> Result<(), IndexStoreError> {
         validate_source(&self.base_chunks_gzip)?;
         validate_source(&self.base_channels_gzip)?;
         let video_mutations = snapshot
@@ -211,7 +200,7 @@ impl GenerationBuilder {
                 }
             }
         }
-        build_index_from_lines_and_open(
+        build_publication_candidate(
             base_documents.chain(replacement_documents),
             channels
                 .into_values()
@@ -232,7 +221,7 @@ impl Publisher {
         }
     }
 
-    pub fn active_index_path(&self) -> Result<PathBuf, IndexStoreError> {
+    fn active_index_path(&self) -> Result<PathBuf, IndexStoreError> {
         let manifest_path = self.paths.state_directory.join(ACTIVE_MANIFEST);
         if !manifest_path.exists() {
             return Ok(self.paths.base_index.clone());
@@ -245,7 +234,7 @@ impl Publisher {
         Ok(path)
     }
 
-    pub fn active_sequence(&self) -> Result<u64, IndexStoreError> {
+    fn active_sequence(&self) -> Result<u64, IndexStoreError> {
         let manifest_path = self.paths.state_directory.join(ACTIVE_MANIFEST);
         if !manifest_path.exists() {
             return Ok(0);
@@ -269,11 +258,13 @@ impl Publisher {
         Ok((engine, sequence))
     }
 
-    pub fn state_directory(&self) -> &Path {
+    pub(crate) fn state_directory(&self) -> &Path {
         &self.paths.state_directory
     }
 
-    pub fn generation_compatibility(&self) -> Result<GenerationCompatibility, IndexStoreError> {
+    pub(crate) fn generation_compatibility(
+        &self,
+    ) -> Result<GenerationCompatibility, IndexStoreError> {
         if let Some(compatibility) = self.compatibility.get() {
             return Ok(compatibility.clone());
         }
@@ -292,12 +283,12 @@ impl Publisher {
     /// marking the corresponding mutations published. `expected_manifest`
     /// makes an activation retry exact even when the first attempt already
     /// moved the incoming directory into its durable generation path.
-    pub fn install_verified_generation(
+    pub(crate) fn install_verified_generation(
         &self,
         sequence: u64,
         incoming_path: &Path,
         expected_manifest: &[u8],
-    ) -> Result<PublishedGeneration, IndexStoreError> {
+    ) -> Result<WarmEngine, IndexStoreError> {
         if sequence == 0 {
             return Err(IndexStoreError::InvalidInput(
                 "raw generation sequence must be positive".to_string(),
@@ -338,82 +329,12 @@ impl Publisher {
         let engine = RawSearchEngine::open_verified_transfer(incoming_path)
             .map_err(map_raw)?
             .warmed_for_activation();
-        let report = report_for_existing(engine.engine());
 
         fs::rename(incoming_path, &final_path).map_err(map_io)?;
         sync_directory(&self.paths.state_directory.join("generations"))?;
         self.activate(sequence, &generation_name)?;
         self.remove_old_generations(sequence)?;
-        Ok(PublishedGeneration {
-            sequence,
-            path: final_path,
-            engine,
-            report,
-        })
-    }
-
-    pub fn publish(
-        &self,
-        store: &MutationStore,
-    ) -> Result<Option<PublishedGeneration>, IndexStoreError> {
-        fs::create_dir_all(self.paths.state_directory.join("generations")).map_err(map_io)?;
-        fs::create_dir_all(self.paths.state_directory.join("work")).map_err(map_io)?;
-        self.remove_uncommitted_artifacts()?;
-        let snapshot = store.snapshot()?;
-        if snapshot.through_sequence <= self.active_sequence()? {
-            return Ok(None);
-        }
-        validate_source(&self.paths.base_chunks_gzip)?;
-        validate_source(&self.paths.base_channels_gzip)?;
-        validate_source(&self.paths.base_index)?;
-        let generation_name = format!("generations/{:020}", snapshot.through_sequence);
-        let final_path = self.paths.state_directory.join(&generation_name);
-        ensure_generation_path(&self.paths.state_directory, &final_path)?;
-        if final_path.exists() {
-            let engine = RawSearchEngine::open(&final_path)
-                .map_err(map_raw)?
-                .warmed_for_activation();
-            self.activate(snapshot.through_sequence, &generation_name)?;
-            store.mark_published(snapshot.through_sequence)?;
-            let report = report_for_existing(engine.engine());
-            return Ok(Some(PublishedGeneration {
-                sequence: snapshot.through_sequence,
-                path: final_path,
-                engine,
-                report,
-            }));
-        }
-
-        let candidate_path = final_path.with_extension("candidate");
-        reset_private_directory(&self.paths.state_directory, &candidate_path)?;
-
-        let (report, engine) = self.build_generation(&snapshot, &candidate_path)?;
-        let engine = engine.warmed_for_activation();
-        sync_directory_tree(&candidate_path)?;
-        fs::rename(&candidate_path, &final_path).map_err(map_io)?;
-        sync_directory(&self.paths.state_directory.join("generations"))?;
-        self.activate(snapshot.through_sequence, &generation_name)?;
-        store.mark_published(snapshot.through_sequence)?;
-        self.remove_old_generations(snapshot.through_sequence)?;
-
-        Ok(Some(PublishedGeneration {
-            sequence: snapshot.through_sequence,
-            path: final_path,
-            engine,
-            report,
-        }))
-    }
-
-    fn build_generation(
-        &self,
-        snapshot: &MutationSnapshot,
-        candidate_path: &Path,
-    ) -> Result<(BuildReport, RawSearchEngine), IndexStoreError> {
-        GenerationBuilder::new(
-            self.paths.base_chunks_gzip.clone(),
-            self.paths.base_channels_gzip.clone(),
-        )
-        .build_snapshot(snapshot, candidate_path)
+        Ok(engine)
     }
 
     fn activate(&self, sequence: u64, directory: &str) -> Result<(), IndexStoreError> {
@@ -456,49 +377,22 @@ impl Publisher {
         }
         Ok(())
     }
-
-    fn remove_uncommitted_artifacts(&self) -> Result<(), IndexStoreError> {
-        let work = self.paths.state_directory.join("work");
-        for entry in fs::read_dir(&work).map_err(map_io)? {
-            remove_scratch_entry(&self.paths.state_directory, entry.map_err(map_io)?)?;
-        }
-
-        let generations = self.paths.state_directory.join("generations");
-        for entry in fs::read_dir(&generations).map_err(map_io)? {
-            let entry = entry.map_err(map_io)?;
-            if entry
-                .path()
-                .extension()
-                .is_some_and(|value| value == "candidate")
-            {
-                remove_scratch_entry(&self.paths.state_directory, entry)?;
-            }
-        }
-        Ok(())
-    }
 }
 
 fn open_exact_generation(
     sequence: u64,
     path: PathBuf,
     expected_manifest: &[u8],
-) -> Result<PublishedGeneration, IndexStoreError> {
+) -> Result<WarmEngine, IndexStoreError> {
     let actual_manifest = fs::read(path.join(GENERATION_MANIFEST)).map_err(map_io)?;
     if actual_manifest != expected_manifest {
         return Err(IndexStoreError::Conflict(format!(
             "generation {sequence} exists with a different manifest"
         )));
     }
-    let engine = RawSearchEngine::open(&path)
+    Ok(RawSearchEngine::open(&path)
         .map_err(map_raw)?
-        .warmed_for_activation();
-    let report = report_for_existing(engine.engine());
-    Ok(PublishedGeneration {
-        sequence,
-        path,
-        engine,
-        report,
-    })
+        .warmed_for_activation())
 }
 
 fn validate_remote_incoming_path(root: &Path, path: &Path) -> Result<(), IndexStoreError> {
@@ -535,22 +429,6 @@ fn update_identity_component(hasher: &mut blake3::Hasher, name: &[u8], value: &[
     hasher.update(value);
 }
 
-fn remove_scratch_entry(root: &Path, entry: fs::DirEntry) -> Result<(), IndexStoreError> {
-    let path = entry.path();
-    ensure_generation_path(root, &path)?;
-    let file_type = entry.file_type().map_err(map_io)?;
-    if file_type.is_dir() {
-        fs::remove_dir_all(path).map_err(map_io)
-    } else if file_type.is_file() {
-        fs::remove_file(path).map_err(map_io)
-    } else {
-        Err(IndexStoreError::InvalidInput(format!(
-            "publisher scratch path has unsupported type: {}",
-            path.display()
-        )))
-    }
-}
-
 fn gzip_lines(
     path: &Path,
 ) -> Result<impl Iterator<Item = std::io::Result<String>>, IndexStoreError> {
@@ -564,14 +442,6 @@ fn validate_source(path: &Path) -> Result<(), IndexStoreError> {
             backend: BACKEND,
             message: format!("required publisher source is missing: {}", path.display()),
         });
-    }
-    Ok(())
-}
-
-fn reset_private_directory(root: &Path, path: &Path) -> Result<(), IndexStoreError> {
-    ensure_generation_path(root, path)?;
-    if path.exists() {
-        fs::remove_dir_all(path).map_err(map_io)?;
     }
     Ok(())
 }
@@ -605,17 +475,6 @@ fn ensure_generation_path(root: &Path, path: &Path) -> Result<(), IndexStoreErro
         )));
     }
     Ok(())
-}
-
-fn report_for_existing(engine: &RawSearchEngine) -> BuildReport {
-    BuildReport {
-        documents: engine.document_count(),
-        videos: engine.video_count(),
-        channels: engine.channel_count(),
-        terms: engine.term_count(),
-        index_bytes: engine.index_size(),
-        elapsed_ms: 0,
-    }
 }
 
 fn map_io(error: std::io::Error) -> IndexStoreError {

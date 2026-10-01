@@ -13,7 +13,7 @@
 use super::*;
 use std::sync::{Mutex, OnceLock};
 
-pub(super) const SKIP_INTERVAL: u32 = 64;
+const SKIP_INTERVAL: u32 = 64;
 // Shorter lists are cheap to walk; a checkpoint would not pay for itself.
 pub(super) const SKIP_MIN_POSTINGS: u32 = 4_096;
 const SKIP_BUDGET_BYTES: usize = 64 * 1024 * 1024;

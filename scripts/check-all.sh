@@ -6,6 +6,7 @@ scripts/check-rust-packages.sh
 cargo test --workspace
 bun run test:e2e
 scripts/check-rust-dependency-policy.sh
+scripts/check-rust-public-surface.sh
 scripts/test-setup-dev.sh
 scripts/test-doctor.sh
 bash scripts/test-check-markdown-links.sh
