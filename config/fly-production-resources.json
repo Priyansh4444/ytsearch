@@ -5,13 +5,13 @@
     "raw_api": {
       "app": "ytsearch-api-raw-production",
       "machine_id": "8e7204a7694d28",
-      "volume_id": "vol_vxmgn65k0385y1n4",
+      "volume_id": "vol_40oxdw7jz2ne86p4",
       "mount_path": "/data"
     },
     "raw_reader": {
       "app": "ytsearch-raw-production",
       "machine_id": "d89303da029328",
-      "volume_id": "vol_v3gnjjw9elpy5ew4",
+      "volume_id": "vol_v3g580llxq66yyw4",
       "mount_path": "/data/mutable"
     },
     "raw_reader_canary": {
@@ -31,42 +31,6 @@
       "machine_id": "080d297f070d08",
       "volume_id": "vol_vp2w5pwendym77j4",
       "mount_path": "/var/lib/ytsearch"
-    }
-  },
-  "retirement_sets": {
-    "typesense": {
-      "reason": "raw-search-cutover",
-      "machines": [
-        {
-          "app": "ytsearch-typesense-staging",
-          "machine_id": "8147deb94937e8",
-          "volume_id": "vol_v8e6yy17jo63nplv",
-          "successor_app": "ytsearch-raw-production"
-        },
-        {
-          "app": "ytsearch-typesense-staging",
-          "machine_id": "d8de466f330468",
-          "volume_id": "vol_vdezd781q880qm34",
-          "successor_app": "ytsearch-raw-production"
-        },
-        {
-          "app": "ytsearch-api-typesense-fly-staging",
-          "machine_id": "1855eddf654298",
-          "volume_id": "vol_vwnydd578odzzo8v",
-          "successor_app": "ytsearch-api-raw-production"
-        },
-        {
-          "app": "ytsearch-indexer-staging",
-          "machine_id": "68352d2be17728",
-          "volume_id": "vol_r68z3gl5wq7jkqd4",
-          "successor_app": "ytsearch-indexer-raw-production"
-        }
-      ],
-      "unattached_volumes": [
-        {"app": "ytsearch-indexer-staging", "volume_id": "vol_v8e6wk3g1l6kj15v"},
-        {"app": "ytsearch-indexer-staging", "volume_id": "vol_458zq611m0yppz14"},
-        {"app": "ytsearch-indexer-staging", "volume_id": "vol_4qlzgynglnz786gr"}
-      ]
     }
   }
 }

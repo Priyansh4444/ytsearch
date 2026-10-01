@@ -18,14 +18,9 @@ Active paths (production):
 `raw` is the only accepted backend id (`scripts/fly-run-queue-indexer.sh` rejects
 anything else; `.env.example` ships `YTSEARCH_SEARCH_BACKEND=raw`).
 
-The Typesense-era units (`ytsearch-api-typesense-fly-staging`,
-`ytsearch-typesense-staging`, `ytsearch-indexer-staging`) are suspended and listed
-in the retirement set in `config/fly-production-resources.json`. Their teardown
-tooling (`scripts/deprecate-typesense-fly.sh`,
-`scripts/destroy-deprecated-typesense-fly.sh`) is still exercised by
-`scripts/check-all.sh`. Managed Typesense Cloud is intentionally removed. Do not
-reintroduce Typesense, and do not tear the suspended units down, unless the user
-explicitly asks.
+The Typesense- and Meilisearch-era Fly apps were destroyed on 2026-09-30; these
+three apps are the whole Fly footprint. Do not reintroduce Typesense unless the
+user explicitly asks.
 
 ## Read This First
 

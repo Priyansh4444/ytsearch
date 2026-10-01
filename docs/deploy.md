@@ -151,12 +151,9 @@ Run a bounded concurrent search load while publishing and require zero errors.
 
 ## Retirement and rollback
 
-After every gate passes, stop the legacy writer/API/engine and mark the exact
-Machines with `scripts/deprecate-typesense-fly.sh`. Keep the source archive,
-documentation, stopped Machines, and verified volumes as deprecated rollback
-and differential-test evidence until the final creator, publication, recovery,
-and exact-inventory gates pass. The active Raw-only migration authorizes only
-the separately reviewed exact retirement set after those gates.
+The Typesense-era apps were destroyed on 2026-09-30 after every gate passed;
+see [the retirement ledger](operations/typesense-retirement.md). Their source
+remains on the `typesense-fly-selfhost-comparison` archive branch.
 
 Rollback to Typesense is a Worker configuration redeploy plus a restart of the
 retained legacy engine/API. Raw also retains its previous verified generation
