@@ -194,16 +194,12 @@ bun run perf:frontend
 ## Documentation
 
 - [Architecture](docs/architecture.md) — crates, boundaries, and data flow
-- [Search experiments](docs/experiments/search/README.md) — Raw evidence,
-  historical Typesense controls, retired Tantivy results, and rollback evidence
 - [Self-hosting](docs/self-hosting.md) — deployment, persistence, and cookies
 - [Indexing operations](docs/indexing-operations-guide.md) — queue and repair
   procedures
 - [Deployment](docs/deploy.md) — the maintained Fly and Cloudflare setup
 - [Staging observability](docs/staging-observability.md) — health checks,
   benchmarks, and logs
-- [Legacy Meilisearch retirement](docs/legacy/meilisearch-retirement.md) —
-  migration history for older forks
 
 ## Project status
 

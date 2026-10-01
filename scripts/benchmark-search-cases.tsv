@@ -1,6 +1,6 @@
 # label<TAB>query<TAB>optional youtuber filter
 # Additional global cases below reproduce >250 ms Raw backend calls in Axiom,
-# 2026-09-17 through 2026-09-21. See P00/slow-searches-2026-09-22.md.
+# 2026-09-17 through 2026-09-21.
 react_global	react
 fire_global	fire
 one_fire_global	one fire

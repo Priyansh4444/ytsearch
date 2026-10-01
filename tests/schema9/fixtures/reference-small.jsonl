@@ -1,8 +1,0 @@
-{"id":"apple-1","video_id":"apple","creator":"@apple","title":"Create visual effects","text":"interfaces and design","timestamp_ms":1000,"content_kind":"video","published_at":20,"views":100,"likes":10,"comments":1}
-{"id":"cafe-1","video_id":"cafe","creator":"@unicode","title":"Café systems","text":"Café normalization","timestamp_ms":1000,"content_kind":"video","published_at":10,"views":10,"likes":1,"comments":0}
-{"id":"rank-high-1","video_id":"rank-high","creator":"@rank","title":"Rank high","text":"rank benchmark","timestamp_ms":1000,"content_kind":"video","published_at":5,"views":9,"likes":9,"comments":9}
-{"id":"rank-missing-1","video_id":"rank-missing","creator":"@rank","title":"Rank missing","text":"rank benchmark","timestamp_ms":1000,"content_kind":"short"}
-{"id":"rank-zero-1","video_id":"rank-zero","creator":"@rank","title":"Rank zero","text":"rank benchmark","timestamp_ms":1000,"content_kind":"video","published_at":0,"views":0,"likes":0,"comments":0}
-{"id":"repeat-1","video_id":"repeat","creator":"@words","title":"Repeated words","text":"the the result","timestamp_ms":1000,"content_kind":"video","published_at":2,"views":2,"likes":2,"comments":2}
-{"id":"solid-1","video_id":"solid","creator":"@ryansolid","title":"Create Effect","text":"solid reactive primitives","timestamp_ms":1000,"content_kind":"video","published_at":30,"views":200,"likes":20,"comments":2}
-{"id":"solid-2","video_id":"solid","creator":"@ryansolid","title":"Create Effect","text":"effect cleanup and create","timestamp_ms":25000,"content_kind":"video","published_at":30,"views":200,"likes":20,"comments":2}

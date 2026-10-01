@@ -9,11 +9,7 @@ The production target has four components:
 | On-demand indexer | `ytsearch-indexer-raw-production` | Transcript cache and repair cursor |
 | Frontend and scheduler | Cloudflare Worker `ytsearch-search` | Cloudflare Queue wake messages |
 
-The checked-in configuration is the target configuration. For an initial Raw
-cutover, copy the deployed legacy queue before changing the Worker origin. The
-production migration already completed that one-time copy. Follow [Typesense
-retirement](operations/typesense-retirement.md) for the recorded order and
-current final gates.
+The checked-in configuration is the target configuration.
 
 ## Prerequisites
 
@@ -81,9 +77,6 @@ flyctl secrets set --app ytsearch-api-raw-production \
 flyctl deploy --config fly.raw-api.toml --ha=false
 ```
 
-Copy every retained legacy JSONL row before changing the Worker queue origin.
-Compare IDs and statuses on both APIs; do not rely only on row counts.
-
 ## 3. Indexer
 
 Stage the Raw URL/admin key plus optional YouTube and cookie inputs, then create
@@ -149,16 +142,10 @@ Also verify in a clean browser:
 
 Run a bounded concurrent search load while publishing and require zero errors.
 
-## Retirement and rollback
+## Rollback
 
-The Typesense-era apps were destroyed on 2026-09-30 after every gate passed;
-see [the retirement ledger](operations/typesense-retirement.md). Their source
-remains on the `typesense-fly-selfhost-comparison` archive branch.
-
-Rollback to Typesense is a Worker configuration redeploy plus a restart of the
-retained legacy engine/API. Raw also retains its previous verified generation
-through the atomic manifest. After final Typesense retirement, only the Raw
-generation rollback remains.
+Raw retains its previous verified generation through the atomic manifest;
+rolling back a publication restores that generation.
 
 ## Secret rules
 

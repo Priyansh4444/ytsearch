@@ -85,7 +85,7 @@ impl RawSearchEngine {
         retain_not_excluded(&mut matches, excluded_documents);
         let mut highlight_group = vec![term.to_string()];
 
-        // Prefix matching is part of Typesense's ordinary candidate set, not a
+        // Prefix matching is part of the ordinary candidate set, not a
         // typo fallback. Always merge it before applying the typo threshold so
         // five exact hits do not hide `exploit` -> `exploiting` matches.
         let (prefix, prefix_terms) = self.fuzzy_alternatives(term, fields, 0, None, true)?;

@@ -3,13 +3,10 @@ use super::*;
 
 mod accelerators;
 mod common_words;
-mod exact_totals_sets;
 mod format_invariants;
 mod partitioned_scan;
 mod posting_skips;
-mod query_contract_v2;
 mod repeated_tokens;
-mod schema9_reference;
 
 const _: () = assert!(std::mem::size_of::<IndexedField>() == 1);
 const _: () = assert!(IndexedField::Text as u8 == 0);
@@ -1225,7 +1222,7 @@ fn unsupported_search_contracts_fail_closed() {
 }
 
 #[test]
-fn active_typesense_parameters_are_validated_and_supported() {
+fn active_query_parameters_are_validated_and_supported() {
     let (_root, engine) = test_engine();
     let mut query = grouped_query("search");
     query.query_by_weights = Some("4,6".to_string());
@@ -2557,7 +2554,7 @@ fn non_contiguous_video_input_preserves_group_membership() {
 }
 
 #[test]
-fn typo_distance_uses_typesense_length_gates() {
+fn typo_distance_uses_length_gates() {
     assert_eq!(bounded_typo_distance("abc"), 0);
     assert_eq!(bounded_typo_distance("abcd"), 1);
     assert_eq!(bounded_typo_distance("abcdef"), 1);

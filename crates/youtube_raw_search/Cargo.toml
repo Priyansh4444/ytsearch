@@ -32,5 +32,3 @@ zstd = "0.13"
 
 [dev-dependencies]
 tempfile = "3"
-unicode-normalization = "0.1"
-unicode_categories = "0.1.1"

@@ -717,8 +717,8 @@ impl RawSearchEngine {
             return self.format_matches(params, &fast_highlights, fast_matches, &mut block_cache);
         }
 
-        // Typesense includes the last-token prefix in the ordinary query even
-        // when the exact conjunction already clears the typo threshold. Typos
+        // The last-token prefix is part of the ordinary query even when the
+        // exact conjunction already clears the typo threshold. Typos
         // remain threshold-gated inside this bounded candidate progression.
         // Every expansion remains conjunctive: a document must match one
         // alternative for every retained query token.
@@ -751,7 +751,7 @@ impl RawSearchEngine {
             FullQueryResolution::TokenDrop => {}
         }
 
-        // Match Typesense's default right_to_left progression. Prefer the longest
+        // Drop tokens right to left. Prefer the longest
         // retained prefix, then try retained suffixes where prefix search remains
         // useful. Bound both ladders so adversarial long queries cannot multiply
         // fuzzy work without limit.

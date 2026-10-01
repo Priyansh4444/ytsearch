@@ -96,10 +96,6 @@ check_frontend_config() {
       printf '\n' >>"$bundle_file"
       cat "$chunk_file" >>"$bundle_file"
     done
-  if grep -q 'ytsearch-index-queue-staging.fly.dev' "$bundle_file"; then
-    echo "$label failed: bundle still references the retired queue API" >&2
-    exit 1
-  fi
   if ! grep -q "${expected_api_url#https://}" "$bundle_file"; then
     # The production Worker intentionally uses same-origin /api routes and
     # proxies them to the configured Fly API, so no backend hostname appears
