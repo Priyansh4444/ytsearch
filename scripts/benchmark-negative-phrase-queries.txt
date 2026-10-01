@@ -1,8 +1,0 @@
-# Paired exact negative-phrase workload. Keep controls and exclusions adjacent.
-black hole
-black hole -"event horizon"
-speed light
-speed light -"speed of light"
-quantum computer
-quantum computer -"quantum computer"
-

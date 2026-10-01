@@ -1,8 +1,0 @@
-# Paired exact-term exclusion workload. Keep positive and negative variants adjacent.
-black hole
-black hole -event
-speed light
-speed light -universe
-quantum computer
-quantum computer -google
-

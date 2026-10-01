@@ -26,14 +26,6 @@ pub(super) enum Command {
     IndexYoutuber(IndexYoutuberCommand),
     #[command(about = "Index YouTubers from a text file")]
     IndexYoutubers(IndexYoutubersCommand),
-    #[command(about = "Refresh the indexed YouTuber profile document without reindexing videos")]
-    RefreshYoutuber(RefreshYoutuberCommand),
-    #[command(about = "Refresh indexed YouTuber profile documents from a text file")]
-    RefreshYoutubers(RefreshYoutubersCommand),
-    #[command(about = "Reconcile one creator's indexed counts from backend chunks only")]
-    RefreshYoutuberCounts(RefreshYoutuberCountsCommand),
-    #[command(about = "Reconcile creator indexed counts from a text file without YouTube")]
-    RefreshYoutuberCountsList(RefreshYoutuberCountsListCommand),
     #[command(about = "Remove a YouTuber document and transcript chunks from the search backend")]
     RemoveYoutuber(RemoveYoutuberCommand),
     #[command(about = "Index one video by ID or URL")]
@@ -85,46 +77,6 @@ pub(super) struct ValidateCommand {
     pub(super) max_videos: u8,
     #[command(flatten)]
     pub(super) youtube: YouTubeAuthArgs,
-}
-
-#[derive(Clone, Debug, Args)]
-pub(super) struct RefreshYoutuberCommand {
-    #[command(flatten)]
-    pub(super) youtuber: YoutuberArg,
-    #[command(flatten)]
-    pub(super) youtube: YouTubeAuthArgs,
-    #[command(flatten)]
-    pub(super) search: SearchAdminArgs,
-}
-
-#[derive(Clone, Debug, Args)]
-pub(super) struct RefreshYoutubersCommand {
-    #[arg(value_name = "LIST_FILE")]
-    pub(super) list_file: PathBuf,
-    #[command(flatten)]
-    pub(super) youtube: YouTubeAuthArgs,
-    #[command(flatten)]
-    pub(super) search: SearchAdminArgs,
-}
-
-#[derive(Clone, Debug, Args)]
-pub(super) struct RefreshYoutuberCountsCommand {
-    #[command(flatten)]
-    pub(super) youtuber: YoutuberArg,
-    #[command(flatten)]
-    pub(super) search: SearchAdminArgs,
-    #[command(flatten)]
-    pub(super) collection: TranscriptCollectionArg,
-}
-
-#[derive(Clone, Debug, Args)]
-pub(super) struct RefreshYoutuberCountsListCommand {
-    #[arg(value_name = "LIST_FILE")]
-    pub(super) list_file: PathBuf,
-    #[command(flatten)]
-    pub(super) search: SearchAdminArgs,
-    #[command(flatten)]
-    pub(super) collection: TranscriptCollectionArg,
 }
 
 #[derive(Clone, Debug, Args)]

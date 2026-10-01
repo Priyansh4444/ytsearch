@@ -20,7 +20,7 @@ use youtube_index_store::{
 };
 use youtube_ingest::{Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource};
 use youtube_raw_search::{GenerationBuilder, MutationStore};
-use youtube_search_client::{DEFAULT_COLLECTION, TextSearchQuery};
+use youtube_search_client::TextSearchQuery;
 use youtube_sources::{
     FallbackMetadataSource, YouTubeMetadataSource, stable_youtuber_id as youtuber_id_from_handle,
 };
@@ -199,12 +199,6 @@ async fn main() -> ExitCode {
         Command::Validate(command) => validate_command(command).await,
         Command::IndexYoutuber(command) => index_youtuber_command(command).await,
         Command::IndexYoutubers(command) => index_youtubers_command(command).await,
-        Command::RefreshYoutuber(command) => refresh_youtuber_command(command).await,
-        Command::RefreshYoutubers(command) => refresh_youtubers_command(command).await,
-        Command::RefreshYoutuberCounts(command) => refresh_youtuber_counts_command(command).await,
-        Command::RefreshYoutuberCountsList(command) => {
-            refresh_youtuber_counts_list_command(command).await
-        }
         Command::RemoveYoutuber(command) => remove_youtuber_command(command).await,
         Command::IndexVideo(command) => index_video_command(command).await,
         Command::Search(command) => search_command(command).await,
@@ -278,38 +272,6 @@ async fn validate_command(command: ValidateCommand) -> Result<(), CliError> {
     Ok(())
 }
 
-async fn refresh_youtuber_command(command: RefreshYoutuberCommand) -> Result<(), CliError> {
-    let youtube = command.youtube.optional_client()?;
-    let ytdlp = YtDlpTranscriptSource::new();
-    let youtuber = validate_youtuber(youtube.as_ref(), &ytdlp, &command.youtuber.handle, 5).await?;
-    print_validated_youtuber(&youtuber);
-
-    let search = command.search.client(DEFAULT_COLLECTION)?;
-    let youtuber_id = youtuber_id_from_handle(&youtuber.handle, &youtuber.channel_id);
-    let existing = search.channel(&youtuber_id).await?;
-    let public_video_count = match discover_videos_for_youtuber(youtube.as_ref(), &ytdlp, &youtuber)
-        .await
-    {
-        Ok(videos) => saturating_u32(videos.len()),
-        Err(error) => {
-            tracing::warn!(handle = %youtuber.handle, %error, "failed to refresh public video count");
-            existing.as_ref().map_or(0, |doc| doc.public_video_count)
-        }
-    };
-    let chunk_stats = search.channel_stats(&youtuber_id).await?;
-    let youtuber_doc = build_youtuber_document_from_chunks(
-        &youtuber,
-        &youtuber_id,
-        public_video_count,
-        chunk_stats,
-        existing.as_ref(),
-    );
-    upsert_channel_document(&search, &youtuber_doc).await?;
-    publish_and_wait(&search).await?;
-    println!("Refreshed YouTuber document: {}", youtuber_doc.id);
-    Ok(())
-}
-
 fn build_youtuber_document_from_chunks(
     youtuber: &ValidatedYoutuber,
     youtuber_id: &str,
@@ -380,70 +342,6 @@ fn preserved_non_empty(candidate: &str, existing: Option<&String>) -> String {
     } else {
         candidate.to_string()
     }
-}
-
-async fn refresh_youtubers_command(command: RefreshYoutubersCommand) -> Result<(), CliError> {
-    let handles = read_youtuber_list(&command.list_file)?;
-    for handle in handles {
-        refresh_youtuber_command(RefreshYoutuberCommand {
-            youtuber: YoutuberArg { handle },
-            youtube: command.youtube.clone(),
-            search: command.search.clone(),
-        })
-        .await?;
-    }
-
-    Ok(())
-}
-
-async fn refresh_youtuber_counts_command(
-    command: RefreshYoutuberCountsCommand,
-) -> Result<(), CliError> {
-    let handle = normalize_handle(&command.youtuber.handle)?;
-    let youtuber_id = youtuber_id_from_handle(&handle, "");
-    let search = command.search.client(command.collection.collection)?;
-    refresh_youtuber_counts(&search, &handle, &youtuber_id).await
-}
-
-async fn refresh_youtuber_counts_list_command(
-    command: RefreshYoutuberCountsListCommand,
-) -> Result<(), CliError> {
-    let handles = read_youtuber_list(&command.list_file)?;
-    let search = command.search.client(command.collection.collection)?;
-    for raw_handle in handles {
-        let handle = normalize_handle(&raw_handle)?;
-        let youtuber_id = youtuber_id_from_handle(&handle, "");
-        refresh_youtuber_counts(&search, &handle, &youtuber_id).await?;
-    }
-    Ok(())
-}
-
-async fn refresh_youtuber_counts(
-    search: &RawIndexAdminClient,
-    handle: &str,
-    youtuber_id: &str,
-) -> Result<(), CliError> {
-    let Some(mut youtuber) = search.channel(youtuber_id).await? else {
-        println!("Skipped count refresh for {handle}: profile document is missing");
-        return Ok(());
-    };
-    let stats = search.channel_stats(youtuber_id).await?;
-    apply_backend_chunk_stats(&mut youtuber, stats);
-    upsert_channel_document(search, &youtuber).await?;
-    publish_and_wait(search).await?;
-    println!(
-        "Refreshed counts for {handle}: {} videos / {} chunks",
-        youtuber.indexed_video_count, youtuber.indexed_chunk_count
-    );
-    Ok(())
-}
-
-fn apply_backend_chunk_stats(youtuber: &mut ChannelDocument, stats: ChunkStats) {
-    youtuber.indexed_video_count = u32::try_from(stats.indexed_videos).unwrap_or(u32::MAX);
-    youtuber.indexed_chunk_count = u32::try_from(stats.indexed_chunks).unwrap_or(u32::MAX);
-    youtuber.public_video_count = youtuber
-        .public_video_count
-        .max(youtuber.indexed_video_count);
 }
 
 async fn upsert_channel_document(
@@ -2899,33 +2797,6 @@ mod tests {
             youtuber_id_from_handle("@t3dotgg", "UCbRP3c757lWg9M-U7TyEkXA"),
             "t3dotgg"
         );
-    }
-
-    #[test]
-    fn backend_counts_replace_stale_profile_counts() {
-        let mut youtuber = ChannelDocument {
-            id: "t3dotgg".to_string(),
-            handle: "@t3dotgg".to_string(),
-            name: "Theo".to_string(),
-            channel_id: "channel".to_string(),
-            uploads_playlist: None,
-            public_video_count: 500,
-            indexed_video_count: 1,
-            indexed_chunk_count: 114,
-            avatar_url: None,
-        };
-
-        apply_backend_chunk_stats(
-            &mut youtuber,
-            ChunkStats {
-                indexed_videos: 576,
-                indexed_chunks: 165_451,
-            },
-        );
-
-        assert_eq!(youtuber.indexed_video_count, 576);
-        assert_eq!(youtuber.indexed_chunk_count, 165_451);
-        assert_eq!(youtuber.public_video_count, 576);
     }
 
     #[test]
