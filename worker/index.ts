@@ -36,13 +36,13 @@ export default {
 function fetchEffect(request: Request, env: Env): Effect.Effect<Response, Error> {
   return Effect.gen(function* () {
     const publicAppOrigin = (env as Env & { PUBLIC_APP_ORIGIN?: string }).PUBLIC_APP_ORIGIN;
-    if (!requestOriginAllowed(request.url, publicAppOrigin)) {
+    const url = new URL(request.url);
+    if (!requestOriginAllowed(url, publicAppOrigin)) {
       return new Response("Forbidden", {
         status: 403,
         headers: { "Cache-Control": "no-store" },
       });
     }
-    const url = new URL(request.url);
     const isApiRequest = url.pathname === "/api" || url.pathname.startsWith("/api/");
 
     if (!isApiRequest) {
