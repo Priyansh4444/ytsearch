@@ -315,6 +315,26 @@ impl DocumentTable {
         )
     }
 
+    /// Starts loading `id`'s search fields into cache without waiting for
+    /// them. Scans that know their next documents call this a few documents
+    /// ahead, since each record read is otherwise a cache miss.
+    #[inline]
+    pub(super) fn prefetch_search_document(&self, id: u32) {
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: SSE is part of the x86-64 baseline, and a prefetch never
+        // dereferences or faults, even for an address outside the mapping.
+        unsafe {
+            core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(
+                self.file
+                    .bytes()
+                    .as_ptr()
+                    .wrapping_add(METADATA_PREFIX_BYTES + id as usize * DOCUMENT_RECORD_BYTES + 12)
+                    .cast(),
+            );
+        }
+    }
+
+    #[inline]
     pub(super) fn search_document(&self, id: u32) -> Result<SearchDocumentRecord> {
         if id as usize >= self.documents {
             return Err(Error::Corrupt(format!("document {id} is out of bounds")));
@@ -389,6 +409,16 @@ impl RawSearchEngine {
         );
         let videos: Vec<VideoMeta> =
             serde_json::from_reader(BufReader::new(File::open(index_path.join(VIDEOS_FILE))?))?;
+        // Scans treat a video whose span equals its length as one contiguous
+        // run, which holds only if its documents ascend strictly.
+        if !videos
+            .iter()
+            .all(|video| video.documents.is_sorted_by(|left, right| left < right))
+        {
+            return Err(Error::Corrupt(
+                "video documents must be strictly increasing".to_string(),
+            ));
+        }
         let channels: Vec<Value> =
             serde_json::from_reader(BufReader::new(File::open(index_path.join(CHANNELS_FILE))?))?;
         let lexicon = Lexicon::open(&index_path.join(LEXICON_FILE))?;

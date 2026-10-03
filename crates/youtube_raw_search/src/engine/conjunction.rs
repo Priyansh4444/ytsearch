@@ -42,6 +42,8 @@ struct TextAlternativeCursor<'a> {
     idf: f32,
     // Seek checkpoints, attached only for pruned schema-9 scans.
     skips: Option<Arc<[skips::SkipEntry]>>,
+    // Every skip entry before this index precedes the last seek target.
+    skip_floor: usize,
 }
 
 struct TitleVideoCursor<'a> {
@@ -933,6 +935,7 @@ impl<'a> TextAlternativeCursor<'a> {
             current: None,
             idf: engine.alternative_idf(entry),
             skips: None,
+            skip_floor: 0,
         })
     }
 
@@ -944,43 +947,58 @@ impl<'a> TextAlternativeCursor<'a> {
             return Ok(());
         }
         self.current = None;
-        while self.posting_cursor < self.postings.len() {
-            let delta = read_varint(self.postings, &mut self.posting_cursor, self.postings.len())?;
-            if self.decoded > 0 && delta == 0 {
+        // Decode in locals and store once on exit: updating `self` in the
+        // loop kept every cursor in memory, because the loop's error paths
+        // call the allocator.
+        let postings = self.postings;
+        let documents = self.engine.inner.manifest.documents;
+        let frequency_limit = self.alternative.entry.text_frequency;
+        let mut posting_cursor = self.posting_cursor;
+        let mut position_cursor = self.position_cursor;
+        let mut previous_document = self.previous_document;
+        let mut decoded = self.decoded;
+        let mut current = None;
+        while posting_cursor < postings.len() {
+            let delta = read_varint(postings, &mut posting_cursor, postings.len())?;
+            if decoded > 0 && delta == 0 {
                 return Err(Error::Corrupt(
                     "posting identifiers must be strictly increasing".to_string(),
                 ));
             }
-            let document = self
-                .previous_document
+            let document = previous_document
                 .checked_add(delta)
                 .ok_or_else(|| Error::Corrupt("posting identifier overflows u32".to_string()))?;
-            if document >= self.engine.inner.manifest.documents {
+            if document >= documents {
                 return Err(Error::Corrupt(
                     "text posting document is out of bounds".to_string(),
                 ));
             }
-            let frequency =
-                read_varint(self.postings, &mut self.posting_cursor, self.postings.len())?;
-            let first_position = self
-                .positions
-                .map(|positions| read_varint(positions, &mut self.position_cursor, positions.len()))
-                .transpose()?
-                .unwrap_or_default();
-            self.previous_document = document;
-            self.decoded = self
-                .decoded
-                .checked_add(1)
-                .ok_or_else(|| Error::Corrupt("posting count overflows u32".to_string()))?;
-            if self.decoded > self.alternative.entry.text_frequency {
+            let frequency = read_varint(postings, &mut posting_cursor, postings.len())?;
+            let first_position = match self.positions {
+                Some(positions) => read_varint(positions, &mut position_cursor, positions.len())?,
+                None => 0,
+            };
+            previous_document = document;
+            // Cannot overflow: each decoded posting is a distinct document
+            // below `documents`.
+            decoded += 1;
+            if decoded > frequency_limit {
                 return Err(Error::Corrupt(
                     "posting count exceeds the lexicon frequency".to_string(),
                 ));
             }
             if document >= target {
-                self.current = Some((document, frequency, first_position));
-                return Ok(());
+                current = Some((document, frequency, first_position));
+                break;
             }
+        }
+        self.posting_cursor = posting_cursor;
+        self.position_cursor = position_cursor;
+        self.previous_document = previous_document;
+        self.decoded = decoded;
+        if current.is_some() {
+            self.current = current;
+            return Ok(());
         }
         self.validate_complete()
     }
@@ -1010,7 +1028,16 @@ impl<'a> TextAlternativeCursor<'a> {
             return Ok(());
         }
         if let Some(skips) = &self.skips {
-            let index = skips.partition_point(|entry| entry.previous_id < target);
+            // Seek targets usually ascend, so search forward from the last
+            // result instead of across the whole array; each probe of the
+            // full binary search was a cache miss. A target behind the floor
+            // falls back to the full search.
+            let floor = match self.skip_floor.checked_sub(1).map(|index| skips[index]) {
+                Some(entry) if entry.previous_id >= target => 0,
+                _ => self.skip_floor,
+            };
+            let index = gallop_partition_point(skips, floor, |entry| entry.previous_id < target);
+            self.skip_floor = index;
             if let Some(entry) = index.checked_sub(1).map(|index| skips[index])
                 && entry.decoded > self.decoded
             {
@@ -1190,6 +1217,23 @@ impl<'a> StreamingTermPlan<'a> {
     }
 }
 
+impl TitleVideoCursor<'_> {
+    /// Index of the first remaining document at or after `target`.
+    fn first_at_or_after(&self, target: u32) -> usize {
+        let remaining = &self.documents[self.document_index..];
+        match (remaining.first(), remaining.last()) {
+            // Video documents ascend strictly (checked at load), so a run
+            // whose span equals its length is contiguous, and the answer is
+            // arithmetic. Nearly every video is one run, and each probe of
+            // the binary search was a cache miss.
+            (Some(&first), Some(&last)) if (last - first) as usize + 1 == remaining.len() => {
+                self.document_index + (target.saturating_sub(first) as usize).min(remaining.len())
+            }
+            _ => self.document_index + remaining.partition_point(|document| *document < target),
+        }
+    }
+}
+
 impl<'a> TitlePlanCursor<'a> {
     fn new(engine: &'a RawSearchEngine, plan: &'a TermPlan) -> Result<Self> {
         let mut videos = Vec::new();
@@ -1227,8 +1271,7 @@ impl<'a> TitlePlanCursor<'a> {
                 break;
             }
             let video = &mut self.videos[index];
-            video.document_index += video.documents[video.document_index..]
-                .partition_point(|document| *document < target);
+            video.document_index = video.first_at_or_after(target);
             match video.documents.get(video.document_index) {
                 Some(&next) => *top = std::cmp::Reverse((next, index)),
                 None => {
@@ -1267,6 +1310,20 @@ impl<'a> TitlePlanCursor<'a> {
     fn finish(&mut self) {
         self.pending.clear();
     }
+}
+
+/// `entries.partition_point(pred)`, given that `pred` holds for every entry
+/// before `start`. Doubles its step from `start`, so the cost is logarithmic
+/// in the distance moved rather than in the slice length.
+fn gallop_partition_point<T>(entries: &[T], start: usize, pred: impl Fn(&T) -> bool) -> usize {
+    let mut low = start;
+    let mut step = 1;
+    while low + step <= entries.len() && pred(&entries[low + step - 1]) {
+        low += step;
+        step *= 2;
+    }
+    let high = (low + step).min(entries.len());
+    low + entries[low..high].partition_point(pred)
 }
 
 fn merge_plan_contribution(combined: &mut Option<DocMatch>, contribution: DocMatch) {
@@ -1336,6 +1393,48 @@ mod strategy_tests {
             alternatives: Vec::new(),
             estimated_documents,
         }
+    }
+
+    #[test]
+    fn title_video_seek_matches_binary_search_for_contiguous_and_gapped_runs() {
+        let lists: [&[u32]; 4] = [&[5, 6, 7, 8, 9], &[5, 6, 8, 9], &[0, 1, 2, 40], &[7]];
+        for documents in lists {
+            for document_index in 0..=documents.len() {
+                let cursor = TitleVideoCursor {
+                    documents,
+                    document_index,
+                    score: 0.0,
+                    exact_mask: 0,
+                };
+                for target in 0..=45 {
+                    let expected = document_index
+                        + documents[document_index..]
+                            .partition_point(|document| *document < target);
+                    assert_eq!(
+                        cursor.first_at_or_after(target),
+                        expected,
+                        "{documents:?} from {document_index} to {target}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gallop_partition_point_matches_binary_search_from_every_valid_start() {
+        let entries = [1_u32, 3, 3, 4, 9, 9, 9, 12, 20, 21, 40];
+        for target in 0..=42 {
+            let pred = |entry: &u32| *entry < target;
+            let expected = entries.partition_point(pred);
+            for start in 0..=expected {
+                assert_eq!(
+                    gallop_partition_point(&entries, start, pred),
+                    expected,
+                    "target {target} from start {start}"
+                );
+            }
+        }
+        assert_eq!(gallop_partition_point(&[] as &[u32], 0, |_| true), 0);
     }
 
     #[test]

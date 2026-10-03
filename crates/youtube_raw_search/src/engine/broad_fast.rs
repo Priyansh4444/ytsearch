@@ -75,6 +75,9 @@ pub(super) fn accelerated_group_order(sort_by: Option<&str>) -> Option<GroupOrde
     }
 }
 
+/// How many matched documents ahead the broad scan prefetches metadata.
+const PREFETCH_DOCUMENTS: usize = 16;
+
 struct DocumentBits {
     words: Vec<u64>,
 }
@@ -310,9 +313,17 @@ impl RawSearchEngine {
             let mut counters: Vec<Option<MomentCounter>> = Vec::new();
             counters.resize_with(self.inner.videos.len(), || None);
             let mut matched_documents = 0_usize;
+            let metadata = &self.inner.metadata;
+            let mut ahead = matched.ones_in(range.clone());
+            for document in ahead.by_ref().take(PREFETCH_DOCUMENTS) {
+                metadata.prefetch_search_document(document);
+            }
             for document in matched.ones_in(range) {
+                if let Some(next) = ahead.next() {
+                    metadata.prefetch_search_document(next);
+                }
                 matched_documents += 1;
-                let record = self.inner.metadata.search_document(document)?;
+                let record = metadata.search_document(document)?;
                 let counter = counters
                     .get_mut(record.video as usize)
                     .ok_or_else(|| Error::Corrupt("document video is out of bounds".to_string()))?
