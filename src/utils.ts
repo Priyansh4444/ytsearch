@@ -5,7 +5,6 @@ type HighlightPart = {
   text: string;
   highlighted: boolean;
 };
-let entityDecoder: HTMLTextAreaElement | undefined;
 
 export function creatorFromPath(): string | null {
   const firstSegment = window.location.pathname.split("/").filter(Boolean)[0]?.trim();
@@ -97,8 +96,18 @@ function partsFromTaggedSnippet(snippet: string): HighlightPart[] {
   return parts.length > 0 ? parts : [{ text: decodeEntities(snippet), highlighted: false }];
 }
 
+// The inverse of the reader's `escape_html`, the only producer of snippets.
+// It escapes `&` too, so no other entity can appear in a snippet. Decoding
+// with plain string operations avoids an HTML parse per snippet part.
+const SNIPPET_ENTITIES: Record<string, string> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#39;": "'",
+};
+
 function decodeEntities(value: string): string {
-  entityDecoder ??= document.createElement("textarea");
-  entityDecoder.innerHTML = value;
-  return entityDecoder.value;
+  if (!value.includes("&")) return value;
+  return value.replace(/&(?:amp|lt|gt|quot|#39);/g, (entity) => SNIPPET_ENTITIES[entity] ?? entity);
 }
