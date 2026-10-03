@@ -238,6 +238,32 @@ test("loads channels and completes a basic search", async ({ page }) => {
   await expect(page.locator("iframe")).toHaveAttribute("src", /autoplay=1/);
 });
 
+test("a playing video survives the periodic availability refresh", async ({ page }) => {
+  // Production is always on, but the client's provisional availability follows
+  // the scheduled window. Before noon Pacific that guess says search is closed,
+  // and resetting to it on every refresh unmounted the results mid-playback.
+  await page.unroute("**/api/**");
+  const api = await mockApi(page, {
+    ...readyAvailability,
+    enforced: false,
+    schedule_policy: "always_on",
+    schedule_phase: "closed",
+  });
+  await page.clock.install({ time: new Date("2026-07-26T16:00:00Z") });
+
+  await page.goto("/?q=rust+testing");
+  await page.getByRole("button", { name: "Play Reliable Rust testing at 0:12" }).click();
+  const player = page.locator("iframe");
+  await expect(player).toHaveCount(1);
+  await player.evaluate((element) => element.setAttribute("data-original-player", ""));
+
+  await page.clock.runFor(61_000);
+  await expect(page.getByText("Loading", { exact: false })).toHaveCount(0);
+
+  await expect(page.locator("iframe[data-original-player]")).toHaveCount(1);
+  expect(api.searchRequests()).toBe(1);
+});
+
 test("searches battery gate within @t3dotgg", async ({ page }) => {
   const searchRequest = page.waitForRequest((request) => {
     const url = new URL(request.url());

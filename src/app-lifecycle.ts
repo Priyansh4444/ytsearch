@@ -1,7 +1,6 @@
 import { onSettled } from "solid-js";
 import { initializeAnalytics } from "./analytics";
 import { fetchSearchAvailability, indexStatus } from "./api";
-import { provisionalAvailability } from "./search-route";
 import type { IndexedChannel, SearchAvailability } from "./types";
 
 type AppLifecycleOptions = {
@@ -25,7 +24,10 @@ export function useAppLifecycle(options: AppLifecycleOptions): void {
 
     const refreshAvailability = () => {
       if (document.hidden) return;
-      options.setAvailability(provisionalAvailability());
+      // Keep the last server answer until the next one arrives. The
+      // provisional value follows the scheduled window, so resetting to it
+      // closed search every morning under always-on mode and unmounted the
+      // results, including a playing video.
       void fetchSearchAvailability(controller.signal)
         .then((value) => {
           if (disposed) return;
