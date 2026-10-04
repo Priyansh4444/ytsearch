@@ -22,6 +22,11 @@ These three apps are the whole Fly footprint.
 
 ## Read This First
 
+Before a task, check [docs/playbooks/](docs/playbooks/README.md) for a playbook
+that covers it: reader performance, dependency updates, frontend reactivity
+bugs. Each lists the commands, the traps that cost time before, and facts not
+worth re-deriving.
+
 Use these docs before changing a subsystem:
 
 - [docs/architecture.md](docs/architecture.md): crate boundaries and data flow.
@@ -43,7 +48,7 @@ Frontend:
 Rust crates:
 
 - `crates/youtube_api`: Axum API used by frontends. Search quality, result grouping, sorting, rate limit, queue API, Axiom search logs.
-- `crates/youtube_cli`: operator CLI for validation, indexing, refresh counts, search, benchmarks.
+- `crates/youtube_cli`: operator CLI for validation, indexing, search, benchmarks.
 - `crates/youtube_ingest`: core chunking/domain traits.
 - `crates/youtube_search_service`: the `SearchBackend` trait and shared query/result types.
 - `crates/youtube_search_client`: the client the API uses to call the search backend.
@@ -70,6 +75,8 @@ Scripts:
 - `scripts/raw-schema-differential.sh`: compares full API responses between two index generations; run it before shipping any index format change.
 - `scripts/build-raw-generation-from-backup.sh`: rebuilds a Raw generation from the base backup archives.
 - `scripts/check-rust-public-surface.sh`: fails when a Rust item is more public than its uses need (`cargo hawk`).
+- `scripts/perf/`: reader profiling and A/B comparison on the real index (`reader-build.sh`, `reader-ab.sh`, `reader-profile.sh`) and bundle-size attribution (`bundle-diff.sh`). See [docs/playbooks/reader-performance.md](docs/playbooks/reader-performance.md).
+- `scripts/deps-outdated.ts` (`bun run deps:outdated`): JS updates on every dist-tag and Rust major versions.
 
 ## Important System Behavior
 
@@ -225,7 +232,7 @@ flyctl machines list -a ytsearch-indexer-raw-production
 - Keep admin/indexing operations out of `youtube_api`; API should use search-only keys for public search.
 - Keep frontend env limited to public API URLs and queue URL. Never expose admin keys.
 - Use `rg` first for code search.
-- Use `apply_patch` for manual edits.
+- Make targeted edits; do not reformat or rewrite unrelated code.
 - Use `bunx wrangler`, not plain `wrangler`, unless the binary is definitely installed.
 - If changing Cloudflare Workers/Pages config or commands, check Wrangler docs/schema first.
 - If changing live Fly machines, verify machine state before and after.
@@ -234,6 +241,10 @@ flyctl machines list -a ytsearch-indexer-raw-production
   - low-signal query (`I`)
   - phrase/term query with stopwords (`fable on high`)
   - filtered creator query (`youtuber=@t3dotgg`)
+
+- Leave the next session faster than this one: when a step took long because
+  something was not written down, add the script, trap or fact to a playbook
+  in `docs/playbooks/` in the same pull request (see its README).
 
 ## Good First Commands In A New Session
 
