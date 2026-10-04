@@ -466,6 +466,22 @@ struct VideoMatches {
 }
 
 #[derive(Clone, Copy)]
+struct TitlePosting {
+    video: u32,
+    frequency: u32,
+    first_position: u32,
+}
+
+impl TitlePosting {
+    /// The title contribution, computed only for postings a caller keeps.
+    fn score(self, idf: f32, prioritize_position: bool) -> f32 {
+        idf * TITLE_QUERY_WEIGHT
+            * (1.0 + (self.frequency as f32).ln())
+            * token_position_multiplier(self.first_position, prioritize_position)
+    }
+}
+
+#[derive(Clone, Copy, Default)]
 struct RelevanceRank {
     score: f32,
     exact_tokens: u8,
@@ -1457,10 +1473,6 @@ impl RawSearchEngine {
         prioritize_position: bool,
         exact_mask: u8,
     ) -> Result<Vec<DocMatch>> {
-        let bytes = self.postings_range(entry.title_offset, entry.title_length)?;
-        let position_bytes = prioritize_position
-            .then(|| self.inner.positions.range(entry.term, IndexedField::Title))
-            .transpose()?;
         let average_docs = self
             .inner
             .manifest
@@ -1469,30 +1481,51 @@ impl RawSearchEngine {
             .unwrap_or(0);
         let mut matches =
             Vec::with_capacity((entry.title_frequency.saturating_mul(average_docs)) as usize);
-        let mut cursor = 0_usize;
-        let mut position_cursor = 0_usize;
-        let mut video_id = 0_u32;
-        let mut postings = 0_u32;
+        self.visit_title_postings(entry, prioritize_position, |posting| {
+            let score = posting.score(idf, prioritize_position);
+            for &document in &self.inner.videos[posting.video as usize].documents {
+                matches.push(DocMatch::with_exact_mask(
+                    document, score, false, exact_mask,
+                ));
+            }
+            Ok(())
+        })?;
+        matches.sort_unstable_by_key(|candidate| candidate.document());
+        Ok(matches)
+    }
+
+    /// Visits each title posting of `entry`, then checks the posting and
+    /// position counts against the lexicon. Visited videos are in bounds.
+    fn visit_title_postings(
+        &self,
+        entry: TermEntry,
+        prioritize_position: bool,
+        mut visit: impl FnMut(TitlePosting) -> Result<()>,
+    ) -> Result<()> {
+        let bytes = self.postings_range(entry.title_offset, entry.title_length)?;
+        let position_bytes = prioritize_position
+            .then(|| self.inner.positions.range(entry.term, IndexedField::Title))
+            .transpose()?;
+        let (mut cursor, mut position_cursor) = (0_usize, 0_usize);
+        let (mut video, mut postings) = (0_u32, 0_u32);
         while cursor < bytes.len() {
-            video_id = video_id.saturating_add(read_varint(bytes, &mut cursor, bytes.len())?);
+            video = video.saturating_add(read_varint(bytes, &mut cursor, bytes.len())?);
             let frequency = read_varint(bytes, &mut cursor, bytes.len())?;
             let first_position = position_bytes
                 .map(|positions| read_varint(positions, &mut position_cursor, positions.len()))
                 .transpose()?
                 .unwrap_or_default();
-            let video = self.inner.videos.get(video_id as usize).ok_or_else(|| {
-                Error::Corrupt("title posting video is out of bounds".to_string())
-            })?;
-            let score = idf
-                * TITLE_QUERY_WEIGHT
-                * (1.0 + (frequency as f32).ln())
-                * token_position_multiplier(first_position, prioritize_position);
-            for &document in &video.documents {
-                matches.push(DocMatch::with_exact_mask(
-                    document, score, false, exact_mask,
+            if video as usize >= self.inner.videos.len() {
+                return Err(Error::Corrupt(
+                    "title posting video is out of bounds".to_string(),
                 ));
             }
-            postings += 1;
+            visit(TitlePosting {
+                video,
+                frequency,
+                first_position,
+            })?;
+            postings = postings.saturating_add(1);
         }
         if postings != entry.title_frequency
             || position_bytes.is_some_and(|positions| position_cursor != positions.len())
@@ -1501,8 +1534,7 @@ impl RawSearchEngine {
                 "title posting/position count does not match lexicon".to_string(),
             ));
         }
-        matches.sort_unstable_by_key(|candidate| candidate.document());
-        Ok(matches)
+        Ok(())
     }
 
     fn postings_range(&self, offset: usize, length: usize) -> Result<&[u8]> {
@@ -2082,19 +2114,9 @@ impl RawSearchEngine {
                 let right = &self.inner.videos[*right as usize];
                 compare_video_sort(
                     left,
-                    RelevanceRank {
-                        score: 0.0,
-                        exact_tokens: 0,
-                        exact_mask: 0,
-                        ordered_phrase: false,
-                    },
+                    RelevanceRank::default(),
                     right,
-                    RelevanceRank {
-                        score: 0.0,
-                        exact_tokens: 0,
-                        exact_mask: 0,
-                        ordered_phrase: false,
-                    },
+                    RelevanceRank::default(),
                     params
                         .sort_by
                         .as_deref()
@@ -2148,19 +2170,9 @@ impl RawSearchEngine {
             match (left_video, right_video) {
                 (Some(left_video), Some(right_video)) => compare_video_sort(
                     left_video,
-                    RelevanceRank {
-                        score: 0.0,
-                        exact_tokens: 0,
-                        exact_mask: 0,
-                        ordered_phrase: false,
-                    },
+                    RelevanceRank::default(),
                     right_video,
-                    RelevanceRank {
-                        score: 0.0,
-                        exact_tokens: 0,
-                        exact_mask: 0,
-                        ordered_phrase: false,
-                    },
+                    RelevanceRank::default(),
                     params
                         .sort_by
                         .as_deref()

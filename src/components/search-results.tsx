@@ -83,11 +83,8 @@ const ResultSection: Component<{
   </Show>
 );
 
-// Single pass. Ordering must match the previous
-// `[...videos.filter("video"), ...videos.filter("unknown")]`: every `video` first
-// (source order), then every `unknown`; shorts stay separate. One shared bucket
-// would interleave `unknown` between `video` cards AND shift the per-section
-// `rank` values that feed analytics payloads.
+// Videos, then unknown kinds, each in source order; shorts separately. Ranks
+// feed analytics, so this order must not change.
 const partitionVideos = (videos: SearchVideoResult[]) => {
   const mains: SearchVideoResult[] = [];
   const unknown: SearchVideoResult[] = [];

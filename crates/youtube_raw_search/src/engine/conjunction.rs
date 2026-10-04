@@ -242,50 +242,19 @@ impl RawSearchEngine {
         &self,
         alternative: &TermAlternative,
     ) -> Result<Vec<(u32, f32)>> {
-        let entry = alternative.entry;
-        let bytes = self.postings_range(entry.title_offset, entry.title_length)?;
-        let position_bytes = alternative
-            .fields
-            .prioritize_position
-            .then(|| self.inner.positions.range(entry.term, IndexedField::Title))
-            .transpose()?;
-        let idf = self.alternative_idf(entry);
         let mut scores = Vec::new();
-        let mut cursor = 0;
-        let mut position_cursor = 0;
-        let mut video_id = 0_u32;
-        let mut postings = 0_u32;
-        while cursor < bytes.len() {
-            video_id = video_id.saturating_add(read_varint(bytes, &mut cursor, bytes.len())?);
-            let frequency = read_varint(bytes, &mut cursor, bytes.len())?;
-            let first_position = position_bytes
-                .map(|positions| read_varint(positions, &mut position_cursor, positions.len()))
-                .transpose()?
-                .unwrap_or_default();
-            let video = self.inner.videos.get(video_id as usize).ok_or_else(|| {
-                Error::Corrupt("title posting video is out of bounds".to_string())
-            })?;
-            if !video.documents.is_empty() {
-                scores.push((
-                    video_id,
-                    idf * TITLE_QUERY_WEIGHT
-                        * (1.0 + (frequency as f32).ln())
-                        * token_position_multiplier(
-                            first_position,
-                            alternative.fields.prioritize_position,
-                        )
-                        * alternative.score_multiplier,
-                ));
+        let idf = self.alternative_idf(alternative.entry);
+        let prioritize = alternative.fields.prioritize_position;
+        self.visit_title_postings(alternative.entry, prioritize, |posting| {
+            if !self.inner.videos[posting.video as usize]
+                .documents
+                .is_empty()
+            {
+                let score = posting.score(idf, prioritize) * alternative.score_multiplier;
+                scores.push((posting.video, score));
             }
-            postings = postings.saturating_add(1);
-        }
-        if postings != entry.title_frequency
-            || position_bytes.is_some_and(|positions| position_cursor != positions.len())
-        {
-            return Err(Error::Corrupt(
-                "title posting/position count does not match lexicon".to_string(),
-            ));
-        }
+            Ok(())
+        })?;
         Ok(scores)
     }
 
@@ -337,51 +306,14 @@ impl RawSearchEngine {
         for stream in streams.iter_mut() {
             stream.seek(documents.start)?;
         }
-        if let [stream] = streams {
-            while let Some(document) = stream.current_document() {
-                if document >= documents.end {
-                    break;
-                }
-                let record = self.inner.metadata.search_document(document)?;
-                let length_norm = self.document_length_norm(record.tokens);
-                let candidate = stream.take_current(length_norm)?;
-                visit(candidate, record)?;
-            }
-            return Ok(());
-        }
-        loop {
-            let mut target = 0;
-            for stream in streams.iter() {
-                let Some(document) = stream.current_document() else {
-                    return Ok(());
-                };
-                target = target.max(document);
-            }
-            if target >= documents.end {
-                return Ok(());
-            }
-            for stream in streams.iter_mut() {
-                stream.seek(target)?;
-            }
-            if streams
-                .iter()
-                .any(|stream| stream.current_document() != Some(target))
-            {
-                continue;
-            }
+        while let Some(target) =
+            next_common_document(streams, documents.end, |stream, target| stream.seek(target))?
+        {
             let record = self.inner.metadata.search_document(target)?;
             let length_norm = self.document_length_norm(record.tokens);
-            let mut stream_matches = streams.iter_mut();
-            let mut combined = stream_matches
-                .next()
-                .ok_or_else(|| Error::Corrupt("streaming conjunction is empty".to_string()))?
-                .take_current(length_norm)?;
-            for stream in stream_matches {
-                let next = stream.take_current(length_norm)?;
-                combined = combine_plan_matches(target, combined, next);
-            }
-            visit(combined, record)?;
+            visit(take_conjunction(streams, target, length_norm)?, record)?;
         }
+        Ok(())
     }
 
     fn document_length_norm(&self, document_tokens: u32) -> f32 {
@@ -498,40 +430,14 @@ impl RawSearchEngine {
             }
             stream.advance_to(documents.start)?;
         }
-        loop {
-            let mut target = 0;
-            let mut exhausted = false;
-            for stream in &streams {
-                let Some(document) = stream.current_document() else {
-                    exhausted = true;
-                    break;
-                };
-                target = target.max(document);
-            }
-            if exhausted || target >= documents.end {
-                break;
-            }
-            for stream in &mut streams {
-                stream.advance_to(target)?;
-            }
-            if streams
-                .iter()
-                .any(|stream| stream.current_document() != Some(target))
-            {
-                continue;
-            }
+        while let Some(target) =
+            next_common_document(&mut streams, documents.end, |stream, target| {
+                stream.advance_to(target)
+            })?
+        {
             let record = self.inner.metadata.search_document(target)?;
             let length_norm = self.document_length_norm(record.tokens);
-            let mut stream_matches = streams.iter_mut();
-            let mut combined = stream_matches
-                .next()
-                .ok_or_else(|| Error::Corrupt("streaming conjunction is empty".to_string()))?
-                .take_current(length_norm)?;
-            for stream in stream_matches {
-                let next = stream.take_current(length_norm)?;
-                combined = combine_plan_matches(target, combined, next);
-            }
-            visit(combined, record)?;
+            visit(take_conjunction(&mut streams, target, length_norm)?, record)?;
         }
 
         if documents.end >= self.inner.manifest.documents {
@@ -870,44 +776,19 @@ impl RawSearchEngine {
             let video = self.inner.metadata.document(target.document())?.video;
             targets_by_video.entry(video).or_default().push(index);
         }
-        let bytes = self.postings_range(entry.title_offset, entry.title_length)?;
-        let position_bytes = fields
-            .prioritize_position
-            .then(|| self.inner.positions.range(entry.term, IndexedField::Title))
-            .transpose()?;
-        let mut cursor = 0_usize;
-        let mut position_cursor = 0_usize;
-        let mut video = 0_u32;
-        let mut postings = 0_u32;
-        while cursor < bytes.len() {
-            video = video.saturating_add(read_varint(bytes, &mut cursor, bytes.len())?);
-            let frequency = read_varint(bytes, &mut cursor, bytes.len())?;
-            let first_position = position_bytes
-                .map(|positions| read_varint(positions, &mut position_cursor, positions.len()))
-                .transpose()?
-                .unwrap_or_default();
-            postings = postings.saturating_add(1);
-            let Some(indices) = targets_by_video.get(&video) else {
-                continue;
+        self.visit_title_postings(entry, fields.prioritize_position, |posting| {
+            let Some(indices) = targets_by_video.get(&posting.video) else {
+                return Ok(());
             };
-            let score = idf
-                * TITLE_QUERY_WEIGHT
-                * (1.0 + (frequency as f32).ln())
-                * token_position_multiplier(first_position, fields.prioritize_position);
+            let score = posting.score(idf, fields.prioritize_position);
             for &index in indices {
                 let contribution = &mut contributions[index];
                 contribution.score += score;
                 contribution.exact_mask |= fields.exact_mask;
                 contribution.matched = true;
             }
-        }
-        if postings != entry.title_frequency
-            || position_bytes.is_some_and(|positions| position_cursor != positions.len())
-        {
-            return Err(Error::Corrupt(
-                "title posting/position count does not match lexicon".to_string(),
-            ));
-        }
+            Ok(())
+        })?;
         Ok(())
     }
 }
@@ -1341,15 +1222,51 @@ fn merge_plan_contribution(combined: &mut Option<DocMatch>, contribution: DocMat
         .set_all_retained_exact(current.all_retained_exact() || contribution.all_retained_exact());
 }
 
-fn combine_plan_matches(document: u32, left: DocMatch, right: DocMatch) -> DocMatch {
-    let mut combined = DocMatch::new(
-        document,
-        left.score + right.score,
-        left.matches_text() || right.matches_text(),
-    );
-    combined.set_exact_mask(left.exact_mask() | right.exact_mask());
-    combined.set_all_retained_exact(left.all_retained_exact() && right.all_retained_exact());
-    combined
+/// Moves `streams` forward until they share a document below `end` and returns
+/// it, or `None` once any stream is exhausted or passes `end`. `step` moves one
+/// stream to a target: `seek` uses skip lists, `advance_to` decodes in order.
+fn next_common_document(
+    streams: &mut [StreamingTermPlan<'_>],
+    end: u32,
+    mut step: impl FnMut(&mut StreamingTermPlan<'_>, u32) -> Result<()>,
+) -> Result<Option<u32>> {
+    loop {
+        let mut target = 0;
+        for stream in streams.iter() {
+            let Some(document) = stream.current_document() else {
+                return Ok(None);
+            };
+            target = target.max(document);
+        }
+        if target >= end {
+            return Ok(None);
+        }
+        for stream in streams.iter_mut() {
+            step(stream, target)?;
+        }
+        if streams
+            .iter()
+            .all(|stream| stream.current_document() == Some(target))
+        {
+            return Ok(Some(target));
+        }
+    }
+}
+
+/// Consumes every stream's match at `target` and combines them.
+fn take_conjunction(
+    streams: &mut [StreamingTermPlan<'_>],
+    target: u32,
+    length_norm: f32,
+) -> Result<DocMatch> {
+    let (first, rest) = streams
+        .split_first_mut()
+        .ok_or_else(|| Error::Corrupt("streaming conjunction is empty".to_string()))?;
+    let mut combined = first.take_current(length_norm)?;
+    for stream in rest {
+        combined = combine_plan_matches(target, combined, stream.take_current(length_norm)?);
+    }
+    Ok(combined)
 }
 
 fn prefer_document_validation(targets: usize, remaining: &[TermPlan]) -> bool {

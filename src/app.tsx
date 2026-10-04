@@ -98,21 +98,14 @@ const App: Component = () => {
   // results <Show> below remounts on any new `successfulSearch` object, which
   // reloaded a playing video every 60 s.
   const searchEnabled = createMemo(() => availability().search_enabled);
-  // Do NOT inline this as a plain accessor: `createEffect` nodes are built with
-  // `_equals: false`, so an effect sourced from an accessor re-runs on EVERY
-  // write to its dependencies. `useAppLifecycle` writes a fresh availability
-  // object on visibilitychange and every 60 s; without the memo's `===` barrier
-  // each of those writes aborts the in-flight search and refetches the
-  // identical request, flashing `LoadingState` over the results. The memo's
-  // equality check is load-bearing, not overhead.
+  // Must stay a memo: effects re-run on every source write, so without this
+  // `===` barrier each availability refresh would abort and refetch the search.
   const executableSearch = createMemo(() => (searchEnabled() ? submitted() : undefined));
   const search = createSearchResource(executableSearch);
 
-  // Both lookups are built once per channel-list change (fetch/cache), never per
-  // keystroke. They key differently on purpose: `channelByKey` uses
-  // `normalizeHandle` (trim + `@`, case-preserving, first match wins — the
-  // contract the previous `channels().find(...)` calls had), while `channelKeys`
-  // lowercases for the substring scan.
+  // Rebuilt only when the channel list changes. `channelByKey` keys by
+  // `normalizeHandle` (case-preserving, first match wins); `channelKeys`
+  // lowercases for substring search.
   const channelByKey = createMemo(() => {
     const map = new Map<string, IndexedChannel>();
     for (const channel of channels() ?? []) {
@@ -449,10 +442,6 @@ const App: Component = () => {
     writeSearchUrl(request);
   };
 
-  // Stable handlers: these bodies are identical for every invocation, so they
-  // are created once here instead of once per JSX construction (Solid runs a
-  // component body once per mount, so the saving is one closure per mount each,
-  // not a per-update win).
   const submitFirstPage = () => runSearch(1);
   const handleCopySearchLink = () => void copySearchLink();
   const handleClearRecent = () => setRecentSearches(clearRecentSearches());

@@ -91,11 +91,6 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
     }
     capture("result_link_copied", resultProperties(props));
   };
-  // Stable per-row handlers: the two identical `result_opened` bodies collapse
-  // into one reference, so each row allocates one closure fewer (N per-hit
-  // closures remain). The per-hit onSelect closure is structurally unavoidable
-  // (it captures `hit`), so its body is a single call instead of three
-  // statements.
   const openResult = () => capture("result_opened", resultProperties(props));
   const copyLink = () => void copyResultLink();
   const runExpand = () => void expandMoments();
@@ -285,19 +280,6 @@ function engagementSummary(video: SearchVideoResult): string | undefined {
 }
 
 function autoplayEmbedUrl(value: string): string {
-  // Fast path only when appending is provably identical to
-  // `searchParams.set("autoplay", "1")`: an absolute embed URL with no fragment
-  // and no query or fragment. Query keys can be bare, percent-encoded, or
-  // repeated, so substring checks cannot prove that `autoplay` is absent.
-  // Anything ambiguous keeps the parser and its `URLSearchParams.set` semantics.
-  if (
-    value.startsWith("https://") &&
-    value.includes("/embed/") &&
-    !value.includes("?") &&
-    !value.includes("#")
-  ) {
-    return `${value}${value.includes("?") ? "&" : "?"}autoplay=1`;
-  }
   const url = new URL(value);
   url.searchParams.set("autoplay", "1");
   return url.toString();

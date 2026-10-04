@@ -1,10 +1,8 @@
 # Raw publication release
 
-Use this runbook to prove a new Raw reader and detached builder on the isolated
-2-GB canary. It does not promote the release or touch the production reader.
-The runner confirms that the canary and builder are stopped before it records
-success. If it cannot confirm a stop, it fails and retains the Machine lease and
-recovery session instead of claiming success.
+Proves a new Raw reader and detached builder on the isolated 2-GB canary. It
+never promotes the release or touches the production reader, and it records
+success only after confirming both Machines stopped.
 
 ## Fixed resources
 
@@ -16,27 +14,19 @@ jq '.resources | {raw_reader_canary, raw_publication_builder}' \
   config/fly-production-resources.json
 ```
 
-The reader must remain stopped, have no services or checks, skip DNS
-registration, use restart policy `no`, and have exactly 2 shared CPUs and 2 GB
-of memory. The builder must remain an inert `sleep infinity` Machine with no
-services and restart policy `no`. Its checked profile controls its CPU and
-memory shape. Full schema migration uses one performance CPU and 4 GB; the
-default incremental profile uses two shared CPUs and 2 GB. The scripts reject
-any drift from these identities and shapes.
+Both stay stopped with restart policy `no` and no services. The reader also
+has no checks, skips DNS, and has exactly 2 shared CPUs and 2 GB. The builder is
+an inert `sleep infinity` Machine: one performance CPU and 4 GB for a full schema
+migration, two shared CPUs and 2 GB for the default incremental profile. The
+scripts reject any drift.
 
 ## Build immutable overlays
 
-Commit the release first. Choose the exact tested corpus image, including its
-full registry digest. The image labels are derived from the full source commit
-and base digest; operators cannot override them.
-
-Uploading the committed source to Fly's private remote builder and registry is
-an external release action. Obtain explicit approval for the exact commit
-before running either build.
-
-Resolve the tested base corpus from the exact production reader selected by the
-checked-in Worker configuration. Fly supplies the immutable image digest. Do
-not type a tag, commit prefix, or digest:
+Commit the release first; image labels derive from the full source commit and
+base digest. Uploading source to Fly's builder is an external action: get
+explicit approval for the exact commit before either build. Resolve the base
+image from the production reader that `wrangler.jsonc` selects, never by typing
+a tag or digest:
 
 ```bash
 read -r app machine < <(
@@ -60,11 +50,9 @@ scripts/build-raw-search-overlay.sh | tee /tmp/raw-reader-image.json
 scripts/build-raw-indexer-overlay.sh | tee /tmp/raw-builder-image.json
 ```
 
-Both commands archive only the committed build inputs. Their JSON output binds
-the source commit, base image, and derived image name.
-The canary also reads that source commit and base-image digest from files baked
-into each running overlay. Machine metadata alone is not accepted as image
-provenance.
+Both archive only committed inputs, and their JSON binds the source commit,
+base image and image name. The canary checks provenance from files baked into
+each overlay, not Machine metadata.
 
 ## Stage exact stopped Machines
 
@@ -87,71 +75,41 @@ APPLY_RAW_PUBLICATION_BUILDER=configure-exact-inert-builder \
   | tee /tmp/raw-publication-builder.json
 ```
 
-Staging never starts either Machine.
-The reader uses `/data/mutable/trials/<source-commit-prefix>` as its state
-directory. A new source commit opens the immutable base index until that trial
-publishes a generation. This keeps earlier canary state and its rollback
-artifact outside the trial. Before the trial, verify the exact base image's
-`/data/index/manifest.json` schema and counts. As of 2026-10-04 the immutable
-base digest has schema 6, 8,142,650 documents, 32,822 videos, and 61 channels,
-and production serves schema-9 generations published from it. A canary that
-never publishes only proves the schema-6 base opens; it is not schema-9
-validation.
-Builder reconciliation replaces the obsolete repair configuration as one exact
-Machine config; stale queue environment variables, embedded scripts, file
-mappings, services, and checks are not carried into the publication role. The
-volume and Machine identity are preserved.
+Staging never starts either Machine. The reader's state directory is
+`/data/mutable/trials/<source-commit-prefix>`, so each commit starts from the
+immutable base index, apart from earlier canary state. Verify the base image's
+`/data/index/manifest.json` first: as of 2026-10-04 it is schema 6 with
+8,142,650 documents, 32,822 videos and 61 channels, and production serves
+schema-9 generations published from it. A canary that never publishes proves
+only that the base opens, not schema 9. Builder reconciliation writes one exact
+Machine config, dropping stale queue settings while keeping the volume and
+Machine identity.
 
-The reader canary maps the deployed `RAW_SEARCH_API_KEY` and
-`RAW_SEARCH_ADMIN_API_KEY` secrets into `/run/secrets`. Fly base64-decodes a
-secret when materializing a Machine `config.files` entry, so the image
-entrypoint re-encodes those bytes before exporting the application credential.
-This keeps file-backed injection identical to Fly's ordinary environment
-injection. The canary requires both non-empty files and stops startup when
-either is absent. Production preserves environment injection because its
-require-files flag remains off.
-
-`flyctl secrets import --stage` does not make a staged secret available through
-`config.files.secret_name`. Activate a coordinated reader/API credential
-rotation with `flyctl secrets deploy` before staging this canary. Verify the
-credential only through a one-way digest of the `youtube-raw-search` process
-environment; `fly ssh console ... env` describes the SSH process and is not
-proof of what the server received.
+The canary reads `RAW_SEARCH_API_KEY` and `RAW_SEARCH_ADMIN_API_KEY` from
+`/run/secrets` and refuses to start without both. Fly base64-decodes secrets
+written through `config.files`, so the entrypoint re-encodes them to match
+environment injection, which production still uses. Staged secrets are not
+visible through `config.files.secret_name`: run `flyctl secrets deploy` for any
+reader/API rotation before staging. Verify a credential only by a one-way digest
+of the `youtube-raw-search` process environment; `fly ssh console ... env` shows
+the SSH process, not the server.
 
 ## Run the complete gate
 
-The gate permits up to 300 one-second health probes for a cold reader start.
-This is an integrity-check allowance, not a search-latency allowance: the
-2 GB canary took 193 seconds to fully checksum and open active generation 2145
-on August 31, 2026. Search cases still fail closed above 200 ms.
-
-When the operator uses a short-lived token from `flyctl auth token` as
-`FLY_API_TOKEN`, set `FLY_MACHINE_SESSION_ALLOW_CLI_TOKEN_REFRESH=1` for the
-gate. The Machine session helper then obtains a fresh CLI token after an
-authentication rejection. It only replays reads; a rejected mutation still
-requires an authoritative state check. A scoped token supplied directly in
-`FLY_API_TOKEN` keeps the default fail-closed behavior.
-
-The queue worker must target the exact production Machine name,
-`d89303da029328.vm.ytsearch-raw-production.internal`, never the app-wide
-name: while a canary is started, the app-wide name can route the worker to
-it. The canary runner checks this before starting.
-
-### Broad-query memory gate
-
-On August 31, 2026, repeated global warmups drove four uncancellable blocking
-searches to about 1.90 GB anonymous RSS and the 2 GB reader was OOM-killed.
-Single-token exact and prefix candidates were each materialized as complete
-posting vectors before grouping. A client timeout did not cancel that
-synchronous backend work.
-
-Grouped, unfiltered broad single-token queries now merge their exact and prefix
-posting cursors directly into bounded per-video slots. The response still
-computes exact `found`, `total_moments`, ranking, pagination, and highlights,
-without retaining one match per corpus hit. The HTTP service also permits one
-backend search at a time; requests waiting for that permit remain cancellable.
-The canary gate must include broad global terms such as `react` and `fire`,
-verify every request remains below 200 ms, and show no OOM increase.
+- A cold start may take up to 300 one-second health probes: checksumming and
+  opening the active generation took 193 s on the 2 GB canary (2026-08-31).
+  Search cases still fail above 200 ms.
+- With a short-lived `flyctl auth token` as `FLY_API_TOKEN`, set
+  `FLY_MACHINE_SESSION_ALLOW_CLI_TOKEN_REFRESH=1`: after a 401/403 the helper
+  refreshes the token and retries reads once; a rejected mutation still needs an
+  authoritative state check. A scoped token keeps the fail-closed default.
+- The queue worker must target the exact production Machine,
+  `d89303da029328.vm.ytsearch-raw-production.internal`, never the app-wide name,
+  which can route to a started canary. The runner checks this first.
+- Broad single-token queries once OOM-killed the 2 GB reader (2026-08-31); they
+  now merge posting cursors into bounded per-video slots, and the HTTP service
+  runs one backend search at a time. The gate must include broad terms such as
+  `react` and `fire`, keep every request below 200 ms, and see no new OOM.
 
 ```bash
 SEARCH_API_KEY="$RAW_CANARY_SEARCH_API_KEY" \
@@ -195,16 +153,9 @@ The one command performs these checks in order:
 10. Deletes the synthetic channel, publishes the deletion, restarts again, and
     requires the channel to remain absent.
 
-The six-hour reader lease is a worst-case mutual-exclusion and recovery
-envelope derived from both complete builder runs, restarts, health checks, and
-cleanup. It does not keep a stopped Machine running for six hours; normal
-cleanup stops the Machines and releases both leases immediately.
-With `FLY_MACHINE_SESSION_ALLOW_CLI_TOKEN_REFRESH=1`, Machine API requests
-refresh the persisted `flyctl` login once after an HTTP 401 or 403. Safe reads
-retry once. Mutations return the original rejection so
-their caller must resolve Machine state before deciding whether to issue a new
-request. This keeps cleanup viable when the original bearer expires during a
-long cold start without blindly replaying a mutation.
+The six-hour reader lease is a worst-case envelope for two builder runs,
+restarts and cleanup; normal cleanup stops both Machines and releases the leases
+immediately.
 
 Evidence is written under
 `.search-experiment/results/raw-canary-<commit>-<timestamp>/`. A successful run

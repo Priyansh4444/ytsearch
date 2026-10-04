@@ -5,18 +5,18 @@ Solid frontend. Docker Compose is the supported local topology.
 
 ## Setup
 
-Install Rust stable, Bun (the version pinned by `packageManager` in
-`package.json`), Docker Compose, OpenSSL, and `yt-dlp`.
-`ffmpeg` is required only for permitted local transcription.
+Install the tools listed in the [README](../README.md#local-development), plus
+OpenSSL; `ffmpeg` is needed only for permitted local transcription. Then:
 
 ```bash
-bun run setup
+bun run setup               # creates .env with separate Raw and queue credentials, if absent
 docker compose up -d --build
-docker compose ps
+curl -fsS http://localhost:8108/health            # Raw engine
+curl -fsS http://localhost:8787/api/health        # API
+curl -fsS http://localhost:8787/api/youtubers
 ```
 
-`bun run setup` creates `.env` only when it does not exist and generates
-separate Raw and queue credentials. To configure by hand:
+Open `http://localhost:3000`. To configure by hand instead:
 
 ```env
 RAW_SEARCH_API_URL=http://127.0.0.1:8108
@@ -26,16 +26,6 @@ RAW_SEARCH_COLLECTION=youtube_transcript_chunks
 INDEX_QUEUE_API_BASE_URL=http://127.0.0.1:8787
 YTSEARCH_INDEX_QUEUE_TOKEN=replace-with-a-long-random-value
 ```
-
-Check the stack:
-
-```bash
-curl -fsS http://localhost:8108/health
-curl -fsS http://localhost:8787/api/health
-curl -fsS http://localhost:8787/api/youtubers
-```
-
-Open `http://localhost:3000`.
 
 ## Persistent state
 
@@ -82,19 +72,9 @@ DAILY_UPDATE_ENABLED=1 DAILY_UPDATE_INITIAL_DELAY_SECONDS=0 \
   docker compose up -d worker
 ```
 
-## Bare-process development
-
-Start Raw through Compose, then run API and frontend separately:
-
-```bash
-docker compose up -d raw-search init-backend
-bun run api
-bun run dev
-```
-
-Raw administration requires `RAW_SEARCH_ADMIN_API_KEY`. Public API processes
-should receive only `RAW_SEARCH_API_KEY` unless they explicitly host a trusted
-administration route.
+Raw administration requires `RAW_SEARCH_ADMIN_API_KEY`; public API processes
+should receive only `RAW_SEARCH_API_KEY`. For running the API and frontend
+outside Compose, see the README's local development section.
 
 ## Cookies and transcription
 

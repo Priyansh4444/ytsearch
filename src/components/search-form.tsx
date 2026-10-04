@@ -20,11 +20,8 @@ export const SearchForm: Component<{
 }> = (props) => {
   const [activeSuggestion, setActiveSuggestion] = createSignal(-1);
   const [suggestionsDismissed, setSuggestionsDismissed] = createSignal(false);
-  // Two memos replace up to 5 slice + trim-chain recomputes per keystroke:
-  // ArrowUp/Down, Enter-to-select and the ARIA reads below share one cached
-  // 8-window. Note `props.channelSuggestions` is a fresh array per keystroke, so
-  // this does NOT stabilize the `For` input identity — it only removes the
-  // repeated slicing. What keeps rows intact is the channel objects' identity.
+  // Shared by arrow keys, Enter-to-select and the ARIA reads below. Rows stay
+  // mounted because channel objects keep their identity, not this array.
   const visibleSuggestions = createMemo(() => props.channelSuggestions.slice(0, 8));
   const suggestionsVisible = createMemo(
     () =>
