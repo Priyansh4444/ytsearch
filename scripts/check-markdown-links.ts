@@ -21,14 +21,14 @@ const codePattern = /```[\s\S]*?```|`[^`\n]+`/g;
 const repositoryPathPattern =
   /(?<![\w./-])((?:scripts|docs|crates|src|worker|shared|config|tests|deploy|\.github)\/[\w./@-]+)/g;
 const packageScriptPattern = /\bbun run ([\w:-]+)/g;
+const packageJson = resolve(root, "package.json");
 const packageScripts = new Set(
-  Object.keys(
-    (
-      JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")) as {
-        scripts?: Record<string, string>;
-      }
-    ).scripts ?? {},
-  ),
+  existsSync(packageJson)
+    ? Object.keys(
+        (JSON.parse(readFileSync(packageJson, "utf8")) as { scripts?: Record<string, string> })
+          .scripts ?? {},
+      )
+    : [],
 );
 
 for (const path of markdownFiles) {

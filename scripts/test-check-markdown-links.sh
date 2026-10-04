@@ -26,4 +26,16 @@ grep -q 'untracked.md: missing missing.md' "$fixture/result"
 rm "$fixture/tracked.md" "$fixture/untracked.md"
 bun "$fixture/scripts/check-markdown-links.ts" > "$fixture/result"
 grep -q 'markdown_links=ok files=1' "$fixture/result"
+
+# Code spans must name existing files and package scripts.
+printf '{"scripts":{"known":"true"}}\n' > "$fixture/package.json"
+printf 'Run `scripts/check-markdown-links.ts`, then `bun run known`.\n' > "$fixture/code.md"
+bun "$fixture/scripts/check-markdown-links.ts" > "$fixture/result"
+printf 'Run `scripts/gone.sh`, then:\n\n```bash\nbun run unknown\n```\n' > "$fixture/code.md"
+if bun "$fixture/scripts/check-markdown-links.ts" > "$fixture/result" 2>&1; then
+  echo 'FAIL: stale code reference accepted' >&2
+  exit 1
+fi
+grep -q 'code.md: missing scripts/gone.sh' "$fixture/result"
+grep -q 'code.md: no package script unknown' "$fixture/result"
 echo 'markdown link scope tests passed'
