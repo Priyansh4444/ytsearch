@@ -93,16 +93,19 @@ const App: Component = () => {
   }>();
   const [indexingToast, setIndexingToast] = createSignal<string>();
   const [indexingChannelPreview, setIndexingChannelPreview] = createSignal<IndexedChannel>();
+  // Every availability refresh writes a new object. Readers that only need
+  // the flag go through this memo so an unchanged flag stops here: the keyed
+  // results <Show> below remounts on any new `successfulSearch` object, which
+  // reloaded a playing video every 60 s.
+  const searchEnabled = createMemo(() => availability().search_enabled);
   // Do NOT inline this as a plain accessor: `createEffect` nodes are built with
   // `_equals: false`, so an effect sourced from an accessor re-runs on EVERY
-  // write to its dependencies. `useAppLifecycle` writes a fresh
-  // `provisionalAvailability()` object on mount, on visibilitychange, and every
-  // 60 s; without the memo's `===` barrier each of those writes aborts the
-  // in-flight search and refetches the identical request, flashing `LoadingState`
-  // over the results. The memo's equality check is load-bearing, not overhead.
-  const executableSearch = createMemo(() =>
-    availability().search_enabled ? submitted() : undefined,
-  );
+  // write to its dependencies. `useAppLifecycle` writes a fresh availability
+  // object on visibilitychange and every 60 s; without the memo's `===` barrier
+  // each of those writes aborts the in-flight search and refetches the
+  // identical request, flashing `LoadingState` over the results. The memo's
+  // equality check is load-bearing, not overhead.
+  const executableSearch = createMemo(() => (searchEnabled() ? submitted() : undefined));
   const search = createSearchResource(executableSearch);
 
   // Both lookups are built once per channel-list change (fetch/cache), never per
@@ -154,12 +157,12 @@ const App: Component = () => {
     return isIndexMode() ? "request" : "search";
   };
   const searchError = createMemo(() => {
-    if (queuedIndexRequest() || !availability().search_enabled) return undefined;
+    if (queuedIndexRequest() || !searchEnabled()) return undefined;
     const state = search();
     return state.status === "error" ? presentSearchError(state.error) : undefined;
   });
   const successfulSearch = createMemo(() => {
-    if (queuedIndexRequest() || !availability().search_enabled) return undefined;
+    if (queuedIndexRequest() || !searchEnabled()) return undefined;
     const request = submitted();
     const state = search();
     if (!request || state.status !== "success") return undefined;
