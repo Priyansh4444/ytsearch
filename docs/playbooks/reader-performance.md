@@ -81,6 +81,13 @@ Measured 2026-10-01 to 2026-10-03:
   (`analyze_broad_plans` closure) 26%, `TextAlternativeCursor::advance_to` 12%,
   `StreamingTermPlan::seek` 11%, `TitlePlanCursor::advance_to` 8%,
   `StreamingTermPlan::take_current` 5%.
+- Tried without measurable gain (2026-10-04; cycles 0.998, noise 0.4%):
+  prefetching metadata in `decode_text_postings` (scoring 16 postings behind
+  decoding), prefetching title targets in `decode_targeted_titles`, and
+  prefetching both cache lines of a straddling record. Postings visit documents in
+  ascending order with small gaps, which the hardware prefetcher already
+  follows. Software prefetch paid off only in the broad scan, whose bitset
+  order leaves irregular gaps.
 - The broad-scan loop is now bound by memory bandwidth, because exact broad totals
   read every matched document's start time from `documents.meta` (24-byte
   records). Further gains there need a format change, such as a compact
