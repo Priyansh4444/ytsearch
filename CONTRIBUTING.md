@@ -1,37 +1,14 @@
 # Contributing to ytsearch
 
-Thanks for helping improve ytsearch. Changes should keep self-hosting safe,
-reproducible, and independent of the project's staging infrastructure.
+Changes should keep self-hosting safe, reproducible, and independent of the
+maintainer's infrastructure. You do not need Fly, Cloudflare, Axiom or YouTube
+accounts: tests use fixtures and mocked HTTP.
 
-## Before you start
+Set up with `bun run setup` and run the stack as described in the
+[README](README.md). The default Compose worker processes only approved queue
+requests; scheduled bulk indexing stays off.
 
-You can work locally without access to the maintainer's Fly, Cloudflare, Axiom,
-or YouTube accounts. Most frontend and API tests use fixtures or mocked HTTP
-responses and do not contact staging.
-
-Install Rust stable, Bun, Docker with Compose, OpenSSL, and `yt-dlp`. Then fork
-and clone the repository and run:
-
-```bash
-bun run setup
-```
-
-This installs locked dependencies and creates a private `.env` with random
-local credentials. It preserves an existing `.env`, so the command is safe to
-run again.
-
-Start the complete local stack:
-
-```bash
-docker compose up -d --build
-```
-
-Open `http://localhost:3000`. The default worker processes only approved queue
-requests; scheduled bulk indexing remains disabled. Read the
-[self-hosting guide](docs/self-hosting.md) when you need persistence, cookies,
-or deployment details.
-
-## Find your way around
+## Where things live
 
 | Area | Start here | Focused check |
 | --- | --- | --- |
@@ -41,74 +18,38 @@ or deployment details.
 | Indexing CLI | `crates/youtube_cli` | `cargo test -p youtube_cli` |
 | Raw query engine | `crates/youtube_raw_search` | `cargo test -p youtube_raw_search` |
 | Raw indexing boundary | `crates/youtube_index_store` | `cargo test -p youtube_index_store` |
-| Operations and deployment | `scripts/`, `docs/` | `sh -n scripts/<changed-script>.sh` |
+| Operations | `scripts/`, `docs/` | `bash -n scripts/<changed-script>.sh` |
 
-The [architecture guide](docs/architecture.md) explains how these areas fit
-together. If you are unsure where a change belongs, open an issue with the
-problem you want to solve before writing a large patch.
+The [architecture guide](docs/architecture.md) shows how these fit together.
+For a large change, open an issue describing the problem first.
 
 ## Making changes
 
-- Create a focused branch and keep commits scoped to one concern.
-- Add or update tests for behavior changes.
-- Never commit API keys, cookies, creator data, local databases, or `.env` files.
-- Prefer non-destructive `update` indexing. Rewipe and removal commands require
-  explicit acknowledgement by design.
-- Keep public API processes on search-only credentials. Admin credentials belong
-  only in trusted indexing or initialization processes.
+- Keep branches and commits to one concern, and add tests for behavior changes.
+- Never commit API keys, cookies, creator data, local databases or `.env` files.
+- Prefer non-destructive `update` indexing; rewipe and removal require explicit
+  acknowledgement by design.
+- Public API processes get search-only credentials; admin credentials belong
+  only to trusted indexing or initialization processes.
 
-During development, run the smallest focused check from the table above. Before
-opening a pull request, run:
+## Checks
 
 ```bash
-bun run check:precommit
+bun run check:precommit   # formatting, lint, types, Clippy, unit tests, build, budgets
+bun run check             # adds workspace tests, browser flows, dependency policy, shell checks
+bun run hooks:install     # run the fast gate before each commit
 ```
 
-This fast gate covers formatting, linting, type checks, strict Clippy, unit
-tests, the production build, and bundle budgets. Run the complete suite before
-submitting substantial or cross-cutting changes:
-
-```bash
-bun run check
-```
-
-The complete suite also runs workspace tests, browser flows, dependency policy,
-and shell checks. Install the optional repository hook once per clone to run the
-fast gate before each commit:
-
-```bash
-bun run hooks:install
-```
-
-Browser-level core-flow and responsive checks use mocked API responses, so they
-are deterministic and do not require staging access:
-
-```bash
-bunx playwright install chromium # first run only
-bun run check:responsive
-```
-
-For changes to local deployment, also verify the clean Compose path:
-
-```bash
-export RAW_SEARCH_ADMIN_API_KEY="$(openssl rand -hex 24)"
-export RAW_SEARCH_API_KEY="$(openssl rand -hex 24)"
-export YTSEARCH_INDEX_QUEUE_TOKEN="$(openssl rand -hex 24)"
-export PUBLIC_API_BASE_URL=http://localhost:8787
-docker compose up -d --build
-curl -fsS http://localhost:8108/health
-curl -fsS http://localhost:8787/api/health
-curl -fsS http://localhost:8787/api/youtubers
-docker compose down
-```
+Useful focused commands: `bun run test:frontend:watch`, `bun run check:responsive`
+(mocked browser flows; run `bunx playwright install chromium` once), and
+`bun run perf:frontend` (measures the deployed site). For local deployment
+changes, also verify the clean Compose path and health checks in the
+[self-hosting guide](docs/self-hosting.md).
 
 ## Pull requests
 
-Explain the user-visible outcome, tests performed, and any migration or
-operational impact. Keep pull requests focused; separate unrelated cleanup from
-behavior changes. The pull request template includes the required safety and
-verification checks.
-
-Do not include secrets, cookies, creator data, production log data, or private
-maintainer notes in issues, commits, screenshots, or pull requests. Use the
-repository's private security reporting flow for vulnerabilities.
+Explain the user-visible outcome, the tests you ran, and any migration or
+operational impact. Keep unrelated cleanup separate from behavior changes. Do
+not include secrets, cookies, creator data or production logs in issues,
+commits or screenshots, and report vulnerabilities privately (see
+[SECURITY.md](SECURITY.md)).

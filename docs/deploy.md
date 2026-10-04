@@ -19,9 +19,9 @@ flyctl auth whoami
 bunx wrangler whoami
 ```
 
-`flyctl auth token` is deprecated and the repository does not call it. Commands
-that use Fly's direct Machines API require an explicit, scoped token. Create an
-organization token because publication coordinates more than one app:
+Machines API scripts need an explicit token (the repository never uses the
+deprecated `flyctl auth token`). Publication spans apps, so create an
+organization token:
 
 ```bash
 flyctl tokens create org --org ORG_SLUG --expiry 720h
@@ -29,23 +29,18 @@ read -rsp 'Fly organization token: ' FLY_API_TOKEN; printf '\n'
 export FLY_API_TOKEN
 ```
 
-Paste the newly created token at the hidden prompt. Do not put it in the
-repository, shell history, command arguments, or logs. A token is shown only at
-creation time; when it expires or Fly rejects it, create a replacement and
-rerun the command. For single-app CI, prefer the narrower
-`flyctl tokens create deploy --app APP --expiry 720h`. The Cloudflare Worker
-needs the multi-app token under its existing secret name:
+Paste it at the hidden prompt; never put it in the repository, shell history,
+arguments or logs, and create a new one when it expires. Single-app CI should
+use `flyctl tokens create deploy --app APP --expiry 720h`. The Worker needs the
+multi-app token as `FLYIO_TOKEN`:
 
 ```bash
 printf '%s' "$FLY_API_TOKEN" | bunx wrangler secret put FLYIO_TOKEN
 ```
 
-These commands follow Fly's current [token
-guidance](https://fly.io/docs/security/tokens/) and [CLI integration
-guidance](https://fly.io/docs/flyctl/integrating/).
-
-Generate separate 24-byte-or-longer public and admin keys. Never print existing
-production secrets or put them in `VITE_*` variables.
+See Fly's [token guidance](https://fly.io/docs/security/tokens/). Generate
+separate public and admin keys of at least 24 bytes, and never print production
+secrets or put them in `VITE_*` variables.
 
 ## 1. Raw engine
 
@@ -60,9 +55,8 @@ flyctl secrets set --app ytsearch-raw-production \
 flyctl deploy --config fly.raw-search.toml --ha=false
 ```
 
-Verify the public health endpoint and the authenticated admin readiness route.
-Then perform one idempotent replacement, publish it, restart the Machine, and
-verify the operation and search result remain visible.
+Verify `/health` and the authenticated admin readiness route, then publish one
+idempotent replacement, restart, and confirm it is still visible.
 
 ## 2. Raw API queue
 
@@ -88,34 +82,31 @@ ON_DEMAND=1 scripts/fly-run-queue-indexer.sh
 scripts/check-queue-indexers.sh
 ```
 
-The configured Machine must have `QUEUE_TARGET_BACKEND=raw`, restart policy
-`no`, and a persistent transcript cache. A Cloudflare Queue message wakes it;
-the API JSONL queue remains authoritative.
+The Machine needs `QUEUE_TARGET_BACKEND=raw`, restart policy `no` and a
+persistent transcript cache; a Cloudflare Queue message wakes it, and the API's
+JSONL queue stays authoritative.
 
-The Worker cron at `17 * * * *` also sends a repair wake. The queue worker owns
-the daily catalog pass: `DAILY_UPDATE_ENABLED=1`, a zero initial delay, and a
-persisted `/var/lib/ytsearch/daily-update.last-completed` timestamp cause the
-first idle wake after each 24-hour interval to run `index-youtubers` over the
-embedded creator list and publish one generation. The worker may stop after
-five idle minutes; the hourly wake is required to resume the daily check.
-Verify the cron, the worker configuration, a `daily_update_completed` log, and
-the persisted timestamp before claiming daily indexing is operating.
+Daily indexing: with `DAILY_UPDATE_ENABLED=1`, the first wake more than 24 hours
+after `/var/lib/ytsearch/daily-update.last-completed` runs `index-youtubers`
+over the creator list and publishes once. The worker stops after five idle
+minutes, so the Worker's hourly cron (`17 * * * *`) repair wake is what resumes
+the daily check. Before claiming it works, verify the cron, the worker config, a
+`daily_update_completed` log and the timestamp file.
 
 ## 4. Cloudflare Worker
 
-`wrangler.jsonc` sends both search and queue routes to
-`ytsearch-api-raw-production`, controls the one Raw engine Machine, and resolves
-the one Raw indexer by its environment tag.
+`wrangler.jsonc` routes search and queue traffic to
+`ytsearch-api-raw-production`, names the Raw engine Machine, and finds the
+indexer by its environment tag.
 
 ```bash
 bun run check:precommit
 scripts/cloudflare-worker-deploy.sh
 ```
 
-Production uses `always_on`: the five-minute reconciler restarts a stopped Raw
-reader and the availability contract explicitly promises 24/7 service.
-`observe` reports health without lifecycle changes; `enforce` is the optional
-Pacific-window policy.
+Production uses `always_on`: a five-minute reconciler restarts a stopped
+reader, and availability promises 24/7 service. `observe` only reports health;
+`enforce` is the optional Pacific-window policy.
 
 ## Cutover gates
 
@@ -123,14 +114,11 @@ Pacific-window policy.
 scripts/verify-search-release.sh
 ```
 
-This command is non-mutating. The full-corpus publication isolation benchmark
-remains an explicit operator action because it creates and publishes an
-idempotent synthetic mutation. Follow
-[Raw publication release](operations/raw-publication-release.md). The release
-command uses one exact isolated reader and one exclusively leased detached
-builder; it never runs generation construction inside the serving reader.
-
-Also verify in a clean browser:
+This is read-only. The publication gate publishes a synthetic mutation, so it
+is a deliberate operator step: follow
+[Raw publication release](operations/raw-publication-release.md), which builds in
+a leased detached builder, never in the serving reader. Also verify in a clean
+browser:
 
 - global `blackhole`;
 - `blackhole` scoped to Veritasium and Vsauce;
