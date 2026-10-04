@@ -379,24 +379,7 @@ impl MutationStore {
                 "SELECT channel_id, document_json, cascade
                  FROM channel_mutations WHERE channel_id=?1",
                 [channel_id],
-                |row| {
-                    let document_json = row.get::<_, Option<Vec<u8>>>(1)?;
-                    let document = document_json
-                        .map(|bytes| serde_json::from_slice::<ChannelDocument>(&bytes))
-                        .transpose()
-                        .map_err(|error| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                1,
-                                rusqlite::types::Type::Blob,
-                                Box::new(error),
-                            )
-                        })?;
-                    Ok(StoredChannelMutation {
-                        channel_id: row.get(0)?,
-                        document,
-                        deletion_scope: ChannelDeletionScope::from_cascade(row.get(2)?),
-                    })
-                },
+                channel_mutation_from_row,
             )
             .optional()
             .map_err(map_sqlite)
@@ -508,17 +491,7 @@ fn snapshot_at_sequence(
         .map_err(map_sqlite)?;
     let videos = video_statement
         .query_map([through_sequence_sql], |row| {
-            let chunks_json = row.get::<_, Option<Vec<u8>>>(1)?;
-            let chunks = chunks_json
-                .map(|bytes| serde_json::from_slice::<Vec<TranscriptChunk>>(&bytes))
-                .transpose()
-                .map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        1,
-                        rusqlite::types::Type::Blob,
-                        Box::new(error),
-                    )
-                })?;
+            let chunks = json_column::<Vec<TranscriptChunk>>(row, 1)?;
             Ok(StoredVideoMutation {
                 video_id: row.get(0)?,
                 chunks,
@@ -536,24 +509,7 @@ fn snapshot_at_sequence(
         )
         .map_err(map_sqlite)?;
     let channels = channel_statement
-        .query_map([through_sequence_sql], |row| {
-            let document_json = row.get::<_, Option<Vec<u8>>>(1)?;
-            let document = document_json
-                .map(|bytes| serde_json::from_slice::<ChannelDocument>(&bytes))
-                .transpose()
-                .map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        1,
-                        rusqlite::types::Type::Blob,
-                        Box::new(error),
-                    )
-                })?;
-            Ok(StoredChannelMutation {
-                channel_id: row.get(0)?,
-                document,
-                deletion_scope: ChannelDeletionScope::from_cascade(row.get(2)?),
-            })
-        })
+        .query_map([through_sequence_sql], channel_mutation_from_row)
         .map_err(map_sqlite)?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(map_sqlite)?;
@@ -784,3 +740,29 @@ fn map_json(error: serde_json::Error) -> IndexStoreError {
 
 #[cfg(test)]
 mod tests;
+
+/// Reads a `channel_mutations` row selected as `channel_id, document_json, cascade`.
+fn channel_mutation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredChannelMutation> {
+    Ok(StoredChannelMutation {
+        channel_id: row.get(0)?,
+        document: json_column(row, 1)?,
+        deletion_scope: ChannelDeletionScope::from_cascade(row.get(2)?),
+    })
+}
+
+/// Decodes a nullable JSON blob column, reporting bad JSON as a column error.
+fn json_column<T: serde::de::DeserializeOwned>(
+    row: &rusqlite::Row<'_>,
+    column: usize,
+) -> rusqlite::Result<Option<T>> {
+    row.get::<_, Option<Vec<u8>>>(column)?
+        .map(|bytes| serde_json::from_slice(&bytes))
+        .transpose()
+        .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                column,
+                rusqlite::types::Type::Blob,
+                Box::new(error),
+            )
+        })
+}

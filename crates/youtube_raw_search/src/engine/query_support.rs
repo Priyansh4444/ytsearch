@@ -270,29 +270,13 @@ pub(super) fn retain_not_excluded(matches: &mut Vec<DocMatch>, excluded: &[u32])
 
 fn intersect_sorted_borrowed(left: Vec<DocMatch>, right: &[DocMatch]) -> Vec<DocMatch> {
     let mut output = Vec::with_capacity(left.len().min(right.len()));
-    let mut left_index = 0_usize;
-    let mut right_index = 0_usize;
-    while left_index < left.len() && right_index < right.len() {
-        match left[left_index]
-            .document()
-            .cmp(&right[right_index].document())
-        {
+    let (mut left_index, mut right_index) = (0_usize, 0_usize);
+    while let (Some(&l), Some(&r)) = (left.get(left_index), right.get(right_index)) {
+        match l.document().cmp(&r.document()) {
             Ordering::Less => left_index += 1,
             Ordering::Greater => right_index += 1,
             Ordering::Equal => {
-                let mut combined = DocMatch::new(
-                    left[left_index].document(),
-                    left[left_index].score + right[right_index].score,
-                    left[left_index].matches_text() || right[right_index].matches_text(),
-                );
-                combined.set_exact_mask(
-                    left[left_index].exact_mask() | right[right_index].exact_mask(),
-                );
-                combined.set_all_retained_exact(
-                    left[left_index].all_retained_exact()
-                        && right[right_index].all_retained_exact(),
-                );
-                output.push(combined);
+                output.push(combine_plan_matches(l.document(), l, r));
                 left_index += 1;
                 right_index += 1;
             }
@@ -302,36 +286,20 @@ fn intersect_sorted_borrowed(left: Vec<DocMatch>, right: &[DocMatch]) -> Vec<Doc
 }
 
 pub(super) fn intersect_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec<DocMatch> {
-    let mut output = Vec::with_capacity(left.len().min(right.len()));
-    let mut left_index = 0_usize;
-    let mut right_index = 0_usize;
-    while left_index < left.len() && right_index < right.len() {
-        match left[left_index]
-            .document()
-            .cmp(&right[right_index].document())
-        {
-            Ordering::Less => left_index += 1,
-            Ordering::Greater => right_index += 1,
-            Ordering::Equal => {
-                let mut combined = DocMatch::new(
-                    left[left_index].document(),
-                    left[left_index].score + right[right_index].score,
-                    left[left_index].matches_text() || right[right_index].matches_text(),
-                );
-                combined.set_exact_mask(
-                    left[left_index].exact_mask() | right[right_index].exact_mask(),
-                );
-                combined.set_all_retained_exact(
-                    left[left_index].all_retained_exact()
-                        && right[right_index].all_retained_exact(),
-                );
-                output.push(combined);
-                left_index += 1;
-                right_index += 1;
-            }
-        }
-    }
-    output
+    intersect_sorted_borrowed(left, &right)
+}
+
+/// One document's matches from two conjunction terms: scores add, text and
+/// exact-term masks union, and the result is all-exact only if both are.
+pub(super) fn combine_plan_matches(document: u32, left: DocMatch, right: DocMatch) -> DocMatch {
+    let mut combined = DocMatch::new(
+        document,
+        left.score + right.score,
+        left.matches_text() || right.matches_text(),
+    );
+    combined.set_exact_mask(left.exact_mask() | right.exact_mask());
+    combined.set_all_retained_exact(left.all_retained_exact() && right.all_retained_exact());
+    combined
 }
 
 pub(super) fn union_all(mut lists: Vec<Vec<DocMatch>>) -> Vec<DocMatch> {
