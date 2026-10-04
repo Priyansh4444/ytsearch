@@ -83,7 +83,7 @@ resource_matches() {
     [.[] | select(.id == $id)] |
     length == 1 and
     (.[0].state as $state | ($states | split(",") | index($state)) != null) and
-    (.[0].config.mounts // []) == [{volume:$volume,path:$mount}]
+    ((.[0].config.mounts // []) | map({volume, path})) == [{volume:$volume,path:$mount}]
   ' "$machine_file" >/dev/null
 }
 

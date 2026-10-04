@@ -15,24 +15,21 @@ fi
 # shellcheck disable=SC1091
 . "$(dirname "$0")/load-env.sh"
 
-APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer}"
+APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-raw-production}"
 FLY_REGION="${FLY_REGION:-sjc}"
 VOLUME_NAME="${INDEXER_VOLUME_NAME:-ytsearch_indexer_data}"
-VOLUME_SIZE_GB="${INDEXER_VOLUME_SIZE_GB:-10}"
 
 if [ -z "${FLY_ORG:-}" ]; then
   echo "Set FLY_ORG to the Fly.io organization that should own the indexer." >&2
   exit 1
 fi
 
-flyctl apps create "$APP_NAME" --org "$FLY_ORG" >/dev/null 2>&1 || true
-
-if ! flyctl volumes list --app "$APP_NAME" | grep -q "$VOLUME_NAME"; then
-  flyctl volumes create "$VOLUME_NAME" \
-    --app "$APP_NAME" \
-    --region "$FLY_REGION" \
-    --size "$VOLUME_SIZE_GB" \
-    --yes
+# Volumes bill while idle, so never create one implicitly; ONE_OFF_NO_VOLUME=1
+# runs with an ephemeral transcript cache instead.
+if [ "${ONE_OFF_NO_VOLUME:-0}" != "1" ] \
+  && ! flyctl volumes list --app "$APP_NAME" | grep -qw "$VOLUME_NAME"; then
+  echo "Volume $VOLUME_NAME does not exist in $APP_NAME; set INDEXER_VOLUME_NAME or ONE_OFF_NO_VOLUME=1." >&2
+  exit 1
 fi
 
 MACHINE_NAME="${INDEXER_MACHINE_NAME:-ytsearch-index-$(date +%Y%m%d%H%M%S)}"

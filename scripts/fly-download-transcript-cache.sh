@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer}"
+APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-raw-production}"
 FLY_REGION="${FLY_REGION:-sjc}"
 VOLUME_NAME="${INDEXER_VOLUME_NAME:-ytsearch_indexer_data}"
 LOCAL_CACHE_DIR="${1:-data/transcript-cache}"
@@ -13,6 +13,11 @@ fi
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "This script needs jq to select the temporary export machine." >&2
+  exit 1
+fi
+
+if ! flyctl volumes list --app "$APP_NAME" | grep -qw "$VOLUME_NAME"; then
+  echo "Volume $VOLUME_NAME does not exist in $APP_NAME; create it or set INDEXER_VOLUME_NAME." >&2
   exit 1
 fi
 

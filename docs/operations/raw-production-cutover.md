@@ -29,13 +29,11 @@ production reader still runs the pre-publication-protocol image. The Machine
 configuration is restored, but the operational gate remains open until a
 publication-v1 reader also satisfies the 200 ms search ceiling and is promoted.
 | Production Worker | `ytsearch-search` | Cloudflare deployment; exact version recorded by each deployment log |
-| Deprecated Typesense engine | `ytsearch-typesense-staging` / `8147deb94937e8` | Stopped and preserved with benchmark Machine `d8de466f330468` |
-| Deprecated Typesense API | `ytsearch-api-typesense-fly-staging` / `1855eddf654298` | Stopped and preserved |
-| Deprecated Typesense indexer | `ytsearch-indexer-staging` / `68352d2be17728` | Stopped and preserved |
+| Retired Typesense engine, API, indexer | `ytsearch-typesense-staging`, `ytsearch-api-typesense-fly-staging`, `ytsearch-indexer-staging` | Destroyed 2026-09-30 |
 
 The table records the Machine IDs observed during the 2026-08-29 audit. App
-names are stable topology. `wrangler.jsonc` and the exact Typesense retirement
-inventory are the executable identities. Resolve image digests and Worker
+names are stable topology. `wrangler.jsonc` and
+`config/fly-production-resources.json` are the executable identities. Resolve image digests and Worker
 version IDs from Fly and Cloudflare immediately before rollback.
 
 ## Promotion gates
@@ -69,8 +67,8 @@ persistence decision](raw-production-cost.md).
 
 ## Rollback
 
-Rollback remains reversible while the deprecated resources are stopped and
-preserved:
+The Typesense apps were destroyed on 2026-09-30, so the procedure below is
+historical; rolling back now means redeploying from the archive branch.
 
 1. Set `API_BASE_URL` in `wrangler.jsonc` back to
    `https://ytsearch-api-typesense-fly-staging.fly.dev`.

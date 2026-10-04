@@ -36,7 +36,7 @@ jq -n '[{
   id:"13131313131313",state:"started",region:"sjc",
   image_ref:{registry:"registry.fly.io"},
   config:{guest:{cpu_kind:"shared",cpus:1,memory_mb:512},
-    mounts:[{volume:"vol_1313131313131313",path:"/data"}]}
+    mounts:[{encrypted:true,path:"/data",size_gb:1,volume:"vol_1313131313131313",name:"queue"}]}
 }]' > "$tmp/apps/ytsearch-api-raw-production.json"
 jq -n '[
   {

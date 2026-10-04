@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer}"
+APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-raw-production}"
 FLY_REGION="${FLY_REGION:-sjc}"
 VOLUME_NAME="${INDEXER_VOLUME_NAME:-ytsearch_indexer_data}"
 LOCAL_CACHE_DIR="${1:-data/transcript-cache}"
@@ -24,12 +24,10 @@ trap cleanup EXIT
 
 tar -C "$LOCAL_CACHE_DIR" -czf "$archive" .
 
-if ! flyctl volumes list --app "$APP_NAME" | grep -q "$VOLUME_NAME"; then
-  flyctl volumes create "$VOLUME_NAME" \
-    --app "$APP_NAME" \
-    --region "$FLY_REGION" \
-    --size "${INDEXER_VOLUME_SIZE_GB:-10}" \
-    --yes
+# Volumes bill while idle, so never create one implicitly.
+if ! flyctl volumes list --app "$APP_NAME" | grep -qw "$VOLUME_NAME"; then
+  echo "Volume $VOLUME_NAME does not exist in $APP_NAME; create it or set INDEXER_VOLUME_NAME." >&2
+  exit 1
 fi
 
 flyctl machine run debian:bookworm-slim \

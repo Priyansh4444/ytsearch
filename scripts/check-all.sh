@@ -33,8 +33,6 @@ scripts/test-stage-raw-reader-canary.sh
 scripts/test-require-committed-rust-build-inputs.sh
 scripts/test-cloud-index-queue-entrypoint.sh
 scripts/check-fly-cost-config.sh
-scripts/test-destroy-deprecated-typesense-fly.sh
-scripts/test-deprecate-typesense-fly.sh
 scripts/test-index-conference-playlists.sh
 scripts/test-compare-autoresearch-search.sh
 scripts/test-idle-gap-fill.sh

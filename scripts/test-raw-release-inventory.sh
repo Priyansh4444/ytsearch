@@ -33,21 +33,7 @@ jq -n '{
       app:"builder-app",machine_id:"22222222222222",
       volume_id:"vol_2222222222222222",mount_path:"/var/lib/ytsearch"
     }
-  },
-  retirement_sets:{typesense:{
-    reason:"raw-search-cutover",
-    machines:[
-      {app:"old-engine",machine_id:"33333333333333",volume_id:"vol_3333333333333333",successor_app:"reader-app"},
-      {app:"old-engine",machine_id:"44444444444444",volume_id:"vol_4444444444444444",successor_app:"reader-app"},
-      {app:"old-api",machine_id:"55555555555555",volume_id:"vol_5555555555555555",successor_app:"api-app"},
-      {app:"old-indexer",machine_id:"66666666666666",volume_id:"vol_6666666666666666",successor_app:"builder-app"}
-    ],
-    unattached_volumes:[
-      {app:"old-indexer",volume_id:"vol_7777777777777777"},
-      {app:"old-indexer",volume_id:"vol_8888888888888888"},
-      {app:"old-indexer",volume_id:"vol_9999999999999999"}
-    ]
-  }}
+  }
 }' > "$valid_inventory"
 
 FLY_PRODUCTION_INVENTORY_PATH="$valid_inventory"

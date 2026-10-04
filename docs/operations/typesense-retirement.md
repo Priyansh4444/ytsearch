@@ -1,5 +1,16 @@
 # Typesense retirement ledger
 
+**Retired 2026-09-30.** With schema 9 serving production, the apps
+`ytsearch-typesense-staging`, `ytsearch-api-typesense-fly-staging`, and
+`ytsearch-indexer-staging` were destroyed together with their Machines,
+volumes, and secrets, along with the empty Meilisearch-era apps
+(`ytsearch-meili-staging`, `ytsearch-api-meili-staging`,
+`ytsearch-index-queue-staging`, `ytsearch-api-pronsh-sandbox`,
+`ytsearch-tantivy-experiment`, `ytsearch-indexer`). The retirement set and its
+deprecation and verification scripts were removed from master; the source
+remains on the `typesense-fly-selfhost-comparison` archive branch. Everything
+below is the historical ledger.
+
 Typesense is no longer on the live read or write path. It remains a deprecated,
 stopped rollback and differential-testing artifact. Its source is retained on
 the `typesense-fly-selfhost-comparison` archive branch; its comparison scripts,
@@ -105,10 +116,7 @@ unexpected Machine or volume makes it fail closed without changing anything.
    Machine, volume, and app is absent before declaring retirement complete.
 
 The historical cleanup implementation remains on the Typesense archive branch.
-On master, `scripts/destroy-deprecated-typesense-fly.sh` is verification-only:
-it resolves every exact Machine and volume and detects inventory drift but has
-no destructive mode. The final migration still requires a separately reviewed
-implementation that deletes only the verified inventory.
+Step 8 was completed on 2026-09-30 by destroying the three apps outright.
 
 Never delete the legacy queue before its request IDs have been copied and
 acknowledged by the Raw queue. A successful search-read cutover alone is not a

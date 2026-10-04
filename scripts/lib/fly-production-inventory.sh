@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Stable, non-secret Fly identities and retirement policy. Release commits,
+# Stable, non-secret Fly identities. Release commits,
 # image digests, private addresses, and credentials deliberately do not belong
 # in this inventory.
 
@@ -30,16 +30,8 @@ fly_production_inventory_validate() {
       type == "object" and
       (keys | sort) == ["app", "machine_id", "mount_path", "volume_id"] and
       (.app | app) and (.machine_id | machine) and (.volume_id | volume);
-    def retired_machine:
-      type == "object" and
-      (keys | sort) == ["app", "machine_id", "successor_app", "volume_id"] and
-      (.app | app) and (.machine_id | machine) and (.volume_id | volume) and
-      (.successor_app | app);
-    def retired_volume:
-      type == "object" and (keys | sort) == ["app", "volume_id"] and
-      (.app | app) and (.volume_id | volume);
     type == "object" and
-    (keys | sort) == ["environment", "resources", "retirement_sets", "schema_version"] and
+    (keys | sort) == ["environment", "resources", "schema_version"] and
     .schema_version == 1 and .environment == "production" and
     (.resources | keys | sort) == [
       "raw_api",
@@ -62,24 +54,8 @@ fly_production_inventory_validate() {
     .resources.raw_queue_worker.app == .resources.raw_publication_builder.app and
     ([.resources.raw_api.app, .resources.raw_reader.app, .resources.raw_queue_worker.app] |
       unique | length) == 3 and
-    (.retirement_sets | keys) == ["typesense"] and
-    (.retirement_sets.typesense | keys | sort) == ["machines", "reason", "unattached_volumes"] and
-    .retirement_sets.typesense.reason == "raw-search-cutover" and
-    (.retirement_sets.typesense.machines | length) == 4 and
-    (.retirement_sets.typesense.machines | all(retired_machine)) and
-    (
-      [.resources.raw_api.app, .resources.raw_reader.app, .resources.raw_queue_worker.app] as $successor_apps |
-      (.retirement_sets.typesense.machines |
-        all(.successor_app as $successor | ($successor_apps | index($successor)) != null))
-    ) and
-    (.retirement_sets.typesense.unattached_volumes | length) == 3 and
-    (.retirement_sets.typesense.unattached_volumes | all(retired_volume)) and
-    ([.resources[] | .machine_id] + [.retirement_sets.typesense.machines[].machine_id] | length) ==
-      ([.resources[] | .machine_id] + [.retirement_sets.typesense.machines[].machine_id] | unique | length) and
-    ([.resources[] | .volume_id] + [.retirement_sets.typesense.machines[].volume_id] +
-      [.retirement_sets.typesense.unattached_volumes[].volume_id] | length) ==
-      ([.resources[] | .volume_id] + [.retirement_sets.typesense.machines[].volume_id] +
-      [.retirement_sets.typesense.unattached_volumes[].volume_id] | unique | length)
+    ([.resources[] | .machine_id] | length) == ([.resources[] | .machine_id] | unique | length) and
+    ([.resources[] | .volume_id] | length) == ([.resources[] | .volume_id] | unique | length)
   ' "$inventory_path" >/dev/null; then
     _fly_production_inventory_error "invalid inventory: $inventory_path"
     return 1
