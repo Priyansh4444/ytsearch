@@ -17,4 +17,13 @@ describe("highlightedParts", () => {
       ],
     );
   });
+
+  test("decodes the reader's escaped characters and nothing else", () => {
+    const snippet = "it&#39;s &quot;R&amp;D&quot; <mark>&lt;b&gt;</mark> &amp;nbsp; plain";
+    expect(highlightedParts("", snippet, "b")).toEqual([
+      { text: 'it\'s "R&D" ', highlighted: false },
+      { text: "<b>", highlighted: true },
+      { text: " &nbsp; plain", highlighted: false },
+    ]);
+  });
 });
