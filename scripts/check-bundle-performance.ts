@@ -1,9 +1,12 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 
+// Raised from 30_000/55_000 for Solid 2.0.0-rc.13, whose reactive core
+// (@solidjs/signals) adds about 6 KB gzipped over rc.1. The app itself did
+// not grow; lower these again if Solid shrinks.
 const budgets = {
-  initialJavaScriptGzipBytes: 30_000,
-  totalJavaScriptGzipBytes: 55_000,
+  initialJavaScriptGzipBytes: 36_000,
+  totalJavaScriptGzipBytes: 56_000,
   cssGzipBytes: 8_000,
 };
 

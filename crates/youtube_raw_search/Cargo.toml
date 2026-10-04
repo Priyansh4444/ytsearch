@@ -28,7 +28,7 @@ youtube_search_service = { path = "../youtube_search_service" }
 youtube_index_store = { path = "../youtube_index_store" }
 youtube_ingest = { path = "../youtube_ingest" }
 youtube_time = { path = "../youtube_time" }
-zstd = "0.13"
+zstd = "0.14"
 
 [dev-dependencies]
 tempfile = "3"
