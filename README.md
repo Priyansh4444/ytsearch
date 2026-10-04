@@ -59,7 +59,8 @@ curl -fsS http://localhost:8787/api/health
 ```
 
 Open `http://localhost:3000`. The first boot starts an empty index. Add a
-creator with a non-destructive update, then publish the resulting counts:
+creator with a non-destructive update; indexing also updates the creator's
+video and chunk counts:
 
 ```bash
 docker compose exec worker ytsearch \
@@ -79,7 +80,7 @@ transcript cache in named volumes. See the
 Install:
 
 - Rust stable
-- [Bun](https://bun.sh/) 1.3.14
+- [Bun](https://bun.sh/), the version pinned by `packageManager` in `package.json`
 - Docker with Compose, or a separately deployed Raw search service
 - `yt-dlp`; `ffmpeg` is also required for optional local transcription
 
@@ -200,6 +201,8 @@ bun run perf:frontend
 - [Deployment](docs/deploy.md) — the maintained Fly and Cloudflare setup
 - [Staging observability](docs/staging-observability.md) — health checks,
   benchmarks, and logs
+- [Playbooks](docs/playbooks/README.md) — commands and known traps for
+  performance work, dependency updates, and frontend bugs
 
 ## Project status
 

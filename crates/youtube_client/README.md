@@ -1,11 +1,9 @@
 # youtube_client
 
-Internal YouTube Data API v3 client.
-
-The crate covers the current resource and method families exposed by Google's
-YouTube Data API v3 discovery document while keeping responses schema-light.
-Use `serde_json::Value` for broad coverage, or deserialize into local structs
-when a caller needs a stable shape.
+Internal, narrow YouTube Data API v3 client: `list` requests for the four
+resources the indexer uses (`channels`, `playlistItems`, `search` and `videos`).
+Responses stay schema-light as `serde_json::Value`; deserialize into local
+structs where a caller needs a stable shape.
 
 ```rust
 use youtube_client::{ListResource, Query, YouTubeClient};

@@ -31,15 +31,19 @@ The app should state that it uses YouTube API Services when YouTube API data is 
 
 ## Embedded YouTube player privacy
 
-The frontend embeds videos using the YouTube privacy-enhanced domain:
+The API returns embed URLs on the YouTube privacy-enhanced domain:
 
 ```text
 https://www.youtube-nocookie.com/embed/{video_id}?start={seconds}&rel=0
 ```
 
-Autoplay is not enabled. Users initiate playback through the YouTube player.
+Result cards show a poster thumbnail loaded from `i.ytimg.com` (Google). No
+YouTube player loads until the user clicks a poster; the frontend then loads the
+embed with `autoplay=1`, so that click starts playback without a second click.
 
-Even with privacy-enhanced embeds, YouTube/Google may receive information when the player loads or when playback is initiated. The app should disclose this in its privacy policy.
+Google receives requests for poster thumbnails as soon as results render, and
+YouTube/Google may receive information when the player loads. The app should
+disclose this in its privacy policy.
 
 ## Local audio transcription fallback
 
@@ -83,9 +87,19 @@ The current local app does not implement accounts. If accounts are added, docume
 - who it is shared with
 - how to revoke Google/YouTube OAuth access if OAuth is used
 
-## Search query logs
+## Search query logs and analytics
 
-The API logs search queries using `tracing`. If deployed publicly, search queries can be personal data. Consider:
+Search queries reach three places in the maintained deployment:
+
+- the API's `tracing` logs;
+- Axiom `search_query` events, when `AXIOM_API_KEY` (or `AXIOM_TOKEN`) and
+  `AXIOM_DATASET` are set: query text, timings, result counts, the
+  Cloudflare country header (`cf-ipcountry`) and request ID (`cf-ray`);
+- PostHog, when `VITE_POSTHOG_KEY` is set: search events carry the query's
+  length and term count (not its text), sort and page; interaction events
+  carry the creator handle and the opened video's identifiers.
+
+If deployed publicly, search queries can be personal data. Consider:
 
 - minimizing logged query text
 - redacting or hashing IP addresses
@@ -122,6 +136,6 @@ The Raw admin key belongs only in trusted indexing processes.
   published generations.
 - [ ] Avoid storing raw audio unless required and permitted.
 - [ ] Keep admin keys server-side only.
-- [ ] Disable autoplay for embeds.
+- [ ] Keep embeds click-to-play: load the player only after the user chooses a video.
 - [ ] Add abuse/rate limits to the API.
 - [ ] Add a contact address for privacy/compliance requests.

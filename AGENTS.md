@@ -1,6 +1,6 @@
 # Agent Handoff: ytsearch
 
-This repo is an experimental YouTube transcript search system. Treat it as a small production staging system, not a toy demo: changes can affect live Fly machines, Cloudflare Pages previews, search quality, indexing cost, and creator data already indexed in the Raw search engine.
+This repo is an experimental YouTube transcript search system. Treat it as a small production staging system, not a toy demo: changes can affect live Fly machines, the Cloudflare Worker frontend, search quality, indexing cost, and creator data already indexed in the Raw search engine.
 
 ## Current Shape
 
@@ -12,7 +12,7 @@ Active paths (production):
 | --- | --- | --- |
 | Frontend | `https://search.pronsh.dev` | Canonical Cloudflare Worker frontend and same-origin API proxy. |
 | Raw API | `ytsearch-api-raw-production` / `https://ytsearch-api-raw-production.fly.dev` | Rust `youtube_api` plus the authoritative JSONL request queue. Always running. |
-| Raw engine | `ytsearch-raw-production` | Reloadable inverted index and mutation publisher. Scheduled. |
+| Raw engine | `ytsearch-raw-production` | Reloadable inverted index and mutation publisher. Always on: the Worker's cron keeps it started under `SEARCH_SCHEDULE_MODE=always_on` (`wrangler.jsonc`). |
 | Raw indexer | `ytsearch-indexer-raw-production` | One on-demand queue worker, woken through Cloudflare Queue. |
 
 `raw` is the only accepted backend id (`scripts/fly-run-queue-indexer.sh` rejects
@@ -62,8 +62,8 @@ Rust crates:
 
 Scripts:
 
-- `scripts/index-all-backends-update.sh`: local update for active backends.
-- `scripts/index-all-backends-rewipe.sh`: destructive schema/timeframe reindex for active backends.
+- `scripts/index-all-backends-update.sh`: local update of the Raw backend.
+- `scripts/index-all-backends-rewipe.sh`: destructive schema/timeframe reindex of the Raw backend.
 - `scripts/fly-run-cloud-indexer.sh`: one-off detached cloud indexing.
 - `scripts/fly-run-queue-indexer.sh`: starts queue-consuming indexer Machine.
 - `scripts/cloud-index-queue-entrypoint.sh`: queue daemon implementation.
@@ -100,8 +100,8 @@ Indexing:
 
 Queue:
 
-- Frontends can submit an index request for a handle. The queue API stores JSONL on a Fly volume.
-- Only one configured queue daemon may use the JSONL queue. It normally remains stopped while idle and Cloudflare wakes it after an approved request; multiple machines can race.
+- Frontends can submit an index request for a handle. The queue API stores JSONL on a Fly volume, one row per request.
+- Only one configured queue daemon may use the JSONL queue. It stays stopped while idle; Cloudflare wakes it after an approved request, and it exits after five idle minutes (`ON_DEMAND=1` sets `IDLE_EXIT_AFTER_SECONDS=300`). Multiple machines can race.
 - The active queue indexer processes `raw`.
 - Queue failures should log and not permanently block the queue. The queue daemon emits structured stderr logs and best-effort Axiom ingestion when Axiom env vars are present.
 - Current daemon command pattern:
@@ -122,8 +122,8 @@ Cloud indexing:
 - Cloud image has `yt-dlp`, its EJS solver package, Deno, and `ffmpeg`.
 - Cloud image does not have `voxtype`; missing-caption videos are skipped unless transcripts were cached locally and uploaded.
 - If YouTube needs auth/cookies, use `scripts/fly-set-indexer-secrets.sh` with `YT_DLP_COOKIES_FILE` pointing to a Netscape-format cookies file. The script stages raw-Machines secrets; recreate workers to consume them. Do not print cookie contents.
-- `YOUTUBE_API_FALLBACK=auto` stages the API key as a base64 file secret. Entrypoints load it only inside the process so `yt-dlp` remains primary and Machine config never exposes the key.
-- Transcript cache lives on the indexer volume at `/data/transcript-cache`.
+- `YOUTUBE_API_FALLBACK=auto` stages the API key as a base64 file secret (`YOUTUBE_API_KEY_FILE_B64`). Entrypoints load it only inside the process so `yt-dlp` remains primary and Machine config never exposes the key. The Data API is only a metadata/discovery fallback: it cannot supply captions, so some videos need authorized cookies or a permitted local transcript cache.
+- Transcript cache lives in `transcript-cache/` on the indexer volume: `/var/lib/ytsearch/transcript-cache` on the queue worker, `/data/transcript-cache` on one-off cloud indexers.
 
 Observability:
 
@@ -138,7 +138,7 @@ Do not inspect or print secrets unless the user explicitly asks. Prefer loading 
 Common env names:
 
 - YouTube: `YOUTUBE_API_KEY`
-- Raw search: `RAW_SEARCH_API_URL`, `RAW_SEARCH_ADMIN_API_KEY`, `RAW_SEARCH_API_KEY`, `RAW_SEARCH_COLLECTION`, `RAW_SEARCH_APP_NAME`
+- Raw search: `RAW_SEARCH_API_URL`, `RAW_SEARCH_ADMIN_API_KEY`, `RAW_SEARCH_API_KEY`, `RAW_SEARCH_COLLECTION`
 - API backend selector: `YTSEARCH_SEARCH_BACKEND=raw`
 - Raw indexer/queue machine: `QUEUE_TARGET_BACKEND=raw`, `INDEXER_APP_NAME`, `INDEXER_VOLUME_NAME`, `INDEXER_IMAGE`
 - Queue: `INDEX_QUEUE_API_BASE_URL`, `YTSEARCH_INDEX_QUEUE_TOKEN`
@@ -202,7 +202,7 @@ curl -fsS 'https://ytsearch-api-raw-production.fly.dev/api/search?q=I&youtuber=%
 
 Expected current behavior:
 
-- `q=I&youtuber=@t3dotgg` should show newest Theo videos, including July 2026 videos if indexed.
+- `q=I&youtuber=@t3dotgg` should show Theo's most recently published indexed videos first.
 - `q=fable on high&youtuber=@t3dotgg` should rank `A proper guide to Fable 5` near the top, with transcript snippets around Fable/high reasoning.
 
 For channel/index status:
@@ -234,7 +234,7 @@ flyctl machines list -a ytsearch-indexer-raw-production
 - Use `rg` first for code search.
 - Make targeted edits; do not reformat or rewrite unrelated code.
 - Use `bunx wrangler`, not plain `wrangler`, unless the binary is definitely installed.
-- If changing Cloudflare Workers/Pages config or commands, check Wrangler docs/schema first.
+- If changing Cloudflare Worker config or commands, check the Wrangler docs and schema first.
 - If changing live Fly machines, verify machine state before and after.
 - If changing indexing behavior, test both `update` and `rewipe` semantics where relevant.
 - If changing search relevance, include at least one live or fixture check for:
@@ -250,19 +250,8 @@ flyctl machines list -a ytsearch-indexer-raw-production
 
 ```bash
 git status --short
-rg -n "TODO|FIXME|raw|require_all_terms|matchingStrategy"
 scripts/agent-status.sh
 scripts/summarize-indexer-logs.sh
 ```
 
 Then read the relevant doc listed in "Read This First" before editing.
-
-
-CURRENTLY The queue has one backend-specific row per request and one on-demand
-Raw worker. Cloudflare wakes the stopped worker after approval; it exits
-after five idle minutes. `yt-dlp` is the primary discovery/transcript source.
-When staged, `YOUTUBE_API_KEY_FILE_B64` is loaded only inside the indexer and
-the Data API is appended as metadata/discovery fallback; it cannot supply
-captions. Some videos still require authorized cookies or a permitted local
-transcript cache because neither public `yt-dlp` nor the Data API can retrieve
-those captions.

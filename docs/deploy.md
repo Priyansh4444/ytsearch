@@ -138,7 +138,8 @@ Also verify in a clean browser:
 - all engagement/date sorts;
 - exact totals and “show more” disappearance;
 - one approved creator request through publication and engine restart;
-- initial JavaScript no greater than 30 KB gzip.
+- initial JavaScript within the `bun run perf:bundle` budget
+  (`scripts/check-bundle-performance.ts`).
 
 Run a bounded concurrent search load while publishing and require zero errors.
 
