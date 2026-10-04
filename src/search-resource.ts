@@ -2,7 +2,7 @@ import { createEffect, createSignal, type Accessor } from "solid-js";
 import { searchTranscripts } from "./api";
 import type { SearchRequest, SearchResponse } from "./types";
 
-export type SearchResourceState =
+type SearchResourceState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "success"; response: SearchResponse }

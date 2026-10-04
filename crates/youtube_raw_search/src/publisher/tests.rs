@@ -4,7 +4,6 @@ use flate2::{Compression, write::GzEncoder};
 use serde::Serialize;
 use serde_json::json;
 use std::{
-    collections::BTreeMap,
     fs::OpenOptions,
     io::{Read, Seek, SeekFrom},
 };
@@ -121,55 +120,37 @@ fn replace_add_and_delete(store: &MutationStore) {
     store.upsert_channel(&channel(2), "upsert-channel").unwrap();
 }
 
-fn generation_hashes(path: &Path) -> BTreeMap<String, String> {
-    fs::read_dir(path)
-        .unwrap()
-        .map(|entry| {
-            let entry = entry.unwrap();
-            let name = entry.file_name().into_string().unwrap();
-            let bytes = fs::read(entry.path()).unwrap();
-            (name, blake3::hash(&bytes).to_hex().to_string())
-        })
-        .collect()
+/// Publishes `store` the way production does: a detached build inside remote
+/// work, then an exact install.
+fn install_detached(publisher: &Publisher, store: &MutationStore) {
+    let work = publisher
+        .paths
+        .state_directory
+        .join("work/remote-publication");
+    fs::create_dir_all(work.join("job")).unwrap();
+    let snapshot_path = work.join("snapshot.sqlite3");
+    store.export_snapshot(&snapshot_path).unwrap();
+    let snapshot_store = MutationStore::open_snapshot_read_only(&snapshot_path).unwrap();
+    let builder = GenerationBuilder::new(
+        publisher.paths.base_chunks_gzip.clone(),
+        publisher.paths.base_channels_gzip.clone(),
+    );
+    let compatibility = builder.compatibility().unwrap();
+    let detached = builder
+        .build(
+            &snapshot_store,
+            &compatibility,
+            &work.join("job/generation"),
+        )
+        .unwrap();
+    let manifest = fs::read(detached.path.join(GENERATION_MANIFEST)).unwrap();
+    publisher
+        .install_verified_generation(detached.sequence, &detached.path, &manifest)
+        .unwrap();
 }
 
 #[test]
-fn publication_atomically_replaces_adds_and_deletes_videos() {
-    let (_directory, publisher, store) = fixture();
-    replace_add_and_delete(&store);
-
-    let published = publisher.publish(&store).unwrap().unwrap();
-
-    assert_eq!(found(published.engine.engine(), "legacyuniquetoken"), 0);
-    assert_eq!(found(published.engine.engine(), "replacement blackhole"), 1);
-    assert_eq!(found(published.engine.engine(), "brandnew searchable"), 1);
-    assert_eq!(found(published.engine.engine(), "deleteuniquetoken"), 0);
-    assert_eq!(publisher.active_index_path().unwrap(), published.path);
-    assert_eq!(
-        store.operation("add-video").unwrap().state,
-        youtube_index_store::IndexOperationState::Published
-    );
-    assert_eq!(
-        fs::read_dir(publisher.paths.state_directory.join("work"))
-            .unwrap()
-            .count(),
-        0,
-        "publication must not materialize a merged JSON corpus"
-    );
-    assert!(
-        fs::read_dir(&published.path).unwrap().all(|entry| {
-            !entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with('.')
-        }),
-        "completed generations must not retain builder spools"
-    );
-}
-
-#[test]
-fn detached_generation_matches_publisher_without_activation_or_wal_changes() {
+fn detached_generation_builds_without_activation_or_wal_changes() {
     let (directory, publisher, store) = fixture();
     replace_add_and_delete(&store);
     let snapshot_path = directory.path().join("mutation-snapshot.sqlite3");
@@ -188,7 +169,16 @@ fn detached_generation_matches_publisher_without_activation_or_wal_changes() {
 
     assert_eq!(detached.sequence, export.through_sequence);
     assert_eq!(detached.path, detached_path);
-    assert_eq!(detached.compatibility, compatibility);
+    assert!(
+        fs::read_dir(&detached.path).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with('.')
+        }),
+        "completed generations must not retain builder spools"
+    );
     let detached_engine = RawSearchEngine::open(&detached.path).unwrap();
     assert_eq!(found(&detached_engine, "legacyuniquetoken"), 0);
     assert_eq!(found(&detached_engine, "replacement blackhole"), 1);
@@ -205,13 +195,6 @@ fn detached_generation_matches_publisher_without_activation_or_wal_changes() {
     assert_eq!(
         store.operation("add-video").unwrap().state,
         youtube_index_store::IndexOperationState::Durable
-    );
-
-    let published = publisher.publish(&store).unwrap().unwrap();
-    assert_eq!(
-        generation_hashes(&detached.path),
-        generation_hashes(&published.path),
-        "detached and in-process builders must produce identical immutable bytes"
     );
 }
 
@@ -252,7 +235,8 @@ fn detached_install_is_exact_monotonic_and_does_not_acknowledge_wal() {
         .unwrap();
 
     assert_eq!(publisher.active_sequence().unwrap(), detached.sequence);
-    assert_eq!(found(installed.engine.engine(), "replacement blackhole"), 1);
+    assert_eq!(found(&installed.into_engine(), "replacement blackhole"), 1);
+    let installed_path = publisher.active_index_path().unwrap();
     assert_eq!(
         store.operation("add-video").unwrap().state,
         youtube_index_store::IndexOperationState::Durable,
@@ -263,10 +247,10 @@ fn detached_install_is_exact_monotonic_and_does_not_acknowledge_wal() {
         "activation recovery must not require the already-renamed input"
     );
 
-    let retried = publisher
+    publisher
         .install_verified_generation(detached.sequence, &detached.path, &manifest)
         .unwrap();
-    assert_eq!(retried.path, installed.path);
+    assert_eq!(publisher.active_index_path().unwrap(), installed_path);
 
     let mut different_manifest = manifest.clone();
     different_manifest.push(b'\n');
@@ -387,26 +371,11 @@ fn publisher_caches_corpus_compatibility_after_the_first_verified_read() {
 }
 
 #[test]
-fn failed_publication_keeps_the_previous_manifest_and_durable_wal() {
-    let (_directory, publisher, store) = fixture();
-    store.delete_video("video-old", "delete-old").unwrap();
-    fs::remove_file(&publisher.paths.base_chunks_gzip).unwrap();
-
-    assert!(publisher.publish(&store).is_err());
-    assert_eq!(publisher.active_sequence().unwrap(), 0);
-    assert_eq!(
-        store.operation("delete-old").unwrap().state,
-        youtube_index_store::IndexOperationState::Durable
-    );
-}
-
-#[test]
 fn restart_open_fully_revalidates_a_published_generation() {
     let (_directory, publisher, store) = fixture();
     store.delete_video("video-delete", "delete-video").unwrap();
-    let published = publisher.publish(&store).unwrap().unwrap();
-    let generation_path = published.path.clone();
-    drop(published);
+    install_detached(&publisher, &store);
+    let generation_path = publisher.active_index_path().unwrap();
 
     let mut postings = OpenOptions::new()
         .read(true)
@@ -428,28 +397,4 @@ fn restart_open_fully_revalidates_a_published_generation() {
         RawSearchEngine::open(&active_path),
         Err(crate::Error::Corrupt(_))
     ));
-}
-
-#[test]
-fn publication_removes_only_uncommitted_recovery_artifacts() {
-    let (_directory, publisher, store) = fixture();
-    let work = publisher.paths.state_directory.join("work/stale");
-    let candidate = publisher
-        .paths
-        .state_directory
-        .join("generations/00000000000000000007.candidate");
-    let completed = publisher
-        .paths
-        .state_directory
-        .join("generations/00000000000000000006");
-    for path in [&work, &candidate, &completed] {
-        fs::create_dir_all(path).unwrap();
-        File::create(path.join("marker")).unwrap();
-    }
-
-    assert!(publisher.publish(&store).unwrap().is_none());
-
-    assert!(!work.exists());
-    assert!(!candidate.exists());
-    assert!(completed.join("marker").exists());
 }

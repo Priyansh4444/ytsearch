@@ -8,19 +8,14 @@ mod positions;
 mod publisher;
 mod reloadable;
 mod remote_publication;
-mod schema9;
 
 pub use engine::{
-    BuildReport, RawSearchEngine, SliceReport, WarmEngine, accelerate_generation, build_index,
-    slice_corpus,
+    BuildReport, RawSearchEngine, SliceReport, accelerate_generation, build_index, slice_corpus,
 };
-pub use mutable::{
-    MutationSnapshot, MutationSnapshotExport, MutationStore, StoredChannelMutation,
-    StoredVideoMutation, VideoMutationSummary,
-};
+pub use mutable::MutationStore;
 pub use publisher::{
-    DetachedGeneration, GenerationBuilder, GenerationCompatibility, PublishedGeneration, Publisher,
-    PublisherPaths, RAW_GENERATION_FORMAT,
+    DetachedGeneration, GenerationBuilder, GenerationCompatibility, Publisher, PublisherPaths,
+    RAW_GENERATION_FORMAT,
 };
 pub use reloadable::ReloadableEngine;
 pub use youtube_search_service::SearchParams;

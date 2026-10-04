@@ -41,9 +41,6 @@ generation.
 | `youtube_cli` | Validation, channel/video indexing, repair, deletion, and direct search |
 | `youtube_api` | Public search, channel directory, and durable approval queue |
 
-Retired engine experiments are documented under `docs/experiments/search/` and
-are not workspace dependencies.
-
 ## Credential boundary
 
 - Browsers receive no search, admin, queue, Fly, YouTube, or Axiom secret.
@@ -87,7 +84,3 @@ graph, not only the HTML entry asset.
 7. Channel deletion scope, publication policy, existing-data policy, indexed
    field, and API relevance ordering are enums internally. Legacy boolean HTTP
    and SQLite representations are converted only at their boundaries.
-
-See [Mutable Raw migration](operations/raw-mutable-migration.md) for measured
-resource behavior and [Typesense retirement](operations/typesense-retirement.md)
-for the gated legacy-resource teardown.

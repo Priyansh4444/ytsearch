@@ -69,11 +69,6 @@ export const searchAvailabilityEffect = (
     return availability(status, healthy, enforced, policy, schedule);
   });
 
-export const searchAvailability = (
-  env: AvailabilityEnvironment,
-  now = new Date(),
-): Promise<SearchAvailability> => Effect.runPromise(searchAvailabilityEffect(env, now));
-
 export function scheduledOfflineResponse(now = new Date()): Response {
   const availableAt = nextPublicOpening(now);
   const retryAfter = Math.max(

@@ -1,8 +1,8 @@
-export const SEARCH_TIME_ZONE = "America/Los_Angeles";
-export const SEARCH_OPEN_MINUTE = 12 * 60;
-export const SEARCH_PREWARM_MINUTE = SEARCH_OPEN_MINUTE - 15;
+const SEARCH_TIME_ZONE = "America/Los_Angeles";
+const SEARCH_OPEN_MINUTE = 12 * 60;
+const SEARCH_PREWARM_MINUTE = SEARCH_OPEN_MINUTE - 15;
 
-export type SchedulePhase = "closed" | "prewarm" | "open";
+type SchedulePhase = "closed" | "prewarm" | "open";
 
 export type ScheduleEvaluation = {
   phase: SchedulePhase;
@@ -61,18 +61,15 @@ export function nextPublicOpening(now = new Date()): string {
 }
 
 function zonedParts(date: Date): ZonedParts {
-  const parts = Object.fromEntries(
-    formatter
-      .formatToParts(date)
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, Number(part.value)]),
-  );
+  const parts = formatter.formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((candidate) => candidate.type === type)?.value);
   return {
-    year: parts.year,
-    month: parts.month,
-    day: parts.day,
-    hour: parts.hour,
-    minute: parts.minute,
+    year: part("year"),
+    month: part("month"),
+    day: part("day"),
+    hour: part("hour"),
+    minute: part("minute"),
   };
 }
 

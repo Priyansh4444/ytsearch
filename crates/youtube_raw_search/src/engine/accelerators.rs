@@ -122,7 +122,7 @@ pub(super) fn upgrade_to_schema_nine(index_path: &Path, config: AcceleratorConfi
     Ok(())
 }
 
-pub(super) fn write_accelerators(
+fn write_accelerators(
     engine: &RawSearchEngine,
     index_path: &Path,
     config: AcceleratorConfig,
@@ -305,7 +305,7 @@ pub(super) fn text_streams(
 
 /// Decodes one list and records each block's last document and maximum
 /// score factor, with the same validation as the posting cursors.
-pub(super) fn block_bounds(
+fn block_bounds(
     engine: &RawSearchEngine,
     streams: PositionedStreams<'_>,
     block_postings: u32,

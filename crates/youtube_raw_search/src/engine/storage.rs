@@ -1,7 +1,7 @@
 use super::*;
 
 impl Lexicon {
-    pub(super) fn open(path: &Path) -> Result<Self> {
+    fn open(path: &Path) -> Result<Self> {
         let file = MappedFile::open(path, LEXICON_MAGIC)?;
         let count = read_u32(file.bytes(), 8)? as usize;
         let version = read_u32(file.bytes(), 12)?;
@@ -87,7 +87,7 @@ impl Lexicon {
 }
 
 impl PositionIndex {
-    pub(super) fn open(path: &Path, magic: &[u8; 8], expected_terms: usize) -> Result<Self> {
+    fn open(path: &Path, magic: &[u8; 8], expected_terms: usize) -> Result<Self> {
         let file = MappedFile::open(path, magic)?;
         let terms = read_u32(file.bytes(), 8)? as usize;
         if terms != expected_terms {
@@ -263,7 +263,7 @@ impl PhraseCursor<'_> {
 }
 
 impl DocumentTable {
-    pub(super) fn open(path: &Path) -> Result<Self> {
+    fn open(path: &Path) -> Result<Self> {
         let file = MappedFile::open(path, METADATA_MAGIC)?;
         let documents = read_u32(file.bytes(), 8)? as usize;
         let blocks = read_u32(file.bytes(), HEADER_BYTES)? as usize;
@@ -513,7 +513,7 @@ impl RawSearchEngine {
 
 /// Longest an activation waits for warm-up. It must leave headroom under the
 /// publisher's admin request timeout, which activation shares.
-pub(crate) const ACTIVATION_WARM_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+const ACTIVATION_WARM_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 const _: () = assert!(
     ACTIVATION_WARM_BUDGET.as_secs() + 5 <= youtube_index_store::ADMIN_REQUEST_TIMEOUT.as_secs(),
     "activation warm-up must finish well inside the admin request timeout"
@@ -525,10 +525,6 @@ const _: () = assert!(
 pub struct WarmEngine(RawSearchEngine);
 
 impl WarmEngine {
-    pub fn engine(&self) -> &RawSearchEngine {
-        &self.0
-    }
-
     pub(crate) fn into_engine(self) -> RawSearchEngine {
         self.0
     }
@@ -537,7 +533,7 @@ impl WarmEngine {
 impl RawSearchEngine {
     /// Warms for activation within `ACTIVATION_WARM_BUDGET`; anything left
     /// finishes in the background after the swap.
-    pub fn warmed_for_activation(self) -> WarmEngine {
+    pub(crate) fn warmed_for_activation(self) -> WarmEngine {
         self.warm_within(ACTIVATION_WARM_BUDGET);
         WarmEngine(self)
     }

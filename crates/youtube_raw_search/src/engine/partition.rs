@@ -68,7 +68,7 @@ impl DocumentPartition {
         Self::parts() >= 2 && u64::from(documents) >= PARTITIONED_SCAN_MIN_DOCUMENTS
     }
 
-    pub(super) fn plan(
+    fn plan(
         videos: &[VideoMeta],
         documents: u32,
         lexicon: &Lexicon,

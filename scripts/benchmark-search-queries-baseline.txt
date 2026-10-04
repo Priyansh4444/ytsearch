@@ -1,9 +1,0 @@
-# Original eight-query workload retained for before/after comparisons.
-react server components
-linux exploit
-battery management
-black hole
-javascript runtime
-memory mapped search
-rust performance
-computer architecture

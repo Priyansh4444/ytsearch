@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Effect from "effect/Effect";
-import { searchAvailability, rawSearchHealthyEffect } from "./search-availability";
+import { rawSearchHealthyEffect, searchAvailabilityEffect } from "./search-availability";
+
+const runAvailability = (...args: Parameters<typeof searchAvailabilityEffect>) =>
+  Effect.runPromise(searchAvailabilityEffect(...args));
 
 const healthUrl = "https://raw.internal/health";
 
@@ -13,7 +16,7 @@ describe("search availability", () => {
     ["2026-01-15T19:44:00Z", "scheduled_offline", "closed"],
     ["2026-01-15T19:45:00Z", "prewarming", "prewarm"],
   ] as const)("returns %s as %s", async (now, status, phase) => {
-    const result = await searchAvailability(
+    const result = await runAvailability(
       {
         SEARCH_SCHEDULE_MODE: "enforce",
         RAW_SEARCH_HEALTH_URL: healthUrl,
@@ -39,7 +42,7 @@ describe("search availability", () => {
       vi.fn().mockResolvedValue(new Response(null, { status: healthy ? 200 : 503 })),
     );
 
-    const result = await searchAvailability(
+    const result = await runAvailability(
       {
         SEARCH_SCHEDULE_MODE: "enforce",
         RAW_SEARCH_HEALTH_URL: healthUrl,
@@ -57,7 +60,7 @@ describe("search availability", () => {
   it("reports degraded without enforcing the schedule when the always-warm origin is unhealthy", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
 
-    const result = await searchAvailability(
+    const result = await runAvailability(
       {
         SEARCH_SCHEDULE_MODE: "always_on",
         RAW_SEARCH_HEALTH_URL: healthUrl,
@@ -77,7 +80,7 @@ describe("search availability", () => {
   it("distinguishes observation mode from an always-on commitment", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
 
-    const result = await searchAvailability(
+    const result = await runAvailability(
       {
         SEARCH_SCHEDULE_MODE: "observe",
         RAW_SEARCH_HEALTH_URL: healthUrl,

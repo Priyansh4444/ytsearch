@@ -18,9 +18,7 @@ Active paths (production):
 `raw` is the only accepted backend id (`scripts/fly-run-queue-indexer.sh` rejects
 anything else; `.env.example` ships `YTSEARCH_SEARCH_BACKEND=raw`).
 
-The Typesense- and Meilisearch-era Fly apps were destroyed on 2026-09-30; these
-three apps are the whole Fly footprint. Do not reintroduce Typesense unless the
-user explicitly asks.
+These three apps are the whole Fly footprint.
 
 ## Read This First
 
@@ -54,11 +52,6 @@ Rust crates:
 - `crates/youtube_client`: YouTube metadata client.
 - `crates/youtube_sources`: YouTube metadata source used by ingestion.
 - `crates/youtube_time`: shared timestamp helpers used by ingest and sources.
-
-Experiment-only crates, NOT part of any shipped path: `crates/youtube_semantic`
-and `crates/youtube_serialization_bench`. They exist to be run by the
-`autoresearch/` harness (`autoresearch/program.md`); nothing in the API, CLI, or
-indexer depends on them.
 - `crates/youtube_ytdlp`: caption extraction via `yt-dlp`.
 - `crates/youtube_transcribe`: optional local audio transcription through `voxtype`; the cloud indexer does not have Voxtype by default.
 
@@ -74,6 +67,9 @@ Scripts:
 - `scripts/check-channel-profile-images.sh`: concise audit of API-owned channel profile images.
 - `scripts/check-staging-machines.sh`: Fly machine inventory.
 - `scripts/benchmark-search-backends.sh`: local search benchmark.
+- `scripts/raw-schema-differential.sh`: compares full API responses between two index generations; run it before shipping any index format change.
+- `scripts/build-raw-generation-from-backup.sh`: rebuilds a Raw generation from the base backup archives.
+- `scripts/check-rust-public-surface.sh`: fails when a Rust item is more public than its uses need (`cargo hawk`).
 
 ## Important System Behavior
 
@@ -92,7 +88,7 @@ Indexing:
 - `update` means add missing videos and preserve existing chunks.
 - `rewipe` deletes a creator's chunks before rebuilding and requires explicit destructive acknowledgement. Prefer `update` when possible.
 - Heavy indexing should default conservative: `JOBS=1 CHANNEL_JOBS=1`, because one Raw writer publishes at a time (see `docs/indexing-operations-guide.md`).
-- Count refresh matters. After indexing, run `refresh-youtuber-counts(-list)` or the wrapper scripts so frontend channel cards match backend chunks. Use `refresh-youtuber(s)` only when profile metadata/public counts/avatars also need YouTube enrichment.
+- Indexing rewrites each creator's profile document (indexed video and chunk counts) as it runs, so channel cards stay in step with backend chunks.
 - `scripts/indexed-channels.txt` is the active creator list for bulk update/daily queue update.
 
 Queue:

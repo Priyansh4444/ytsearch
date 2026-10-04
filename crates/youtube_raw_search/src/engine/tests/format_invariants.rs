@@ -55,8 +55,8 @@ fn the_advertised_format_is_the_schema_publication_builds() {
         json!({"id":"b-1","video_id":"b","title":"Runtimes","text":"the search runtime","youtuber_handle":"@two","t_start_ms":0,"t_end_ms":1000}),
     ]
     .map(|chunk| Ok(chunk.to_string()));
-    let (_, engine) = build_index_from_lines_and_open(chunks.into_iter(), Vec::new(), &index)
-        .expect("publication build");
+    build_publication_candidate(chunks.into_iter(), Vec::new(), &index).expect("publication build");
+    let engine = RawSearchEngine::open(&index).expect("open candidate");
     assert_eq!(
         engine.inner.manifest.schema_version,
         format_schema(crate::RAW_GENERATION_FORMAT),

@@ -16,10 +16,10 @@ use crate::ADMIN_REQUEST_TIMEOUT;
 
 #[derive(Clone, Debug)]
 pub struct RawIndexAdminConfig {
-    pub base_url: String,
-    pub api_key: String,
-    pub timeout: Duration,
-    pub publication_timeout: Duration,
+    base_url: String,
+    api_key: String,
+    timeout: Duration,
+    publication_timeout: Duration,
 }
 
 impl RawIndexAdminConfig {

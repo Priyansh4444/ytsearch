@@ -9,8 +9,7 @@ recovery session instead of claiming success.
 ## Fixed resources
 
 [`config/fly-production-resources.json`](../../config/fly-production-resources.json)
-is the only executable inventory of the isolated reader, detached builder, and
-deprecated Typesense preservation set. Inspect the two release roles with:
+is the only executable inventory of the production Machines and volumes. Inspect the two release roles with:
 
 ```bash
 jq '.resources | {raw_reader_canary, raw_publication_builder}' \
@@ -131,33 +130,10 @@ authentication rejection. It only replays reads; a rejected mutation still
 requires an authoritative state check. A scoped token supplied directly in
 `FLY_API_TOKEN` keeps the default fail-closed behavior.
 
-The September 25 canary at source `4444ee366532` opened the immutable schema-6
-base and passed the authenticated publication protocol check, but failed before
-starting the builder. Its 165-request baseline had zero errors, p95 462.734 ms,
-and maximum 675.084 ms. Eleven existing benchmark cases exceeded 250 ms;
-`and the` reached 675.084 ms and `the` reached 532.820 ms. See
-`docs/experiments/search/schema9/P00/canary-baseline-2026-09-25.json` for the
-source-bound samples. The canary was stopped and its lease released after the
-CLI token expired during cleanup. This is a failed performance gate, not
-permission to switch the production reader.
-
-The same trial exposed an isolation failure: while the canary was started, the
-live queue worker using `ytsearch-raw-production.internal` downloaded the
-canary's synthetic protocol operation at sequence 1 into its own work volume.
-The worker rejected a generation compatibility mismatch and did not publish
-it. The source-bound receipt records the exact operation and copied work
-database hash. `dns.skip_registration` and an empty service list did not keep
-the app-wide name safe for this worker in the observed run. The queue target
-must be the exact production Machine name,
-`d89303da029328.vm.ytsearch-raw-production.internal`, and the canary runner
-now checks this before starting. Reconcile and verify the live worker first;
-keep the canary stopped until then. [Fly's private DNS documentation](https://fly.io/docs/networking/private-networking/)
-describes the exact Machine name as a way to address one Machine.
-`scripts/reconcile-raw-queue-worker.sh` can stage the stopped worker with this
-target while the production reader still has its IPv4 bind. Its stopped-stage
-check reports `queue_reader_check=deferred worker_stage_only=1`; this is only a
-configuration check. Start the worker and run the ordinary full queue checker
-after the production reader serves private IPv6 and publication is safe.
+The queue worker must target the exact production Machine name,
+`d89303da029328.vm.ytsearch-raw-production.internal`, never the app-wide
+name: while a canary is started, the app-wide name can route the worker to
+it. The canary runner checks this before starting.
 
 ### Broad-query memory gate
 
@@ -244,8 +220,3 @@ If an authoritative stop or lease release cannot be confirmed, the command
 fails without a success attestation and preserves its mode-700 session under
 `${XDG_STATE_HOME:-${TMPDIR:-/tmp}}/ytsearch/fly-machine-recovery/`. The printed
 path contains the nonce needed to retry cleanup and must not be committed.
-
-Typesense retirement, production promotion, queue-worker restoration, and
-creator reconciliation remain separate gates. See
-[Raw mutable migration](raw-mutable-migration.md) and
-[Typesense retirement](typesense-retirement.md).

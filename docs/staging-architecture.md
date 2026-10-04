@@ -79,6 +79,3 @@ trimming returned the idle process to 138.45 MiB locally.
 | Recreate/start indexer | `ON_DEMAND=1 scripts/fly-run-queue-indexer.sh` |
 | Creator status | `scripts/check-indexed-channel-status.sh @handle` |
 | Search benchmark | `RUNS=10 scripts/benchmark-search-cases.sh` |
-
-The legacy resource list and irreversible teardown sequence live in
-[Typesense retirement](operations/typesense-retirement.md).

@@ -4,10 +4,9 @@ set -eu
 bun run check:precommit
 scripts/check-rust-packages.sh
 cargo test --workspace
-cargo test -p youtube_raw_search --example lazy_exact_measure
-scripts/test-measure-lazy-exact-prototype.sh
 bun run test:e2e
 scripts/check-rust-dependency-policy.sh
+scripts/check-rust-public-surface.sh
 scripts/test-setup-dev.sh
 scripts/test-doctor.sh
 bash scripts/test-check-markdown-links.sh
@@ -34,10 +33,10 @@ scripts/test-require-committed-rust-build-inputs.sh
 scripts/test-cloud-index-queue-entrypoint.sh
 scripts/check-fly-cost-config.sh
 scripts/test-index-conference-playlists.sh
-scripts/test-compare-autoresearch-search.sh
 scripts/test-idle-gap-fill.sh
 scripts/test-benchmark-search-tools.sh
 scripts/test-refresh-query-log.sh
+scripts/test-fly-set-indexer-secrets.sh
 
 for script in scripts/*.sh; do
   case "$(head -n 1 "$script")" in

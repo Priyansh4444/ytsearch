@@ -127,10 +127,7 @@ test.afterEach(async ({ page }) => {
 
 test("renders the search shell while an initial lazy chunk is delayed", async ({ page }) => {
   let chunkRequested = false;
-  let releaseChunk: () => void = () => {};
-  const chunkGate = new Promise<void>((resolve) => {
-    releaseChunk = resolve;
-  });
+  const { promise: chunkGate, resolve: releaseChunk } = Promise.withResolvers<void>();
   await page.route("**/src/components/channel-picker.tsx*", async (route) => {
     chunkRequested = true;
     await chunkGate;

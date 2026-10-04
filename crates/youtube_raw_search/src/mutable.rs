@@ -26,38 +26,36 @@ pub struct MutationStore {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MutationSnapshotExport {
-    pub through_sequence: u64,
-    pub bytes: u64,
-    pub blake3: String,
+    pub(crate) through_sequence: u64,
+    pub(crate) bytes: u64,
+    pub(crate) blake3: String,
 }
 
 #[derive(Clone, Debug)]
 pub struct StoredVideoMutation {
-    pub sequence: u64,
-    pub video_id: String,
-    pub chunks: Option<Vec<TranscriptChunk>>,
+    pub(crate) video_id: String,
+    pub(crate) chunks: Option<Vec<TranscriptChunk>>,
 }
 
 #[derive(Clone, Debug)]
 pub struct StoredChannelMutation {
-    pub sequence: u64,
-    pub channel_id: String,
-    pub document: Option<ChannelDocument>,
-    pub deletion_scope: ChannelDeletionScope,
+    pub(crate) channel_id: String,
+    pub(crate) document: Option<ChannelDocument>,
+    pub(crate) deletion_scope: ChannelDeletionScope,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VideoMutationSummary {
-    pub video_id: String,
-    pub youtuber_id: Option<String>,
-    pub chunk_count: Option<u64>,
+    pub(crate) video_id: String,
+    pub(crate) youtuber_id: Option<String>,
+    pub(crate) chunk_count: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct MutationSnapshot {
-    pub through_sequence: u64,
-    pub videos: Vec<StoredVideoMutation>,
-    pub channels: Vec<StoredChannelMutation>,
+    pub(crate) through_sequence: u64,
+    pub(crate) videos: Vec<StoredVideoMutation>,
+    pub(crate) channels: Vec<StoredChannelMutation>,
 }
 
 impl MutationStore {
@@ -126,7 +124,7 @@ impl MutationStore {
         })
     }
 
-    pub fn replace_video(
+    pub(crate) fn replace_video(
         &self,
         replacement: VideoReplacement<'_>,
         idempotency_key: &str,
@@ -167,7 +165,7 @@ impl MutationStore {
         )
     }
 
-    pub fn delete_video(
+    pub(crate) fn delete_video(
         &self,
         video_id: &str,
         idempotency_key: &str,
@@ -195,7 +193,7 @@ impl MutationStore {
         )
     }
 
-    pub fn upsert_channel(
+    pub(crate) fn upsert_channel(
         &self,
         channel: &ChannelDocument,
         idempotency_key: &str,
@@ -222,7 +220,7 @@ impl MutationStore {
         )
     }
 
-    pub fn delete_channel(
+    pub(crate) fn delete_channel(
         &self,
         channel_id: &str,
         scope: ChannelDeletionScope,
@@ -250,7 +248,7 @@ impl MutationStore {
         )
     }
 
-    pub fn operation(&self, operation_id: &str) -> Result<IndexOperation, IndexStoreError> {
+    pub(crate) fn operation(&self, operation_id: &str) -> Result<IndexOperation, IndexStoreError> {
         validate_idempotency_key(operation_id)?;
         self.connection()?
             .query_row(
@@ -263,7 +261,7 @@ impl MutationStore {
             .ok_or_else(|| IndexStoreError::InvalidInput("unknown operation id".to_string()))
     }
 
-    pub fn snapshot(&self) -> Result<MutationSnapshot, IndexStoreError> {
+    pub(crate) fn snapshot(&self) -> Result<MutationSnapshot, IndexStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
@@ -274,7 +272,7 @@ impl MutationStore {
         Ok(snapshot)
     }
 
-    pub fn export_snapshot(
+    pub(crate) fn export_snapshot(
         &self,
         destination: &Path,
     ) -> Result<MutationSnapshotExport, IndexStoreError> {
@@ -338,7 +336,7 @@ impl MutationStore {
         })
     }
 
-    pub fn video_mutation_summary(
+    pub(crate) fn video_mutation_summary(
         &self,
         video_id: &str,
     ) -> Result<Option<VideoMutationSummary>, IndexStoreError> {
@@ -354,7 +352,9 @@ impl MutationStore {
             .map_err(map_sqlite)
     }
 
-    pub fn video_mutation_summaries(&self) -> Result<Vec<VideoMutationSummary>, IndexStoreError> {
+    pub(crate) fn video_mutation_summaries(
+        &self,
+    ) -> Result<Vec<VideoMutationSummary>, IndexStoreError> {
         let connection = self.connection()?;
         let mut statement = connection
             .prepare(
@@ -369,33 +369,32 @@ impl MutationStore {
             .map_err(map_sqlite)
     }
 
-    pub fn channel_mutation(
+    pub(crate) fn channel_mutation(
         &self,
         channel_id: &str,
     ) -> Result<Option<StoredChannelMutation>, IndexStoreError> {
         validate_identifier("channel id", channel_id)?;
         self.connection()?
             .query_row(
-                "SELECT sequence, channel_id, document_json, cascade
+                "SELECT channel_id, document_json, cascade
                  FROM channel_mutations WHERE channel_id=?1",
                 [channel_id],
                 |row| {
-                    let document_json = row.get::<_, Option<Vec<u8>>>(2)?;
+                    let document_json = row.get::<_, Option<Vec<u8>>>(1)?;
                     let document = document_json
                         .map(|bytes| serde_json::from_slice::<ChannelDocument>(&bytes))
                         .transpose()
                         .map_err(|error| {
                             rusqlite::Error::FromSqlConversionFailure(
-                                2,
+                                1,
                                 rusqlite::types::Type::Blob,
                                 Box::new(error),
                             )
                         })?;
                     Ok(StoredChannelMutation {
-                        sequence: row_u64(row, 0)?,
-                        channel_id: row.get(1)?,
+                        channel_id: row.get(0)?,
                         document,
-                        deletion_scope: ChannelDeletionScope::from_cascade(row.get(3)?),
+                        deletion_scope: ChannelDeletionScope::from_cascade(row.get(2)?),
                     })
                 },
             )
@@ -403,7 +402,7 @@ impl MutationStore {
             .map_err(map_sqlite)
     }
 
-    pub fn mark_published(&self, through_sequence: u64) -> Result<(), IndexStoreError> {
+    pub(crate) fn mark_published(&self, through_sequence: u64) -> Result<(), IndexStoreError> {
         let through_sequence = i64::try_from(through_sequence)
             .map_err(|error| IndexStoreError::internal(BACKEND, error))?;
         self.connection()?
@@ -503,26 +502,25 @@ fn snapshot_at_sequence(
         .map_err(|error| IndexStoreError::internal(BACKEND, error))?;
     let mut video_statement = transaction
         .prepare(
-            "SELECT sequence, video_id, chunks_json
+            "SELECT video_id, chunks_json
                  FROM video_mutations WHERE sequence <= ?1 ORDER BY video_id",
         )
         .map_err(map_sqlite)?;
     let videos = video_statement
         .query_map([through_sequence_sql], |row| {
-            let chunks_json = row.get::<_, Option<Vec<u8>>>(2)?;
+            let chunks_json = row.get::<_, Option<Vec<u8>>>(1)?;
             let chunks = chunks_json
                 .map(|bytes| serde_json::from_slice::<Vec<TranscriptChunk>>(&bytes))
                 .transpose()
                 .map_err(|error| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        2,
+                        1,
                         rusqlite::types::Type::Blob,
                         Box::new(error),
                     )
                 })?;
             Ok(StoredVideoMutation {
-                sequence: row_u64(row, 0)?,
-                video_id: row.get(1)?,
+                video_id: row.get(0)?,
                 chunks,
             })
         })
@@ -533,28 +531,27 @@ fn snapshot_at_sequence(
 
     let mut channel_statement = transaction
         .prepare(
-            "SELECT sequence, channel_id, document_json, cascade
+            "SELECT channel_id, document_json, cascade
                  FROM channel_mutations WHERE sequence <= ?1 ORDER BY channel_id",
         )
         .map_err(map_sqlite)?;
     let channels = channel_statement
         .query_map([through_sequence_sql], |row| {
-            let document_json = row.get::<_, Option<Vec<u8>>>(2)?;
+            let document_json = row.get::<_, Option<Vec<u8>>>(1)?;
             let document = document_json
                 .map(|bytes| serde_json::from_slice::<ChannelDocument>(&bytes))
                 .transpose()
                 .map_err(|error| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        2,
+                        1,
                         rusqlite::types::Type::Blob,
                         Box::new(error),
                     )
                 })?;
             Ok(StoredChannelMutation {
-                sequence: row_u64(row, 0)?,
-                channel_id: row.get(1)?,
+                channel_id: row.get(0)?,
                 document,
-                deletion_scope: ChannelDeletionScope::from_cascade(row.get(3)?),
+                deletion_scope: ChannelDeletionScope::from_cascade(row.get(2)?),
             })
         })
         .map_err(map_sqlite)?

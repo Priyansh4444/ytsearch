@@ -1,4 +1,4 @@
-export type SwarmPosition = {
+type SwarmPosition = {
   x: number;
   y: number;
   mobileX: number;
@@ -6,27 +6,23 @@ export type SwarmPosition = {
   color: string;
 };
 
-const VESPER_SWARM_COLORS = ["#ffc799", "#99ffe4", "#8db4ff", "#ff8080", "#ffb86c"];
+const VESPER_SWARM_COLORS = ["#ffc799", "#99ffe4", "#8db4ff", "#ff8080", "#ffb86c"] as const;
 
-export function ovalSwarmPositions(total: number): SwarmPosition[] {
-  const ringCounts = [Math.ceil(total / 2), Math.floor(total / 2)];
-  const ringProgress = [0, 0];
-
-  return Array.from({ length: total }, (_, index) => {
-    const ring = index % 2;
-    const ringIndex = ringProgress[ring]++;
-    const angle = (ringIndex / ringCounts[ring]) * Math.PI * 2 - Math.PI / 2 + ring * 0.09;
-    const radiusX = ring === 0 ? 44 : 36;
-    const radiusY = ring === 0 ? 43 : 35;
-    const mobile = mobilePosition(index, total);
-    return {
-      x: round(50 + Math.cos(angle) * radiusX),
-      y: round(50 + Math.sin(angle) * radiusY),
-      mobileX: mobile.x,
-      mobileY: mobile.y,
-      color: VESPER_SWARM_COLORS[index % VESPER_SWARM_COLORS.length],
-    };
-  });
+/** Position `index` of `total` alternately on two concentric oval rings. */
+export function ovalSwarmPosition(index: number, total: number): SwarmPosition {
+  const ring = index % 2;
+  const ringCount = ring === 0 ? Math.ceil(total / 2) : Math.floor(total / 2);
+  const angle = (Math.floor(index / 2) / ringCount) * Math.PI * 2 - Math.PI / 2 + ring * 0.09;
+  const radiusX = ring === 0 ? 44 : 36;
+  const radiusY = ring === 0 ? 43 : 35;
+  const mobile = mobilePosition(index, total);
+  return {
+    x: round(50 + Math.cos(angle) * radiusX),
+    y: round(50 + Math.sin(angle) * radiusY),
+    mobileX: mobile.x,
+    mobileY: mobile.y,
+    color: VESPER_SWARM_COLORS[index % VESPER_SWARM_COLORS.length] ?? VESPER_SWARM_COLORS[0],
+  };
 }
 
 export function magneticOffset(deltaX: number, deltaY: number) {

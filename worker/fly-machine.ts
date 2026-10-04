@@ -27,7 +27,7 @@ const FlyMachinesSchema = Schema.mutable(Schema.Array(FlyMachineSchema)) satisfi
 const decodeFlyMachineState = Schema.decodeUnknownEffect(FlyMachineStateSchema);
 const decodeFlyMachines = Schema.decodeUnknownEffect(FlyMachinesSchema);
 
-export class FlyApiError extends Error {
+class FlyApiError extends Error {
   constructor(
     readonly operation: string,
     readonly status?: number,
@@ -119,7 +119,7 @@ function decodeResponseEffect<A, E>(
   operation: string,
 ): Effect.Effect<A, FlyApiError> {
   return Effect.tryPromise({
-    try: () => response.json() as Promise<unknown>,
+    try: () => response.json(),
     catch: (cause) => new FlyApiError(`${operation} response decoding`, undefined, cause),
   }).pipe(
     Effect.flatMap(decode),

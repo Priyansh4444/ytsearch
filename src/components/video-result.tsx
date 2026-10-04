@@ -30,11 +30,8 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
   const selection = createMemo(() => {
     const list = visible();
     const id = selectedHitId();
-    if (id !== undefined) {
-      for (let i = 0; i < list.length; i++) {
-        if (list[i]!.id === id) return { hit: list[i]!, id };
-      }
-    }
+    const hit = id === undefined ? undefined : list.find((candidate) => candidate.id === id);
+    if (hit) return { hit, id };
     const fallback = list[0] ?? props.video.hits[0];
     return { hit: fallback, id: fallback?.id };
   });

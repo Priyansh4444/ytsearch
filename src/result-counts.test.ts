@@ -58,7 +58,7 @@ describe("searchResultCountLabel", () => {
           total_moments: 5,
           total_videos: 2,
           has_next_page: false,
-          hits: [video("duplicate", 1).hits[0]!],
+          hits: [video("duplicate", 1).hits[0]],
         }),
       ),
     ).toBe("2 videos · 5 moments");

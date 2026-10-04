@@ -23,7 +23,7 @@ use std::{
     sync::Arc,
     time::Instant,
 };
-use youtube_index_store::{ChannelDocument, ChunkStats};
+use youtube_index_store::ChannelDocument;
 use youtube_search_service::{BackendError, SearchBackend, SearchParams};
 use youtube_time::parse_rfc3339_timestamp;
 
@@ -122,19 +122,19 @@ const GENERATION_FILES_SCHEMA_9: [&str; 14] = [
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BuildReport {
-    pub documents: u64,
-    pub videos: usize,
-    pub channels: usize,
-    pub terms: usize,
-    pub index_bytes: u64,
-    pub elapsed_ms: u128,
+    documents: u64,
+    videos: usize,
+    channels: usize,
+    terms: usize,
+    index_bytes: u64,
+    elapsed_ms: u128,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct SliceReport {
-    pub documents: u64,
-    pub videos: usize,
-    pub bytes: u64,
+    documents: u64,
+    videos: usize,
+    bytes: u64,
 }
 
 #[derive(Deserialize)]
@@ -221,7 +221,7 @@ mod tests;
 pub use accelerators::accelerate_generation;
 #[cfg(test)]
 use builder::BuildPosting;
-pub(crate) use builder::build_index_from_lines_and_open;
+pub(crate) use builder::build_publication_candidate;
 pub use builder::{build_index, slice_corpus};
 pub(crate) use query_support::HOT_MAPPED_FILES;
 use query_support::*;
@@ -230,7 +230,7 @@ use single_token::{
     MAX_COMPACT_SPLIT_POSTING_WORK, MAX_COMPACT_SPLIT_PROXIMITY_MATCHES, SplitWorkBudget,
     compact_split_proximity_is_bounded,
 };
-pub use storage::WarmEngine;
+pub(crate) use storage::WarmEngine;
 
 #[derive(Clone, Copy)]
 struct DocumentRecord {
@@ -553,27 +553,15 @@ impl SearchBackend for RawSearchEngine {
 }
 
 impl RawSearchEngine {
-    pub fn document_count(&self) -> u64 {
+    pub(crate) fn document_count(&self) -> u64 {
         u64::from(self.inner.manifest.documents)
     }
 
-    pub fn video_count(&self) -> usize {
-        self.inner.videos.len()
-    }
-
-    pub fn channel_count(&self) -> usize {
-        self.inner.channels.len()
-    }
-
-    pub fn term_count(&self) -> usize {
-        self.inner.lexicon.count
-    }
-
-    pub fn index_size(&self) -> u64 {
+    pub(crate) fn index_size(&self) -> u64 {
         self.inner.index_bytes
     }
 
-    pub fn video_chunk_count(&self, video_id: &str) -> u64 {
+    pub(crate) fn video_chunk_count(&self, video_id: &str) -> u64 {
         self.inner
             .videos
             .iter()
@@ -581,7 +569,7 @@ impl RawSearchEngine {
             .map_or(0, |video| video.documents.len() as u64)
     }
 
-    pub fn indexed_video_ids(&self, channel_id: &str) -> Vec<String> {
+    pub(crate) fn indexed_video_ids(&self, channel_id: &str) -> Vec<String> {
         let mut video_ids = self
             .video_chunk_counts(channel_id)
             .into_iter()
@@ -591,7 +579,7 @@ impl RawSearchEngine {
         video_ids
     }
 
-    pub fn video_chunk_counts(&self, channel_id: &str) -> Vec<(String, u64)> {
+    pub(crate) fn video_chunk_counts(&self, channel_id: &str) -> Vec<(String, u64)> {
         self.inner
             .videos
             .iter()
@@ -600,21 +588,7 @@ impl RawSearchEngine {
             .collect()
     }
 
-    pub fn channel_stats(&self, channel_id: &str) -> ChunkStats {
-        self.inner
-            .videos
-            .iter()
-            .filter(|video| video.belongs_to(channel_id))
-            .fold(ChunkStats::default(), |mut stats, video| {
-                stats.indexed_videos = stats.indexed_videos.saturating_add(1);
-                stats.indexed_chunks = stats
-                    .indexed_chunks
-                    .saturating_add(video.documents.len() as u64);
-                stats
-            })
-    }
-
-    pub fn channel_document(&self, channel_id: &str) -> Result<Option<ChannelDocument>> {
+    pub(crate) fn channel_document(&self, channel_id: &str) -> Result<Option<ChannelDocument>> {
         self.inner
             .channels
             .iter()
@@ -625,7 +599,7 @@ impl RawSearchEngine {
             .map_err(Error::Json)
     }
 
-    pub fn channel_documents(&self) -> Result<Vec<ChannelDocument>> {
+    pub(crate) fn channel_documents(&self) -> Result<Vec<ChannelDocument>> {
         let mut channels = self
             .inner
             .channels
@@ -638,7 +612,7 @@ impl RawSearchEngine {
         Ok(channels)
     }
 
-    pub fn search(&self, params: &SearchParams) -> Result<Value> {
+    pub(crate) fn search(&self, params: &SearchParams) -> Result<Value> {
         validate_search_params(params)?;
         let parsed = parse_query(&params.q)?;
         if params.phrase_slop.is_some() && parsed.phrases.is_empty() {
@@ -717,8 +691,8 @@ impl RawSearchEngine {
             return self.format_matches(params, &fast_highlights, fast_matches, &mut block_cache);
         }
 
-        // Typesense includes the last-token prefix in the ordinary query even
-        // when the exact conjunction already clears the typo threshold. Typos
+        // The last-token prefix is part of the ordinary query even when the
+        // exact conjunction already clears the typo threshold. Typos
         // remain threshold-gated inside this bounded candidate progression.
         // Every expansion remains conjunctive: a document must match one
         // alternative for every retained query token.
@@ -751,7 +725,7 @@ impl RawSearchEngine {
             FullQueryResolution::TokenDrop => {}
         }
 
-        // Match Typesense's default right_to_left progression. Prefer the longest
+        // Drop tokens right to left. Prefer the longest
         // retained prefix, then try retained suffixes where prefix search remains
         // useful. Bound both ladders so adversarial long queries cannot multiply
         // fuzzy work without limit.
@@ -2284,7 +2258,7 @@ impl RawSearchEngine {
         Ok(serde_json::from_slice(bytes)?)
     }
 
-    pub fn search_channels(&self, params: &SearchParams) -> Result<Value> {
+    pub(crate) fn search_channels(&self, params: &SearchParams) -> Result<Value> {
         validate_channel_search_params(params)?;
         let query = params.q.trim().to_ascii_lowercase();
         let mut channels = self

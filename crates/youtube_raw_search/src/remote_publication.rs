@@ -19,7 +19,7 @@ use youtube_index_store::{
 };
 
 pub(crate) use youtube_index_store::RAW_GENERATION_FILES;
-pub(crate) type GenerationFile = RawGenerationFile;
+type GenerationFile = RawGenerationFile;
 pub(crate) type GenerationManifest = RawGenerationManifest;
 pub(crate) type GenerationUploadRequest = RawGenerationUpload;
 pub(crate) type RemoteJobResponse = RawPublicationJob;
@@ -482,7 +482,7 @@ impl RemotePublication {
         .await
         .map_err(map_io)??;
         self.engine
-            .replace(installed.engine, sequence)
+            .replace(installed, sequence)
             .map_err(|error| IndexStoreError::internal(BACKEND, format!("{error:?}")))?;
         self.store.mark_published(sequence)?;
         job.status = RemoteJobStatus::Activated;

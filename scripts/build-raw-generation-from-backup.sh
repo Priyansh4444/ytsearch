@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
-  echo "usage: $0 <typesense-backup-dir> <new-raw-index-dir>" >&2
+  echo "usage: $0 <backup-dir> <new-raw-index-dir>" >&2
   exit 2
 fi
 
