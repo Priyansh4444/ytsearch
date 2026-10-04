@@ -79,9 +79,10 @@ BACKENDS=raw JOBS=1 CHANNEL_JOBS=1 nohup \
 
 Start with `JOBS=1`. Increase fetch concurrency only after measuring YouTube
 error rate, publisher peak RSS, publication latency, and public search latency.
-`CHANNEL_JOBS` controls creator concurrency independently. The bounded
-full-corpus publisher peaked at 447.2 MiB standalone and 736 MiB while the old
-reader remained live.
+`CHANNEL_JOBS` controls creator concurrency independently. In the schema-6 era
+(2026-08-11), the bounded full-corpus publisher peaked at 447.2 MiB standalone
+and 736 MiB while the old reader remained live; remeasure before relying on
+these for schema-9 generations.
 
 ## Conference playlists
 
@@ -109,7 +110,9 @@ role may target a different reader. An app-wide secret would override those
 targets and can make an isolated publication builder contact production.
 
 `yt-dlp` is primary. `YOUTUBE_API_KEY` is an optional discovery/metadata
-fallback and cannot retrieve captions:
+fallback and cannot retrieve captions. `YOUTUBE_API_FALLBACK` is `auto` (the
+default: stage the key when one is configured), `1` (require it) or `0`
+(remove it):
 
 ```bash
 YOUTUBE_API_FALLBACK=1 scripts/fly-set-indexer-secrets.sh
@@ -138,8 +141,12 @@ flyctl machine list --app ytsearch-indexer-raw-production
 flyctl logs --app ytsearch-indexer-raw-production
 ```
 
-The transcript cache persists at `/data/transcript-cache`. Copy permitted cache
-data with `scripts/fly-upload-transcript-cache.sh` and
+The transcript cache persists in `transcript-cache/` at the indexer volume's
+root. The queue worker mounts that volume at `/var/lib/ytsearch` (so it cannot
+hide the Raw corpus baked under `/data`), making its cache
+`/var/lib/ytsearch/transcript-cache`; one-off cloud indexers and the copy
+scripts mount it at `/data`. Copy permitted cache data with
+`scripts/fly-upload-transcript-cache.sh` and
 `scripts/fly-download-transcript-cache.sh`.
 
 ## Approval queue

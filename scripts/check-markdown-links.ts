@@ -15,6 +15,22 @@ const markdownFiles = execFileSync(
 const failures: string[] = [];
 const linkPattern = /!?\[[^\]]*\]\(([^)]+)\)/g;
 
+// Code spans and fenced blocks name repository files and package scripts;
+// a renamed or deleted one leaves the instruction silently wrong.
+const codePattern = /```[\s\S]*?```|`[^`\n]+`/g;
+const repositoryPathPattern =
+  /(?<![\w./-])((?:scripts|docs|crates|src|worker|shared|config|tests|deploy|\.github)\/[\w./@-]+)/g;
+const packageScriptPattern = /\bbun run ([\w:-]+)/g;
+const packageJson = resolve(root, "package.json");
+const packageScripts = new Set(
+  existsSync(packageJson)
+    ? Object.keys(
+        (JSON.parse(readFileSync(packageJson, "utf8")) as { scripts?: Record<string, string> })
+          .scripts ?? {},
+      )
+    : [],
+);
+
 for (const path of markdownFiles) {
   const body = readFileSync(resolve(root, path), "utf8");
   for (const match of body.matchAll(linkPattern)) {
@@ -28,12 +44,22 @@ for (const path of markdownFiles) {
     const destination = resolve(dirname(resolve(root, path)), fileTarget);
     if (!existsSync(destination)) failures.push(`${path}: missing ${target}`);
   }
+  for (const [code] of body.matchAll(codePattern)) {
+    for (const match of code.matchAll(repositoryPathPattern)) {
+      const reference = (match[1] ?? "").replace(/[.,:;]+$/u, "");
+      if (!existsSync(resolve(root, reference))) failures.push(`${path}: missing ${reference}`);
+    }
+    for (const match of code.matchAll(packageScriptPattern)) {
+      const script = match[1] ?? "";
+      if (!packageScripts.has(script)) failures.push(`${path}: no package script ${script}`);
+    }
+  }
 }
 
 if (failures.length > 0) {
   // oxlint-disable-next-line no-console -- contributors need every broken path in CI output.
   console.error(
-    "Broken local Markdown links:\n" + failures.map((failure) => `- ${failure}`).join("\n"),
+    "Broken local Markdown references:\n" + failures.map((failure) => `- ${failure}`).join("\n"),
   );
   process.exit(1);
 }

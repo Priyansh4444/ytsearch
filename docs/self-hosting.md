@@ -5,7 +5,8 @@ Solid frontend. Docker Compose is the supported local topology.
 
 ## Setup
 
-Install Rust stable, Bun 1.3.14, Docker Compose, OpenSSL, and `yt-dlp`.
+Install Rust stable, Bun (the version pinned by `packageManager` in
+`package.json`), Docker Compose, OpenSSL, and `yt-dlp`.
 `ffmpeg` is required only for permitted local transcription.
 
 ```bash

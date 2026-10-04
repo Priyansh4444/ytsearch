@@ -29,14 +29,14 @@ operation state, counts, and publication integrity. Alert on:
 - active generation absent or unreadable;
 - durable sequence ahead of published sequence longer than the publication SLO;
 - repeated failed operations or publications;
-- RSS approaching the 4 GiB allocation;
+- RSS approaching the 2.5 GiB allocation (`fly.raw-search.toml`);
 - mutable volume above 80%;
 - search errors above zero;
 - queue rows stuck `running` after the indexer stops.
 
-Publication is expected to raise RSS temporarily. The measured full-corpus peak
-is 2.46 GiB and steady local post-trim RSS is 138.45 MiB. The last remote warmed
-production reader measurement was 356.25 MiB.
+Publication is expected to raise RSS temporarily. The full-corpus peak measured
+in the schema-6 era (2026-08-08) was 2.46 GiB. On 2026-10-01 the warmed schema-9
+production reader used about 430 MB RSS, of which about 315 MB was anonymous.
 
 ## Indexing events
 
@@ -45,8 +45,10 @@ phase. Scheduled maintenance emits `daily_update_started`,
 `daily_update_completed`, or `daily_update_failed`. The Worker emits
 `indexer_repair_wake_enqueued`, `indexer_woken`, or `indexer_wake_failed`.
 
-Raw lifecycle events use the `raw_search_schedule_*` prefix. Observation mode
-must not mutate Fly state; enforcement mode must stop the indexer before Raw.
+In production (`always_on`) the Worker's five-minute reconciler emits
+`raw_search_always_on_reconciled`. The optional schedule modes emit
+`raw_search_schedule_*` events; observation mode must not mutate Fly state, and
+enforcement mode must stop the indexer before Raw.
 
 ## Search telemetry
 
@@ -81,7 +83,7 @@ bun run perf:bundle
 
 Before and after publication, run the fixed relevance matrix and a concurrent
 load. Require zero response errors, exact totals, no stale “show more” control,
-and an initial browser bundle no larger than 30 KB gzip.
+and an initial browser bundle within the `bun run perf:bundle` budget.
 
 For an alternating before/after API comparison over the shared case matrix:
 

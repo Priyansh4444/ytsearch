@@ -90,11 +90,13 @@ APPLY_RAW_PUBLICATION_BUILDER=configure-exact-inert-builder \
 Staging never starts either Machine.
 The reader uses `/data/mutable/trials/<source-commit-prefix>` as its state
 directory. A new source commit opens the immutable base index until that trial
-publishes a generation. This keeps the earlier schema-8 canary state and its
-rollback artifact outside the trial. Before the trial, verify the exact base
-image's `/data/index/manifest.json` schema and counts; the current immutable
-base digest has schema 6, 8,142,650 documents, 32,822 videos, and 61 channels.
-Do not interpret a successful base-generation canary as schema-9 validation.
+publishes a generation. This keeps earlier canary state and its rollback
+artifact outside the trial. Before the trial, verify the exact base image's
+`/data/index/manifest.json` schema and counts. As of 2026-10-04 the immutable
+base digest has schema 6, 8,142,650 documents, 32,822 videos, and 61 channels,
+and production serves schema-9 generations published from it. A canary that
+never publishes only proves the schema-6 base opens; it is not schema-9
+validation.
 Builder reconciliation replaces the obsolete repair configuration as one exact
 Machine config; stale queue environment variables, embedded scripts, file
 mappings, services, and checks are not carried into the publication role. The

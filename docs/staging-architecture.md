@@ -1,14 +1,14 @@
 # Production architecture
 
 Raw is the only target backend. Cloudflare serves the application, proxies the
-Rust API, emits durable wake signals, and controls the scheduled Raw engine.
+Rust API, emits durable wake signals, and keeps the Raw engine running.
 
 | Service | Purpose | Lifecycle |
 | --- | --- | --- |
 | Cloudflare Worker | Static app, same-origin API, availability, Fly control | Always available |
 | Cloudflare Queue | Retryable indexer wake signal | Managed |
 | `ytsearch-api-raw-production` | Public search API and authoritative JSONL request queue | Always running |
-| `ytsearch-raw-production` | Reloadable inverted index and mutation publisher | Scheduled |
+| `ytsearch-raw-production` | Reloadable inverted index and mutation publisher | Always on |
 | `ytsearch-indexer-raw-production` | Approved indexing, daily update, and gap repair | On demand |
 
 ```mermaid
@@ -43,15 +43,18 @@ flowchart LR
 
 ## Availability and cost window
 
-The Worker owns `GET /api/availability` and evaluates Pacific time. In enforced
-mode it prewarms the engine before noon, allows searches from noon through
+The Worker owns `GET /api/availability`. Production runs
+`SEARCH_SCHEDULE_MODE=always_on` (`wrangler.jsonc`): a five-minute cron restarts
+a stopped Raw engine, and search is available around the clock.
+
+The optional `enforce` mode evaluates Pacific time. It prewarms the engine before noon, allows searches from noon through
 midnight, stops the indexer first at close, then stops Raw on a later
 reconciliation. Direct Raw auto-start is disabled so a request cannot bypass
 the cost boundary.
 
 The indexer Machine ID is discovered by the unique
 `QUEUE_TARGET_BACKEND=raw` tag. The Raw engine Machine ID is explicit in
-`wrangler.jsonc` so a benchmark Machine can never be scheduled accidentally.
+`wrangler.jsonc` so the Worker can never start or stop a benchmark Machine by accident.
 
 ## Publication state
 
@@ -64,9 +67,12 @@ The Raw volume contains:
 - source corpus archives needed for compaction.
 
 Admin counts include pending durable writes. Public search visibility advances
-only when a verified generation becomes active. Full-corpus publication took
-70–80 seconds in the measured experiment and peaked at 2.46 GiB RSS; allocator
-trimming returned the idle process to 138.45 MiB locally.
+only when a verified generation becomes active. In the schema-6 era
+(2026-08-08), full-corpus publication took 70–80 seconds and peaked at 2.46 GiB
+RSS. The reader now runs schema-9 generations with a 2.5 GiB allocation sized
+for publication double residency (`fly.raw-search.toml`); the release gate's
+current memory limits are in
+[Raw publication release](operations/raw-publication-release.md).
 
 ## Operator surfaces
 
