@@ -31,6 +31,7 @@
     "perf:worker": "bun scripts/check-worker-performance.ts",
     "check": "scripts/check-all.sh",
     "check:all": "bun run check",
+    "deps:outdated": "bun scripts/deps-outdated.ts",
     "check:precommit": "bun run format:check && bun run lint && bun run typecheck && bun run check:docs && CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false bunx wrangler types --check && cargo fmt --check && cargo clippy --workspace --all-targets --all-features -- -D warnings && bun run test:frontend:coverage && bun run test:worker && bun run build && bun run perf:bundle && bun run perf:worker",
     "check:rust:isolation": "scripts/check-rust-packages.sh",
     "check:analytics": "bun scripts/check-frontend-analytics.ts",
