@@ -9,8 +9,6 @@ type SwarmItem = {
   channel: IndexedChannel;
   x: number;
   y: number;
-  mobileX: number;
-  mobileY: number;
   color: string;
 };
 
@@ -31,7 +29,8 @@ export const ChannelPicker: Component<{
     animationFrame = window.requestAnimationFrame(() => {
       if (!stage) return;
       const bounds = stage.getBoundingClientRect();
-      const useMobileLayout = bounds.width < 640;
+      // Narrow screens show a grid, which has no ring positions to pull.
+      if (bounds.width < 640) return;
       stage.dataset.cursorActive = "true";
       stage.style.setProperty("--cursor-x", `${event.clientX - bounds.left}px`);
       stage.style.setProperty("--cursor-y", `${event.clientY - bounds.top}px`);
@@ -39,10 +38,8 @@ export const ChannelPicker: Component<{
       for (const item of swarm()) {
         const element = itemElements.get(item.channel.id);
         if (!element) continue;
-        const xPercent = useMobileLayout ? item.mobileX : item.x;
-        const yPercent = useMobileLayout ? item.mobileY : item.y;
-        const centerX = bounds.left + (xPercent / 100) * bounds.width;
-        const centerY = bounds.top + (yPercent / 100) * bounds.height;
+        const centerX = bounds.left + (item.x / 100) * bounds.width;
+        const centerY = bounds.top + (item.y / 100) * bounds.height;
         const offset = magneticOffset(event.clientX - centerX, event.clientY - centerY);
         if (offset.x === 0 && offset.y === 0) continue;
         nextActiveElements.add(element);
@@ -109,7 +106,7 @@ export const ChannelPicker: Component<{
               aria-label={`Search ${item.channel.name}`}
               title={`Search ${item.channel.name}`}
               class="channel-swarm-item group"
-              style={`--swarm-x:${item.x}%;--swarm-y:${item.y}%;--swarm-mobile-x:${item.mobileX}%;--swarm-mobile-y:${item.mobileY}%;--swarm-color:${item.color}`}
+              style={`--swarm-x:${item.x}%;--swarm-y:${item.y}%;--swarm-color:${item.color}`}
               onClick={(event) => {
                 event.preventDefault();
                 event.currentTarget.style.viewTransitionName = "selected-channel-identity";

@@ -19,12 +19,10 @@ describe("SearchForm", () => {
     render(() => (
       <SearchForm
         query="solid js"
-        sort="relevance"
         searchAvailable={true}
         home={false}
         mode="search"
         onQueryInput={() => undefined}
-        onSortChange={() => undefined}
         onSubmit={onSubmit}
         channelSuggestions={[]}
         onChannelSelect={() => undefined}
@@ -40,12 +38,10 @@ describe("SearchForm", () => {
     render(() => (
       <SearchForm
         query="@marimo"
-        sort="relevance"
         searchAvailable={true}
         home={false}
         mode="channel"
         onQueryInput={() => undefined}
-        onSortChange={() => undefined}
         onSubmit={() => undefined}
         channelSuggestions={[channel]}
         onChannelSelect={onChannelSelect}
@@ -61,12 +57,10 @@ describe("SearchForm", () => {
     render(() => (
       <SearchForm
         query="@marimo"
-        sort="relevance"
         searchAvailable={true}
         home={true}
         mode="channel"
         onQueryInput={() => undefined}
-        onSortChange={() => undefined}
         onSubmit={() => undefined}
         channelSuggestions={[channel]}
         onChannelSelect={onChannelSelect}
@@ -87,12 +81,10 @@ describe("SearchForm", () => {
     const { unmount } = render(() => (
       <SearchForm
         query="solid js"
-        sort="relevance"
         searchAvailable={false}
         home={true}
         mode="search"
         onQueryInput={() => undefined}
-        onSortChange={() => undefined}
         onSubmit={() => undefined}
         channelSuggestions={[]}
         onChannelSelect={() => undefined}
@@ -105,12 +97,10 @@ describe("SearchForm", () => {
     render(() => (
       <SearchForm
         query="@example"
-        sort="relevance"
         searchAvailable={false}
         home={true}
         mode="channel"
         onQueryInput={() => undefined}
-        onSortChange={() => undefined}
         onSubmit={() => undefined}
         channelSuggestions={[]}
         onChannelSelect={() => undefined}
@@ -123,13 +113,11 @@ describe("SearchForm", () => {
     render(() => (
       <SearchForm
         query="solid js"
-        sort="relevance"
         searchAvailable={true}
         busy={true}
         home={false}
         mode="search"
         onQueryInput={() => undefined}
-        onSortChange={() => undefined}
         onSubmit={() => undefined}
         channelSuggestions={[]}
         onChannelSelect={() => undefined}

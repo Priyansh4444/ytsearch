@@ -1,18 +1,15 @@
 import { For, Show, createEffect, createMemo, createSignal, flush } from "solid-js";
 import type { Component } from "solid-js";
-import type { IndexedChannel, SearchSort } from "../types";
-import { searchSortOptions } from "../search-sorts";
+import type { IndexedChannel } from "../types";
 import { ChannelAvatar, indexedCountLabel } from "./channel-profile";
 
 export const SearchForm: Component<{
   query: string;
-  sort: SearchSort;
   searchAvailable: boolean;
   busy?: boolean;
   home: boolean;
   selectedChannelName?: string;
   onQueryInput: (query: string) => void;
-  onSortChange: (sort: SearchSort) => void;
   mode: "search" | "request" | "channel";
   onSubmit: () => void;
   channelSuggestions: IndexedChannel[];
@@ -68,7 +65,7 @@ export const SearchForm: Component<{
         props.onSubmit();
       }}
     >
-      <label for="transcript-search" class="mb-2 block text-sm font-medium text-vesper-muted">
+      <label for="transcript-search" class="sr-only">
         Search transcripts
       </label>
       <div class="relative">
@@ -104,25 +101,11 @@ export const SearchForm: Component<{
                 : "border-vesper-control focus:border-vesper-yellow"
             }`}
           />
-          <Show when={props.mode === "search"}>
-            <div class="search-options flex min-w-0 gap-2">
-              <select
-                value={props.sort}
-                onChange={(event) => props.onSortChange(event.currentTarget.value as SearchSort)}
-                aria-label="Sort results"
-                class="min-w-0 flex-1 border border-vesper-control bg-vesper-bg px-3 py-3 text-base text-white transition-colors focus:border-vesper-yellow sm:text-sm"
-              >
-                <For each={searchSortOptions()}>
-                  {([value, label]) => <option value={value}>{label}</option>}
-                </For>
-              </select>
-            </div>
-          </Show>
           <button
             type="submit"
             disabled={props.mode === "search" && (!props.searchAvailable || props.busy)}
             aria-busy={props.busy === undefined ? undefined : props.busy ? "true" : "false"}
-            class={`pressable search-submit min-w-28 border px-6 py-3 font-semibold text-vesper-bg ${
+            class={`pressable search-submit border px-4 py-3 font-semibold text-vesper-bg sm:min-w-28 sm:px-6 ${
               props.mode === "request"
                 ? "border-vesper-green bg-vesper-green hover:bg-vesper-blue"
                 : !props.searchAvailable || props.busy
@@ -175,7 +158,12 @@ export const SearchForm: Component<{
           </div>
         </Show>
       </div>
-      <p id="search-help" class="mt-2 text-center text-xs text-vesper-dim sm:text-left">
+      <p
+        id="search-help"
+        class={`mt-2 text-center text-xs text-vesper-dim sm:text-left ${
+          props.home || props.mode !== "search" || props.selectedChannelName ? "" : "sr-only"
+        }`}
+      >
         <Show
           when={!props.selectedChannelName}
           fallback={`Searching only ${props.selectedChannelName}. Go back to search every channel.`}
@@ -186,8 +174,8 @@ export const SearchForm: Component<{
               <>No indexed creator matches this handle. Press Enter to request indexing approval.</>
             }
           >
-            Search everything, select a creator, or begin with{" "}
-            <span class="text-vesper-yellow">@</span> to filter by channel.
+            Search every transcript, or start with <span class="text-vesper-yellow">@</span> to pick
+            a creator.
           </Show>
         </Show>
       </p>

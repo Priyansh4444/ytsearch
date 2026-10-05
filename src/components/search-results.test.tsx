@@ -71,7 +71,9 @@ describe("SearchResults sections", () => {
         ])}
         youtuber=""
         page={1}
+        sort="relevance"
         onPageChange={() => undefined}
+        onSortChange={() => undefined}
       />
     ));
 
@@ -79,12 +81,8 @@ describe("SearchResults sections", () => {
     // every unknown after every video; a single shared bucket would interleave
     // them and shift the per-section rank values.
     expect(renderedCardIds()).toEqual(["video-v1", "video-v2", "video-u1", "video-u2", "video-s1"]);
-    expect(
-      screen.getByRole("heading", { name: /^Videos · 4 on current page$/ }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { name: /^Shorts · 1 on current page$/ }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^Videos · 4$/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^Shorts · 1$/ })).toBeInTheDocument();
   });
 
   test("keeps the Videos section for unknown-only pages and omits an empty Shorts section", () => {
@@ -93,14 +91,14 @@ describe("SearchResults sections", () => {
         response={response([video("u1", "unknown")])}
         youtuber=""
         page={1}
+        sort="relevance"
         onPageChange={() => undefined}
+        onSortChange={() => undefined}
       />
     ));
 
     expect(renderedCardIds()).toEqual(["video-u1"]);
-    expect(
-      screen.getByRole("heading", { name: /^Videos · 1 on current page$/ }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^Videos · 1$/ })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /^Shorts/ })).not.toBeInTheDocument();
   });
 
@@ -110,15 +108,15 @@ describe("SearchResults sections", () => {
         response={response([video("s1", "short")])}
         youtuber=""
         page={1}
+        sort="relevance"
         onPageChange={() => undefined}
+        onSortChange={() => undefined}
       />
     ));
 
     expect(renderedCardIds()).toEqual(["video-s1"]);
     expect(screen.queryByRole("heading", { name: /^Videos/ })).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { name: /^Shorts · 1 on current page$/ }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^Shorts · 1$/ })).toBeInTheDocument();
   });
 
   test("shows the empty state for a page with no videos at all", () => {
@@ -136,7 +134,9 @@ describe("search timing", () => {
       <SearchResults
         response={{ ...response([video("a", "video")]), request_duration_ms: 4, edge_cached: true }}
         page={1}
+        sort="relevance"
         onPageChange={() => undefined}
+        onSortChange={() => undefined}
       />
     ));
     expect(screen.getByText(/4 ms request · cached/)).toBeTruthy();

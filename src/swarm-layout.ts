@@ -1,8 +1,6 @@
 type SwarmPosition = {
   x: number;
   y: number;
-  mobileX: number;
-  mobileY: number;
   color: string;
 };
 
@@ -15,12 +13,9 @@ export function ovalSwarmPosition(index: number, total: number): SwarmPosition {
   const angle = (Math.floor(index / 2) / ringCount) * Math.PI * 2 - Math.PI / 2 + ring * 0.09;
   const radiusX = ring === 0 ? 44 : 36;
   const radiusY = ring === 0 ? 43 : 35;
-  const mobile = mobilePosition(index, total);
   return {
     x: round(50 + Math.cos(angle) * radiusX),
     y: round(50 + Math.sin(angle) * radiusY),
-    mobileX: mobile.x,
-    mobileY: mobile.y,
     color: VESPER_SWARM_COLORS[index % VESPER_SWARM_COLORS.length] ?? VESPER_SWARM_COLORS[0],
   };
 }
@@ -34,16 +29,6 @@ export function magneticOffset(deltaX: number, deltaY: number) {
   const distance = Math.sqrt(d2);
   const pull = (1 - distance / 220) ** 2 * 0.6;
   return { x: round(deltaX * pull), y: round(deltaY * pull) };
-}
-
-function mobilePosition(index: number, total: number) {
-  const itemsPerRow = 7;
-  const row = Math.floor(index / itemsPerRow);
-  const column = index % itemsPerRow;
-  const rowCount = Math.min(itemsPerRow, total - row * itemsPerRow);
-  const yPositions = [7, 18, 29, 71, 82, 93];
-  const x = rowCount === 1 ? 50 : 9 + (column / (rowCount - 1)) * 82;
-  return { x: round(x), y: yPositions[row] ?? 96 };
 }
 
 function round(value: number): number {

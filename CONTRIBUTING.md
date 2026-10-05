@@ -42,7 +42,9 @@ bun run hooks:install     # run the fast gate before each commit
 
 Useful focused commands: `bun run test:frontend:watch`, `bun run check:responsive`
 (mocked browser flows; run `bunx playwright install chromium` once), and
-`bun run perf:frontend` (measures the deployed site). For local deployment
+`bun run perf:frontend` (measures the deployed site). For UI work on real data
+without a local backend, run
+`YTSEARCH_DEV_API=https://ytsearch-api-raw-production.fly.dev bun run dev`. For local deployment
 changes, also verify the clean Compose path and health checks in the
 [self-hosting guide](docs/self-hosting.md).
 

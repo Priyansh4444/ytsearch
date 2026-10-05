@@ -163,6 +163,7 @@ const App: Component = () => {
       response: state.response,
       youtuber: request.youtuber,
       page: page(),
+      sort: request.sort,
     };
   });
   const indexDialogState = createMemo(() => {
@@ -311,20 +312,25 @@ const App: Component = () => {
     writeSearchUrl(request);
   };
 
-  const goToPage = (nextPage: number) => {
+  // Reruns the submitted search (not whatever is typed now) on another page or sort.
+  const resubmit = (nextPage: number, nextSort: SearchSort) => {
     const current = submitted();
     if (!current) return;
-    // Explicit literal: same fields, stable object shape, no spread copy.
     const request: SearchRequest = {
       query: current.query,
       youtuber: current.youtuber,
       page: nextPage,
-      sort: current.sort,
+      sort: nextSort,
     };
     captureSearchSubmitted(request);
     setPage(nextPage);
     setSubmitted(request);
     writeSearchUrl(request);
+  };
+  const goToPage = (nextPage: number) => resubmit(nextPage, submitted()?.sort ?? sort());
+  const changeSort = (nextSort: SearchSort) => {
+    setSort(nextSort);
+    resubmit(1, nextSort);
   };
 
   const goBack = () => {
@@ -453,7 +459,9 @@ const App: Component = () => {
 
   return (
     <main class="flex min-h-svh flex-col overflow-clip bg-vesper-bg text-vesper-text">
-      <h1 class="sr-only">Search YouTube transcripts</h1>
+      <Show when={hasSearchSurface()}>
+        <h1 class="sr-only">Search YouTube transcripts</h1>
+      </Show>
       <div class="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 px-4 py-4 [padding-bottom:calc(1rem+env(safe-area-inset-bottom))] sm:px-6 sm:py-6 lg:px-8">
         <section
           class={`relative ${
@@ -480,21 +488,32 @@ const App: Component = () => {
             </Loading>
           </Show>
 
+          <Show when={!hasSearchSurface()}>
+            {/* Above the desktop ring but transparent to the pointer, so it
+                never blocks the avatars around it. */}
+            <div class="pointer-events-none relative z-10 text-center">
+              <h1 class="text-3xl font-semibold tracking-tight text-white">ytsearch</h1>
+              <p class="mt-1 text-sm text-vesper-muted">
+                Find the moment a creator said it, across every indexed video.
+              </p>
+            </div>
+          </Show>
+
           <SearchForm
             query={query()}
-            sort={sort()}
             searchAvailable={availability().search_enabled}
             busy={search().status === "loading"}
             home={!hasSearchSurface()}
             selectedChannelName={selectedChannel()?.name}
             mode={formMode()}
             onQueryInput={setQuery}
-            onSortChange={setSort}
             onSubmit={submitFirstPage}
             channelSuggestions={channelSuggestions()}
             onChannelSelect={selectChannel}
           />
-          <AvailabilityNotice availability={availability()} />
+          <Show when={!hasSearchSurface() || availability().status !== "ready"}>
+            <AvailabilityNotice availability={availability()} />
+          </Show>
           <Show when={!hasSearchSurface() && recentSearches().length > 0}>
             <Loading>
               <RecentSearches
@@ -542,7 +561,9 @@ const App: Component = () => {
                   response={result.response}
                   youtuber={result.youtuber}
                   page={result.page}
+                  sort={result.sort}
                   onPageChange={goToPage}
+                  onSortChange={changeSort}
                 />
               </Loading>
             )}
@@ -576,7 +597,7 @@ const App: Component = () => {
       <Show when={indexingNotice()} keyed>
         {(notice) => (
           <div
-            class="fixed inset-x-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-50 flex items-center gap-3 border border-vesper-green bg-vesper-panel px-4 py-3 text-sm text-white shadow-xl sm:end-5 sm:inset-x-auto sm:max-w-[calc(100vw-2.5rem)]"
+            class="fixed start-3 bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-50 flex max-w-[calc(100vw-1.5rem)] items-center gap-2 border border-vesper-green bg-vesper-panel px-3 py-1.5 text-xs text-white shadow-xl sm:start-auto sm:end-5 sm:gap-3 sm:px-4 sm:py-3 sm:text-sm"
             role="status"
           >
             <ChannelAvatar channel={notice.channel} size="compact" />

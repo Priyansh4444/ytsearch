@@ -264,6 +264,24 @@ test("a playing video survives the periodic availability refresh", async ({ page
   expect(api.searchRequests()).toBe(1);
 });
 
+test("changing the sort re-sorts the submitted search", async ({ page }) => {
+  await page.goto("/?q=rust+testing");
+  await expect(page.getByRole("link", { name: /Reliable Rust testing/ })).toBeVisible();
+  // Typing a new query without submitting must not leak into the re-sort.
+  await page.getByRole("combobox", { name: "Search transcripts" }).fill("unsubmitted");
+
+  const resorted = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/search" && url.searchParams.get("sort") === "published_desc";
+  });
+  await page.getByLabel("Sort results").selectOption("published_desc");
+
+  const url = new URL((await resorted).url());
+  expect(url.searchParams.get("q")).toBe("rust testing");
+  expect(url.searchParams.get("page")).toBe("1");
+  await expect(page).toHaveURL(/sort=published_desc/);
+});
+
 test("searches battery gate within @t3dotgg", async ({ page }) => {
   const searchRequest = page.waitForRequest((request) => {
     const url = new URL(request.url());
@@ -421,7 +439,8 @@ for (const viewport of [
   test(`home page has no phantom scrollbar on ${viewport.name}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto("/");
-    await expect(page.getByText("Example Creator").first()).toBeVisible();
+    // Phones show avatars only, so match the creator link's accessible name.
+    await expect(page.getByRole("link", { name: "Search Example Creator" })).toBeVisible();
 
     const dimensions = await page.evaluate(() => ({
       clientHeight: document.documentElement.clientHeight,
