@@ -198,36 +198,45 @@ pub(super) fn apply_bigram_proximity(
             .ok()
             .and_then(|index| title.get(index));
         let ordered = text_posting.is_some() || title_posting.is_some();
-        if ordered {
-            let text_multiplier = text_posting
-                .map(|posting| {
-                    proximity_multiplier(
-                        PositionalWindow {
-                            displacement: 0,
-                            max_offset: posting.earliest_end_offset,
-                        },
-                        2,
-                        prioritize_position,
-                    )
-                })
-                .unwrap_or(1.0);
-            let title_multiplier = title_posting
-                .map(|posting| {
-                    proximity_multiplier(
-                        PositionalWindow {
-                            displacement: 0,
-                            max_offset: posting.earliest_end_offset,
-                        },
-                        2,
-                        prioritize_position,
-                    )
-                })
-                .unwrap_or(1.0);
-            candidate.score *= text_multiplier.max(title_multiplier) * ORDERED_PHRASE_MULTIPLIER;
-        }
-        candidate.set_ordered_phrase(ordered);
+        let adjacent = |posting: &bigram::BigramPosting| PositionalWindow {
+            displacement: 0,
+            max_offset: posting.earliest_end_offset,
+        };
+        apply_proximity_score(
+            candidate,
+            text_posting.map(adjacent),
+            title_posting.map(adjacent),
+            2,
+            prioritize_position,
+            ordered,
+        );
     }
     Ok(())
+}
+
+/// Multiplies `candidate`'s score by the stronger of its field proximity
+/// boosts and, for an ordered phrase, the phrase multiplier. A field without a
+/// window contributes 1.0.
+pub(super) fn apply_proximity_score(
+    candidate: &mut DocMatch,
+    text: Option<PositionalWindow>,
+    title: Option<PositionalWindow>,
+    tokens: usize,
+    prioritize_position: bool,
+    ordered: bool,
+) {
+    let multiplier = |window: Option<PositionalWindow>| {
+        window.map_or(1.0, |window| {
+            proximity_multiplier(window, tokens, prioritize_position)
+        })
+    };
+    candidate.score *= multiplier(text).max(multiplier(title))
+        * if ordered {
+            ORDERED_PHRASE_MULTIPLIER
+        } else {
+            1.0
+        };
+    candidate.set_ordered_phrase(ordered);
 }
 
 pub(super) fn intersect_all_borrowed(lists: &[Vec<DocMatch>]) -> Vec<DocMatch> {
@@ -314,40 +323,36 @@ pub(super) fn union_all(mut lists: Vec<Vec<DocMatch>>) -> Vec<DocMatch> {
 }
 
 pub(super) fn union_sorted_ids(left: Vec<u32>, right: Vec<u32>) -> Vec<u32> {
-    if left.is_empty() {
-        return right;
-    }
-    if right.is_empty() {
-        return left;
-    }
-    let mut output = Vec::with_capacity(left.len().saturating_add(right.len()));
-    let mut left = left.into_iter().peekable();
-    let mut right = right.into_iter().peekable();
-    loop {
-        match (left.peek(), right.peek()) {
-            (Some(left_value), Some(right_value)) => match left_value.cmp(right_value) {
-                Ordering::Less => output.push(left.next().expect("peeked left")),
-                Ordering::Greater => output.push(right.next().expect("peeked right")),
-                Ordering::Equal => {
-                    output.push(left.next().expect("peeked left"));
-                    right.next();
-                }
-            },
-            (Some(_), None) => {
-                output.extend(left);
-                break;
-            }
-            (None, Some(_)) => {
-                output.extend(right);
-                break;
-            }
-            (None, None) => break,
-        }
-    }
-    output
+    merge_sorted(left, right, |id| *id, |left, _| left)
 }
 
 pub(super) fn union_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec<DocMatch> {
+    merge_sorted(
+        left,
+        right,
+        |candidate| candidate.document(),
+        |left, right| {
+            let mut combined = DocMatch::new(
+                left.document(),
+                left.score + right.score,
+                left.matches_text() || right.matches_text(),
+            );
+            combined.set_exact_mask(left.exact_mask() | right.exact_mask());
+            combined
+                .set_all_retained_exact(left.all_retained_exact() || right.all_retained_exact());
+            combined
+        },
+    )
+}
+
+/// Merges two lists sorted by `key`, combining the two items of a shared key.
+#[inline]
+fn merge_sorted<T>(
+    left: Vec<T>,
+    right: Vec<T>,
+    key: impl Fn(&T) -> u32,
+    combine: impl Fn(T, T) -> T,
+) -> Vec<T> {
     if left.is_empty() {
         return right;
     }
@@ -359,26 +364,15 @@ pub(super) fn union_sorted(left: Vec<DocMatch>, right: Vec<DocMatch>) -> Vec<Doc
     let mut right = right.into_iter().peekable();
     loop {
         match (left.peek(), right.peek()) {
-            (Some(left_value), Some(right_value)) => {
-                match left_value.document().cmp(&right_value.document()) {
-                    Ordering::Less => output.push(left.next().expect("peeked left")),
-                    Ordering::Greater => output.push(right.next().expect("peeked right")),
-                    Ordering::Equal => {
-                        let left_value = left.next().expect("peeked left");
-                        let right_value = right.next().expect("peeked right");
-                        let mut combined = DocMatch::new(
-                            left_value.document(),
-                            left_value.score + right_value.score,
-                            left_value.matches_text() || right_value.matches_text(),
-                        );
-                        combined.set_exact_mask(left_value.exact_mask() | right_value.exact_mask());
-                        combined.set_all_retained_exact(
-                            left_value.all_retained_exact() || right_value.all_retained_exact(),
-                        );
-                        output.push(combined);
-                    }
+            (Some(left_value), Some(right_value)) => match key(left_value).cmp(&key(right_value)) {
+                Ordering::Less => output.push(left.next().expect("peeked left")),
+                Ordering::Greater => output.push(right.next().expect("peeked right")),
+                Ordering::Equal => {
+                    let left_value = left.next().expect("peeked left");
+                    let right_value = right.next().expect("peeked right");
+                    output.push(combine(left_value, right_value));
                 }
-            }
+            },
             (Some(_), None) => {
                 output.extend(left);
                 break;

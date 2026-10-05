@@ -1051,28 +1051,25 @@ impl RawSearchEngine {
                 ),
             };
         for candidate in matches {
-            let text_multiplier = candidate
+            let text_window = candidate
                 .matches_text()
                 .then(|| positional_window(&text_windows, candidate.document()))
-                .flatten()
-                .map(|window| proximity_multiplier(window, terms.len(), fields.prioritize_position))
-                .unwrap_or(1.0);
+                .flatten();
             let record = self.inner.metadata.document(candidate.document())?;
-            let title_multiplier = positional_window(&title_windows, record.video)
-                .map(|window| proximity_multiplier(window, terms.len(), fields.prioritize_position))
-                .unwrap_or(1.0);
+            let title_window = positional_window(&title_windows, record.video);
             let ordered = ordered_phrases
                 .documents
                 .binary_search(&candidate.document())
                 .is_ok()
                 || ordered_phrases.videos.binary_search(&record.video).is_ok();
-            candidate.score *= text_multiplier.max(title_multiplier)
-                * if ordered {
-                    ORDERED_PHRASE_MULTIPLIER
-                } else {
-                    1.0
-                };
-            candidate.set_ordered_phrase(ordered);
+            apply_proximity_score(
+                candidate,
+                text_window,
+                title_window,
+                terms.len(),
+                fields.prioritize_position,
+                ordered,
+            );
         }
         Ok(())
     }
@@ -1088,12 +1085,7 @@ impl RawSearchEngine {
         let terms = &terms[..terms.len().min(MAX_PROXIMITY_TOKENS)];
         let sequence = &sequence[..sequence.len().min(MAX_PROXIMITY_TOKENS)];
         for candidate in matches {
-            let record = self.inner.metadata.document(candidate.document())?;
-            let video = self
-                .inner
-                .videos
-                .get(record.video as usize)
-                .ok_or_else(|| Error::Corrupt("document video is out of bounds".to_string()))?;
+            let (_, video) = self.document_video(candidate.document())?;
             let document = self.document_value(candidate.document(), cache)?;
             let text_summary = if fields.text && candidate.matches_text() {
                 document
@@ -1106,23 +1098,16 @@ impl RawSearchEngine {
             let title_summary = fields
                 .title
                 .then(|| positional_summary(&video.title, terms, sequence));
-            let text_multiplier = text_summary
-                .and_then(|summary| summary.window)
-                .map(|window| proximity_multiplier(window, terms.len(), fields.prioritize_position))
-                .unwrap_or(1.0);
-            let title_multiplier = title_summary
-                .and_then(|summary| summary.window)
-                .map(|window| proximity_multiplier(window, terms.len(), fields.prioritize_position))
-                .unwrap_or(1.0);
             let ordered = text_summary.is_some_and(|summary| summary.ordered)
                 || title_summary.is_some_and(|summary| summary.ordered);
-            candidate.score *= text_multiplier.max(title_multiplier)
-                * if ordered {
-                    ORDERED_PHRASE_MULTIPLIER
-                } else {
-                    1.0
-                };
-            candidate.set_ordered_phrase(ordered);
+            apply_proximity_score(
+                candidate,
+                text_summary.and_then(|summary| summary.window),
+                title_summary.and_then(|summary| summary.window),
+                terms.len(),
+                fields.prioritize_position,
+                ordered,
+            );
         }
         Ok(())
     }
@@ -1395,16 +1380,15 @@ impl RawSearchEngine {
         self.matches_for_entry(entry, fields)
     }
 
+    fn average_documents_per_video(&self) -> u32 {
+        let manifest = &self.inner.manifest;
+        manifest.documents.checked_div(manifest.videos).unwrap_or(0)
+    }
+
     fn matches_for_entry(&self, entry: TermEntry, fields: QueryFields) -> Result<Vec<DocMatch>> {
-        let average_documents_per_video = self
-            .inner
-            .manifest
-            .documents
-            .checked_div(self.inner.manifest.videos)
-            .unwrap_or(0);
         let effective_title_documents = entry
             .title_frequency
-            .saturating_mul(average_documents_per_video);
+            .saturating_mul(self.average_documents_per_video());
         let effective_frequency = entry
             .text_frequency
             .saturating_add(effective_title_documents)
@@ -1473,14 +1457,11 @@ impl RawSearchEngine {
         prioritize_position: bool,
         exact_mask: u8,
     ) -> Result<Vec<DocMatch>> {
-        let average_docs = self
-            .inner
-            .manifest
-            .documents
-            .checked_div(self.inner.manifest.videos)
-            .unwrap_or(0);
-        let mut matches =
-            Vec::with_capacity((entry.title_frequency.saturating_mul(average_docs)) as usize);
+        let mut matches = Vec::with_capacity(
+            entry
+                .title_frequency
+                .saturating_mul(self.average_documents_per_video()) as usize,
+        );
         self.visit_title_postings(entry, prioritize_position, |posting| {
             let score = posting.score(idf, prioritize_position);
             for &document in &self.inner.videos[posting.video as usize].documents {
@@ -1649,12 +1630,7 @@ impl RawSearchEngine {
         }
 
         let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
-        let full_exact_mask = plans
-            .iter()
-            .flat_map(|plan| &plan.alternatives)
-            .fold(0_u8, |mask, alternative| {
-                mask | alternative.fields.exact_mask
-            });
+        let full_exact_mask = plans.iter().fold(0, |mask, plan| mask | plan.exact_mask());
         // Schema 9 answers a complete broad search without scoring every
         // match; the other dispositions keep the scan below.
         if let Some(order) = broad_fast::accelerated_group_order(params.sort_by.as_deref())
@@ -1751,9 +1727,7 @@ impl RawSearchEngine {
         }
 
         let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
-        let dominant_exact_mask = plan.alternatives.iter().fold(0_u8, |mask, alternative| {
-            mask | alternative.fields.exact_mask
-        });
+        let dominant_exact_mask = plan.exact_mask();
         if let Some(order) = broad_fast::accelerated_group_order(params.sort_by.as_deref())
             && let Some(analysis) = self.analyze_broad_plans(&plans, order)?
         {
@@ -1805,23 +1779,6 @@ impl RawSearchEngine {
         let mut groups = Vec::new();
         groups.resize_with(self.inner.videos.len(), || None);
         groups
-    }
-
-    fn record_group_match(
-        &self,
-        groups: &mut [Option<VideoMatches>],
-        candidate: DocMatch,
-        record: DocumentRecord,
-        hits_per_group: usize,
-    ) -> Result<()> {
-        self.record_group_match_values(
-            groups,
-            candidate,
-            record.video,
-            record.t_start_ms,
-            hits_per_group,
-            None,
-        )
     }
 
     fn record_group_match_values(
@@ -1964,16 +1921,18 @@ impl RawSearchEngine {
         // table avoids hashing every matching transcript chunk on broad queries.
         let mut groups = self.empty_group_slots();
         for candidate in matches {
-            let record = self.inner.metadata.document(candidate.document())?;
-            let Some(video) = self.inner.videos.get(record.video as usize) else {
-                return Err(Error::Corrupt(
-                    "document video is out of bounds".to_string(),
-                ));
-            };
+            let (record, video) = self.document_video(candidate.document())?;
             if !video_matches_filter(video, filter) {
                 continue;
             }
-            self.record_group_match(&mut groups, candidate, record, hits_per_group)?;
+            self.record_group_match_values(
+                &mut groups,
+                candidate,
+                record.video,
+                record.t_start_ms,
+                hits_per_group,
+                None,
+            )?;
         }
         self.format_group_slots(params, highlight_groups, groups, cache)
     }
@@ -1989,12 +1948,7 @@ impl RawSearchEngine {
         let mut filtered = Vec::with_capacity(matches.len());
         let mut moment_counts = HashMap::<u32, MomentCounter>::new();
         for candidate in matches {
-            let record = self.inner.metadata.document(candidate.document())?;
-            let video = self
-                .inner
-                .videos
-                .get(record.video as usize)
-                .ok_or_else(|| Error::Corrupt("document video is out of bounds".to_string()))?;
+            let (record, video) = self.document_video(candidate.document())?;
             if video_matches_filter(video, filter) {
                 if candidate.matches_text() {
                     moment_counts
@@ -2156,11 +2110,7 @@ impl RawSearchEngine {
             .filter(|document| {
                 excluded_documents.binary_search(document).is_err()
                     && self
-                        .inner
-                        .metadata
-                        .document(*document)
-                        .ok()
-                        .and_then(|record| self.inner.videos.get(record.video as usize))
+                        .video_for_document(*document)
                         .is_some_and(|video| video_matches_filter(video, filter))
             })
             .collect::<Vec<_>>();
@@ -2194,6 +2144,18 @@ impl RawSearchEngine {
             "out_of": self.inner.manifest.documents,
             "hits": hits,
         }))
+    }
+
+    /// Returns a document's metadata record and the video it belongs to.
+    #[inline]
+    fn document_video(&self, document: u32) -> Result<(DocumentRecord, &VideoMeta)> {
+        let record = self.inner.metadata.document(document)?;
+        let video = self
+            .inner
+            .videos
+            .get(record.video as usize)
+            .ok_or_else(|| Error::Corrupt("document video is out of bounds".to_string()))?;
+        Ok((record, video))
     }
 
     fn video_for_document(&self, document: u32) -> Option<&VideoMeta> {

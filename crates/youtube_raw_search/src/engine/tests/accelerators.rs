@@ -363,10 +363,7 @@ fn compare_accelerated_pages(nine: &RawSearchEngine) {
             continue;
         }
         plans.sort_unstable_by_key(|plan| plan.estimated_documents);
-        let dominant = plans
-            .iter()
-            .flat_map(|plan| &plan.alternatives)
-            .fold(0, |mask, alternative| mask | alternative.fields.exact_mask);
+        let dominant = plans.iter().fold(0, |mask, plan| mask | plan.exact_mask());
         for sort in sorts {
             let order = broad_fast::accelerated_group_order(sort).expect("supported");
             let Some(analysis) = nine.analyze_broad_plans(&plans, order).expect("analysis") else {
@@ -477,10 +474,7 @@ fn measure_accelerated_broad_relevance() {
             }
             analysis.window_bounds = bounds;
         }
-        let dominant = plans
-            .iter()
-            .flat_map(|plan| &plan.alternatives)
-            .fold(0, |mask, alternative| mask | alternative.fields.exact_mask);
+        let dominant = plans.iter().fold(0, |mask, plan| mask | plan.exact_mask());
         let started = std::time::Instant::now();
         engine
             .accelerated_broad_page(

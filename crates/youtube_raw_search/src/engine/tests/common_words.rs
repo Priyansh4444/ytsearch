@@ -131,12 +131,8 @@ fn common_word_streaming_reducer_matches_independent_materialized_json() {
                     .conjunction_plans(&ordered_tokens(query), fields, true, 0)
                     .expect("plans");
                 plans.sort_unstable_by_key(|plan| plan.estimated_documents);
-                let dominant_exact_mask = plans
-                    .iter()
-                    .flat_map(|plan| &plan.alternatives)
-                    .fold(0_u8, |mask, alternative| {
-                        mask | alternative.fields.exact_mask
-                    });
+                let dominant_exact_mask =
+                    plans.iter().fold(0, |mask, plan| mask | plan.exact_mask());
                 let materialized = intersect_all_borrowed(
                     &plans
                         .iter()

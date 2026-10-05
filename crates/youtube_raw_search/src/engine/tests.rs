@@ -1862,9 +1862,7 @@ fn streaming_single_plan_group_accumulation_matches_materialized_response() {
         .expect("materialized response");
 
     let hits_per_group = usize::from(params.group_limit.expect("group limit"));
-    let dominant_exact_mask = plan.alternatives.iter().fold(0_u8, |mask, alternative| {
-        mask | alternative.fields.exact_mask
-    });
+    let dominant_exact_mask = plan.exact_mask();
     let mut groups = engine.empty_group_slots();
     engine
         .visit_term_plan(plan, |candidate, record| {
