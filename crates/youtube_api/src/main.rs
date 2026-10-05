@@ -11,13 +11,11 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
-#[cfg(test)]
-use channel_images::is_allowed_youtube_image_url;
 use channel_images::{ChannelImageCache, is_valid_channel_id, resized_youtube_image_url};
 use index_queue::{IndexActivity, IndexQueue, IndexQueueItem, new_index_request_id};
 use rate_limit::RateLimiter;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     cmp::Reverse,
     collections::{HashMap, HashSet},
@@ -43,10 +41,10 @@ const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8787";
 const DEFAULT_PER_PAGE: u8 = 20;
 const MAX_PER_PAGE: u8 = 100;
 const MERGE_TRANSCRIPT_HIT_WINDOW_MS: u32 = 20_000;
-const MAX_SEARCH_PAGE_FETCHES: u32 = 10;
+const VIDEO_SCOPE_PAGE_SIZE: u8 = 250;
+const VIDEO_SCOPE_MAX_PAGE_FETCHES: u32 = 100;
 const INITIAL_GROUP_LIMIT: u8 = 3;
 const CACHE_YOUTUBERS: &str = "public, max-age=30, stale-while-revalidate=300";
-const CACHE_SEARCH: &str = "no-store";
 const CACHE_CHANNEL_IMAGE: &str = "public, max-age=86400, stale-while-revalidate=604800";
 const CACHE_NO_STORE: &str = "no-store";
 const DEFAULT_SEARCH_RATE_LIMIT_PER_MINUTE: usize = 120;
@@ -75,16 +73,6 @@ struct AppState {
 enum RelevanceOrdering {
     Backend,
     ApiHeuristic,
-}
-
-impl RelevanceOrdering {
-    fn from_preserve_backend_flag(preserve: bool) -> Self {
-        if preserve {
-            Self::Backend
-        } else {
-            Self::ApiHeuristic
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -136,9 +124,14 @@ struct IndexQueueListResponse {
     requests: Vec<IndexQueueItem>,
 }
 
+#[derive(Debug, Deserialize)]
+struct IndexRequestStatusInput {
+    status: String,
+}
+
 #[derive(Debug, Serialize)]
-struct SearchResponse {
-    query: String,
+struct SearchResponse<'a> {
+    query: &'a str,
     total_moments: u64,
     total_videos: u64,
     totals_approximate: bool,
@@ -150,8 +143,8 @@ struct SearchResponse {
     sort: SearchSort,
     mode: &'static str,
     has_next_page: bool,
-    hits: Vec<SearchHit>,
-    videos: Vec<SearchVideoResult>,
+    hits: Vec<&'a SearchHit>,
+    videos: &'a [SearchVideoResult],
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -167,7 +160,7 @@ enum SearchSort {
     PublishedAsc,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct SearchHit {
     id: String,
     video_id: String,
@@ -202,7 +195,7 @@ struct SearchHit {
     group_match_count: Option<usize>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct SearchVideoResult {
     video_id: String,
     title: String,
@@ -226,7 +219,7 @@ struct SearchVideoResult {
     hits: Vec<SearchHit>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Debug, Serialize)]
 struct SearchLogEvent {
     event: &'static str,
     backend: String,
@@ -256,14 +249,14 @@ struct SearchLogEvent {
     cache_control: &'static str,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum MatchKind {
     Transcript,
     Title,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ContentKind {
     Video,
@@ -322,10 +315,11 @@ async fn main() -> Result<(), ApiError> {
         search: search_client,
         backend_label: env::var("YTSEARCH_BACKEND_LABEL").unwrap_or_else(|_| "raw".to_string()),
         engagement_sorts_enabled: env_bool("YTSEARCH_ENGAGEMENT_SORTS", false),
-        relevance_ordering: RelevanceOrdering::from_preserve_backend_flag(env_bool(
-            "YTSEARCH_PRESERVE_BACKEND_RELEVANCE_ORDER",
-            false,
-        )),
+        relevance_ordering: if env_bool("YTSEARCH_PRESERVE_BACKEND_RELEVANCE_ORDER", false) {
+            RelevanceOrdering::Backend
+        } else {
+            RelevanceOrdering::ApiHeuristic
+        },
         axiom,
         rate_limiter: Arc::new(Mutex::new(RateLimiter::default())),
         search_rate_limit_per_minute: env_usize(
@@ -434,7 +428,7 @@ fn browser_origin_allowed(origin: &HeaderValue, configured: &[String]) -> bool {
 }
 
 async fn health() -> Response {
-    cache_response(CACHE_NO_STORE, Json(serde_json::json!({ "ok": true })))
+    no_store_json(json!({ "ok": true }))
 }
 
 async fn youtubers_handler(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
@@ -483,10 +477,13 @@ async fn channel_image_handler(
     let content_type = upstream
         .headers()
         .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| value.starts_with("image/"))
-        .unwrap_or("image/jpeg")
-        .to_string();
+        .filter(|value| {
+            value
+                .to_str()
+                .is_ok_and(|value| value.starts_with("image/"))
+        })
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("image/jpeg"));
     if upstream
         .content_length()
         .is_some_and(|length| length > 2_000_000)
@@ -501,17 +498,10 @@ async fn channel_image_handler(
         return Err(ApiError::ChannelImage("image is too large".to_string()));
     }
 
-    let mut response = bytes.into_response();
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(&content_type)
-            .unwrap_or_else(|_| HeaderValue::from_static("image/jpeg")),
-    );
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static(CACHE_CHANNEL_IMAGE),
-    );
-    Ok(response)
+    Ok(cache_response(
+        CACHE_CHANNEL_IMAGE,
+        ([(header::CONTENT_TYPE, content_type)], bytes),
+    ))
 }
 
 async fn search_handler(
@@ -519,14 +509,13 @@ async fn search_handler(
     headers: HeaderMap,
     Query(params): Query<SearchParams>,
 ) -> Result<Response, ApiError> {
-    if state.search_rate_limit_per_minute > 0 {
-        let client = client_key(&headers);
-        state.rate_limiter.lock().await.allow(
-            format!("search:{client}"),
-            state.search_rate_limit_per_minute,
-            Duration::from_secs(60),
-        )?;
-    }
+    rate_limit(
+        &state,
+        &headers,
+        "search",
+        state.search_rate_limit_per_minute,
+    )
+    .await?;
     let query = params.q.trim();
     if query.is_empty() {
         return Err(ApiError::EmptyQuery);
@@ -543,35 +532,31 @@ async fn search_handler(
         sort = SearchSort::PublishedDesc;
     }
     let search_started = Instant::now();
+    // A video-scoped request loads every matching moment of one video. Any
+    // other request lets the backend paginate video cards, so long transcripts
+    // cannot crowd other videos out of the result window.
     let video_scope = params.video_id.is_some();
-    // Let the backend paginate video cards so long transcripts cannot crowd all
-    // other videos out of the bounded result window. A video-scoped request is
-    // the exception because it intentionally loads every matching moment.
-    let use_backend_grouping = !video_scope;
-    let search_page_size = if video_scope {
-        250
-    } else if use_backend_grouping {
-        per_page.saturating_add(1)
-    } else {
-        per_page.saturating_mul(8).min(MAX_PER_PAGE)
-    };
     let requested_offset = (page - 1).saturating_mul(u32::from(per_page));
-    let search_backend_page = if use_backend_grouping { page } else { 1 };
-    let local_offset = if use_backend_grouping {
-        0
+    let (search_backend_page, search_page_size) = if video_scope {
+        (1, VIDEO_SCOPE_PAGE_SIZE)
     } else {
-        requested_offset as usize
+        (page, per_page.saturating_add(1))
     };
     let backend_query = if low_signal_query { "*" } else { query };
     let mut search_query = TextSearchQuery::new(backend_query)
         .query_by("text,title")
         .highlight_fields("text,title");
-    search_query = if use_backend_grouping {
-        search_query.window(requested_offset, search_page_size)
-    } else {
+    search_query = if video_scope {
         search_query
             .per_page(search_page_size)
             .page(search_backend_page)
+            .without_grouping()
+    } else {
+        // Cards render three moments and load the rest on demand; Raw's group
+        // `found` preserves the true count.
+        search_query
+            .window(requested_offset, search_page_size)
+            .group_limit(INITIAL_GROUP_LIMIT)
     };
     search_query = match sort {
         SearchSort::PublishedDesc => search_query.sort_by("published_at_timestamp:desc"),
@@ -582,16 +567,6 @@ async fn search_handler(
         SearchSort::CommentsDesc => search_query.sort_by("comment_count:desc"),
         SearchSort::Relevance => search_query,
     };
-    if use_backend_grouping {
-        // The card renders three moments initially and lazily loads the full
-        // video on demand. Fetching five inflated broad-query payloads without
-        // improving first paint; Raw's group `found` preserves the true count.
-        search_query = search_query
-            .group_by("video_id")
-            .group_limit(INITIAL_GROUP_LIMIT);
-    } else {
-        search_query = search_query.without_grouping();
-    }
     tracing::info!(
         query,
         per_page,
@@ -603,20 +578,10 @@ async fn search_handler(
         "search request"
     );
 
-    if let Some(youtuber) = params
-        .youtuber
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(youtuber) = non_empty(params.youtuber.as_deref()) {
         search_query = search_query.youtuber_handle(normalize_handle(youtuber));
     }
-    if let Some(video_id) = params
-        .video_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(video_id) = non_empty(params.video_id.as_deref()) {
         if !video_id
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
@@ -629,60 +594,59 @@ async fn search_handler(
     let first_backend_started = Instant::now();
     let mut first_raw = state.search.search(&search_query).await?;
     let first_backend_search_ms = first_backend_started.elapsed().as_millis() as u64;
-    let backend_found = backend_found(&first_raw);
-    let backend_total_moments = backend_total_moments(&first_raw);
-    let total_videos = if use_backend_grouping {
-        backend_found
-    } else {
+    let backend_found = raw_u64(&first_raw, "found").unwrap_or_default();
+    let backend_total_moments = raw_u64(&first_raw, "total_moments");
+    let out_of = raw_u64(&first_raw, "out_of").unwrap_or_default();
+    let total_videos = if video_scope {
         u64::from(backend_found > 0)
+    } else {
+        backend_found
     };
-    let out_of = backend_out_of(&first_raw);
     let grouped_has_next_page =
-        use_backend_grouping && truncate_grouped_lookahead(&mut first_raw, per_page);
+        !video_scope && truncate_grouped_lookahead(&mut first_raw, per_page);
     let processing_started = Instant::now();
-    let mut page_result = collect_visible_videos(
+    let mut timings = SearchCollectionTimings {
+        backend_search_calls: 1,
+        backend_search_ms: first_backend_search_ms,
+        ..SearchCollectionTimings::default()
+    };
+    let (local_offset, max_page_fetches) = if video_scope {
+        (requested_offset as usize, VIDEO_SCOPE_MAX_PAGE_FETCHES)
+    } else {
+        (0, 1)
+    };
+    let hits = collect_hits(
         &state.search,
         &search_query,
         first_raw,
-        search_backend_page,
-        local_offset,
-        per_page,
         search_page_size,
-        sort,
-        query,
-        state.relevance_ordering,
-        1,
-        first_backend_search_ms,
-        if video_scope {
-            100
-        } else if use_backend_grouping {
-            1
-        } else {
-            MAX_SEARCH_PAGE_FETCHES
-        },
+        max_page_fetches,
+        local_offset + usize::from(per_page) + 1,
+        &mut timings,
     )
     .await?;
-    if use_backend_grouping {
-        page_result.has_next_page = grouped_has_next_page;
+    let videos = video_results_from_hits_with_policy(hits, sort, query, state.relevance_ordering);
+    let (videos, mut has_next_page) = page_of_videos(videos, local_offset, per_page);
+    if !video_scope {
+        has_next_page = grouped_has_next_page;
     }
     let result_processing_ms = processing_started.elapsed().as_millis() as u64;
-    let videos = page_result.videos;
     let hits = videos
         .iter()
-        .flat_map(|video| video.hits.iter().cloned())
+        .flat_map(|video| &video.hits)
         .collect::<Vec<_>>();
     let total_moments = backend_total_moments
-        .unwrap_or(if use_backend_grouping {
-            hits.len() as u64
-        } else {
+        .unwrap_or(if video_scope {
             backend_found
+        } else {
+            hits.len() as u64
         })
         .max(hits.len() as u64);
     let response = SearchResponse {
-        query: query.to_string(),
+        query,
         total_moments,
         total_videos: total_videos.max(videos.len() as u64),
-        totals_approximate: use_backend_grouping && backend_total_moments.is_none(),
+        totals_approximate: !video_scope && backend_total_moments.is_none(),
         total_found: total_moments,
         out_of,
         time_to_first_result_ms: first_backend_search_ms,
@@ -690,20 +654,20 @@ async fn search_handler(
         per_page,
         sort,
         mode: "lexical",
-        has_next_page: page_result.has_next_page,
+        has_next_page,
         hits,
-        videos,
+        videos: &videos,
     };
-    let response_body_bytes = serde_json::to_vec(&response).map_or(0, |body| body.len());
+    let body = serde_json::to_vec(&response).map_err(std::io::Error::from)?;
     tracing::info!(
         query,
         found = backend_found,
         returned_videos = response.videos.len(),
         returned_hits = response.hits.len(),
-        backend_search_ms = page_result.timings.backend_search_ms,
+        backend_search_ms = timings.backend_search_ms,
         first_backend_search_ms,
         result_processing_ms,
-        response_body_bytes,
+        response_body_bytes = body.len(),
         "search response"
     );
     if let Some(axiom) = &state.axiom {
@@ -724,20 +688,23 @@ async fn search_handler(
             out_of,
             returned_videos: response.videos.len(),
             returned_hits: response.hits.len(),
-            has_next_page: response.has_next_page,
+            has_next_page,
             duration_ms: search_started.elapsed().as_millis() as u64,
-            backend_search_ms: page_result.timings.backend_search_ms,
+            backend_search_ms: timings.backend_search_ms,
             first_backend_search_ms,
             result_processing_ms,
-            backend_search_calls: page_result.timings.backend_search_calls,
-            backend_raw_hits: page_result.timings.backend_raw_hits,
-            backend_grouped_hits: page_result.timings.backend_grouped_hits,
-            response_body_bytes,
-            cache_control: CACHE_SEARCH,
+            backend_search_calls: timings.backend_search_calls,
+            backend_raw_hits: timings.backend_raw_hits,
+            backend_grouped_hits: timings.backend_grouped_hits,
+            response_body_bytes: body.len(),
+            cache_control: CACHE_NO_STORE,
         });
     }
 
-    Ok(cache_response(CACHE_SEARCH, Json(response)))
+    Ok(cache_response(
+        CACHE_NO_STORE,
+        ([(header::CONTENT_TYPE, "application/json")], body),
+    ))
 }
 
 async fn create_index_request(
@@ -745,40 +712,36 @@ async fn create_index_request(
     headers: HeaderMap,
     Json(input): Json<IndexRequestInput>,
 ) -> Result<Response, ApiError> {
-    if state.index_request_rate_limit_per_minute > 0 {
-        let client = client_key(&headers);
-        state.rate_limiter.lock().await.allow(
-            format!("index-request:{client}"),
-            state.index_request_rate_limit_per_minute,
-            Duration::from_secs(60),
-        )?;
-    }
+    rate_limit(
+        &state,
+        &headers,
+        "index-request",
+        state.index_request_rate_limit_per_minute,
+    )
+    .await?;
     let handle = normalize_handle_checked(&input.handle)?;
-    let requested_at = epoch_seconds();
     let note = normalize_index_request_note(input.note)?;
-    let backends = queue_target_backends(input.backends.as_deref())?;
-    let mut requests = Vec::with_capacity(backends.len());
-    for target_backend in backends {
-        let request = IndexQueueItem {
-            id: new_index_request_id(&target_backend, &handle),
-            handle: handle.clone(),
-            note: note.clone(),
-            requested_at,
+    validate_target_backends(input.backends.as_deref())?;
+    let request = state
+        .index_queue
+        .enqueue(IndexQueueItem {
+            id: new_index_request_id("raw", &handle),
+            handle,
+            note,
+            requested_at: epoch_seconds(),
             source_backend: "raw".to_string(),
-            target_backend: Some(target_backend),
+            target_backend: Some("raw".to_string()),
             status: "pending".to_string(),
-        };
-        requests.push(state.index_queue.enqueue(request).await?);
-    }
-    let request = requests
-        .first()
-        .cloned()
-        .ok_or_else(|| ApiError::Queue("no target backends selected".to_string()))?;
+        })
+        .await?;
     Ok(cache_response(
         CACHE_NO_STORE,
         (
             StatusCode::ACCEPTED,
-            Json(IndexQueueResponse { request, requests }),
+            Json(IndexQueueResponse {
+                requests: vec![request.clone()],
+                request,
+            }),
         ),
     ))
 }
@@ -793,10 +756,7 @@ async fn list_index_requests(
         .index_queue
         .list(params.limit.unwrap_or(100).clamp(1, 1000))
         .await?;
-    Ok(cache_response(
-        CACHE_NO_STORE,
-        Json(IndexQueueListResponse { requests }),
-    ))
+    Ok(no_store_json(IndexQueueListResponse { requests }))
 }
 
 async fn index_status(
@@ -808,61 +768,58 @@ async fn index_status(
         .as_deref()
         .map(normalize_handle_checked)
         .transpose()?;
-    let activity = state.index_queue.activity().await?;
-    if let Some(activity) = activity.filter(|activity| {
-        handle
-            .as_ref()
-            .is_none_or(|handle| activity.handle == *handle)
-    }) {
-        let channel = state
-            .search
-            .list_youtubers()
-            .await?
-            .into_iter()
-            .find(|channel| channel.handle.eq_ignore_ascii_case(&activity.handle));
-        return Ok(cache_response(
-            CACHE_NO_STORE,
-            Json(serde_json::json!({
-                "handle": activity.handle,
-                "status": "running",
-                "request_id": format!("active-{}", activity.started_at),
-                "target_backend": activity.target_backend,
-                "channel": channel,
-            })),
-        ));
-    }
-    let request = state
+    let wanted = |candidate: &str| handle.as_deref().is_none_or(|handle| candidate == handle);
+    let (status_handle, status, request_id, target_backend) = if let Some(activity) = state
         .index_queue
-        .list(usize::MAX)
+        .activity()
         .await?
-        .into_iter()
-        .find(|request| {
-            (matches!(request.status.as_str(), "running" | "queued")
-                || (handle.is_some()
-                    && matches!(request.status.as_str(), "pending" | "failed" | "rejected")))
-                && handle
-                    .as_ref()
-                    .is_none_or(|handle| request.handle == *handle)
-        });
-    let channel = match request.as_ref() {
-        Some(request) => state
+        .filter(|activity| wanted(&activity.handle))
+    {
+        (
+            activity.handle,
+            "running".to_string(),
+            Some(format!("active-{}", activity.started_at)),
+            Some(activity.target_backend),
+        )
+    } else if let Some(request) =
+        state
+            .index_queue
+            .list(usize::MAX)
+            .await?
+            .into_iter()
+            .find(|request| {
+                (matches!(request.status.as_str(), "running" | "queued")
+                    || (handle.is_some()
+                        && matches!(request.status.as_str(), "pending" | "failed" | "rejected")))
+                    && wanted(&request.handle)
+            })
+    {
+        (
+            request.handle,
+            request.status,
+            Some(request.id),
+            request.target_backend,
+        )
+    } else {
+        (String::new(), "idle".to_string(), None, None)
+    };
+    let channel = if status_handle.is_empty() {
+        None
+    } else {
+        state
             .search
             .list_youtubers()
             .await?
             .into_iter()
-            .find(|channel| channel.handle.eq_ignore_ascii_case(&request.handle)),
-        None => None,
+            .find(|channel| channel.handle.eq_ignore_ascii_case(&status_handle))
     };
-    Ok(cache_response(
-        CACHE_NO_STORE,
-        Json(serde_json::json!({
-            "handle": request.as_ref().map(|item| item.handle.as_str()).unwrap_or(""),
-            "status": request.as_ref().map(|item| item.status.as_str()).unwrap_or("idle"),
-            "request_id": request.as_ref().map(|item| item.id.clone()),
-            "target_backend": request.and_then(|item| item.target_backend),
-            "channel": channel,
-        })),
-    ))
+    Ok(no_store_json(json!({
+        "handle": status_handle,
+        "status": status,
+        "request_id": request_id,
+        "target_backend": target_backend,
+        "channel": channel,
+    })))
 }
 
 async fn update_index_activity(
@@ -880,10 +837,7 @@ async fn update_index_activity(
         None => None,
     };
     state.index_queue.set_activity(activity).await?;
-    Ok(cache_response(
-        CACHE_NO_STORE,
-        Json(serde_json::json!({ "ok": true })),
-    ))
+    Ok(no_store_json(json!({ "ok": true })))
 }
 
 async fn ack_index_request(
@@ -893,10 +847,7 @@ async fn ack_index_request(
 ) -> Result<Response, ApiError> {
     state.index_queue.authorize(&headers)?;
     state.index_queue.ack(&id).await?;
-    Ok(cache_response(
-        CACHE_NO_STORE,
-        Json(serde_json::json!({ "ok": true })),
-    ))
+    Ok(no_store_json(json!({ "ok": true })))
 }
 
 async fn approve_index_request(
@@ -904,15 +855,14 @@ async fn approve_index_request(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
-    state.index_queue.authorize(&headers)?;
-    let request = state
-        .index_queue
-        .set_status_from(&id, "queued", &["pending", "rejected", "failed"])
-        .await?;
-    Ok(cache_response(
-        CACHE_NO_STORE,
-        Json(serde_json::json!({ "request": request })),
-    ))
+    transition_index_request(
+        &state,
+        &headers,
+        &id,
+        "queued",
+        &["pending", "rejected", "failed"],
+    )
+    .await
 }
 
 async fn reject_index_request(
@@ -920,20 +870,22 @@ async fn reject_index_request(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
-    state.index_queue.authorize(&headers)?;
-    let request = state
-        .index_queue
-        .set_status_from(&id, "rejected", &["pending"])
-        .await?;
-    Ok(cache_response(
-        CACHE_NO_STORE,
-        Json(serde_json::json!({ "request": request })),
-    ))
+    transition_index_request(&state, &headers, &id, "rejected", &["pending"]).await
 }
 
-#[derive(Debug, Deserialize)]
-struct IndexRequestStatusInput {
-    status: String,
+async fn transition_index_request(
+    state: &AppState,
+    headers: &HeaderMap,
+    id: &str,
+    status: &str,
+    allowed_statuses: &[&str],
+) -> Result<Response, ApiError> {
+    state.index_queue.authorize(headers)?;
+    let request = state
+        .index_queue
+        .set_status_from(id, status, allowed_statuses)
+        .await?;
+    Ok(no_store_json(json!({ "request": request })))
 }
 
 async fn update_index_request_status(
@@ -949,10 +901,7 @@ async fn update_index_request_status(
         ));
     }
     let request = state.index_queue.set_status(&id, &input.status).await?;
-    Ok(cache_response(
-        CACHE_NO_STORE,
-        Json(serde_json::json!({ "request": request })),
-    ))
+    Ok(no_store_json(json!({ "request": request })))
 }
 
 fn is_valid_index_request_status(status: &str) -> bool {
@@ -966,34 +915,30 @@ fn is_searchable_channel(channel: &ChannelDocument) -> bool {
     channel.indexed_video_count > 0 && channel.indexed_chunk_count > 0
 }
 
-fn queue_target_backends(input: Option<&[String]>) -> Result<Vec<String>, ApiError> {
-    let requested = input
-        .map(|backends| backends.iter().map(String::as_str).collect::<Vec<_>>())
-        .unwrap_or_else(|| vec!["raw"]);
-    let mut normalized = Vec::new();
-    for backend in requested {
-        let backend = backend.trim();
-        if backend.is_empty() {
-            continue;
-        }
-        let backend = match backend {
-            "raw" => "raw",
+/// `raw` is the only backend. Blank entries are ignored, but at least one
+/// backend must remain.
+fn validate_target_backends(input: Option<&[String]>) -> Result<(), ApiError> {
+    let Some(backends) = input else {
+        return Ok(());
+    };
+    let mut any = false;
+    for backend in backends.iter().map(|backend| backend.trim()) {
+        match backend {
+            "" => {}
+            "raw" => any = true,
             other => {
                 return Err(ApiError::BadRequest(format!(
                     "unsupported target backend: {other}"
                 )));
             }
-        };
-        if !normalized.iter().any(|existing| existing == backend) {
-            normalized.push(backend.to_string());
         }
     }
-    if normalized.is_empty() {
+    if !any {
         return Err(ApiError::BadRequest(
             "at least one target backend is required".to_string(),
         ));
     }
-    Ok(normalized)
+    Ok(())
 }
 
 fn normalize_index_request_note(note: Option<String>) -> Result<Option<String>, ApiError> {
@@ -1011,12 +956,6 @@ fn normalize_index_request_note(note: Option<String>) -> Result<Option<String>, 
     Ok(note)
 }
 
-struct SearchPageResult {
-    videos: Vec<SearchVideoResult>,
-    has_next_page: bool,
-    timings: SearchCollectionTimings,
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 struct SearchCollectionTimings {
     backend_search_calls: u32,
@@ -1025,210 +964,125 @@ struct SearchCollectionTimings {
     backend_grouped_hits: usize,
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn collect_visible_videos(
+/// Parses `raw` and then fetches following backend pages until one comes
+/// back short, `max_page_fetches` pages have been read, or the hits span
+/// `required_videos` videos. Nearby moments are coalesced after every page,
+/// so later pages merge into the kept moments.
+async fn collect_hits(
     search: &SearchClient,
-    base_query: &TextSearchQuery,
-    first_raw: Value,
-    first_search_backend_page: u32,
-    local_offset: usize,
-    per_page: u8,
-    search_page_size: u8,
-    sort: SearchSort,
-    query: &str,
-    relevance_ordering: RelevanceOrdering,
-    initial_backend_search_calls: u32,
-    initial_backend_search_ms: u64,
+    query: &TextSearchQuery,
+    mut raw: Value,
+    page_size: u8,
     max_page_fetches: u32,
-) -> Result<SearchPageResult, ApiError> {
-    let required_videos = local_offset
-        .saturating_add(usize::from(per_page))
-        .saturating_add(1);
+    required_videos: usize,
+    timings: &mut SearchCollectionTimings,
+) -> Result<Vec<SearchHit>, ApiError> {
     let mut combined = Vec::new();
-    let mut current_page = first_search_backend_page;
-    let mut raw = first_raw;
-    let mut timings = SearchCollectionTimings {
-        backend_search_calls: initial_backend_search_calls,
-        backend_search_ms: initial_backend_search_ms,
-        ..SearchCollectionTimings::default()
-    };
-
-    for fetch_index in 0..max_page_fetches {
-        timings.backend_raw_hits = timings
-            .backend_raw_hits
-            .saturating_add(raw_hits_count(&raw));
-        timings.backend_grouped_hits = timings
-            .backend_grouped_hits
-            .saturating_add(grouped_hits_count(&raw));
+    for page in 1..=max_page_fetches {
+        let raw_hits = array_len(&raw, "hits");
+        timings.backend_raw_hits += raw_hits;
+        timings.backend_grouped_hits += array_len(&raw, "grouped_hits");
         let page_hits = parse_hits(&raw)?;
-        let is_empty = page_hits.is_empty();
+        let last_page = page_hits.is_empty() || raw_hits < usize::from(page_size);
         combined.extend(page_hits);
         combined = merge_nearby_transcript_hits(dedupe_title_only_hits(combined));
-
-        if has_at_least_distinct_videos(&combined, required_videos) || is_empty {
-            return Ok(page_result_from_videos(
-                video_results_from_hits_with_policy(&combined, sort, query, relevance_ordering),
-                local_offset,
-                per_page,
-                timings,
-            ));
-        }
-
-        let fetched_raw_hits = raw
-            .get("hits")
-            .and_then(Value::as_array)
-            .map_or(0, Vec::len);
-        if fetched_raw_hits < usize::from(search_page_size) {
+        if last_page
+            || page == max_page_fetches
+            || has_at_least_distinct_videos(&combined, required_videos)
+        {
             break;
         }
 
-        if fetch_index + 1 == max_page_fetches {
-            break;
-        }
-
-        current_page = current_page.saturating_add(1);
         let backend_started = Instant::now();
-        raw = search
-            .search(&base_query.clone().page(current_page))
-            .await?;
-        timings.backend_search_calls = timings.backend_search_calls.saturating_add(1);
-        timings.backend_search_ms = timings
-            .backend_search_ms
-            .saturating_add(backend_started.elapsed().as_millis() as u64);
+        raw = search.search(&query.clone().page(page + 1)).await?;
+        timings.backend_search_calls += 1;
+        timings.backend_search_ms += backend_started.elapsed().as_millis() as u64;
     }
-
-    Ok(page_result_from_videos(
-        video_results_from_hits_with_policy(&combined, sort, query, relevance_ordering),
-        local_offset,
-        per_page,
-        timings,
-    ))
-}
-
-fn page_result_from_videos(
-    videos: Vec<SearchVideoResult>,
-    local_offset: usize,
-    per_page: u8,
-    timings: SearchCollectionTimings,
-) -> SearchPageResult {
-    let per_page = usize::from(per_page);
-    let has_next_page = videos.len() > local_offset.saturating_add(per_page);
-    SearchPageResult {
-        videos: videos
-            .into_iter()
-            .skip(local_offset)
-            .take(per_page)
-            .collect(),
-        has_next_page,
-        timings,
-    }
-}
-
-fn backend_found(raw: &Value) -> u64 {
-    raw.get("estimatedTotalHits")
-        .or_else(|| raw.get("totalHits"))
-        .or_else(|| raw.get("found"))
-        .and_then(Value::as_u64)
-        .unwrap_or_default()
-}
-
-fn backend_total_moments(raw: &Value) -> Option<u64> {
-    raw.get("total_moments").and_then(Value::as_u64)
-}
-
-fn backend_out_of(raw: &Value) -> u64 {
-    raw.get("estimatedTotalHits")
-        .or_else(|| raw.get("totalHits"))
-        .or_else(|| raw.get("out_of"))
-        .and_then(Value::as_u64)
-        .unwrap_or_default()
+    Ok(combined)
 }
 
 fn has_at_least_distinct_videos(hits: &[SearchHit], required: usize) -> bool {
-    if required == 0 {
-        return true;
-    }
-
     let mut video_ids = HashSet::with_capacity(required.min(hits.len()));
-    for hit in hits {
-        video_ids.insert(hit.video_id.as_str());
-        if video_ids.len() >= required {
-            return true;
-        }
-    }
-    false
+    hits.iter()
+        .any(|hit| video_ids.insert(hit.video_id.as_str()) && video_ids.len() >= required)
 }
 
-#[cfg(test)]
-fn video_results_from_hits(
-    hits: &[SearchHit],
-    sort: SearchSort,
-    query: &str,
-) -> Vec<SearchVideoResult> {
-    video_results_from_hits_with_policy(hits, sort, query, RelevanceOrdering::ApiHeuristic)
+/// Returns one page of videos and whether any video follows it.
+fn page_of_videos(
+    videos: Vec<SearchVideoResult>,
+    offset: usize,
+    per_page: u8,
+) -> (Vec<SearchVideoResult>, bool) {
+    let per_page = usize::from(per_page);
+    let has_next_page = videos.len() > offset.saturating_add(per_page);
+    let page = videos.into_iter().skip(offset).take(per_page).collect();
+    (page, has_next_page)
+}
+
+fn raw_u64(raw: &Value, field: &str) -> Option<u64> {
+    raw.get(field).and_then(Value::as_u64)
+}
+
+fn array_len(raw: &Value, field: &str) -> usize {
+    raw.get(field).and_then(Value::as_array).map_or(0, Vec::len)
 }
 
 fn video_results_from_hits_with_policy(
-    hits: &[SearchHit],
+    hits: Vec<SearchHit>,
     sort: SearchSort,
     query: &str,
     relevance_ordering: RelevanceOrdering,
 ) -> Vec<SearchVideoResult> {
     let terms = searchable_terms(query);
     let joined_terms = terms.concat();
-    let mut order = Vec::new();
-    let mut by_video: HashMap<String, SearchVideoResult> = HashMap::new();
+    let mut videos = Vec::<SearchVideoResult>::new();
+    let mut by_video = HashMap::<String, usize>::new();
 
     for hit in hits {
-        let entry = by_video.entry(hit.video_id.clone()).or_insert_with(|| {
-            order.push(hit.video_id.clone());
-            SearchVideoResult::from_hit(hit)
+        let index = *by_video.entry(hit.video_id.clone()).or_insert_with(|| {
+            videos.push(SearchVideoResult::from_hit(&hit));
+            videos.len() - 1
         });
-        entry.hits.push(hit.clone());
+        videos[index].hits.push(hit);
     }
 
-    let mut videos = order
-        .into_iter()
-        .filter_map(|video_id| by_video.remove(&video_id))
-        .map(|mut video| {
-            if video
-                .hits
-                .iter()
-                .any(|hit| hit.match_kind == MatchKind::Transcript)
-            {
-                video
-                    .hits
-                    .retain(|hit| hit.match_kind == MatchKind::Transcript);
-            }
-            video.match_count = video.match_count.max(video.hits.len());
-            match sort {
-                SearchSort::Relevance if relevance_ordering == RelevanceOrdering::Backend => {}
-                SearchSort::Relevance | SearchSort::RelevanceEngagement => {
-                    video.hits.sort_by_cached_key(|hit| {
-                        (Reverse(hit_relevance_score(hit, &terms)), hit.t_start_ms)
-                    })
-                }
-                SearchSort::PublishedDesc
-                | SearchSort::PublishedAsc
-                | SearchSort::ViewsDesc
-                | SearchSort::LikesDesc
-                | SearchSort::CommentsDesc => {
-                    video.hits.sort_by_key(|hit| hit.t_start_ms);
-                }
-            }
-            if let Some(best_hit) = video
-                .hits
-                .iter()
-                .find(|hit| hit.match_kind == MatchKind::Transcript)
-                .or_else(|| video.hits.first())
-            {
-                video.youtube_url = best_hit.youtube_url.clone();
-                video.embed_url = best_hit.embed_url.clone();
-                video.best_timestamp = best_hit.timestamp.clone();
-            }
+    for video in &mut videos {
+        if video
+            .hits
+            .iter()
+            .any(|hit| hit.match_kind == MatchKind::Transcript)
+        {
             video
-        })
-        .collect::<Vec<_>>();
+                .hits
+                .retain(|hit| hit.match_kind == MatchKind::Transcript);
+        }
+        video.match_count = video.match_count.max(video.hits.len());
+        match sort {
+            SearchSort::Relevance if relevance_ordering == RelevanceOrdering::Backend => {}
+            SearchSort::Relevance | SearchSort::RelevanceEngagement => {
+                video.hits.sort_by_cached_key(|hit| {
+                    (Reverse(hit_relevance_score(hit, &terms)), hit.t_start_ms)
+                })
+            }
+            SearchSort::PublishedDesc
+            | SearchSort::PublishedAsc
+            | SearchSort::ViewsDesc
+            | SearchSort::LikesDesc
+            | SearchSort::CommentsDesc => {
+                video.hits.sort_by_key(|hit| hit.t_start_ms);
+            }
+        }
+        if let Some(best_hit) = video
+            .hits
+            .iter()
+            .find(|hit| hit.match_kind == MatchKind::Transcript)
+            .or_else(|| video.hits.first())
+        {
+            video.youtube_url = best_hit.youtube_url.clone();
+            video.embed_url = best_hit.embed_url.clone();
+            video.best_timestamp = best_hit.timestamp.clone();
+        }
+    }
 
     match sort {
         SearchSort::Relevance if relevance_ordering == RelevanceOrdering::ApiHeuristic => {
@@ -1406,54 +1260,29 @@ fn content_kind_for_duration(duration_ms: Option<u32>) -> ContentKind {
 }
 
 fn parse_hits(raw: &Value) -> Result<Vec<SearchHit>, ApiError> {
-    if let Some(grouped_hits) = raw.get("grouped_hits").and_then(Value::as_array) {
-        let hit_count = grouped_hits
-            .iter()
-            .filter_map(|group| group.get("hits").and_then(Value::as_array))
-            .map(Vec::len)
-            .sum();
-        let mut parsed = Vec::with_capacity(hit_count);
-        for group in grouped_hits {
-            let group_match_count = group
-                .get("found")
-                .and_then(Value::as_u64)
-                .and_then(|found| usize::try_from(found).ok());
-            let Some(hits) = group.get("hits").and_then(Value::as_array) else {
-                continue;
-            };
-            for hit in hits {
-                let document = hit.get("document").unwrap_or(hit);
-                let mut parsed_hit = SearchHit::from_search_backend_hit(document, hit)?;
-                parsed_hit.group_match_count = group_match_count;
-                parsed.push(parsed_hit);
-            }
-        }
-        return Ok(parsed);
-    }
-
-    let Some(hits) = raw.get("hits").and_then(Value::as_array) else {
-        return Ok(Vec::new());
+    let Some(groups) = raw.get("grouped_hits").and_then(Value::as_array) else {
+        return raw
+            .get("hits")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|hit| SearchHit::from_backend_hit(hit, None))
+            .collect();
     };
-
-    let mut parsed = Vec::with_capacity(hits.len());
-    for hit in hits {
-        let document = hit.get("document").unwrap_or(hit);
-        parsed.push(SearchHit::from_search_backend_hit(document, hit)?);
+    let mut parsed = Vec::new();
+    for group in groups {
+        let group_match_count =
+            raw_u64(group, "found").and_then(|found| usize::try_from(found).ok());
+        for hit in group
+            .get("hits")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            parsed.push(SearchHit::from_backend_hit(hit, group_match_count)?);
+        }
     }
-
     Ok(parsed)
-}
-
-fn raw_hits_count(raw: &Value) -> usize {
-    raw.get("hits")
-        .and_then(Value::as_array)
-        .map_or(0, Vec::len)
-}
-
-fn grouped_hits_count(raw: &Value) -> usize {
-    raw.get("grouped_hits")
-        .and_then(Value::as_array)
-        .map_or(0, Vec::len)
 }
 
 fn truncate_grouped_lookahead(raw: &mut Value, per_page: u8) -> bool {
@@ -1466,849 +1295,75 @@ fn truncate_grouped_lookahead(raw: &mut Value, per_page: u8) -> bool {
     has_next_page
 }
 
-#[cfg(test)]
-#[allow(clippy::items_after_test_module)]
-mod tests {
-    use super::*;
-    use serde_json::json;
+impl SearchHit {
+    /// Parses one Raw hit: `{ "document": {...}, "highlights": [...] }`.
+    fn from_backend_hit(hit: &Value, group_match_count: Option<usize>) -> Result<Self, ApiError> {
+        let document = hit.get("document").unwrap_or(hit);
+        let video_id = string_field(document, "video_id")?;
+        let t_start_ms = u32_field(document, "t_start_ms")?;
+        let text_highlight = highlight_for_field(hit, "text");
+        let title_highlight = highlight_for_field(hit, "title");
+        let match_kind = if title_highlight.is_some() && text_highlight.is_none() {
+            MatchKind::Title
+        } else {
+            MatchKind::Transcript
+        };
+        let (timestamp, youtube_url, embed_url) = match match_kind {
+            MatchKind::Transcript => {
+                let seconds = t_start_ms / 1000;
+                (
+                    Some(format_timestamp(t_start_ms)),
+                    format!("https://www.youtube.com/watch?v={video_id}&t={seconds}s"),
+                    format!(
+                        "https://www.youtube-nocookie.com/embed/{video_id}?start={seconds}&rel=0"
+                    ),
+                )
+            }
+            MatchKind::Title => (
+                None,
+                format!("https://www.youtube.com/watch?v={video_id}"),
+                format!("https://www.youtube-nocookie.com/embed/{video_id}?rel=0"),
+            ),
+        };
 
-    #[test]
-    fn browser_origins_allow_only_configured_and_local_development() {
-        let configured = vec!["https://search.pronsh.dev".to_string()];
-
-        for allowed in [
-            "https://search.pronsh.dev",
-            "http://localhost:5173",
-            "http://127.0.0.1:3000",
-            "http://[::1]:8787",
-        ] {
-            assert!(browser_origin_allowed(
-                &HeaderValue::from_str(allowed).unwrap(),
-                &configured
-            ));
-        }
-        for rejected in [
-            "https://ytsearch-755.pages.dev",
-            "https://search.pronsh.dev.evil.example",
-            "https://evil.example",
-            "null",
-        ] {
-            assert!(!browser_origin_allowed(
-                &HeaderValue::from_str(rejected).unwrap(),
-                &configured
-            ));
-        }
-    }
-
-    fn test_document(id: &str, video_id: &str, text: &str) -> Value {
-        json!({
-            "id": id,
-            "video_id": video_id,
-            "title": "Test video",
-            "text": text,
-            "youtuber_handle": "@test",
-            "youtuber_name": "Test",
-            "view_count": 1_000_000,
-            "like_count": "100000",
-            "comment_count": 10000.0,
-            "t_start_ms": 1000,
-            "t_end_ms": 2000
+        Ok(Self {
+            id: string_field(document, "id")?,
+            title: string_field(document, "title")?,
+            text: string_field(document, "text")?,
+            prev_text: optional_string_field(document, "prev_text"),
+            next_text: optional_string_field(document, "next_text"),
+            text_highlight,
+            title_highlight,
+            match_kind,
+            youtuber_handle: string_field(document, "youtuber_handle")?,
+            youtuber_name: string_field(document, "youtuber_name")?,
+            thumbnail: optional_string_field(document, "thumbnail"),
+            published_at: optional_string_field(document, "published_at"),
+            view_count: optional_u64_field(document, "view_count").unwrap_or_default(),
+            like_count: optional_u64_field(document, "like_count").unwrap_or_default(),
+            comment_count: optional_u64_field(document, "comment_count").unwrap_or_default(),
+            content_kind: content_kind_for_duration(optional_u32_field(document, "duration")),
+            t_start_ms,
+            t_end_ms: u32_field(document, "t_end_ms")?,
+            timestamp,
+            youtube_url,
+            embed_url,
+            video_id,
+            group_match_count,
         })
     }
-
-    fn test_hit(video_id: &str, title: &str, text: &str) -> SearchHit {
-        let document = json!({
-            "id": format!("{video_id}-1"),
-            "video_id": video_id,
-            "title": title,
-            "text": text,
-            "youtuber_handle": "@test",
-            "youtuber_name": "Test",
-            "t_start_ms": 1000,
-            "t_end_ms": 2000,
-            "published_at": "2026-01-01T00:00:00Z"
-        });
-        SearchHit::from_search_backend_hit(&document, &json!({})).expect("test hit")
-    }
-
-    #[test]
-    fn only_proxies_canonical_youtube_channel_images() {
-        assert!(is_valid_channel_id("UC6nSFpj9HTCZ5t-N3Rm3-HA"));
-        assert!(!is_valid_channel_id("../etc/passwd"));
-        assert!(is_allowed_youtube_image_url(
-            "https://yt3.googleusercontent.com/channel-avatar=s800-c-k-c0x00ffffff-no-rj"
-        ));
-        assert!(is_allowed_youtube_image_url(
-            "https://yt3.ggpht.com/channel-avatar=s800-c-k-c0x00ffffff-no-rj"
-        ));
-        assert!(!is_allowed_youtube_image_url(
-            "https://example.com/avatar.png"
-        ));
-        assert!(!is_allowed_youtube_image_url(
-            "http://yt3.ggpht.com/avatar.png"
-        ));
-        assert_eq!(
-            resized_youtube_image_url(
-                "https://yt3.ggpht.com/channel-avatar=s800-c-k-c0x00ffffff-no-rj",
-                96
-            ),
-            "https://yt3.ggpht.com/channel-avatar=s96-c-k-c0x00ffffff-no-rj"
-        );
-        assert_eq!(
-            resized_youtube_image_url("https://yt3.ggpht.com/avatar.png", 96),
-            "https://yt3.ggpht.com/avatar.png"
-        );
-    }
-
-    #[test]
-    fn parse_hits_flattens_raw_grouped_hits() {
-        let raw = json!({
-            "grouped_hits": [
-                {
-                    "group_key": ["video-a"],
-                    "found": 4,
-                    "hits": [
-                        {
-                            "document": test_document("a-1", "video-a", "first"),
-                            "highlights": [{"field": "text", "snippet": "<mark>first</mark>"}]
-                        }
-                    ]
-                },
-                {
-                    "group_key": ["video-b"],
-                    "hits": [
-                        {
-                            "document": test_document("b-1", "video-b", "second"),
-                            "highlights": [{"field": "text", "snippet": "<mark>second</mark>"}]
-                        }
-                    ]
-                }
-            ]
-        });
-
-        let hits = parse_hits(&raw).expect("grouped hits parse");
-
-        assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].video_id, "video-a");
-        assert_eq!(hits[1].video_id, "video-b");
-        assert_eq!(hits[0].view_count, 1_000_000);
-        assert_eq!(hits[0].like_count, 100_000);
-        assert_eq!(hits[0].comment_count, 10_000);
-        let videos = video_results_from_hits_with_policy(
-            &hits,
-            SearchSort::Relevance,
-            "first",
-            RelevanceOrdering::Backend,
-        );
-        assert_eq!(videos[0].match_count, 4);
-    }
-
-    #[test]
-    fn grouped_match_count_survives_nearby_moment_coalescing() {
-        let raw = json!({
-            "grouped_hits": [{
-                "group_key": ["video-a"],
-                "found": 3,
-                "hits": [
-                    {"document": test_document("a-1", "video-a", "first")},
-                    {"document": test_document("a-2", "video-a", "second")},
-                    {"document": test_document("a-3", "video-a", "third")}
-                ]
-            }]
-        });
-        let mut hits = parse_hits(&raw).expect("grouped hits parse");
-        hits[0].t_start_ms = 0;
-        hits[1].t_start_ms = 10_000;
-        hits[2].t_start_ms = 20_000;
-
-        let merged = merge_nearby_transcript_hits(hits);
-        let videos = video_results_from_hits_with_policy(
-            &merged,
-            SearchSort::Relevance,
-            "first",
-            RelevanceOrdering::Backend,
-        );
-
-        assert_eq!(videos[0].hits.len(), 1);
-        assert_eq!(videos[0].match_count, 3);
-    }
-
-    #[test]
-    fn absent_optional_search_fields_are_omitted_from_json() {
-        let mut hit = test_hit("video-a", "Result", "matching moment");
-        hit.prev_text = None;
-        hit.next_text = None;
-        hit.text_highlight = None;
-        hit.title_highlight = None;
-        hit.thumbnail = None;
-        hit.published_at = None;
-        hit.timestamp = None;
-        let hit_json = serde_json::to_value(&hit).expect("serialize hit");
-        for field in [
-            "prev_text",
-            "next_text",
-            "text_highlight",
-            "title_highlight",
-            "thumbnail",
-            "published_at",
-            "timestamp",
-        ] {
-            assert!(
-                hit_json.get(field).is_none(),
-                "unexpected null field {field}"
-            );
-        }
-
-        let mut video = SearchVideoResult::from_hit(&hit);
-        video.best_timestamp = None;
-        let video_json = serde_json::to_value(video).expect("serialize video");
-        for field in [
-            "title_highlight",
-            "thumbnail",
-            "published_at",
-            "best_timestamp",
-        ] {
-            assert!(
-                video_json.get(field).is_none(),
-                "unexpected null field {field}"
-            );
-        }
-    }
-
-    #[test]
-    fn engagement_sorts_are_gated_to_the_experimental_backend() {
-        for sort in [
-            SearchSort::RelevanceEngagement,
-            SearchSort::ViewsDesc,
-            SearchSort::LikesDesc,
-            SearchSort::CommentsDesc,
-        ] {
-            assert!(validate_search_sort(sort, true).is_ok());
-            assert!(matches!(
-                validate_search_sort(sort, false),
-                Err(ApiError::BadRequest(_))
-            ));
-        }
-        for sort in [
-            SearchSort::Relevance,
-            SearchSort::PublishedDesc,
-            SearchSort::PublishedAsc,
-        ] {
-            assert!(validate_search_sort(sort, false).is_ok());
-        }
-    }
-
-    #[test]
-    fn engagement_results_preserve_backend_video_order_and_counts() {
-        let mut popular = test_hit("popular", "Popular", "matching moment");
-        popular.view_count = 9_000_000;
-        popular.like_count = 700_000;
-        popular.comment_count = 40_000;
-        let mut niche = test_hit("niche", "Niche", "matching moment");
-        niche.view_count = 1_000;
-        niche.like_count = 100;
-        niche.comment_count = 10;
-
-        let videos = video_results_from_hits(
-            &[popular, niche],
-            SearchSort::RelevanceEngagement,
-            "matching moment",
-        );
-
-        assert_eq!(videos[0].video_id, "popular");
-        assert_eq!(videos[0].view_count, 9_000_000);
-        assert_eq!(videos[0].like_count, 700_000);
-        assert_eq!(videos[0].comment_count, 40_000);
-    }
-
-    #[test]
-    fn one_character_queries_are_low_signal() {
-        assert!(is_low_signal_query("I"));
-        assert!(is_low_signal_query("?"));
-        assert!(!is_low_signal_query("fable"));
-    }
-
-    #[tokio::test]
-    async fn health_response_is_successful_and_not_cached() {
-        let response = health().await;
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get(header::CACHE_CONTROL),
-            Some(&HeaderValue::from_static(CACHE_NO_STORE))
-        );
-        assert_eq!(
-            response.headers().get(header::CONTENT_TYPE),
-            Some(&HeaderValue::from_static("application/json"))
-        );
-    }
-
-    #[test]
-    fn api_errors_use_stable_http_statuses_and_json_content_type() {
-        let cases = [
-            (ApiError::EmptyQuery, StatusCode::BAD_REQUEST),
-            (ApiError::InvalidHandle, StatusCode::BAD_REQUEST),
-            (ApiError::Unauthorized, StatusCode::UNAUTHORIZED),
-            (ApiError::RateLimited(10), StatusCode::TOO_MANY_REQUESTS),
-            (
-                ApiError::BadRequest("bad input".to_string()),
-                StatusCode::BAD_REQUEST,
-            ),
-        ];
-
-        for (error, expected_status) in cases {
-            let response = error.into_response();
-            assert_eq!(response.status(), expected_status);
-            assert_eq!(
-                response.headers().get(header::CONTENT_TYPE),
-                Some(&HeaderValue::from_static("application/json"))
-            );
-        }
-    }
-
-    #[test]
-    fn search_page_slicing_reports_next_page_without_leaking_extra_result() {
-        let videos: Vec<SearchVideoResult> = (0..4)
-            .map(|index| {
-                SearchVideoResult::from_hit(&test_hit(
-                    &format!("video-{index}"),
-                    "Result",
-                    "matching moment",
-                ))
-            })
-            .collect();
-
-        let first = page_result_from_videos(videos.clone(), 0, 3, Default::default());
-        assert_eq!(first.videos.len(), 3);
-        assert!(first.has_next_page);
-
-        let second = page_result_from_videos(videos, 3, 3, Default::default());
-        assert_eq!(second.videos.len(), 1);
-        assert!(!second.has_next_page);
-    }
-
-    #[test]
-    fn grouped_pagination_uses_and_removes_a_lookahead_group() {
-        let mut result = json!({
-            "grouped_hits": [{"group_key": ["a"]}, {"group_key": ["b"]}]
-        });
-        assert!(truncate_grouped_lookahead(&mut result, 1));
-        assert_eq!(grouped_hits_count(&result), 1);
-
-        assert!(!truncate_grouped_lookahead(&mut result, 1));
-        assert_eq!(grouped_hits_count(&result), 1);
-    }
-
-    #[test]
-    fn ungrouped_totals_preserve_the_matching_moment_count() {
-        let totals = json!({ "found": 35_383, "out_of": 7_129_139 });
-        assert_eq!(backend_found(&totals), 35_383);
-        assert_eq!(backend_out_of(&totals), 7_129_139);
-    }
-
-    #[test]
-    fn raw_grouped_totals_preserve_all_matching_moments() {
-        let totals = json!({
-            "found": 15,
-            "total_moments": 41,
-            "grouped_hits": [{ "found": 5, "hits": [{}, {}, {}] }]
-        });
-
-        assert_eq!(backend_found(&totals), 15);
-        assert_eq!(backend_total_moments(&totals), Some(41));
-        assert_eq!(grouped_hits_count(&totals), 1);
-    }
-
-    #[test]
-    fn index_request_statuses_include_review_states() {
-        assert!(is_valid_index_request_status("pending"));
-        assert!(is_valid_index_request_status("queued"));
-        assert!(is_valid_index_request_status("running"));
-        assert!(is_valid_index_request_status("failed"));
-        assert!(is_valid_index_request_status("rejected"));
-        assert!(!is_valid_index_request_status("complete"));
-    }
-
-    #[test]
-    fn index_request_text_fields_are_bounded() {
-        assert!(normalize_handle_checked("@valid-handle").is_ok());
-        assert!(normalize_handle_checked(&format!("@{}", "a".repeat(MAX_HANDLE_BYTES))).is_err());
-        assert_eq!(
-            normalize_index_request_note(Some("  useful context  ".to_string())).unwrap(),
-            Some("useful context".to_string())
-        );
-        assert!(normalize_index_request_note(Some("x".repeat(MAX_NOTE_CHARS + 1))).is_err());
-    }
-
-    #[tokio::test]
-    async fn pending_requests_require_approval_before_becoming_queueable() {
-        let queue = test_index_queue("approval");
-        let request = test_index_request("approval-request", "pending");
-        queue
-            .enqueue(request.clone())
-            .await
-            .expect("enqueue request");
-
-        let approved = queue
-            .set_status_from(&request.id, "queued", &["pending", "rejected", "failed"])
-            .await
-            .expect("approve pending request");
-        assert_eq!(approved.status, "queued");
-
-        let approved_again = queue
-            .set_status_from(&request.id, "queued", &["pending", "rejected", "failed"])
-            .await
-            .expect("approval is idempotent");
-        assert_eq!(approved_again.status, "queued");
-
-        let rejection = queue
-            .set_status_from(&request.id, "rejected", &["pending"])
-            .await;
-        assert!(rejection.is_err());
-        let _ = tokio::fs::remove_file(queue.path).await;
-    }
-
-    #[tokio::test]
-    async fn enqueue_deduplicates_pending_requests() {
-        let queue = test_index_queue("dedupe");
-        let first = test_index_request("first-request", "pending");
-        let duplicate = IndexQueueItem {
-            id: "duplicate-request".to_string(),
-            ..first.clone()
-        };
-
-        queue.enqueue(first.clone()).await.expect("enqueue first");
-        let returned = queue.enqueue(duplicate).await.expect("dedupe request");
-        assert_eq!(returned.id, first.id);
-        assert_eq!(queue.list(usize::MAX).await.expect("list queue").len(), 1);
-        let _ = tokio::fs::remove_file(queue.path).await;
-    }
-
-    fn test_index_queue(label: &str) -> IndexQueue {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        IndexQueue::new(
-            std::env::temp_dir().join(format!(
-                "ytsearch-{label}-{}-{nonce}.jsonl",
-                std::process::id()
-            )),
-            None,
-            DEFAULT_INDEX_QUEUE_MAX_ITEMS,
-        )
-    }
-
-    fn test_index_request(id: &str, status: &str) -> IndexQueueItem {
-        IndexQueueItem {
-            id: id.to_string(),
-            handle: "@test".to_string(),
-            note: None,
-            requested_at: 1,
-            source_backend: "raw".to_string(),
-            target_backend: Some("raw".to_string()),
-            status: status.to_string(),
-        }
-    }
-
-    #[test]
-    fn searchable_terms_ignore_short_terms_and_stopwords() {
-        assert_eq!(searchable_terms("fable on high"), vec!["fable", "high"]);
-        assert!(searchable_terms("I").is_empty());
-    }
-
-    #[test]
-    fn relevance_score_prefers_specific_query_terms_over_stopword_noise() {
-        let focused = SearchHit {
-            text: "Use Fable on high reasoning".to_string(),
-            text_highlight: Some(
-                "Use <mark>Fable</mark> on <mark>high</mark> reasoning".to_string(),
-            ),
-            ..SearchHit::from_search_backend_hit(
-                &test_document("focused", "video-a", "Use Fable on high reasoning"),
-                &json!({}),
-            )
-            .expect("focused hit")
-        };
-        let noisy = SearchHit {
-            text: "on and on and on".to_string(),
-            text_highlight: Some("<mark>on</mark> and <mark>on</mark>".to_string()),
-            ..SearchHit::from_search_backend_hit(
-                &test_document("noisy", "video-a", "on and on and on"),
-                &json!({}),
-            )
-            .expect("noisy hit")
-        };
-        let terms = searchable_terms("fable on high");
-
-        assert!(hit_relevance_score(&focused, &terms) > hit_relevance_score(&noisy, &terms));
-    }
-
-    #[test]
-    fn video_results_keep_every_collected_moment() {
-        let hits = (0..12)
-            .map(|index| {
-                let mut hit = test_hit("same-video", "Complete result", "matching moment");
-                hit.id = format!("moment-{index}");
-                hit.t_start_ms = index * 30_000;
-                hit
-            })
-            .collect::<Vec<_>>();
-
-        let videos = video_results_from_hits(&hits, SearchSort::Relevance, "matching moment");
-
-        assert_eq!(videos[0].match_count, 12);
-        assert_eq!(videos[0].hits.len(), 12);
-    }
-
-    #[test]
-    fn distinct_video_probe_matches_grouped_result_count() {
-        let hits = vec![
-            test_hit("video-a", "A", "first"),
-            test_hit("video-a", "A", "second"),
-            test_hit("video-b", "B", "third"),
-        ];
-
-        assert!(has_at_least_distinct_videos(&hits, 0));
-        assert!(has_at_least_distinct_videos(&hits, 2));
-        assert!(!has_at_least_distinct_videos(&hits, 3));
-        assert_eq!(
-            video_results_from_hits(&hits, SearchSort::Relevance, "first").len(),
-            2
-        );
-    }
-
-    #[test]
-    fn relevance_reranker_promotes_batterygate_over_generic_battery_mentions() {
-        let videos = video_results_from_hits(
-            &[
-                test_hit(
-                    "generic",
-                    "Why phones have batteries",
-                    "The battery can age over time.",
-                ),
-                test_hit(
-                    "batterygate",
-                    "The BatteryGate incident explained",
-                    "Apple slowed phones during the BatteryGate incident.",
-                ),
-            ],
-            SearchSort::Relevance,
-            "battery gate incident",
-        );
-
-        assert_eq!(
-            videos.first().map(|video| video.video_id.as_str()),
-            Some("batterygate")
-        );
-    }
-
-    #[test]
-    fn relevance_reranker_promotes_a_direct_linux_exploit_match() {
-        let videos = video_results_from_hits(
-            &[
-                test_hit(
-                    "generic-linux",
-                    "A tour of Linux desktops",
-                    "Linux has a broad software ecosystem.",
-                ),
-                test_hit(
-                    "exploit",
-                    "How the Linux exploit worked",
-                    "This Linux exploit gained local privileges.",
-                ),
-            ],
-            SearchSort::Relevance,
-            "linux exploit",
-        );
-
-        assert_eq!(
-            videos.first().map(|video| video.video_id.as_str()),
-            Some("exploit")
-        );
-    }
-
-    #[test]
-    fn raw_relevance_policy_preserves_backend_video_and_moment_order() {
-        let mut first_moment = test_hit(
-            "backend-first",
-            "A backend-ranked result",
-            "A lower-scoring local substring match.",
-        );
-        first_moment.id = "backend-first-moment-a".to_string();
-        first_moment.t_start_ms = 20_000;
-        let mut second_moment = test_hit(
-            "backend-first",
-            "A backend-ranked result",
-            "linux exploit appears here but was ranked second by the backend.",
-        );
-        second_moment.id = "backend-first-moment-b".to_string();
-        second_moment.t_start_ms = 1_000;
-        let locally_favored = test_hit(
-            "local-first",
-            "How the Linux exploit worked",
-            "This Linux exploit gained local privileges.",
-        );
-        let hits = [first_moment, second_moment, locally_favored];
-
-        let preserved = video_results_from_hits_with_policy(
-            &hits,
-            SearchSort::Relevance,
-            "linux exploit",
-            RelevanceOrdering::Backend,
-        );
-        let legacy = video_results_from_hits_with_policy(
-            &hits,
-            SearchSort::Relevance,
-            "linux exploit",
-            RelevanceOrdering::ApiHeuristic,
-        );
-
-        assert_eq!(preserved[0].video_id, "backend-first");
-        assert_eq!(preserved[0].hits[0].id, "backend-first-moment-a");
-        assert_eq!(legacy[0].video_id, "local-first");
-        assert_eq!(legacy[1].hits[0].id, "backend-first-moment-b");
-    }
-
-    #[test]
-    fn grouping_preserves_title_hit_video_rank() {
-        let mut ranked_title = test_hit("ranked", "C Programming Language", "title match");
-        ranked_title.match_kind = MatchKind::Title;
-        let videos = video_results_from_hits(
-            &dedupe_title_only_hits(vec![
-                ranked_title,
-                test_hit("other", "Generic result", "other candidate"),
-                test_hit("ranked", "C Programming Language", "arrays and pointers"),
-            ]),
-            SearchSort::Relevance,
-            "c programming arrays",
-        );
-
-        assert_eq!(videos[0].video_id, "ranked");
-        assert!(
-            videos[0]
-                .hits
-                .iter()
-                .all(|hit| hit.match_kind == MatchKind::Transcript)
-        );
-    }
-
-    #[test]
-    fn nearby_moment_coalescing_preserves_the_best_backend_rank() {
-        let hits = [20_000, 40_000, 0]
-            .into_iter()
-            .map(|start| {
-                let mut hit = test_hit("video", "Video", "matching moment");
-                hit.id = format!("moment-{start}");
-                hit.t_start_ms = start;
-                hit
-            })
-            .collect::<Vec<_>>();
-
-        let merged = merge_nearby_transcript_hits(hits);
-        let mut starts = merged.iter().map(|hit| hit.t_start_ms).collect::<Vec<_>>();
-        starts.sort_unstable();
-        assert_eq!(starts, vec![20_000, 40_000]);
-        assert_eq!(merged[0].id, "moment-20000");
-    }
-
-    #[test]
-    #[ignore = "manual performance comparison; run with --release --ignored --nocapture"]
-    fn cached_relevance_keys_avoid_repeated_normalization() {
-        const HITS: usize = 4_096;
-        const ROUNDS: usize = 40;
-        let terms = searchable_terms("rust memory safety compiler performance");
-        let hits = (0..HITS)
-            .map(|index| {
-                test_hit(
-                    &format!("video-{index}"),
-                    if index % 3 == 0 {
-                        "Rust compiler memory safety"
-                    } else {
-                        "A general software discussion"
-                    },
-                    if index % 5 == 0 {
-                        "compiler performance and memory safety in Rust"
-                    } else {
-                        "software engineering conversation"
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-
-        let comparison_started = Instant::now();
-        let mut comparison_ids = Vec::new();
-        for _ in 0..ROUNDS {
-            let mut candidate = hits.clone();
-            candidate.sort_by(|left, right| {
-                hit_relevance_score(right, &terms)
-                    .cmp(&hit_relevance_score(left, &terms))
-                    .then_with(|| left.t_start_ms.cmp(&right.t_start_ms))
-            });
-            comparison_ids = candidate.into_iter().map(|hit| hit.id).collect();
-        }
-        let comparison_elapsed = comparison_started.elapsed();
-
-        let cached_started = Instant::now();
-        let mut cached_ids = Vec::new();
-        for _ in 0..ROUNDS {
-            let mut candidate = hits.clone();
-            candidate.sort_by_cached_key(|hit| {
-                (Reverse(hit_relevance_score(hit, &terms)), hit.t_start_ms)
-            });
-            cached_ids = candidate.into_iter().map(|hit| hit.id).collect();
-        }
-        let cached_elapsed = cached_started.elapsed();
-
-        assert_eq!(comparison_ids, cached_ids);
-        println!(
-            "hits={HITS} rounds={ROUNDS} comparison_ms={:.2} cached_ms={:.2} speedup={:.2}",
-            comparison_elapsed.as_secs_f64() * 1_000.0,
-            cached_elapsed.as_secs_f64() * 1_000.0,
-            comparison_elapsed.as_secs_f64() / cached_elapsed.as_secs_f64()
-        );
-    }
-
-    #[test]
-    #[ignore = "manual representative benchmark; run with --release --ignored --nocapture"]
-    fn benchmark_relevance_grouping_workload() {
-        const VIDEOS: usize = 128;
-        const HITS_PER_VIDEO: usize = 4;
-        const ROUNDS: usize = 80;
-        let hits = (0..VIDEOS)
-            .flat_map(|video_index| {
-                (0..HITS_PER_VIDEO).map(move |hit_index| {
-                    let mut hit = test_hit(
-                        &format!("video-{video_index}"),
-                        if video_index % 3 == 0 {
-                            "Rust runtime memory safety and compiler performance"
-                        } else {
-                            "A practical software engineering discussion"
-                        },
-                        if hit_index % 2 == 0 {
-                            "Rust compiler performance uses memory safety without garbage collection"
-                        } else {
-                            "Runtime design and practical systems engineering tradeoffs"
-                        },
-                    );
-                    hit.id = format!("video-{video_index}-hit-{hit_index}");
-                    hit.t_start_ms = u32::try_from(hit_index * 30_000).expect("timestamp");
-                    hit
-                })
-            })
-            .collect::<Vec<_>>();
-
-        let started = Instant::now();
-        let mut checksum = 0;
-        for _ in 0..ROUNDS {
-            let videos = std::hint::black_box(video_results_from_hits(
-                std::hint::black_box(&hits),
-                SearchSort::Relevance,
-                std::hint::black_box("rust runtime memory safety compiler performance"),
-            ));
-            checksum ^= videos
-                .iter()
-                .map(|video| video.match_count + video.hits.len())
-                .sum::<usize>();
-        }
-        let elapsed = started.elapsed();
-
-        std::hint::black_box(checksum);
-        assert_eq!(checksum, 0, "even rounds produce a stable checksum");
-        println!(
-            "videos={VIDEOS} hits={} rounds={ROUNDS} elapsed_ms={:.2} per_round_ms={:.3}",
-            hits.len(),
-            elapsed.as_secs_f64() * 1_000.0,
-            elapsed.as_secs_f64() * 1_000.0 / ROUNDS as f64
-        );
-    }
-
-    #[test]
-    #[ignore = "manual representative benchmark; run with --release --ignored --nocapture"]
-    fn benchmark_multi_page_distinct_video_probe() {
-        const PAGES: usize = 8;
-        const VIDEOS_PER_PAGE: usize = 16;
-        const HITS_PER_VIDEO: usize = 4;
-        const ROUNDS: usize = 40;
-        const QUERY: &str = "rust runtime memory safety compiler performance";
-        let required_videos = PAGES * VIDEOS_PER_PAGE;
-        let pages = (0..PAGES)
-            .map(|page_index| {
-                (0..VIDEOS_PER_PAGE)
-                    .flat_map(|video_offset| {
-                        let video_index = page_index * VIDEOS_PER_PAGE + video_offset;
-                        (0..HITS_PER_VIDEO).map(move |hit_index| {
-                            let mut hit = test_hit(
-                                &format!("video-{video_index}"),
-                                "Rust runtime memory safety and compiler performance",
-                                "Runtime design and practical systems engineering tradeoffs",
-                            );
-                            hit.id = format!("video-{video_index}-hit-{hit_index}");
-                            hit.t_start_ms = u32::try_from(hit_index * 30_000).expect("timestamp");
-                            hit
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-
-        let legacy = || {
-            let mut combined = Vec::new();
-            let mut final_videos = Vec::new();
-            for page in &pages {
-                combined.extend(page.iter().cloned());
-                combined = merge_nearby_transcript_hits(dedupe_title_only_hits(combined));
-                final_videos = video_results_from_hits(&combined, SearchSort::Relevance, QUERY);
-                if final_videos.len() >= required_videos {
-                    break;
-                }
+}
+
+fn highlight_for_field(hit: &Value, field: &str) -> Option<String> {
+    hit.get("highlights")?
+        .as_array()?
+        .iter()
+        .find_map(|highlight| {
+            if highlight.get("field")?.as_str()? != field {
+                return None;
             }
-            final_videos
-        };
-        let optimized = || {
-            let mut combined = Vec::new();
-            for page in &pages {
-                combined.extend(page.iter().cloned());
-                combined = merge_nearby_transcript_hits(dedupe_title_only_hits(combined));
-                if has_at_least_distinct_videos(&combined, required_videos) {
-                    return video_results_from_hits(&combined, SearchSort::Relevance, QUERY);
-                }
-            }
-            video_results_from_hits(&combined, SearchSort::Relevance, QUERY)
-        };
-
-        let expected = legacy();
-        let actual = optimized();
-        assert_eq!(
-            expected
-                .iter()
-                .map(|video| video.video_id.as_str())
-                .collect::<Vec<_>>(),
-            actual
-                .iter()
-                .map(|video| video.video_id.as_str())
-                .collect::<Vec<_>>()
-        );
-
-        let legacy_started = Instant::now();
-        for _ in 0..ROUNDS {
-            std::hint::black_box(legacy());
-        }
-        let legacy_elapsed = legacy_started.elapsed();
-        let optimized_started = Instant::now();
-        for _ in 0..ROUNDS {
-            std::hint::black_box(optimized());
-        }
-        let optimized_elapsed = optimized_started.elapsed();
-
-        println!(
-            "pages={PAGES} videos={required_videos} hits={} rounds={ROUNDS} legacy_ms={:.2} optimized_ms={:.2} speedup={:.2}",
-            pages.iter().map(Vec::len).sum::<usize>(),
-            legacy_elapsed.as_secs_f64() * 1_000.0,
-            optimized_elapsed.as_secs_f64() * 1_000.0,
-            legacy_elapsed.as_secs_f64() / optimized_elapsed.as_secs_f64()
-        );
-    }
+            highlight.get("snippet")?.as_str().map(ToOwned::to_owned)
+        })
 }
 
 fn merge_nearby_transcript_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
@@ -2352,7 +1407,7 @@ fn merge_nearby_transcript_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
 }
 
 fn dedupe_title_only_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
-    let mut seen_title_videos = std::collections::HashSet::new();
+    let mut seen_title_videos = HashSet::new();
     let mut deduped = Vec::with_capacity(hits.len());
 
     for hit in hits {
@@ -2367,90 +1422,6 @@ fn dedupe_title_only_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
     }
 
     deduped
-}
-
-impl SearchHit {
-    fn from_search_backend_hit(document: &Value, hit: &Value) -> Result<Self, ApiError> {
-        let id = string_field(document, "id")?;
-        let video_id = string_field(document, "video_id")?;
-        let t_start_ms = u32_field(document, "t_start_ms")?;
-        let t_end_ms = u32_field(document, "t_end_ms")?;
-        let content_kind = content_kind_for_duration(optional_u32_field(document, "duration"));
-        let text_highlight = highlight_for_field(hit, "text");
-        let title_highlight = highlight_for_field(hit, "title");
-        let match_kind = if title_highlight.is_some() && text_highlight.is_none() {
-            MatchKind::Title
-        } else {
-            MatchKind::Transcript
-        };
-        let timestamp =
-            matches!(match_kind, MatchKind::Transcript).then(|| format_timestamp(t_start_ms));
-        let youtube_url = match match_kind {
-            MatchKind::Transcript => format!(
-                "https://www.youtube.com/watch?v={video_id}&t={}s",
-                t_start_ms / 1000
-            ),
-            MatchKind::Title => format!("https://www.youtube.com/watch?v={video_id}"),
-        };
-        let embed_url = match match_kind {
-            MatchKind::Transcript => format!(
-                "https://www.youtube-nocookie.com/embed/{video_id}?start={}&rel=0",
-                t_start_ms / 1000
-            ),
-            MatchKind::Title => format!("https://www.youtube-nocookie.com/embed/{video_id}?rel=0"),
-        };
-
-        Ok(Self {
-            id,
-            video_id,
-            title: string_field(document, "title")?,
-            text: string_field(document, "text")?,
-            prev_text: optional_string_field(document, "prev_text"),
-            next_text: optional_string_field(document, "next_text"),
-            text_highlight,
-            title_highlight,
-            match_kind,
-            youtuber_handle: string_field(document, "youtuber_handle")?,
-            youtuber_name: string_field(document, "youtuber_name")?,
-            thumbnail: optional_string_field(document, "thumbnail"),
-            published_at: optional_string_field(document, "published_at"),
-            view_count: optional_u64_field(document, "view_count").unwrap_or_default(),
-            like_count: optional_u64_field(document, "like_count").unwrap_or_default(),
-            comment_count: optional_u64_field(document, "comment_count").unwrap_or_default(),
-            content_kind,
-            t_start_ms,
-            t_end_ms,
-            timestamp,
-            youtube_url,
-            embed_url,
-            group_match_count: None,
-        })
-    }
-}
-
-fn highlight_for_field(hit: &Value, field: &str) -> Option<String> {
-    hit.get("highlights")
-        .and_then(Value::as_array)
-        .and_then(|highlights| {
-            highlights.iter().find_map(|highlight| {
-                let matches_field = highlight.get("field").and_then(Value::as_str) == Some(field);
-                matches_field
-                    .then(|| highlight.get("snippet").and_then(Value::as_str))
-                    .flatten()
-            })
-        })
-        .or_else(|| {
-            hit.get("_formatted")
-                .and_then(|formatted| formatted.get(field))
-                .and_then(Value::as_str)
-        })
-        .or_else(|| {
-            hit.get("highlight")
-                .and_then(|highlight| highlight.get(field))
-                .and_then(|field_highlight| field_highlight.get("snippet"))
-                .and_then(Value::as_str)
-        })
-        .map(ToOwned::to_owned)
 }
 
 fn string_field(document: &Value, field: &'static str) -> Result<String, ApiError> {
@@ -2554,7 +1525,23 @@ fn epoch_seconds() -> u64 {
         .as_secs()
 }
 
-fn client_key(headers: &HeaderMap) -> String {
+async fn rate_limit(
+    state: &AppState,
+    headers: &HeaderMap,
+    scope: &str,
+    per_minute: usize,
+) -> Result<(), ApiError> {
+    if per_minute > 0 {
+        state.rate_limiter.lock().await.allow(
+            format!("{scope}:{}", client_key(headers)),
+            per_minute,
+            Duration::from_secs(60),
+        )?;
+    }
+    Ok(())
+}
+
+fn client_key(headers: &HeaderMap) -> &str {
     ["cf-connecting-ip", "fly-client-ip", "x-forwarded-for"]
         .iter()
         .filter_map(|name| headers.get(*name))
@@ -2567,7 +1554,10 @@ fn client_key(headers: &HeaderMap) -> String {
                 .filter(|value| !value.is_empty())
         })
         .unwrap_or("unknown")
-        .to_string()
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 fn header_string(headers: &HeaderMap, name: &'static str) -> Option<String> {
@@ -2584,6 +1574,10 @@ fn cache_response<T: IntoResponse>(cache_control: &'static str, response: T) -> 
         HeaderValue::from_static(cache_control),
     );
     response
+}
+
+fn no_store_json(value: impl Serialize) -> Response {
+    cache_response(CACHE_NO_STORE, Json(value))
 }
 
 fn env_usize(name: &str, default: usize) -> usize {
@@ -2671,12 +1665,8 @@ impl IntoResponse for ApiError {
             Self::RateLimited(seconds) => Some(*seconds),
             _ => None,
         };
-        let body = Json(serde_json::json!({ "error": self.to_string() }));
-        let mut response = (status, body).into_response();
-        response.headers_mut().insert(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static(CACHE_NO_STORE),
-        );
+        let mut response = no_store_json(json!({ "error": self.to_string() }));
+        *response.status_mut() = status;
         if let Some(seconds) = retry_after
             && let Ok(value) = HeaderValue::from_str(&seconds.to_string())
         {
@@ -2685,3 +1675,6 @@ impl IntoResponse for ApiError {
         response
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -307,7 +307,36 @@ mod tests {
             queue.enqueue(test_request("second", "@second")).await,
             Err(ApiError::QueueFull)
         ));
+        assert_eq!(queue.list(usize::MAX).await.expect("list queue").len(), 1);
 
+        let _ = tokio::fs::remove_file(queue.path).await;
+    }
+
+    #[tokio::test]
+    async fn pending_requests_require_approval_before_becoming_queueable() {
+        let queue = test_queue("approval", 10);
+        let request = test_request("approval-request", "@test");
+        queue
+            .enqueue(request.clone())
+            .await
+            .expect("enqueue request");
+
+        let approved = queue
+            .set_status_from(&request.id, "queued", &["pending", "rejected", "failed"])
+            .await
+            .expect("approve pending request");
+        assert_eq!(approved.status, "queued");
+
+        let approved_again = queue
+            .set_status_from(&request.id, "queued", &["pending", "rejected", "failed"])
+            .await
+            .expect("approval is idempotent");
+        assert_eq!(approved_again.status, "queued");
+
+        let rejection = queue
+            .set_status_from(&request.id, "rejected", &["pending"])
+            .await;
+        assert!(rejection.is_err());
         let _ = tokio::fs::remove_file(queue.path).await;
     }
 }

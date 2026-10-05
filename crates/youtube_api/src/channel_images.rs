@@ -74,7 +74,7 @@ pub(crate) fn is_valid_channel_id(channel_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
-pub(crate) fn is_allowed_youtube_image_url(url: &str) -> bool {
+fn is_allowed_youtube_image_url(url: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(url) else {
         return false;
     };
@@ -83,4 +83,38 @@ pub(crate) fn is_allowed_youtube_image_url(url: &str) -> bool {
             url.host_str(),
             Some("yt3.ggpht.com" | "yt3.googleusercontent.com")
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_proxies_canonical_youtube_channel_images() {
+        assert!(is_valid_channel_id("UC6nSFpj9HTCZ5t-N3Rm3-HA"));
+        assert!(!is_valid_channel_id("../etc/passwd"));
+        assert!(is_allowed_youtube_image_url(
+            "https://yt3.googleusercontent.com/channel-avatar=s800-c-k-c0x00ffffff-no-rj"
+        ));
+        assert!(is_allowed_youtube_image_url(
+            "https://yt3.ggpht.com/channel-avatar=s800-c-k-c0x00ffffff-no-rj"
+        ));
+        assert!(!is_allowed_youtube_image_url(
+            "https://example.com/avatar.png"
+        ));
+        assert!(!is_allowed_youtube_image_url(
+            "http://yt3.ggpht.com/avatar.png"
+        ));
+        assert_eq!(
+            resized_youtube_image_url(
+                "https://yt3.ggpht.com/channel-avatar=s800-c-k-c0x00ffffff-no-rj",
+                96
+            ),
+            "https://yt3.ggpht.com/channel-avatar=s96-c-k-c0x00ffffff-no-rj"
+        );
+        assert_eq!(
+            resized_youtube_image_url("https://yt3.ggpht.com/avatar.png", 96),
+            "https://yt3.ggpht.com/avatar.png"
+        );
+    }
 }
