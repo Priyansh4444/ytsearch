@@ -11,7 +11,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::task::JoinSet;
-use youtube_client::{ListResource, Page, Query, YouTubeClient};
+use youtube_client::{ListResource, Query, YouTubeClient};
 use youtube_index_store::{
     BackendReadiness, ChannelDeletionScope, ChannelDocument, ChunkStats, IndexOperation,
     IndexStoreError, RAW_GENERATION_FILES, RAW_PUBLICATION_API_VERSION, RawGenerationManifest,
@@ -28,6 +28,7 @@ use youtube_transcribe::{TranscriptionConfig, VoxtypeTranscriptSource};
 use youtube_ytdlp::{YtDlpTranscriptSource, YtDlpVideo};
 
 mod args;
+mod atomic_file;
 mod failure_ledger;
 mod publication_receipt;
 mod reconciliation_manifest;
@@ -77,14 +78,8 @@ struct ValidatedYoutuber {
     title: String,
     uploads_playlist: Option<String>,
     avatar_url: Option<String>,
-    recent_uploads: Vec<UploadPreview>,
+    recent_uploads: Vec<DiscoveredVideo>,
     uploads_warning: Option<String>,
-}
-
-#[derive(Debug)]
-struct UploadPreview {
-    video_id: String,
-    title: String,
 }
 
 #[derive(Clone, Debug)]
@@ -197,7 +192,7 @@ async fn main() -> ExitCode {
     let result = match Cli::parse().command {
         Command::InitBackend(command) => init_backend_command(command).await,
         Command::Validate(command) => validate_command(command).await,
-        Command::IndexYoutuber(command) => index_youtuber_command(command).await,
+        Command::IndexYoutuber(command) => index_youtuber(command).await,
         Command::IndexYoutubers(command) => index_youtubers_command(command).await,
         Command::RemoveYoutuber(command) => remove_youtuber_command(command).await,
         Command::IndexVideo(command) => index_video_command(command).await,
@@ -803,24 +798,17 @@ fn validate_remove_safety(allow_destructive_remove: bool) -> Result<(), CliError
     Ok(())
 }
 
-async fn index_youtuber_command(command: IndexYoutuberCommand) -> Result<(), CliError> {
-    let publication = PublicationPolicy::from_defer_flag(command.defer_publish);
-    index_youtuber(command, publication).await
-}
-
-async fn index_youtuber(
-    command: IndexYoutuberCommand,
-    publication: PublicationPolicy,
-) -> Result<(), CliError> {
+async fn index_youtuber(command: IndexYoutuberCommand) -> Result<(), CliError> {
+    let run = &command.run;
+    let publication = PublicationPolicy::from_defer_flag(run.defer_publish);
     let existing_data =
-        ExistingDataPolicy::from_cli(command.mode, command.no_wipe, command.skip_existing);
-    validate_existing_data_policy(existing_data, command.allow_destructive_rewipe)?;
-    let collection = command.collection.collection.clone();
-    let transcript_search = command.search.client(collection.clone())?;
+        ExistingDataPolicy::from_cli(run.mode, command.no_wipe, command.skip_existing);
+    validate_existing_data_policy(existing_data, run.allow_destructive_rewipe)?;
+    let transcript_search = run.search.client(run.collection.collection.clone())?;
     transcript_search.readiness().await?;
 
-    let youtube = command.youtube.optional_client()?;
-    let caption_source = command.transcript.caption_source();
+    let youtube = run.youtube.optional_client()?;
+    let caption_source = run.transcript.caption_source();
     let youtuber = validate_youtuber(
         youtube.as_ref(),
         &caption_source,
@@ -845,7 +833,7 @@ async fn index_youtuber(
 
     let youtuber_id = youtuber_id_from_handle(&youtuber.handle, &youtuber.channel_id);
     let discovery_manifest = write_complete_discovery(
-        &command.transcript.transcript_cache_dir,
+        &run.transcript.transcript_cache_dir,
         &youtuber_id,
         &youtuber.handle,
         &public_videos,
@@ -855,9 +843,8 @@ async fn index_youtuber(
         discovery_manifest.display()
     );
 
-    let youtuber_search = transcript_search.clone();
     let initial_youtuber_doc = upsert_youtuber_document_from_chunks(
-        &youtuber_search,
+        &transcript_search,
         &youtuber,
         &youtuber_id,
         saturating_u32(public_videos.len()),
@@ -891,13 +878,13 @@ async fn index_youtuber(
     }
 
     let metadata_source = metadata_source(youtube.as_ref(), &caption_source);
-    let transcribe_source = command.transcript.transcriber();
-    let chunker = command.transcript.chunker();
+    let transcribe_source = run.transcript.transcriber();
+    let chunker = run.transcript.chunker();
     let mut stats = IndexStats {
         discovered_videos: public_videos.len(),
         ..IndexStats::default()
     };
-    let stop_after_existing = normalized_stop_after_existing(command.stop_after_existing);
+    let stop_after_existing = normalized_stop_after_existing(run.stop_after_existing);
     let videos_to_index = prepare_videos_to_index(
         &public_videos,
         &transcript_search,
@@ -950,8 +937,8 @@ async fn index_youtuber(
         })
         .collect::<Vec<_>>();
     let failure_ledger = FailureLedger::new(
-        command.transcript.transcript_cache_dir.join(".failures"),
-        Duration::from_secs(command.transcript_failure_retry_seconds),
+        run.transcript.transcript_cache_dir.join(".failures"),
+        Duration::from_secs(run.transcript_failure_retry_seconds),
     );
     defer_recent_transcript_failures(
         &mut videos_to_index,
@@ -993,52 +980,40 @@ async fn index_youtuber(
             next_video += 1;
             active_jobs += 1;
 
-            let timeout_seconds = command.video_timeout_seconds;
-            let metadata_source = metadata_source.clone();
-            let caption_source = caption_source.clone();
-            let transcribe_source = transcribe_source.clone();
-            let chunker = chunker.clone();
-            let transcript_search = transcript_search.clone();
-            let worker_youtuber_id = youtuber_id.clone();
-            let content_kind = command.content_kind;
-            let timeout_video_id = video.video_id.clone();
-            let timeout_title = video.title.clone();
+            let worker = index_discovered_video(
+                index,
+                worker_total,
+                video.clone(),
+                youtuber_id.clone(),
+                metadata_source.clone(),
+                caption_source.clone(),
+                transcribe_source.clone(),
+                chunker.clone(),
+                transcript_search.clone(),
+                run.content_kind,
+                use_worker_existing_checks,
+                failure_ledger.clone(),
+            );
+            let timeout = Duration::from_secs(run.video_timeout_seconds);
             let failure_ledger = failure_ledger.clone();
-            let timeout_failure_ledger = failure_ledger.clone();
-            let timeout_youtuber_id = youtuber_id.clone();
+            let youtuber_id = youtuber_id.clone();
             tasks.spawn(async move {
-                tokio::time::timeout(
-                    Duration::from_secs(timeout_seconds),
-                    index_discovered_video(
-                        index,
-                        worker_total,
-                        video,
-                        worker_youtuber_id,
-                        metadata_source,
-                        caption_source,
-                        transcribe_source,
-                        chunker,
-                        transcript_search,
-                        content_kind,
-                        use_worker_existing_checks,
-                        failure_ledger,
-                    ),
-                )
-                .await
-                .unwrap_or_else(|_| {
-                    let category = timeout_failure_ledger.record(
-                        &timeout_video_id,
-                        &timeout_youtuber_id,
-                        FailureStage::Timeout,
-                        "video indexing exceeded its timeout",
-                    );
-                    Ok(IndexVideoOutcome::Skipped {
-                        video_id: timeout_video_id,
-                        title: timeout_title,
-                        reason: "timeout".to_string(),
-                        category,
+                tokio::time::timeout(timeout, worker)
+                    .await
+                    .unwrap_or_else(|_| {
+                        let category = failure_ledger.record(
+                            &video.video_id,
+                            &youtuber_id,
+                            FailureStage::Timeout,
+                            "video indexing exceeded its timeout",
+                        );
+                        Ok(IndexVideoOutcome::Skipped {
+                            video_id: video.video_id,
+                            title: video.title,
+                            reason: "timeout".to_string(),
+                            category,
+                        })
                     })
-                })
             });
         }
 
@@ -1080,7 +1055,7 @@ async fn index_youtuber(
                 || completed_videos.saturating_sub(last_youtuber_doc_refresh_completed) >= 25);
         if should_refresh_youtuber_doc {
             match upsert_youtuber_document_from_chunks(
-                &youtuber_search,
+                &transcript_search,
                 &youtuber,
                 &youtuber_id,
                 public_video_count,
@@ -1111,7 +1086,7 @@ async fn index_youtuber(
     if stats.attempted_videos > 0 && (run_indexed_videos == 0 || run_indexed_chunks == 0) {
         if existing_data.skips_existing_videos() && stats.existing_videos > 0 {
             let youtuber_doc = upsert_youtuber_document_from_chunks(
-                &youtuber_search,
+                &transcript_search,
                 &youtuber,
                 &youtuber_id,
                 public_video_count,
@@ -1127,7 +1102,7 @@ async fn index_youtuber(
             return Ok(());
         }
 
-        if let Err(error) = youtuber_search
+        if let Err(error) = transcript_search
             .delete_channel(
                 &youtuber_id,
                 ChannelDeletionScope::ChannelAndVideos,
@@ -1157,7 +1132,7 @@ async fn index_youtuber(
     }
 
     let youtuber_doc = upsert_youtuber_document_from_chunks(
-        &youtuber_search,
+        &transcript_search,
         &youtuber,
         &youtuber_id,
         public_video_count,
@@ -1213,14 +1188,14 @@ fn catalog_outcome(failures: Vec<(String, CliError)>) -> Result<(), CliError> {
 }
 
 async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), CliError> {
+    let cache_dir = &command.run.transcript.transcript_cache_dir;
     let publication_search = command
+        .run
         .search
-        .client(command.collection.collection.clone())?;
-    let handles = reconciliation_manifest::resume_order(
-        &command.transcript.transcript_cache_dir,
-        read_youtuber_list(&command.list_file)?,
-    )?;
-    let reconciliation_run_id = begin_catalog_run(&command.transcript.transcript_cache_dir)?;
+        .client(command.run.collection.collection.clone())?;
+    let handles =
+        reconciliation_manifest::resume_order(cache_dir, read_youtuber_list(&command.list_file)?)?;
+    let reconciliation_run_id = begin_catalog_run(cache_dir)?;
     println!("Started catalog reconciliation run: {reconciliation_run_id}");
     let channel_jobs = effective_channel_jobs(command.channel_jobs, command.jobs);
     println!(
@@ -1237,31 +1212,20 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
                 break;
             };
             let failed_handle = handle.clone();
+            // Update mode ignores the per-video flags; rewipe reindexes everything.
             let child = IndexYoutuberCommand {
                 youtuber: YoutuberArg { handle },
-                youtube: command.youtube.clone(),
-                search: command.search.clone(),
-                collection: command.collection.clone(),
+                run: IndexRunArgs {
+                    defer_publish: true,
+                    ..command.run.clone()
+                },
                 max_videos: command.max_videos,
                 max_new_videos: None,
-                mode: command.mode,
-                allow_destructive_rewipe: command.allow_destructive_rewipe,
                 jobs: command.jobs,
-                video_timeout_seconds: command.video_timeout_seconds,
-                stop_after_existing: command.stop_after_existing,
-                skip_existing: command.mode == IndexMode::Update,
-                no_wipe: command.mode == IndexMode::Update,
-                content_kind: command.content_kind,
-                transcript: command.transcript.clone(),
-                transcript_failure_retry_seconds: command.transcript_failure_retry_seconds,
-                defer_publish: true,
+                skip_existing: false,
+                no_wipe: false,
             };
-            tasks.spawn(async move {
-                (
-                    failed_handle,
-                    index_youtuber(child, PublicationPolicy::DeferVisibility).await,
-                )
-            });
+            tasks.spawn(async move { (failed_handle, index_youtuber(child).await) });
         }
 
         let Some(result) = tasks.join_next().await else {
@@ -1272,7 +1236,7 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
             Ok((blocked_handle, Err(error @ CliError::UpstreamBlocked(_)))) => {
                 tasks.abort_all();
                 reconciliation_manifest::remember_blocked_creator(
-                    &command.transcript.transcript_cache_dir,
+                    cache_dir,
                     Some(&blocked_handle),
                 )?;
                 println!(
@@ -1295,11 +1259,8 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
     }
 
     // Every creator was attempted, so the next pass starts from the top.
-    reconciliation_manifest::remember_blocked_creator(
-        &command.transcript.transcript_cache_dir,
-        None,
-    )?;
-    if PublicationPolicy::from_defer_flag(command.defer_publish).publishes_after_run() {
+    reconciliation_manifest::remember_blocked_creator(cache_dir, None)?;
+    if PublicationPolicy::from_defer_flag(command.run.defer_publish).publishes_after_run() {
         publish_and_wait(&publication_search).await?;
     }
     catalog_outcome(failures)
@@ -1330,7 +1291,7 @@ fn validate_existing_data_policy(
     Ok(())
 }
 
-fn read_youtuber_list(path: &PathBuf) -> Result<Vec<String>, CliError> {
+fn read_youtuber_list(path: &Path) -> Result<Vec<String>, CliError> {
     let body = std::fs::read_to_string(path).map_err(|error| {
         CliError::Message(format!("failed to read {}: {error}", path.display()))
     })?;
@@ -1364,13 +1325,11 @@ async fn prepare_videos_to_index(
     let limit = max_videos.unwrap_or(public_videos.len());
     let candidates = public_videos.iter().take(limit);
 
-    if !skip_existing || stop_after_existing.is_none() {
+    let (true, Some(stop_after_existing)) = (skip_existing, stop_after_existing) else {
         let videos = candidates.cloned().collect::<Vec<_>>();
         stats.attempted_videos = videos.len();
         return Ok(videos);
-    }
-
-    let stop_after_existing = stop_after_existing.expect("checked above");
+    };
     let mut videos = Vec::new();
     let mut consecutive_existing = 0usize;
 
@@ -1469,18 +1428,14 @@ fn select_missing_video_until_existing_tail(
     false
 }
 
-fn transcript_source(no_cache: bool, cache_dir: PathBuf) -> YtDlpTranscriptSource {
-    let source = YtDlpTranscriptSource::new();
-    if no_cache {
-        source
-    } else {
-        source.with_cache_dir(cache_dir)
-    }
-}
-
 impl TranscriptOptions {
     fn caption_source(&self) -> YtDlpTranscriptSource {
-        transcript_source(self.no_transcript_cache, self.transcript_cache_dir.clone())
+        let source = YtDlpTranscriptSource::new();
+        if self.no_transcript_cache {
+            source
+        } else {
+            source.with_cache_dir(self.transcript_cache_dir.clone())
+        }
     }
 
     fn transcriber(&self) -> Option<VoxtypeTranscriptSource> {
@@ -1579,8 +1534,8 @@ async fn index_discovered_video(
         if existing_chunks > 0 {
             tracing::info!(
                 video_id = %video.video_id,
-                existing_check_ms = existing_check_started.elapsed().as_millis() as u64,
-                total_ms = indexing_started.elapsed().as_millis() as u64,
+                existing_check_ms = elapsed_ms(existing_check_started),
+                total_ms = elapsed_ms(indexing_started),
                 "indexing video already exists"
             );
             return Ok(IndexVideoOutcome::Existing {
@@ -1590,34 +1545,29 @@ async fn index_discovered_video(
             });
         }
     }
-    let existing_check_ms = existing_check_started.elapsed().as_millis() as u64;
+    let existing_check_ms = elapsed_ms(existing_check_started);
 
     let metadata_started = Instant::now();
     let mut metadata = match metadata_source.metadata_for_video(&video.video_id).await {
         Ok(metadata) => metadata,
         Err(error) => {
-            let category = failure_ledger.record(
-                &video.video_id,
-                &youtuber_id,
-                FailureStage::Metadata,
-                &error.to_string(),
-            );
             tracing::warn!(
                 video_id = %video.video_id,
                 %error,
-                metadata_ms = metadata_started.elapsed().as_millis() as u64,
-                total_ms = indexing_started.elapsed().as_millis() as u64,
+                metadata_ms = elapsed_ms(metadata_started),
+                total_ms = elapsed_ms(indexing_started),
                 "skipped video metadata"
             );
-            return Ok(IndexVideoOutcome::Skipped {
-                video_id: video.video_id,
-                title: video.title,
-                reason: format!("metadata: {error}"),
-                category,
-            });
+            return Ok(skipped_video(
+                video,
+                &failure_ledger,
+                &youtuber_id,
+                FailureStage::Metadata,
+                error,
+            ));
         }
     };
-    let metadata_ms = metadata_started.elapsed().as_millis() as u64;
+    let metadata_ms = elapsed_ms(metadata_started);
     metadata.youtuber.id = youtuber_id;
 
     let content_kind = content_kind_for_duration(metadata.duration_ms);
@@ -1629,7 +1579,7 @@ async fn index_discovered_video(
             ?content_kind,
             existing_check_ms,
             metadata_ms,
-            total_ms = indexing_started.elapsed().as_millis() as u64,
+            total_ms = elapsed_ms(indexing_started),
             "skipped by content kind"
         );
         return Ok(IndexVideoOutcome::KindFiltered {
@@ -1652,77 +1602,62 @@ async fn index_discovered_video(
             tracing::warn!(
                 video_id = %video.video_id,
                 %error,
-                transcript_ms = transcript_started.elapsed().as_millis() as u64,
-                total_ms = indexing_started.elapsed().as_millis() as u64,
+                transcript_ms = elapsed_ms(transcript_started),
+                total_ms = elapsed_ms(indexing_started),
                 "skipped transcript"
             );
-            let category = failure_ledger.record(
-                &video.video_id,
+            return Ok(skipped_video(
+                video,
+                &failure_ledger,
                 &metadata.youtuber.id,
                 FailureStage::Transcript,
-                &error.to_string(),
-            );
-            return Ok(IndexVideoOutcome::Skipped {
-                video_id: video.video_id,
-                title: video.title,
-                reason: format!("transcript: {error}"),
-                category,
-            });
+                error,
+            ));
         }
     };
-    let transcript_ms = transcript_started.elapsed().as_millis() as u64;
+    let transcript_ms = elapsed_ms(transcript_started);
 
     let chunking_started = Instant::now();
     let chunks = match chunker.chunks(&metadata, &transcript) {
         Ok(chunks) => chunks,
         Err(error) => {
-            let category = failure_ledger.record(
-                &video.video_id,
-                &metadata.youtuber.id,
-                FailureStage::Chunking,
-                &error.to_string(),
-            );
             tracing::warn!(
                 video_id = %video.video_id,
                 %error,
-                chunking_ms = chunking_started.elapsed().as_millis() as u64,
-                total_ms = indexing_started.elapsed().as_millis() as u64,
+                chunking_ms = elapsed_ms(chunking_started),
+                total_ms = elapsed_ms(indexing_started),
                 "skipped chunking"
             );
-            return Ok(IndexVideoOutcome::Skipped {
-                video_id: video.video_id,
-                title: video.title,
-                reason: format!("chunking: {error}"),
-                category,
-            });
+            return Ok(skipped_video(
+                video,
+                &failure_ledger,
+                &metadata.youtuber.id,
+                FailureStage::Chunking,
+                error,
+            ));
         }
     };
-    let chunking_ms = chunking_started.elapsed().as_millis() as u64;
+    let chunking_ms = elapsed_ms(chunking_started);
 
     let chunk_count = chunks.len();
     let import_started = Instant::now();
     if let Err(error) = replace_video_document(&search, &video.video_id, &chunks).await {
-        let category = failure_ledger.record(
-            &video.video_id,
-            &metadata.youtuber.id,
-            FailureStage::Import,
-            &error.to_string(),
-        );
         tracing::warn!(
             video_id = %video.video_id,
             %error,
-            import_ms = import_started.elapsed().as_millis() as u64,
-            total_ms = indexing_started.elapsed().as_millis() as u64,
+            import_ms = elapsed_ms(import_started),
+            total_ms = elapsed_ms(indexing_started),
             "skipped import"
         );
-        return Ok(IndexVideoOutcome::Skipped {
-            video_id: video.video_id,
-            title: video.title,
-            reason: format!("import: {error}"),
-            category,
-        });
+        return Ok(skipped_video(
+            video,
+            &failure_ledger,
+            &metadata.youtuber.id,
+            FailureStage::Import,
+            error,
+        ));
     }
-    let import_ms = import_started.elapsed().as_millis() as u64;
+    let import_ms = elapsed_ms(import_started);
     failure_ledger.clear(&video.video_id);
     tracing::info!(
         video_id = %video.video_id,
@@ -1733,7 +1668,7 @@ async fn index_discovered_video(
         transcript_ms,
         chunking_ms,
         import_ms,
-        total_ms = indexing_started.elapsed().as_millis() as u64,
+        total_ms = elapsed_ms(indexing_started),
         "indexed video performance"
     );
 
@@ -1743,6 +1678,28 @@ async fn index_discovered_video(
         chunks: chunk_count,
         audio_transcribed,
     })
+}
+
+/// Records a classified failure for `video` and reports it as skipped.
+fn skipped_video(
+    video: DiscoveredVideo,
+    failure_ledger: &FailureLedger,
+    youtuber_id: &str,
+    stage: FailureStage,
+    error: impl std::fmt::Display,
+) -> IndexVideoOutcome {
+    let error = error.to_string();
+    let category = failure_ledger.record(&video.video_id, youtuber_id, stage, &error);
+    IndexVideoOutcome::Skipped {
+        video_id: video.video_id,
+        title: video.title,
+        reason: format!("{}: {error}", stage.as_str()),
+        category,
+    }
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    started.elapsed().as_millis() as u64
 }
 
 fn apply_index_outcome(
@@ -1916,13 +1873,10 @@ async fn validate_youtuber(
             "Could not resolve YouTube handle {handle} with yt-dlp and no YOUTUBE_API_KEY is configured"
         ))
     })?;
-    match profile_result.expect("profile lookup runs when the YouTube client is configured") {
-        Ok(mut youtuber) => {
-            populate_recent_uploads(youtube, &mut youtuber, max_videos).await;
-            Ok(youtuber)
-        }
-        Err(error) => Err(error),
-    }
+    let mut youtuber =
+        profile_result.expect("profile lookup runs when the YouTube client is configured")?;
+    populate_recent_uploads(youtube, &mut youtuber, max_videos).await;
+    Ok(youtuber)
 }
 
 async fn populate_recent_uploads(
@@ -1967,7 +1921,7 @@ async fn enrich_youtuber_channel_metadata(
         .page()
         .await?;
 
-    let channel = first_item(&channel_page).ok_or_else(|| {
+    let channel = channel_page.items.first().ok_or_else(|| {
         CliError::Message(format!("No YouTube channel found for handle {handle}"))
     })?;
     let channel_id = required_string(channel, "/id", "channel id")?;
@@ -2070,10 +2024,7 @@ async fn validate_youtuber_with_ytdlp(
             .videos
             .into_iter()
             .take(usize::from(max_videos))
-            .map(|video| UploadPreview {
-                video_id: video.video_id,
-                title: video.title,
-            })
+            .map(discovered_video_from_ytdlp_video)
             .collect(),
         uploads_warning: None,
     })
@@ -2120,90 +2071,66 @@ async fn discover_upload_playlist_videos(
     youtube: &YouTubeClient,
     uploads_playlist: &str,
 ) -> Result<Vec<DiscoveredVideo>, CliError> {
-    let mut videos = Vec::new();
-    let mut page_token = None;
-
-    loop {
-        let mut query = Query::new()
-            .part(["snippet", "contentDetails"])
-            .set("playlistId", uploads_playlist)
-            .max_results(50)
-            .fields("nextPageToken,items(snippet(title),contentDetails/videoId)");
-
-        if let Some(token) = page_token {
-            query = query.page_token(token);
-        }
-
-        let page = youtube
-            .list(ListResource::PlaylistItems)
-            .query(query)
-            .page()
-            .await?;
-        for item in &page.items {
-            if let Some(video) = discovered_video_from_playlist_item(item) {
-                videos.push(video);
-            }
-        }
-
-        page_token = page.next_page_token;
-        if page_token.is_none() {
-            break;
-        }
-    }
-
-    Ok(dedupe_discovered_videos(videos))
+    let query = Query::new()
+        .part(["snippet", "contentDetails"])
+        .set("playlistId", uploads_playlist)
+        .max_results(50)
+        .fields("nextPageToken,items(snippet(title),contentDetails/videoId)");
+    list_all_videos(
+        youtube,
+        ListResource::PlaylistItems,
+        query,
+        PLAYLIST_VIDEO_ID,
+    )
+    .await
 }
 
 async fn discover_public_videos(
     youtube: &YouTubeClient,
     channel_id: &str,
 ) -> Result<Vec<DiscoveredVideo>, CliError> {
+    let query = Query::new()
+        .part(["snippet"])
+        .set("channelId", channel_id)
+        .set("type", "video")
+        .set("order", "date")
+        .max_results(50)
+        .fields("nextPageToken,items(id/videoId,snippet/title)");
+    list_all_videos(youtube, ListResource::Search, query, "/id/videoId").await
+}
+
+const PLAYLIST_VIDEO_ID: &str = "/contentDetails/videoId";
+
+/// Follows every `nextPageToken` and returns the deduplicated videos.
+async fn list_all_videos(
+    youtube: &YouTubeClient,
+    resource: ListResource,
+    query: Query,
+    video_id_pointer: &str,
+) -> Result<Vec<DiscoveredVideo>, CliError> {
     let mut videos = Vec::new();
     let mut page_token = None;
-
     loop {
-        let mut query = Query::new()
-            .part(["snippet"])
-            .set("channelId", channel_id)
-            .set("type", "video")
-            .set("order", "date")
-            .max_results(50)
-            .fields("nextPageToken,items(id/videoId,snippet/title)");
-
+        let mut page_query = query.clone();
         if let Some(token) = page_token {
-            query = query.page_token(token);
+            page_query = page_query.page_token(token);
         }
-
-        let page = youtube
-            .list(ListResource::Search)
-            .query(query)
-            .page()
-            .await?;
-        for item in &page.items {
-            if let Some(video) = discovered_video_from_search_item(item) {
-                videos.push(video);
-            }
-        }
-
+        let page = youtube.list(resource).query(page_query).page().await?;
+        videos.extend(
+            page.items
+                .iter()
+                .filter_map(|item| discovered_video_from_item(item, video_id_pointer)),
+        );
         page_token = page.next_page_token;
         if page_token.is_none() {
-            break;
+            return Ok(dedupe_discovered_videos(videos));
         }
     }
-
-    Ok(dedupe_discovered_videos(videos))
 }
 
-fn discovered_video_from_playlist_item(item: &Value) -> Option<DiscoveredVideo> {
+fn discovered_video_from_item(item: &Value, video_id_pointer: &str) -> Option<DiscoveredVideo> {
     Some(DiscoveredVideo {
-        video_id: optional_string(item, "/contentDetails/videoId")?,
-        title: optional_string(item, "/snippet/title")?,
-    })
-}
-
-fn discovered_video_from_search_item(item: &Value) -> Option<DiscoveredVideo> {
-    Some(DiscoveredVideo {
-        video_id: optional_string(item, "/id/videoId")?,
+        video_id: optional_string(item, video_id_pointer)?,
         title: optional_string(item, "/snippet/title")?,
     })
 }
@@ -2232,7 +2159,7 @@ async fn fetch_recent_uploads(
     youtube: &YouTubeClient,
     uploads_playlist: &str,
     max_videos: u8,
-) -> Result<Vec<UploadPreview>, CliError> {
+) -> Result<Vec<DiscoveredVideo>, CliError> {
     let page = youtube
         .list(ListResource::PlaylistItems)
         .query(
@@ -2248,12 +2175,7 @@ async fn fetch_recent_uploads(
     Ok(page
         .items
         .iter()
-        .filter_map(|item| {
-            Some(UploadPreview {
-                video_id: optional_string(item, "/contentDetails/videoId")?,
-                title: optional_string(item, "/snippet/title")?,
-            })
-        })
+        .filter_map(|item| discovered_video_from_item(item, PLAYLIST_VIDEO_ID))
         .collect())
 }
 
@@ -2404,10 +2326,6 @@ fn normalize_handle(raw_handle: &str) -> Result<String, CliError> {
     }
 
     Ok(format!("@{without_at}"))
-}
-
-fn first_item(page: &Page<Value>) -> Option<&Value> {
-    page.items.first()
 }
 
 fn required_string(value: &Value, pointer: &str, label: &str) -> Result<String, CliError> {

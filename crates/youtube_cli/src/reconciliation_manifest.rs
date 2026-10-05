@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{self, File, OpenOptions},
-    io::Write,
+    fs,
     path::{Path, PathBuf},
     sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
@@ -59,7 +58,8 @@ pub(super) fn write_complete_discovery(
         handle: handle.to_string(),
         video_ids,
     };
-    let encoded = serde_json::to_vec_pretty(&manifest)?;
+    let mut encoded = serde_json::to_vec_pretty(&manifest)?;
+    encoded.push(b'\n');
     let key = blake3::hash(creator_id.as_bytes()).to_hex();
     let path = directory.join(format!("{key}.json"));
     write_atomic(&directory, &path, &encoded)?;
@@ -74,7 +74,7 @@ pub(super) fn begin_catalog_run(transcript_cache_directory: &Path) -> std::io::R
     write_atomic(
         &directory,
         &directory.join("active-run-id"),
-        run_id.as_bytes(),
+        format!("{run_id}\n").as_bytes(),
     )?;
     Ok(run_id)
 }
@@ -169,7 +169,7 @@ pub(super) fn remember_blocked_creator(
     match handle {
         Some(handle) => {
             fs::create_dir_all(&directory)?;
-            write_atomic(&directory, &path, handle.as_bytes())
+            write_atomic(&directory, &path, format!("{handle}\n").as_bytes())
         }
         None => match fs::remove_file(&path) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
@@ -190,18 +190,7 @@ fn write_atomic(directory: &Path, path: &Path, body: &[u8]) -> std::io::Result<(
             .unwrap_or("reconciliation"),
         std::process::id()
     ));
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temporary)?;
-    file.write_all(body)?;
-    file.write_all(b"\n")?;
-    file.sync_all()?;
-    if let Err(error) = fs::rename(&temporary, path) {
-        let _ = fs::remove_file(&temporary);
-        return Err(error);
-    }
-    File::open(directory)?.sync_all()
+    crate::atomic_file::write(path, &temporary, body)
 }
 
 #[cfg(test)]
