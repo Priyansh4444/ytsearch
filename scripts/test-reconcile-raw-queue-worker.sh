@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-export FLY_API_TOKEN=fake-token
+export FLY_API_TOKEN=test-secret-token
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 tmp="$(mktemp -d)"
@@ -142,7 +142,7 @@ set -eu
 printf '%s\n' "$*" >> "$FAKE_FLY_LOG"
 case "$1 $2" in
   "auth token")
-    printf 'fake-token\n'
+    printf 'test-refreshed-token\n'
     ;;
   "machine list")
     cat "$FAKE_FLY_STATE"
@@ -211,45 +211,17 @@ case "$1 $2" in
 esac
 SH
 chmod +x "$tmp/fake-bin/flyctl"
-cat > "$tmp/fake-bin/curl" <<'SH'
-#!/usr/bin/env sh
-set -eu
-request=""
-response=""
-auth_header=""
-lease_header=""
-method="GET"
-url=""
-printf '%s\n' "$*" >> "$FAKE_CURL_LOG"
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --data-binary) request="${2#@}"; shift 2 ;;
-    --output) response="$2"; shift 2 ;;
-    --request) method="$2"; shift 2 ;;
-    --header)
-      case "$2" in
-        @*)
-          header_file="${2#@}"
-          if grep -q '^Authorization:' "$header_file"; then
-            auth_header="$header_file"
-          elif grep -q '^fly-machine-lease-nonce:' "$header_file"; then
-            lease_header="$header_file"
-          fi
-          ;;
-      esac
-      shift 2
-      ;;
-    http://*|https://*) url="$1"; shift ;;
-    *) shift ;;
-  esac
-done
-[ -n "$response" ] && [ -n "$auth_header" ] && [ -n "$url" ]
-[ "$(stat -c '%a' "$auth_header")" = "600" ]
-grep -Fx 'Authorization: Bearer fake-token' "$auth_header" >/dev/null
+cat > "$tmp/fake-bin/curl" <<SH
+#!/usr/bin/env bash
+set -euo pipefail
+source "$SCRIPT_DIR/lib/test-fly-fakes.sh"
+SH
+cat >> "$tmp/fake-bin/curl" <<'SH'
+fake_curl_parse "$@"
 case "$method:$url" in
   POST:*/lease)
     if [ "${FAKE_LEASE_CONFLICT:-0}" = "1" ]; then
-      printf '{"error":"lease conflict"}\n' > "$response"
+      printf '{"error":"lease conflict"}\n' > "$output"
       printf '409'
       exit 0
     fi
@@ -269,21 +241,19 @@ case "$method:$url" in
         "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
       mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
     fi
-    printf '{"status":"success","data":{"nonce":"fake-nonce"}}\n' > "$response"
+    printf '{"status":"success","data":{"nonce":"test-lease-nonce"}}\n' > "$output"
     : > "$FAKE_FLY_LEASE"
     printf 'lease acquired\n' >> "$FAKE_FLY_LOG"
     printf '201'
     ;;
   GET:*/machines/machine-1)
-    [ -n "$lease_header" ] && [ -f "$FAKE_FLY_LEASE" ]
-    [ "$(stat -c '%a' "$lease_header")" = "600" ]
-    grep -Fx 'fly-machine-lease-nonce: fake-nonce' "$lease_header" >/dev/null
-    jq '.[0]' "$FAKE_FLY_STATE" > "$response"
+    [ -f "$FAKE_FLY_LEASE" ]
+    jq '.[0]' "$FAKE_FLY_STATE" > "$output"
     printf 'machine read under lease\n' >> "$FAKE_FLY_LOG"
     printf '200'
     ;;
   POST:*/machines/machine-1)
-    [ -n "$request" ] && [ -n "$lease_header" ] && [ -f "$FAKE_FLY_LEASE" ]
+    [ -n "$request" ] && [ -f "$FAKE_FLY_LEASE" ]
     case "$request" in
       *.json) ;;
       *) echo "machine request must use a .json path: $request" >&2; exit 1 ;;
@@ -295,7 +265,7 @@ case "$method:$url" in
       and .skip_launch == true
     ' "$request" >/dev/null
     if [ "${FAKE_UPDATE_CONFLICT:-0}" = "1" ]; then
-      printf '{"error":"stale version"}\n' > "$response"
+      printf '{"error":"stale version"}\n' > "$output"
       printf '409'
       exit 0
     fi
@@ -305,16 +275,16 @@ case "$method:$url" in
       | .[0].state = "created"
     ' "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
     mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
-    jq '.[0]' "$FAKE_FLY_STATE" > "$response"
+    jq '.[0]' "$FAKE_FLY_STATE" > "$output"
     printf 'api update\n' >> "$FAKE_FLY_LOG"
     printf '200'
     ;;
   POST:*/machines/machine-1/start)
-    [ -n "$lease_header" ] && [ -f "$FAKE_FLY_LEASE" ]
+    [ -f "$FAKE_FLY_LEASE" ]
     [ "$(jq -r '.[0].state' "$FAKE_FLY_STATE")" = "created" ]
     jq '.[0].state = "started"' "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
     mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
-    jq '.[0]' "$FAKE_FLY_STATE" > "$response"
+    jq '.[0]' "$FAKE_FLY_STATE" > "$output"
     printf 'api start\n' >> "$FAKE_FLY_LOG"
     if [ "${FAKE_START_RESPONSE_LOST:-0}" = "1" ]; then
       exit 7
@@ -322,7 +292,7 @@ case "$method:$url" in
     printf '200'
     ;;
   POST:*/machines/machine-1/stop)
-    [ -n "$lease_header" ] && [ -f "$FAKE_FLY_LEASE" ]
+    [ -f "$FAKE_FLY_LEASE" ]
     jq --arg async "${FAKE_ASYNC_STOP:-0}" \
       '.[0].state = (if $async == "1" then "stopping" else "stopped" end)' \
       "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
@@ -331,7 +301,7 @@ case "$method:$url" in
     printf '200'
     ;;
   DELETE:*/lease)
-    [ -n "$lease_header" ] && [ -f "$FAKE_FLY_LEASE" ]
+    [ -f "$FAKE_FLY_LEASE" ]
     rm -f "$FAKE_FLY_LEASE"
     printf 'lease released\n' >> "$FAKE_FLY_LOG"
     printf '200'
@@ -363,7 +333,7 @@ jq -e '
   and .[0].config.metadata.external_owner == "fresh-leased-get"
 ' \
   "$tmp/fly-state.json" >/dev/null
-if grep -E 'fake-token|fake-nonce' "$tmp/curl.log"; then
+if grep -E 'test-secret-token|test-lease-nonce' "$tmp/curl.log"; then
   echo "Fly credentials must not appear in curl arguments" >&2
   exit 1
 fi

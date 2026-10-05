@@ -21,14 +21,14 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 mkdir -p "$tmp/bin"
 export FLY_PRODUCTION_INVENTORY_PATH="$SCRIPT_DIR/testdata/fly-production-resources.json"
 export RAW_RELEASE_RECOVERY_ROOT="$tmp/recovery"
-export FLY_API_TOKEN=fake-token
+export FLY_API_TOKEN=test-secret-token
 
 cat > "$tmp/bin/flyctl" <<'SH'
 #!/usr/bin/env sh
 set -eu
 printf '%s\n' "$*" >> "$FAKE_FLY_LOG"
 case "$1 $2" in
-  "auth token") printf 'fake-token\n' ;;
+  "auth token") printf 'test-refreshed-token\n' ;;
   "machine list")
     case " $* " in
       *" --app ytsearch-raw-production "*) cat "$FAKE_TARGET_STATE" ;;
@@ -67,24 +67,16 @@ esac
 SH
 chmod +x "$tmp/bin/flyctl"
 
-cat > "$tmp/bin/curl" <<'SH'
+cat > "$tmp/bin/curl" <<SH
 #!/usr/bin/env bash
 set -euo pipefail
-method=GET
-output=""
-url=""
-while (($#)); do
-  case "$1" in
-    --request) method="$2"; shift 2 ;;
-    --output) output="$2"; shift 2 ;;
-    http://*|https://*) url="$1"; shift ;;
-    *) shift ;;
-  esac
-done
-printf '%s %s\n' "$method" "$url" >> "$FAKE_CURL_LOG"
+source "$SCRIPT_DIR/lib/test-fly-fakes.sh"
+SH
+cat >> "$tmp/bin/curl" <<'SH'
+fake_curl_parse "$@"
 case "$method:$url" in
   POST:*/lease)
-    printf '{"data":{"nonce":"fake-nonce","expires_at":4102444800}}\n' > "$output"
+    printf '{"data":{"nonce":"test-lease-nonce","expires_at":4102444800}}\n' > "$output"
     printf '201'
     ;;
   GET:*/machines/33333333333333)
