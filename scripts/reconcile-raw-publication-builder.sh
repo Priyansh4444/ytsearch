@@ -204,50 +204,13 @@ min_secrets_version="$(fly_machine_app_secrets_version "$RAW_BUILDER_APP")"
 fly_machine_session_update "$session_directory" "$machine_config" "$min_secrets_version"
 fly_machine_session_stop "$session_directory" 3 10 1
 fly_machine_session_get "$session_directory" "$resolved"
-if ! jq -e \
-  --arg image "$indexer_image" \
-  --arg source "$source_commit" \
-  --arg target "$RAW_PUBLICATION_TARGET_URL" \
-  --arg target_machine "$target_machine_id" \
-  --arg base "sha256:$base_digest" \
-  --arg builder_profile "$RAW_PUBLICATION_BUILDER_PROFILE" \
-  --arg cpu_kind "$RAW_PUBLICATION_BUILDER_CPU_KIND" \
-  --argjson cpus "$RAW_PUBLICATION_BUILDER_CPUS" \
-  --argjson memory_mb "$RAW_PUBLICATION_BUILDER_MEMORY_MB" \
-  --arg volume "$RAW_BUILDER_VOLUME_ID" '
-  .state == "stopped" and
+if ! raw_publication_builder_is_staged "$source_commit" "$RAW_PUBLICATION_TARGET_URL" \
+  "$target_machine_id" "sha256:$base_digest" /var/lib/ytsearch '
   (.config.image == $image or (.config.image | startswith($image + "@sha256:"))) and
-  (.image_ref.digest | test("^sha256:[0-9a-f]{64}$")) and
-  .config.env.YTSEARCH_MACHINE_ROLE == "publication-builder" and
-  .config.env.RAW_SEARCH_API_URL == $target and
   .config.env.RAW_PUBLICATION_WORK_DIRECTORY == "/var/lib/ytsearch/raw-generation-work" and
   .config.env.RAW_PUBLICATION_MIN_FREE_BYTES == "8000000000" and
-  .config.init.entrypoint == ["/usr/bin/sleep"] and
-  .config.init.cmd == ["infinity"] and
-  .config.init.swap_size_mb == 512 and
-  .config.metadata.lifecycle == "on-demand-publication-builder" and
-  .config.metadata.source_commit == $source and
-  .config.metadata.base_image_digest == $base and
-  .config.metadata.builder_profile == $builder_profile and
-  .config.metadata.target_machine == $target_machine and
-  .config.restart.policy == "no" and
-  .config.guest.cpu_kind == $cpu_kind and
-  .config.guest.cpus == $cpus and
-  .config.guest.memory_mb == $memory_mb and
-  ((.config.services // []) | length) == 0 and
-  ((.config.checks // {}) | length) == 0 and
-  ((.config.files // []) | length) == 0 and
-  .config.dns.skip_registration == true and
-  ((.config.env | keys | sort) == [
-    "RAW_PUBLICATION_MIN_FREE_BYTES",
-    "RAW_PUBLICATION_WORK_DIRECTORY",
-    "RAW_SEARCH_API_URL",
-    "YTSEARCH_MACHINE_ROLE"
-  ]) and
-  ((.config.mounts // []) | length) == 1 and
-  .config.mounts[0].volume == $volume and
-  .config.mounts[0].path == "/var/lib/ytsearch"
-' "$resolved" >/dev/null; then
+  .config.init.swap_size_mb == 512
+' --arg image "$indexer_image" < "$resolved"; then
   printf 'publication builder verification failed after update\n' >&2
   exit 1
 fi
