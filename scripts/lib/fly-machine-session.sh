@@ -606,8 +606,12 @@ fly_machine_session_preserve() {
     return 1
   fi
   destination_parent="$(dirname -- "$destination")"
-  mkdir -p -- "$destination_parent"
-  mv -- "$directory" "$destination"
+  # Callers run this inside `if`, where errexit is off: a failed move must not
+  # report the session as preserved.
+  if ! mkdir -p -- "$destination_parent" || ! mv -- "$directory" "$destination"; then
+    _fly_machine_session_error "could not move the session to $destination"
+    return 1
+  fi
   chmod 700 "$destination"
   printf '%s\n' "$destination"
 }
