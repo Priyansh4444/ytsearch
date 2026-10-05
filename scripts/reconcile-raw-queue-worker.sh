@@ -312,35 +312,9 @@ if [ "$fresh_version" != "$machine_version" ]; then
 fi
 
 write_reconciled_config < "$response_file" > "$config_file"
-if ! flyctl secrets sync --stage --app "$APP_NAME" >/dev/null; then
-  echo "Could not synchronize the authoritative Fly secrets version for $APP_NAME." >&2
-  exit 1
-fi
-min_secrets_version=""
-fly_config_file="${FLY_CONFIG_FILE:-${FLY_CONFIG_DIR:-$HOME/.fly}/config.yml}"
-if [ -r "$fly_config_file" ]; then
-  min_secrets_version="$(awk -v app="$APP_NAME" '
-    /^app_secrets_minvers:/ { in_minvers = 1; next }
-    in_minvers && /^[^[:space:]]/ { exit }
-    in_minvers {
-      line = $0
-      sub(/^[[:space:]]+/, "", line)
-      key = line
-      sub(/:.*/, "", key)
-      if (key == app) {
-        sub(/^[^:]*:[[:space:]]*/, "", line)
-        print line
-        exit
-      }
-    }
-  ' "$fly_config_file")"
-fi
-case "$min_secrets_version" in
-  ''|*[!0-9]*)
-    echo "Fly did not persist the synchronized secrets version for $APP_NAME." >&2
-    exit 1
-    ;;
-esac
+# Stage the authoritative secrets version and read it back from flyctl's config.
+min_secrets_version="$(bash -c '. "$1" && fly_machine_app_secrets_version "$2"' sh \
+  "$SCRIPT_DIR/lib/fly-machine-session.sh" "$APP_NAME")" || exit 1
 jq -n \
   --slurpfile config "$config_file" \
   --arg current_version "$fresh_version" \
