@@ -5,7 +5,7 @@
 # lease nonce is test-lease-nonce.
 
 # Writes curl and flyctl stubs into a bin directory that run fake_fly_curl and
-# fake_flyctl from this file.
+# fake_flyctl from this file, and a sleep that returns at once.
 fake_fly_install() {
   local library
   library="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/test-fly-fakes.sh"
@@ -14,7 +14,8 @@ fake_fly_install() {
     "$library" > "$1/curl"
   printf '#!/usr/bin/env bash\nset -euo pipefail\nsource %q\nfake_flyctl "$@"\n' \
     "$library" > "$1/flyctl"
-  chmod +x "$1/curl" "$1/flyctl"
+  printf '#!/bin/sh\n' > "$1/sleep"
+  chmod +x "$1/curl" "$1/flyctl" "$1/sleep"
 }
 
 # flyctl: logs to FAKE_FLY_LOG, lists FAKE_FLY_STATE (FAKE_TARGET_STATE for the
@@ -72,7 +73,8 @@ fake_curl_parse() {
 # Machines API for the first machine in FAKE_FLY_STATE, whose id is
 # FAKE_MACHINE_ID. An update must satisfy the jq filter FAKE_UPDATE_FILTER; it
 # replaces the config, bumps instance_id from -1 to -2 and resolves the image
-# to FAKE_RESOLVED_DIGEST.
+# to FAKE_RESOLVED_DIGEST. FAKE_STOP_STATUS or FAKE_RELEASE_STATUS other than
+# 200 or 204 make stop or lease release fail with that HTTP status.
 fake_fly_curl() {
   fake_curl_parse "$@"
   case "$method:$url" in
@@ -86,10 +88,12 @@ fake_fly_curl() {
       printf 200
       ;;
     POST:*/machines/"$FAKE_MACHINE_ID"/stop)
-      jq '.[0].state = "stopped"' "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
-      mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
+      if [[ "${FAKE_STOP_STATUS:-200}" == 200 ]]; then
+        jq '.[0].state = "stopped"' "$FAKE_FLY_STATE" > "$FAKE_FLY_STATE.next"
+        mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
+      fi
       printf '{}\n' > "$output"
-      printf 200
+      printf '%s' "${FAKE_STOP_STATUS:-200}"
       ;;
     POST:*/machines/"$FAKE_MACHINE_ID")
       jq -e "$FAKE_UPDATE_FILTER" "$request" >/dev/null
@@ -105,7 +109,7 @@ fake_fly_curl() {
       ;;
     DELETE:*/lease)
       printf '{}\n' > "$output"
-      printf 204
+      printf '%s' "${FAKE_RELEASE_STATUS:-204}"
       ;;
     *) printf 'unexpected fake curl request: %s %s\n' "$method" "$url" >&2; exit 92 ;;
   esac
@@ -146,4 +150,53 @@ fake_fly_setup() {
     FAKE_FLY_LOG="$directory/fly.log" \
     FAKE_CURL_LOG="$directory/curl.log" \
     FAKE_RESOLVED_DIGEST="$resolved_digest"
+}
+
+# Runs a staging command (the remaining arguments) from initial_state with a
+# failing stop, then a failing lease release: each must fail without releasing
+# an unstopped Machine and move the leased session to
+# $RAW_RELEASE_RECOVERY_ROOT/<recovery_prefix>-*. With an unusable recovery root
+# the session must stay where it is.
+expect_staging_cleanup_failures() {
+  local initial_state="$1" recovery_prefix="$2" failure session
+  local directory
+  directory="$(dirname -- "$FAKE_FLY_STATE")"
+  shift 2
+  for failure in FAKE_STOP_STATUS=500 FAKE_RELEASE_STATUS=500 unusable-recovery-root; do
+    cp "$initial_state" "$FAKE_FLY_STATE"
+    : > "$FAKE_CURL_LOG"
+    rm -rf "$directory/recovery"
+    if [[ "$failure" == unusable-recovery-root ]]; then
+      : > "$directory/recovery"
+      set -- env FAKE_STOP_STATUS=500 "$@"
+    else
+      set -- env "$failure" "$@"
+    fi
+    if env RAW_RELEASE_RECOVERY_ROOT="$directory/recovery" "$@" \
+      >/dev/null 2> "$directory/cleanup.err"; then
+      printf 'staging must fail with %s\n' "$failure" >&2
+      exit 1
+    fi
+    case "$failure" in
+      FAKE_STOP_STATUS=*)
+        grep -F 'stop could not be confirmed; retaining lease until TTL expiry' \
+          "$directory/cleanup.err" >/dev/null
+        ! grep -q '^DELETE ' "$FAKE_CURL_LOG"
+        ! grep -q -- '--request DELETE' "$FAKE_CURL_LOG"
+        ;;
+      FAKE_RELEASE_STATUS=*)
+        grep -F 'lease release failed' "$directory/cleanup.err" >/dev/null
+        grep -q -- '--request DELETE' "$FAKE_CURL_LOG"
+        ;;
+    esac
+    if [[ "$failure" == unusable-recovery-root ]]; then
+      session="$(sed -n 's/.*recovery session remains at //p' "$directory/cleanup.err")"
+      [[ -f "$session/lease.header" ]]
+      rm -rf "$(dirname -- "$session")"
+    else
+      grep -F 'recovery session preserved at' "$directory/cleanup.err" >/dev/null
+      test -f "$directory"/recovery/"$recovery_prefix"-*/lease.header
+    fi
+    shift 2
+  done
 }

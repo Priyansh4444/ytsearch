@@ -117,37 +117,16 @@ resolved="$temporary_directory/resolved-machine.json"
 lease_acquired=0
 
 cleanup_builder_stage() {
-  local prior_status="$1"
-  local cleanup_status="$prior_status"
-  local release_allowed=1
-  local preserve_session=0
-  local recovery_root recovery_destination
+  local status="$1" finish=0
   trap - EXIT
   trap '' INT TERM
-  if (( lease_acquired == 1 )) && ! fly_machine_session_stop "$session_directory" 3 10 1; then
-    printf 'publication builder stop could not be confirmed; retaining lease until TTL expiry\n' >&2
-    cleanup_status=1
-    release_allowed=0
-    preserve_session=1
+  if (( lease_acquired == 1 )); then
+    fly_machine_session_finish "$session_directory" 'publication builder' \
+      "builder-stage-$RAW_BUILDER_MACHINE_ID" 3 10 1 || finish=$?
   fi
-  if (( lease_acquired == 1 && release_allowed == 1 )) \
-    && ! fly_machine_session_release "$session_directory"; then
-    printf 'publication builder lease release failed after staging\n' >&2
-    cleanup_status=1
-    preserve_session=1
-  fi
-  if (( preserve_session == 1 )); then
-    recovery_root="${RAW_RELEASE_RECOVERY_ROOT:-$(fly_machine_session_default_recovery_root)}"
-    recovery_destination="$recovery_root/builder-stage-${RAW_BUILDER_MACHINE_ID}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-    if fly_machine_session_preserve "$session_directory" "$recovery_destination" >/dev/null; then
-      printf 'publication builder recovery session preserved at %s\n' "$recovery_destination" >&2
-    else
-      printf 'publication builder recovery session remains at %s\n' "$session_directory" >&2
-      exit "$cleanup_status"
-    fi
-  fi
-  rm -rf "$temporary_directory"
-  exit "$cleanup_status"
+  (( finish == 0 )) || status=1
+  (( finish == 2 )) || rm -rf "$temporary_directory"
+  exit "$status"
 }
 trap 'cleanup_builder_stage $?' EXIT
 trap 'exit 130' INT TERM

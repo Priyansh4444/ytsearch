@@ -451,43 +451,21 @@ restart_canary() {
 }
 
 cleanup() {
-  local prior_status="$1"
-  local cleanup_status="$prior_status"
-  local release_allowed=1
-  local preserve_session=0
-  local recovery_root="${RAW_RELEASE_RECOVERY_ROOT:-$(fly_machine_session_default_recovery_root)}"
-  local recovery_destination="$recovery_root/reader-canary-${RAW_CANARY_MACHINE_ID}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  local status="$1" finish=0
   trap - EXIT
   trap '' INT TERM
   if [[ -n "$proxy_pid" ]]; then
     kill "$proxy_pid" 2>/dev/null || true
     wait "$proxy_pid" 2>/dev/null || true
   fi
-  if (( lease_acquired == 1 )) && ! fly_machine_session_stop "$session_directory" \
-    "$RAW_CANARY_STOP_RETRIES" "$RAW_CANARY_STOP_POLL_ATTEMPTS" \
-    "$RAW_CANARY_STATE_POLL_INTERVAL_SECONDS"; then
-    printf 'Raw canary stop could not be confirmed; retaining lease until TTL expiry\n' >&2
-    cleanup_status=1
-    release_allowed=0
-    preserve_session=1
+  if (( lease_acquired == 1 )); then
+    fly_machine_session_finish "$session_directory" 'Raw canary' \
+      "reader-canary-$RAW_CANARY_MACHINE_ID" "$RAW_CANARY_STOP_RETRIES" \
+      "$RAW_CANARY_STOP_POLL_ATTEMPTS" "$RAW_CANARY_STATE_POLL_INTERVAL_SECONDS" || finish=$?
   fi
-  if (( lease_acquired == 1 && release_allowed == 1 )); then
-    if ! fly_machine_session_release "$session_directory"; then
-      printf 'Raw canary lease release failed\n' >&2
-      cleanup_status=1
-      preserve_session=1
-    fi
-  fi
-  if (( preserve_session == 1 )); then
-    if fly_machine_session_preserve "$session_directory" "$recovery_destination" >/dev/null; then
-      printf 'Raw canary recovery session preserved at %s\n' "$recovery_destination" >&2
-    else
-      printf 'Raw canary recovery session remains at %s\n' "$session_directory" >&2
-      exit "$cleanup_status"
-    fi
-  fi
-  rm -rf "$secret_directory"
-  exit "$cleanup_status"
+  (( finish == 0 )) || status=1
+  (( finish == 2 )) || rm -rf "$secret_directory"
+  exit "$status"
 }
 trap 'cleanup $?' EXIT
 trap 'exit 130' INT TERM

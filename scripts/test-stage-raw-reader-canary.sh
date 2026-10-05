@@ -58,6 +58,7 @@ cat > "$tmp/state.json" <<JSON
 }]
 JSON
 
+cp "$tmp/state.json" "$tmp/initial-state.json"
 "$SCRIPT_DIR/stage-raw-reader-canary.sh" > "$tmp/dry.json"
 jq -e --arg machine "$machine_id" '.apply == false and .machine == $machine' \
   "$tmp/dry.json" >/dev/null
@@ -98,5 +99,10 @@ expect_failure 'Raw canary staging must reject public services' \
 jq '.[0].config.mounts[0].volume = "wrong-volume"' "$tmp/state.json" > "$tmp/wrong.json"
 expect_failure 'Raw canary staging must reject the wrong volume' \
   env FAKE_FLY_STATE="$tmp/wrong.json" "$SCRIPT_DIR/stage-raw-reader-canary.sh"
+
+
+expect_staging_cleanup_failures "$tmp/initial-state.json" "reader-stage-$machine_id" \
+  env APPLY_RAW_READER_CANARY=stage-exact-isolated-canary \
+  "$SCRIPT_DIR/stage-raw-reader-canary.sh"
 
 printf 'raw_reader_canary_staging=ok\n'
