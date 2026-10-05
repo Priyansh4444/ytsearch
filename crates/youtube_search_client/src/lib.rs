@@ -55,11 +55,6 @@ impl TextSearchQuery {
         self
     }
 
-    pub fn group_by(mut self, value: impl Into<String>) -> Self {
-        self.group_by = Some(value.into());
-        self
-    }
-
     pub fn without_grouping(mut self) -> Self {
         self.group_by = None;
         self.group_limit = None;
