@@ -380,43 +380,9 @@ builder="$(flyctl machine list --app "$RAW_BUILDER_APP" --json |
     [.[] | select(.id == $id)] |
     if length == 1 then .[0] else error("exact Raw publication builder not found") end
   ')"
-if ! jq -e --arg source "$source_commit" --arg target "$private_target" \
-  --arg target_machine "$RAW_CANARY_MACHINE_ID" --arg volume "$RAW_BUILDER_VOLUME_ID" \
-  --arg base_image_digest "$base_image_digest" \
-  --arg builder_profile "$RAW_PUBLICATION_BUILDER_PROFILE" \
-  --arg cpu_kind "$RAW_PUBLICATION_BUILDER_CPU_KIND" \
-  --argjson cpus "$RAW_PUBLICATION_BUILDER_CPUS" \
-  --argjson memory_mb "$RAW_PUBLICATION_BUILDER_MEMORY_MB" '
-    .state == "stopped" and
-    .config.env.YTSEARCH_MACHINE_ROLE == "publication-builder" and
-    .config.env.RAW_SEARCH_API_URL == $target and
-    .config.init.entrypoint == ["/usr/bin/sleep"] and
-    .config.init.cmd == ["infinity"] and
-    .config.metadata.lifecycle == "on-demand-publication-builder" and
-    .config.metadata.source_commit == $source and
-    .config.metadata.target_machine == $target_machine and
-    .config.metadata.base_image_digest == $base_image_digest and
-    .config.metadata.builder_profile == $builder_profile and
-    (.image_ref.digest | test("^sha256:[0-9a-f]{64}$")) and
-    .config.restart.policy == "no" and
-    .config.guest.cpu_kind == $cpu_kind and
-    .config.guest.cpus == $cpus and
-    .config.guest.memory_mb == $memory_mb and
-    ((.config.services // []) | length) == 0 and
-    ((.config.checks // {}) | length) == 0 and
-    ((.config.files // []) | length) == 0 and
-    .config.dns.skip_registration == true and
-    ((.config.env | keys | sort) == [
-      "RAW_PUBLICATION_MIN_FREE_BYTES",
-      "RAW_PUBLICATION_WORK_DIRECTORY",
-      "RAW_SEARCH_API_URL",
-      "YTSEARCH_MACHINE_ROLE"
-    ]) and
-    ((.config.mounts // []) | length) == 1 and
-    .config.mounts[0].volume == $volume and
-    .config.mounts[0].path == $mount_path and
-    (.config.image | contains("raw-indexer-" + ($source[0:12]) + "-"))
-  ' --arg mount_path "$RAW_BUILDER_MOUNT_PATH" <<<"$builder" >/dev/null; then
+if ! raw_publication_builder_is_staged "$source_commit" "$private_target" \
+  "$RAW_CANARY_MACHINE_ID" "$base_image_digest" "$RAW_BUILDER_MOUNT_PATH" \
+  '.config.image | contains("raw-indexer-" + ($source[0:12]) + "-")' <<<"$builder"; then
   printf 'refusing to run with an unstaged or mismatched publication builder\n' >&2
   exit 1
 fi
