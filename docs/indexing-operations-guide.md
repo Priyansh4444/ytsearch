@@ -49,7 +49,7 @@ ALLOW_DESTRUCTIVE_REWIPE=1 cargo run --release -p youtube_cli -- \
 JOBS=1 CHANNEL_JOBS=1 nohup scripts/index-all-raw.sh scripts/indexed-channels.txt \
   > /tmp/ytsearch-index-all.log 2>&1 &
 # failure-only output:
-BACKENDS=raw JOBS=1 CHANNEL_JOBS=1 nohup scripts/run-index-all-quiet.sh \
+JOBS=1 CHANNEL_JOBS=1 nohup scripts/run-index-all-quiet.sh \
   scripts/indexed-channels.txt > /tmp/ytsearch-index-all.quiet.out 2>&1 &
 ```
 
