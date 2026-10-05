@@ -145,6 +145,7 @@ function decodeSearchResponse(input: unknown): SearchResponse {
     total_found: number(value.total_found),
     out_of: number(value.out_of),
     time_to_first_result_ms: number(value.time_to_first_result_ms),
+    edge_cached: value.edge_cached === true,
     page: number(value.page),
     per_page: number(value.per_page),
     sort: literal(value.sort, [

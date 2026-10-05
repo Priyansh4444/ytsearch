@@ -1,3 +1,4 @@
+import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import worker from "./index";
 import { shouldWakeIndexer } from "./wake-policy";
@@ -5,11 +6,25 @@ import { shouldWakeIndexer } from "./wake-policy";
 const TEST_RAW_MACHINE_ID = "11111111111111";
 const TEST_RETIRED_RAW_MACHINE_ID = "22222222222222";
 
-afterEach(() => {
+const EDGE_CACHED_PATHS = ["/api/search?q=rust", "/api/availability", "/api/index-status"];
+
+afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  for (const path of EDGE_CACHED_PATHS) {
+    await caches.default.delete(new Request(`https://search.pronsh.dev${path}`));
+  }
 });
+
+// Runs the Worker with a real execution context and waits for its
+// `waitUntil` work, such as edge-cache writes, before returning.
+async function fetchWorker(request: Request, env: Env): Promise<Response> {
+  const ctx = createExecutionContext();
+  const response = await worker.fetch(request, env, ctx);
+  await waitOnExecutionContext(ctx);
+  return response;
+}
 
 describe("index request approval wake gate", () => {
   test("does not wake the indexer for a new public request", () => {
@@ -53,13 +68,62 @@ describe("scheduled repair wake", () => {
   });
 });
 
+describe("edge cache", () => {
+  const searchRequest = () => new Request("https://search.pronsh.dev/api/search?q=rust");
+
+  test("serves a repeated search from the edge and marks it cached", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T20:00:00Z"));
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => Response.json({ query: "rust", time_to_first_result_ms: 8 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = await fetchWorker(searchRequest(), testEnv());
+    expect(await first.json()).not.toHaveProperty("edge_cached");
+    const second = await fetchWorker(searchRequest(), testEnv());
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(await second.json()).toMatchObject({ query: "rust", edge_cached: true });
+    expect(second.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  test("never caches a failed search", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T20:00:00Z"));
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => Response.json({ error: "busy" }, { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchWorker(searchRequest(), testEnv());
+    const second = await fetchWorker(searchRequest(), testEnv());
+
+    expect(second.status).toBe(503);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("probes origin health once per availability window", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const env = testEnv({ SEARCH_SCHEDULE_MODE: "always_on" });
+    const availability = () => new Request("https://search.pronsh.dev/api/availability");
+
+    await fetchWorker(availability(), env);
+    const second = await fetchWorker(availability(), env);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(await second.json()).toMatchObject({ status: "ready", search_enabled: true });
+  });
+});
+
 describe("scheduled search availability", () => {
   test("serves static assets without consulting Fly", async () => {
     const assetResponse = new Response("app");
     const assetFetch = vi.fn().mockResolvedValue(assetResponse);
     vi.stubGlobal("fetch", vi.fn());
 
-    const response = await worker.fetch(
+    const response = await fetchWorker(
       new Request("https://search.pronsh.dev/"),
       testEnv({ ASSETS: { fetch: assetFetch } }),
     );
@@ -76,7 +140,7 @@ describe("scheduled search availability", () => {
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    const response = await worker.fetch(
+    const response = await fetchWorker(
       new Request("https://search.pronsh.dev/api/search?q=rust"),
       testEnv(),
     );
@@ -92,7 +156,7 @@ describe("scheduled search availability", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  test("bypasses every persistent cache for dynamic searches", async () => {
+  test("sends dynamic searches to browsers uncached and fetches them uncached", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-26T20:00:00Z"));
     const fetchMock = vi
@@ -102,7 +166,7 @@ describe("scheduled search availability", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    const response = await worker.fetch(
+    const response = await fetchWorker(
       new Request("https://search.pronsh.dev/api/search?q=rust"),
       testEnv(),
     );
@@ -125,7 +189,7 @@ describe("scheduled search availability", () => {
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ query: "rust", videos: [] }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await worker.fetch(
+    await fetchWorker(
       new Request("https://search.pronsh.dev/api/search?q=rust", {
         headers: { Origin: "http://localhost:5173" },
       }),
@@ -141,7 +205,7 @@ describe("scheduled search availability", () => {
     vi.setSystemTime(new Date("2026-07-26T17:00:00Z"));
     vi.stubGlobal("fetch", vi.fn());
 
-    const response = await worker.fetch(
+    const response = await fetchWorker(
       new Request("https://search.pronsh.dev/api/availability"),
       testEnv(),
     );

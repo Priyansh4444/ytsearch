@@ -30,7 +30,9 @@ export const SearchResults: Component<{
           {props.response.request_duration_ms ?? props.response.time_to_first_result_ms} ms request
           {props.response.request_duration_ms === undefined
             ? ""
-            : ` · ${props.response.time_to_first_result_ms} ms search`}
+            : props.response.edge_cached
+              ? " · cached"
+              : ` · ${props.response.time_to_first_result_ms} ms search`}
         </span>
       </div>
 
