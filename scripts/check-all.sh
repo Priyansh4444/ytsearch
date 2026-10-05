@@ -25,8 +25,7 @@ scripts/test-fly-machine-session.sh
 scripts/test-raw-release-inventory.sh
 scripts/sync-wrangler-production-resources.sh --check
 scripts/test-sync-wrangler-production-resources.sh
-scripts/test-build-raw-indexer-overlay.sh
-scripts/test-build-raw-search-overlay.sh
+scripts/test-build-raw-overlays.sh
 scripts/test-raw-search-entrypoint.sh
 scripts/test-stage-raw-reader-canary.sh
 scripts/test-require-committed-rust-build-inputs.sh

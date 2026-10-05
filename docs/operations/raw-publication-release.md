@@ -46,8 +46,8 @@ export BASE_IMAGE="$(
     end
   '
 )"
-scripts/build-raw-search-overlay.sh | tee /tmp/raw-reader-image.json
-scripts/build-raw-indexer-overlay.sh | tee /tmp/raw-builder-image.json
+scripts/build-raw-overlay.sh reader | tee /tmp/raw-reader-image.json
+scripts/build-raw-overlay.sh indexer | tee /tmp/raw-builder-image.json
 ```
 
 Both archive only committed inputs, and their JSON binds the source commit,
