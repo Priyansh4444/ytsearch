@@ -136,12 +136,8 @@ impl ShardSpoolWriter {
 
 impl PositionSpoolWriter {
     fn create(path: &Path) -> Result<Self> {
-        let mut output = ColdWriter::create(path)?;
-        let mut header = Vec::with_capacity(HEADER_BYTES);
-        write_header(&mut header, POSITION_SPOOL_MAGIC, 0);
-        output.write_all(&header)?;
         Ok(Self {
-            output,
+            output: create_with_header(path, POSITION_SPOOL_MAGIC, 0)?,
             position: 0,
             scratch: Vec::new(),
         })
@@ -268,10 +264,7 @@ where
     fs::create_dir_all(index_path)?;
 
     let documents_path = index_path.join(DOCUMENTS_FILE);
-    let mut document_output = ColdWriter::create(&documents_path)?;
-    let mut document_header = Vec::with_capacity(HEADER_BYTES);
-    write_header(&mut document_header, DOCUMENTS_MAGIC, 0);
-    document_output.write_all(&document_header)?;
+    let mut document_output = create_with_header(&documents_path, DOCUMENTS_MAGIC, 0)?;
     let position_spool_path = index_path.join(POSITION_SPOOL_FILE);
     let mut position_spool = PositionSpoolWriter::create(&position_spool_path)?;
     let mut position_scratch = Vec::new();
@@ -519,14 +512,10 @@ pub fn slice_corpus(
     max_videos: usize,
 ) -> Result<SliceReport> {
     let mut videos = HashSet::new();
-    for line in BufReader::new(ColdReader::open(input_path)?).lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let source: IndexDocument = serde_json::from_str(&line)?;
+    for_each_corpus_line(input_path, |_, source| {
         videos.insert(source.video_id);
-    }
+        Ok(())
+    })?;
     let mut videos = videos.into_iter().collect::<Vec<_>>();
     videos.sort_unstable_by(|left, right| {
         stable_hash(left)
@@ -539,26 +528,35 @@ pub fn slice_corpus(
     let mut output = ColdWriter::create(output_path)?;
     let mut documents = 0_u64;
     let mut bytes = 0_u64;
-    for line in BufReader::new(ColdReader::open(input_path)?).lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
+    for_each_corpus_line(input_path, |line, source| {
+        if selected.contains(&source.video_id) {
+            output.write_all(line.as_bytes())?;
+            output.write_all(b"\n")?;
+            documents += 1;
+            bytes = bytes.saturating_add(line.len() as u64 + 1);
         }
-        let source: IndexDocument = serde_json::from_str(&line)?;
-        if !selected.contains(&source.video_id) {
-            continue;
-        }
-        output.write_all(line.as_bytes())?;
-        output.write_all(b"\n")?;
-        documents += 1;
-        bytes = bytes.saturating_add(line.len() as u64 + 1);
-    }
+        Ok(())
+    })?;
     output.finish()?;
     Ok(SliceReport {
         documents,
         videos: selected.len(),
         bytes,
     })
+}
+
+/// Visits every non-blank line of a chunk corpus with its parsed document.
+fn for_each_corpus_line(
+    path: &Path,
+    mut visit: impl FnMut(&str, IndexDocument) -> Result<()>,
+) -> Result<()> {
+    for line in BufReader::new(ColdReader::open(path)?).lines() {
+        let line = line?;
+        if !line.trim().is_empty() {
+            visit(&line, serde_json::from_str(&line)?)?;
+        }
+    }
+    Ok(())
 }
 
 fn flush_document_block(
@@ -708,22 +706,11 @@ fn write_postings(
     }
     let term_count_u32 = u32::try_from(term_count)
         .map_err(|_| Error::Corrupt("term count exceeds u32".to_string()))?;
-    let mut postings = ColdWriter::create(&index_path.join(POSTINGS_FILE))?;
-    let mut postings_header = Vec::with_capacity(HEADER_BYTES);
-    write_header(&mut postings_header, POSTINGS_MAGIC, term_count_u32);
-    postings.write_all(&postings_header)?;
-    let mut positions = ColdWriter::create(&index_path.join(POSITIONS_FILE))?;
-    let mut positions_header = Vec::with_capacity(HEADER_BYTES);
-    write_header(&mut positions_header, POSITIONS_MAGIC, term_count_u32);
-    positions.write_all(&positions_header)?;
-    let mut full_positions = ColdWriter::create(&index_path.join(FULL_POSITIONS_FILE))?;
-    let mut full_positions_header = Vec::with_capacity(HEADER_BYTES);
-    write_header(
-        &mut full_positions_header,
-        FULL_POSITIONS_MAGIC,
-        term_count_u32,
-    );
-    full_positions.write_all(&full_positions_header)?;
+    let create =
+        |name: &str, magic| create_with_header(&index_path.join(name), magic, term_count_u32);
+    let mut postings = create(POSTINGS_FILE, POSTINGS_MAGIC)?;
+    let mut positions = create(POSITIONS_FILE, POSITIONS_MAGIC)?;
+    let mut full_positions = create(FULL_POSITIONS_FILE, FULL_POSITIONS_MAGIC)?;
     let position_offsets_count = term_count
         .checked_mul(2)
         .and_then(|count| count.checked_add(1))
@@ -740,33 +727,36 @@ fn write_postings(
     let mut full_position_offsets = Vec::with_capacity(position_offsets_count);
     let mut lexicon = Vec::with_capacity(term_count);
     let mut position_scratch = Vec::with_capacity(5);
+    // Appends one field's postings and positions; returns the postings offset
+    // and encoded length.
+    let mut append = |list: &[BuildPosting]| -> Result<(u64, u32)> {
+        let encoded = encode_postings(list);
+        let offset = postings_position;
+        postings.write_all(&encoded)?;
+        postings_position += encoded.len() as u64;
+        position_offsets.push(positions_position);
+        full_position_offsets.push(full_positions_position);
+        let (first_bytes, remaining_bytes) = write_position_lists(
+            list,
+            position_spool,
+            &mut positions,
+            &mut full_positions,
+            &mut position_scratch,
+        )?;
+        positions_position = positions_position
+            .checked_add(first_bytes)
+            .ok_or_else(|| Error::Corrupt("positions file exceeds u32 length".to_string()))?;
+        full_positions_position = full_positions_position
+            .checked_add(remaining_bytes)
+            .ok_or_else(|| Error::Corrupt("full positions file exceeds u32 length".to_string()))?;
+        Ok((offset, encoded.len() as u32))
+    };
 
     for path in shard_paths {
         let mut terms = read_posting_shard(&path)?.into_iter().collect::<Vec<_>>();
         terms.sort_unstable_by(|left, right| left.0.cmp(&right.0));
         for (term, lists) in terms {
-            let text = encode_postings(&lists.text);
-            let text_offset = postings_position;
-            postings.write_all(&text)?;
-            postings_position += text.len() as u64;
-            position_offsets.push(positions_position);
-            full_position_offsets.push(full_positions_position);
-            let (text_first_bytes, text_remaining_bytes) = write_position_lists(
-                &lists.text,
-                position_spool,
-                &mut positions,
-                &mut full_positions,
-                &mut position_scratch,
-            )?;
-            positions_position = positions_position
-                .checked_add(text_first_bytes)
-                .ok_or_else(|| Error::Corrupt("positions file exceeds u32 length".to_string()))?;
-            full_positions_position = full_positions_position
-                .checked_add(text_remaining_bytes)
-                .ok_or_else(|| {
-                    Error::Corrupt("full positions file exceeds u32 length".to_string())
-                })?;
-            let title = encode_postings(&lists.title);
+            let (text_offset, text_length) = append(&lists.text)?;
             let fuzzy_title_frequency = lists.title.iter().fold(0_u32, |frequency, posting| {
                 frequency.saturating_add(
                     videos
@@ -774,33 +764,14 @@ fn write_postings(
                         .map_or(0, |video| video.documents.len() as u32),
                 )
             });
-            let title_offset = postings_position;
-            postings.write_all(&title)?;
-            postings_position += title.len() as u64;
-            position_offsets.push(positions_position);
-            full_position_offsets.push(full_positions_position);
-            let (title_first_bytes, title_remaining_bytes) = write_position_lists(
-                &lists.title,
-                position_spool,
-                &mut positions,
-                &mut full_positions,
-                &mut position_scratch,
-            )?;
-            positions_position = positions_position
-                .checked_add(title_first_bytes)
-                .ok_or_else(|| Error::Corrupt("positions file exceeds u32 length".to_string()))?;
-            full_positions_position = full_positions_position
-                .checked_add(title_remaining_bytes)
-                .ok_or_else(|| {
-                    Error::Corrupt("full positions file exceeds u32 length".to_string())
-                })?;
+            let (title_offset, title_length) = append(&lists.title)?;
             lexicon.push(LexiconBuildEntry {
                 term,
                 text_offset,
-                text_length: text.len() as u32,
+                text_length,
                 text_frequency: lists.text.len() as u32,
                 title_offset,
-                title_length: title.len() as u32,
+                title_length,
                 title_frequency: lists.title.len() as u32,
                 fuzzy_title_frequency,
             });
@@ -809,16 +780,17 @@ fn write_postings(
     position_offsets.push(positions_position);
     full_position_offsets.push(full_positions_position);
     postings.finish()?;
-    positions.seek(SeekFrom::Start(HEADER_BYTES as u64))?;
-    for offset in position_offsets {
-        positions.write_all(&offset.to_le_bytes())?;
+    // Fill in the offset tables reserved after each header.
+    for (mut output, offsets) in [
+        (positions, position_offsets),
+        (full_positions, full_position_offsets),
+    ] {
+        output.seek(SeekFrom::Start(HEADER_BYTES as u64))?;
+        for offset in offsets {
+            output.write_all(&offset.to_le_bytes())?;
+        }
+        output.finish()?;
     }
-    positions.finish()?;
-    full_positions.seek(SeekFrom::Start(HEADER_BYTES as u64))?;
-    for offset in full_position_offsets {
-        full_positions.write_all(&offset.to_le_bytes())?;
-    }
-    full_positions.finish()?;
     write_fuzzy_index(
         index_path,
         lexicon.iter().enumerate().map(|(index, entry)| {
@@ -832,6 +804,15 @@ fn write_postings(
     )?;
     write_lexicon(index_path, &lexicon)?;
     Ok(lexicon)
+}
+
+/// Creates `path` and writes the standard index header to it.
+fn create_with_header(path: &Path, magic: &[u8; 8], count: u32) -> Result<ColdWriter> {
+    let mut output = ColdWriter::create(path)?;
+    let mut header = Vec::with_capacity(HEADER_BYTES);
+    write_header(&mut header, magic, count);
+    output.write_all(&header)?;
+    Ok(output)
 }
 
 fn refine_posting_shards(directory: &Path) -> Result<Vec<PathBuf>> {
@@ -1518,10 +1499,11 @@ fn write_lexicon(index_path: &Path, entries: &[LexiconBuildEntry]) -> Result<()>
     }
     offsets.push(entry_bytes.len() as u64);
 
-    let mut output = ColdWriter::create(&index_path.join(LEXICON_FILE))?;
-    let mut header = Vec::with_capacity(HEADER_BYTES);
-    write_header(&mut header, LEXICON_MAGIC, entries.len() as u32);
-    output.write_all(&header)?;
+    let mut output = create_with_header(
+        &index_path.join(LEXICON_FILE),
+        LEXICON_MAGIC,
+        entries.len() as u32,
+    )?;
     for offset in offsets {
         output.write_all(&offset.to_le_bytes())?;
     }

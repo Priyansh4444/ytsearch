@@ -94,15 +94,8 @@ pub(super) fn record_writer(
     sync: Duration,
     advise: Duration,
 ) {
-    ACTIVE_METRICS.with(|metrics| {
-        let mut metrics = metrics.borrow_mut();
-        let Some(metrics) = metrics.as_mut() else {
-            return;
-        };
-        let writer = match class {
-            WriterClass::General => &mut metrics.general,
-            WriterClass::PostingShard => &mut metrics.posting_shard,
-        };
+    with_active(|metrics| {
+        let writer = metrics.writer(class);
         writer.reclaims = writer.reclaims.saturating_add(1);
         writer.advised_bytes = writer.advised_bytes.saturating_add(advised_bytes);
         writer.flush_nanos = writer.flush_nanos.saturating_add(duration_nanos(flush));
@@ -112,11 +105,7 @@ pub(super) fn record_writer(
 }
 
 pub(super) fn record_reader(advised_bytes: u64, advise: Duration) {
-    ACTIVE_METRICS.with(|metrics| {
-        let mut metrics = metrics.borrow_mut();
-        let Some(metrics) = metrics.as_mut() else {
-            return;
-        };
+    with_active(|metrics| {
         metrics.reader_reclaims = metrics.reader_reclaims.saturating_add(1);
         metrics.reader_advised_bytes = metrics.reader_advised_bytes.saturating_add(advised_bytes);
         metrics.reader_advise_nanos = metrics
@@ -126,21 +115,28 @@ pub(super) fn record_reader(advised_bytes: u64, advise: Duration) {
 }
 
 pub(super) fn record_seek(class: WriterClass, flush: Duration, seek: Duration) {
-    ACTIVE_METRICS.with(|metrics| {
-        let mut metrics = metrics.borrow_mut();
-        let Some(metrics) = metrics.as_mut() else {
-            return;
-        };
-        let writer = match class {
-            WriterClass::General => &mut metrics.general,
-            WriterClass::PostingShard => &mut metrics.posting_shard,
-        };
+    with_active(|metrics| {
+        let writer = metrics.writer(class);
         writer.seeks = writer.seeks.saturating_add(1);
         writer.seek_flush_nanos = writer
             .seek_flush_nanos
             .saturating_add(duration_nanos(flush));
         writer.seek_nanos = writer.seek_nanos.saturating_add(duration_nanos(seek));
     });
+}
+
+/// Updates the current thread's metrics, if a measurement is active.
+fn with_active(update: impl FnOnce(&mut PublicationIoMetrics)) {
+    ACTIVE_METRICS.with(|metrics| metrics.borrow_mut().as_mut().map(update));
+}
+
+impl PublicationIoMetrics {
+    fn writer(&mut self, class: WriterClass) -> &mut WriterMetrics {
+        match class {
+            WriterClass::General => &mut self.general,
+            WriterClass::PostingShard => &mut self.posting_shard,
+        }
+    }
 }
 
 fn duration_nanos(duration: Duration) -> u64 {
