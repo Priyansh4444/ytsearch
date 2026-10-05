@@ -129,3 +129,17 @@ describe("SearchResults sections", () => {
     expect(renderedCardIds()).toEqual([]);
   });
 });
+
+describe("search timing", () => {
+  test("labels an edge-cached response instead of repeating its old search time", () => {
+    render(() => (
+      <SearchResults
+        response={{ ...response([video("a", "video")]), request_duration_ms: 4, edge_cached: true }}
+        page={1}
+        onPageChange={() => undefined}
+      />
+    ));
+    expect(screen.getByText(/4 ms request · cached/)).toBeTruthy();
+    expect(screen.queryByText(/5 ms search/)).toBeNull();
+  });
+});

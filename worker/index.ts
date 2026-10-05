@@ -25,15 +25,28 @@ type WakeMessage = {
 
 const QUEUE_INDEXER_ROLE = "queue-indexer";
 
+// Responses identical for every visitor, and how long each Cloudflare location
+// may reuse one. Any number of readers then costs the origin one request per
+// key and TTL instead of one per visitor. Browsers still get `no-store`.
+const EDGE_CACHE_SECONDS: Readonly<Record<string, number>> = {
+  "/api/search": 60,
+  "/api/availability": 15,
+  "/api/index-status": 10,
+};
+
 export default {
-  fetch: (request, env): Promise<Response> =>
-    Effect.runPromise(fetchEffect(request, env), { signal: request.signal }),
+  fetch: (request, env, ctx): Promise<Response> =>
+    Effect.runPromise(fetchEffect(request, env, ctx), { signal: request.signal }),
   queue: (batch, env): Promise<void> => Effect.runPromise(queueEffect(batch, env)),
   scheduled: (controller, env): Promise<void> =>
     Effect.runPromise(scheduledEffect(controller, env)),
 } satisfies ExportedHandler<Env, WakeMessage>;
 
-function fetchEffect(request: Request, env: Env): Effect.Effect<Response, Error> {
+function fetchEffect(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Effect.Effect<Response, Error> {
   return Effect.gen(function* () {
     const publicAppOrigin = (env as Env & { PUBLIC_APP_ORIGIN?: string }).PUBLIC_APP_ORIGIN;
     const url = new URL(request.url);
@@ -48,10 +61,6 @@ function fetchEffect(request: Request, env: Env): Effect.Effect<Response, Error>
     if (!isApiRequest) {
       return yield* fromPromise(() => env.ASSETS.fetch(request));
     }
-    if (request.method === "GET" && url.pathname === "/api/availability") {
-      const current = yield* searchAvailabilityEffect(env);
-      return Response.json(current, { headers: { "Cache-Control": "no-store" } });
-    }
     if (url.pathname === "/api/search" && scheduleEnforced(env)) {
       const schedule = evaluateSearchSchedule();
       if (schedule.phase !== "open") {
@@ -60,6 +69,29 @@ function fetchEffect(request: Request, env: Env): Effect.Effect<Response, Error>
         );
         return scheduledOfflineResponse();
       }
+    }
+
+    const edgeSeconds = request.method === "GET" ? EDGE_CACHE_SECONDS[url.pathname] : undefined;
+    const edgeKey = edgeSeconds ? new Request(url.toString()) : undefined;
+    if (edgeKey) {
+      const cached = yield* fromPromise(() => caches.default.match(edgeKey));
+      if (cached) return withBrowserNoStore(new Response(cached.body, cached));
+    }
+    const response = yield* apiResponseEffect(request, url, env);
+    if (edgeKey && edgeSeconds && response.status === 200) {
+      ctx.waitUntil(
+        storeAtEdge(edgeKey, response.clone(), edgeSeconds, url.pathname === "/api/search"),
+      );
+    }
+    return response;
+  });
+}
+
+function apiResponseEffect(request: Request, url: URL, env: Env): Effect.Effect<Response, Error> {
+  return Effect.gen(function* () {
+    if (request.method === "GET" && url.pathname === "/api/availability") {
+      const current = yield* searchAvailabilityEffect(env);
+      return Response.json(current, { headers: { "Cache-Control": "no-store" } });
     }
 
     const upstreamUrl = new URL(
@@ -75,13 +107,35 @@ function fetchEffect(request: Request, env: Env): Effect.Effect<Response, Error>
       yield* fromPromise(() => env.INDEX_WAKE_QUEUE.send({ reason: "index-request" }));
     }
     const response = new Response(upstreamResponse.body, upstreamResponse);
-    if (dynamicSearch) {
-      response.headers.set("Cache-Control", "no-store");
-      response.headers.set("CDN-Cache-Control", "no-store");
-      response.headers.set("Cloudflare-CDN-Cache-Control", "no-store");
-    }
-    return response;
+    return dynamicSearch ? withBrowserNoStore(response) : response;
   });
+}
+
+function withBrowserNoStore(response: Response): Response {
+  response.headers.set("Cache-Control", "no-store");
+  response.headers.set("CDN-Cache-Control", "no-store");
+  response.headers.set("Cloudflare-CDN-Cache-Control", "no-store");
+  return response;
+}
+
+// Runs after the response is sent. A stored search is marked `edge_cached`, so
+// a later hit reports itself as cached instead of repeating the original
+// search time as if it had just been measured.
+async function storeAtEdge(
+  key: Request,
+  response: Response,
+  seconds: number,
+  markSearch: boolean,
+): Promise<void> {
+  const body = markSearch
+    ? JSON.stringify({ ...(await response.json<Record<string, unknown>>()), edge_cached: true })
+    : response.body;
+  const stored = new Response(body, response);
+  stored.headers.set("Cache-Control", `public, max-age=${seconds}`);
+  stored.headers.delete("CDN-Cache-Control");
+  stored.headers.delete("Cloudflare-CDN-Cache-Control");
+  stored.headers.delete("Set-Cookie");
+  await caches.default.put(key, stored);
 }
 
 function queueEffect(batch: MessageBatch<WakeMessage>, env: Env): Effect.Effect<void> {

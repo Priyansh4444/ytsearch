@@ -59,6 +59,8 @@ export type SearchResponse = {
   out_of: number;
   time_to_first_result_ms: number;
   request_duration_ms?: number;
+  /** Served from the Worker's edge cache, so `time_to_first_result_ms` is not fresh. */
+  edge_cached?: boolean;
   page: number;
   per_page: number;
   sort: SearchSort;
