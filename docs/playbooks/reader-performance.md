@@ -67,6 +67,12 @@ time: with both readers pinned to the P-cores, an A/A run agrees within about
 - **Seek targets usually ascend, but not always.** Any search that resumes from
   the previous position must validate the hint and fall back (see
   `gallop_partition_point`).
+- **Parallel worktrees share `/tmp` and ports.** With several agents working
+  at once, binaries and `PERF_TARGET_DIR` under `/tmp` were deleted mid-session
+  (2026-10-04), so keep them in a private directory such as
+  `~/.cache/<name>/`. `reader-ab.sh` always binds ports 18120/18122 and the
+  Playwright e2e step binds 4174. A second concurrent run fails to warm, or
+  fails with `ERR_CONNECTION_REFUSED`; rerun it rather than debugging the change.
 
 ## Facts
 
