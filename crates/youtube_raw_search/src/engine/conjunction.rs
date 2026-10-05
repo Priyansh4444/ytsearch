@@ -29,6 +29,15 @@ pub(super) struct TermPlan {
     pub(super) estimated_documents: u64,
 }
 
+impl TermPlan {
+    /// The exact-match bits any alternative of this plan can set.
+    pub(super) fn exact_mask(&self) -> u8 {
+        self.alternatives
+            .iter()
+            .fold(0, |mask, alternative| mask | alternative.fields.exact_mask)
+    }
+}
+
 struct TextAlternativeCursor<'a> {
     engine: &'a RawSearchEngine,
     alternative: &'a TermAlternative,
@@ -458,12 +467,7 @@ impl RawSearchEngine {
         };
         let mut retained = Vec::with_capacity(matches.len());
         for candidate in matches.drain(..) {
-            let record = self.inner.metadata.document(candidate.document())?;
-            let video = self
-                .inner
-                .videos
-                .get(record.video as usize)
-                .ok_or_else(|| Error::Corrupt("document video is out of bounds".to_string()))?;
+            let (_, video) = self.document_video(candidate.document())?;
             if video_matches_filter(video, Some(filter)) {
                 retained.push(candidate);
             }
@@ -507,12 +511,7 @@ impl RawSearchEngine {
         let mut matches = Vec::with_capacity(targets.len());
         for target in targets {
             let document = target.document();
-            let record = self.inner.metadata.document(document)?;
-            let video = self
-                .inner
-                .videos
-                .get(record.video as usize)
-                .ok_or_else(|| Error::Corrupt("document video is out of bounds".to_string()))?;
+            let (record, video) = self.document_video(document)?;
             let source = self.document_value(document, block_cache)?;
             let text_tokens = source
                 .get("text")
@@ -543,12 +542,7 @@ impl RawSearchEngine {
         let mut matches = Vec::with_capacity(targets.len());
         'documents: for target in targets {
             let document = target.document();
-            let record = self.inner.metadata.document(document)?;
-            let video = self
-                .inner
-                .videos
-                .get(record.video as usize)
-                .ok_or_else(|| Error::Corrupt("document video is out of bounds".to_string()))?;
+            let (record, video) = self.document_video(document)?;
             let source = self.document_value(document, block_cache)?;
             let text_tokens = source
                 .get("text")
@@ -585,15 +579,7 @@ impl RawSearchEngine {
     ) -> TargetContribution {
         let mut contribution = TargetContribution::default();
         for alternative in &plan.alternatives {
-            let effective_frequency = self
-                .estimated_entry_documents(alternative.entry)
-                .min(u64::from(self.inner.manifest.documents));
-            let idf = inverse_document_frequency(
-                self.inner.manifest.documents,
-                u32::try_from(effective_frequency)
-                    .unwrap_or(u32::MAX)
-                    .max(1),
-            );
+            let idf = self.estimated_entry_idf(alternative.entry);
             if alternative.fields.text
                 && let Some((frequency, first_position)) =
                     token_stats(text_tokens, &alternative.term)
@@ -644,13 +630,20 @@ impl RawSearchEngine {
         )
     }
 
+    fn estimated_entry_idf(&self, entry: TermEntry) -> f32 {
+        let effective_frequency = self
+            .estimated_entry_documents(entry)
+            .min(u64::from(self.inner.manifest.documents));
+        inverse_document_frequency(
+            self.inner.manifest.documents,
+            u32::try_from(effective_frequency)
+                .unwrap_or(u32::MAX)
+                .max(1),
+        )
+    }
+
     fn estimated_entry_documents_for_fields(&self, entry: TermEntry, fields: QueryFields) -> u64 {
-        let average_documents_per_video = self
-            .inner
-            .manifest
-            .documents
-            .checked_div(self.inner.manifest.videos)
-            .unwrap_or(0);
+        let average_documents_per_video = self.average_documents_per_video();
         let text_documents = fields.text.then_some(u64::from(entry.text_frequency));
         let title_documents = fields.title.then_some(u64::from(
             entry
@@ -671,15 +664,7 @@ impl RawSearchEngine {
         if targets.is_empty() {
             return Ok(Vec::new());
         }
-        let effective_frequency = self
-            .estimated_entry_documents(entry)
-            .min(u64::from(self.inner.manifest.documents));
-        let idf = inverse_document_frequency(
-            self.inner.manifest.documents,
-            u32::try_from(effective_frequency)
-                .unwrap_or(u32::MAX)
-                .max(1),
-        );
+        let idf = self.estimated_entry_idf(entry);
         let mut contributions = vec![TargetContribution::default(); targets.len()];
         if fields.text {
             self.decode_targeted_text(entry, fields, targets, idf, &mut contributions)?;
