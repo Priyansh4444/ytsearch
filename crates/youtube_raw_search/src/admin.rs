@@ -15,7 +15,7 @@ use serde_json::json;
 use std::{collections::BTreeMap, num::NonZeroU16, sync::Arc};
 use tokio_util::io::ReaderStream;
 use youtube_index_store::{
-    BackendReadiness, ChannelDeletionScope, ChannelDocument, IndexStoreError,
+    BackendReadiness, ChannelDeletionScope, ChannelDocument, IndexOperation, IndexStoreError,
     RAW_PUBLICATION_API_VERSION, VideoIdPage, VideoReplacement,
 };
 use youtube_ingest::TranscriptChunk;
@@ -285,7 +285,7 @@ async fn operation(
     State(state): State<AdminState>,
     Path(operation_id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<youtube_index_store::IndexOperation>, AdminError> {
+) -> Result<Json<IndexOperation>, AdminError> {
     authorize(&state, &headers)?;
     Ok(Json(state.store.operation(&operation_id)?))
 }
@@ -295,17 +295,14 @@ async fn replace_video(
     Path(video_id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<ReplaceVideoRequest>,
-) -> Result<(StatusCode, Json<youtube_index_store::IndexOperation>), AdminError> {
+) -> Result<(StatusCode, Json<IndexOperation>), AdminError> {
     authorize(&state, &headers)?;
     require_publication_api_version(request.publication_api_version)?;
-    let store = Arc::clone(&state.store);
-    let operation = tokio::task::spawn_blocking(move || {
+    accept_mutation(&state, move |store| {
         let replacement = VideoReplacement::new(&video_id, &request.chunks)?;
         store.replace_video(replacement, &request.idempotency_key)
     })
     .await
-    .map_err(AdminError::task)??;
-    Ok((StatusCode::ACCEPTED, Json(operation)))
 }
 
 async fn delete_video(
@@ -313,16 +310,13 @@ async fn delete_video(
     Path(video_id): Path<String>,
     headers: HeaderMap,
     Query(request): Query<DeleteRequest>,
-) -> Result<(StatusCode, Json<youtube_index_store::IndexOperation>), AdminError> {
+) -> Result<(StatusCode, Json<IndexOperation>), AdminError> {
     authorize(&state, &headers)?;
     require_publication_api_version(request.publication_api_version)?;
-    let store = Arc::clone(&state.store);
-    let operation = tokio::task::spawn_blocking(move || {
+    accept_mutation(&state, move |store| {
         store.delete_video(&video_id, &request.idempotency_key)
     })
     .await
-    .map_err(AdminError::task)??;
-    Ok((StatusCode::ACCEPTED, Json(operation)))
 }
 
 async fn upsert_channel(
@@ -330,7 +324,7 @@ async fn upsert_channel(
     Path(channel_id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<UpsertChannelRequest>,
-) -> Result<(StatusCode, Json<youtube_index_store::IndexOperation>), AdminError> {
+) -> Result<(StatusCode, Json<IndexOperation>), AdminError> {
     authorize(&state, &headers)?;
     require_publication_api_version(request.publication_api_version)?;
     if request.document.id != channel_id {
@@ -338,13 +332,10 @@ async fn upsert_channel(
             "channel document id must match the URL".to_string(),
         )));
     }
-    let store = Arc::clone(&state.store);
-    let operation = tokio::task::spawn_blocking(move || {
+    accept_mutation(&state, move |store| {
         store.upsert_channel(&request.document, &request.idempotency_key)
     })
     .await
-    .map_err(AdminError::task)??;
-    Ok((StatusCode::ACCEPTED, Json(operation)))
 }
 
 async fn delete_channel(
@@ -352,11 +343,10 @@ async fn delete_channel(
     Path(channel_id): Path<String>,
     headers: HeaderMap,
     Query(request): Query<DeleteChannelRequest>,
-) -> Result<(StatusCode, Json<youtube_index_store::IndexOperation>), AdminError> {
+) -> Result<(StatusCode, Json<IndexOperation>), AdminError> {
     authorize(&state, &headers)?;
     require_publication_api_version(request.publication_api_version)?;
-    let store = Arc::clone(&state.store);
-    let operation = tokio::task::spawn_blocking(move || {
+    accept_mutation(&state, move |store| {
         store.delete_channel(
             &channel_id,
             ChannelDeletionScope::from_cascade(request.cascade),
@@ -364,7 +354,17 @@ async fn delete_channel(
         )
     })
     .await
-    .map_err(AdminError::task)??;
+}
+
+/// Runs a store mutation off the async runtime and answers 202 Accepted.
+async fn accept_mutation(
+    state: &AdminState,
+    mutate: impl FnOnce(&MutationStore) -> Result<IndexOperation, IndexStoreError> + Send + 'static,
+) -> Result<(StatusCode, Json<IndexOperation>), AdminError> {
+    let store = Arc::clone(&state.store);
+    let operation = tokio::task::spawn_blocking(move || mutate(&store))
+        .await
+        .map_err(AdminError::task)??;
     Ok((StatusCode::ACCEPTED, Json(operation)))
 }
 

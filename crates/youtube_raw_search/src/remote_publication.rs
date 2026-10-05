@@ -38,19 +38,9 @@ const MAX_GENERATION_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 const MIN_FREE_AFTER_UPLOAD_BYTES: u64 = 1024 * 1024 * 1024;
 const UPLOAD_BUFFER_BYTES: usize = 256 * 1024;
 const UPLOAD_RECLAIM_BYTES: u64 = 64 * 1024 * 1024;
-const LEGACY_SCHEMA_SIX_FILES: [&str; 9] = [
-    "channels.json",
-    "videos.json",
-    "lexicon.bin",
-    "postings.bin",
-    "positions.bin",
-    "positions.full.bin",
-    "documents.blocks",
-    "documents.meta",
-    "fuzzy.bin",
-];
-// Jobs persisted by a reader that advertised a schema-8 format stay readable,
-// so a restart can retire them instead of failing to load its state.
+// Jobs persisted by a reader that published schema 6, 7 or 8 stay readable, so
+// a restart can retire them instead of failing to load its state. Each older
+// schema's files are a prefix of the next one's.
 const LEGACY_SCHEMA_EIGHT_FILES: [&str; 12] = [
     "channels.json",
     "videos.json",
@@ -65,21 +55,8 @@ const LEGACY_SCHEMA_EIGHT_FILES: [&str; 12] = [
     "bigrams.title.bin",
     "broad-single.bin",
 ];
-// Jobs persisted by a reader that published schema 7 stay readable, so a
-// restart after the schema-9 switch retires them instead of failing.
-const LEGACY_SCHEMA_SEVEN_FILES: [&str; 11] = [
-    "channels.json",
-    "videos.json",
-    "lexicon.bin",
-    "postings.bin",
-    "positions.bin",
-    "positions.full.bin",
-    "documents.blocks",
-    "documents.meta",
-    "fuzzy.bin",
-    "bigrams.text.bin",
-    "bigrams.title.bin",
-];
+const LEGACY_SCHEMA_SEVEN_FILES: &[&str] = LEGACY_SCHEMA_EIGHT_FILES.split_at(11).0;
+const LEGACY_SCHEMA_SIX_FILES: &[&str] = LEGACY_SCHEMA_EIGHT_FILES.split_at(9).0;
 
 #[derive(Clone)]
 pub(crate) struct RemotePublication {
@@ -257,12 +234,7 @@ impl RemotePublication {
         request: GenerationUploadRequest,
     ) -> Result<RemoteJobResponse, IndexStoreError> {
         let _operation = self.operation.lock().await;
-        let mut job = self.load_matching_job(job_id)?;
-        if job.status == RemoteJobStatus::Activated {
-            return Err(IndexStoreError::Conflict(
-                "raw publication job is already activated".to_string(),
-            ));
-        }
+        let mut job = self.load_unactivated_job(job_id)?;
         if request.target_sequence != job.target_sequence {
             return Err(IndexStoreError::Conflict(format!(
                 "generation sequence {} does not match prepared snapshot {}",
@@ -314,12 +286,7 @@ impl RemotePublication {
         // protect the serving generation's cache during the transfer.
         let evict_after_sync = !crate::engine::HOT_MAPPED_FILES.contains(&allowlisted_name);
         let _operation = self.operation.lock().await;
-        let mut job = self.load_matching_job(job_id)?;
-        if job.status == RemoteJobStatus::Activated {
-            return Err(IndexStoreError::Conflict(
-                "raw publication job is already activated".to_string(),
-            ));
-        }
+        let mut job = self.load_unactivated_job(job_id)?;
         let expected = job
             .manifest
             .as_ref()
@@ -506,6 +473,16 @@ impl RemotePublication {
         if job.job_id != job_id {
             return Err(IndexStoreError::InvalidInput(
                 "unknown remote publication job".to_string(),
+            ));
+        }
+        Ok(job)
+    }
+
+    fn load_unactivated_job(&self, job_id: &str) -> Result<PersistedJob, IndexStoreError> {
+        let job = self.load_matching_job(job_id)?;
+        if job.status == RemoteJobStatus::Activated {
+            return Err(IndexStoreError::Conflict(
+                "raw publication job is already activated".to_string(),
             ));
         }
         Ok(job)
@@ -704,8 +681,8 @@ fn validate_persisted_job(job: &PersistedJob) -> Result<(), IndexStoreError> {
         match job.compatibility.generation_format.as_str() {
             crate::RAW_GENERATION_FORMAT => (GENERATION_SCHEMA_VERSION, &RAW_GENERATION_FILES),
             "raw-index-schema-8-v1" | "raw-index-schema-8-v2" => (8, &LEGACY_SCHEMA_EIGHT_FILES),
-            "raw-index-schema-7-v1" | "raw-index-schema-7-v2" => (7, &LEGACY_SCHEMA_SEVEN_FILES),
-            "raw-index-schema-6-v1" => (6, &LEGACY_SCHEMA_SIX_FILES),
+            "raw-index-schema-7-v1" | "raw-index-schema-7-v2" => (7, LEGACY_SCHEMA_SEVEN_FILES),
+            "raw-index-schema-6-v1" => (6, LEGACY_SCHEMA_SIX_FILES),
             _ => {
                 return Err(IndexStoreError::InvalidInput(
                     "unsupported persisted raw generation format".to_string(),

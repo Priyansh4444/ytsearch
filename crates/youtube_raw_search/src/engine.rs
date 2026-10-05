@@ -78,31 +78,10 @@ const MAX_DIRECT_POSITION_TARGETS: usize = 128;
 const MAX_EXACT_PROXIMITY_MATCHES: usize = 50_000;
 const MAX_PHRASE_TOKENS: usize = 32;
 const MAX_PHRASE_SLOP: u8 = 8;
-const GENERATION_FILES_SCHEMA_6: [&str; 9] = [
-    CHANNELS_FILE,
-    VIDEOS_FILE,
-    LEXICON_FILE,
-    POSTINGS_FILE,
-    POSITIONS_FILE,
-    FULL_POSITIONS_FILE,
-    DOCUMENTS_FILE,
-    METADATA_FILE,
-    FUZZY_FILE,
-];
-const GENERATION_FILES_SCHEMA_7: [&str; 11] = [
-    CHANNELS_FILE,
-    VIDEOS_FILE,
-    LEXICON_FILE,
-    POSTINGS_FILE,
-    POSITIONS_FILE,
-    FULL_POSITIONS_FILE,
-    DOCUMENTS_FILE,
-    METADATA_FILE,
-    FUZZY_FILE,
-    bigram::TEXT_BIGRAM_FILE,
-    bigram::TITLE_BIGRAM_FILE,
-];
-// Schema 9 is schema 7 plus build-time accelerators that change no response.
+// Schema 9 is schema 7 plus build-time accelerators that change no response,
+// and schema 7 is schema 6 plus the bigram sidecars.
+const GENERATION_FILES_SCHEMA_6: &[&str] = GENERATION_FILES_SCHEMA_9.split_at(9).0;
+const GENERATION_FILES_SCHEMA_7: &[&str] = GENERATION_FILES_SCHEMA_9.split_at(11).0;
 const GENERATION_FILES_SCHEMA_9: [&str; 14] = [
     CHANNELS_FILE,
     VIDEOS_FILE,
