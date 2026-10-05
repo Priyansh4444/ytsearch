@@ -18,12 +18,13 @@ use youtube_index_store::{
     RawIndexAdminClient, RawPublicationJob, RawPublicationStatus, SearchIndexAdmin,
     VideoReplacement,
 };
-use youtube_ingest::{Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource};
+use youtube_ingest::{
+    Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource,
+    stable_youtuber_id as youtuber_id_from_handle,
+};
 use youtube_raw_search::{GenerationBuilder, MutationStore};
 use youtube_search_client::TextSearchQuery;
-use youtube_sources::{
-    FallbackMetadataSource, YouTubeMetadataSource, stable_youtuber_id as youtuber_id_from_handle,
-};
+use youtube_sources::{FallbackMetadataSource, YouTubeMetadataSource};
 use youtube_transcribe::{TranscriptionConfig, VoxtypeTranscriptSource};
 use youtube_ytdlp::{YtDlpTranscriptSource, YtDlpVideo};
 

@@ -26,7 +26,7 @@ use tokio::{
 };
 use youtube_ingest::{
     DurationMs, IngestError, TimestampMs, TranscriptSegment, TranscriptSource, VideoMetadata,
-    VideoMetadataSource, Youtuber,
+    VideoMetadataSource, Youtuber, stable_youtuber_id,
 };
 
 const YOUTUBE_WATCH_URL_PREFIX: &str = "https://www.youtube.com/watch?v=";
@@ -940,14 +940,6 @@ fn normalize_handle(handle: &str) -> String {
     }
 }
 
-fn stable_youtuber_id(handle: &str, channel_id: &str) -> String {
-    if handle.starts_with('@') {
-        handle.to_ascii_lowercase()
-    } else {
-        channel_id.to_string()
-    }
-}
-
 fn seconds_to_ms(seconds: f64) -> Option<u32> {
     if !seconds.is_finite() || seconds < 0.0 {
         return None;
@@ -1053,6 +1045,21 @@ printf '%s' '{"events":[{"tStartMs":1000,"dDurationMs":2000,"segs":[{"utf8":"fal
         assert_eq!(transcript.len(), 1);
         assert_eq!(transcript[0].text, "fallback works");
         fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn files_video_metadata_under_the_canonical_creator_id() {
+        // The YouTube API source and every indexing path use this form; a
+        // raw `@Handle` here filed `index-video` chunks under another creator.
+        let video = serde_json::json!({
+            "title": "Example video",
+            "channel_id": "UCexample",
+            "uploader": "Example",
+            "uploader_id": "@Example",
+        });
+        let metadata = metadata_from_video_json(&video, "video1").unwrap();
+        assert_eq!(metadata.youtuber.id, "example");
+        assert_eq!(metadata.youtuber.handle, "@Example");
     }
 
     #[test]
