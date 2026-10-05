@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use serde_json::Value;
-use youtube_client::{ListResource, Page, Query, YouTubeClient};
+use youtube_client::{ListResource, Query, YouTubeClient};
 use youtube_ingest::{IngestError, VideoMetadata, VideoMetadataSource, Youtuber};
 use youtube_time::parse_duration_ms as parse_youtube_duration_ms;
 
@@ -31,7 +31,9 @@ impl VideoMetadataSource for YouTubeMetadataSource {
             .await
             .map_err(|error| metadata_error(video_id, format!("videos.list failed: {error}")))?;
 
-        let video = first_item(&video_page)
+        let video = video_page
+            .items
+            .first()
             .ok_or_else(|| metadata_error(video_id, "videos.list returned no items"))?;
 
         let channel_id = required_string(video, "/snippet/channelId", video_id)?;
@@ -51,7 +53,7 @@ impl VideoMetadataSource for YouTubeMetadataSource {
             .await
             .map_err(|error| metadata_error(video_id, format!("channels.list failed: {error}")))?;
 
-        let channel = first_item(&channel_page);
+        let channel = channel_page.items.first();
         let handle = channel
             .and_then(|item| optional_string(item, "/snippet/customUrl"))
             .unwrap_or_else(|| channel_id.clone());
@@ -126,10 +128,6 @@ impl VideoMetadataSource for FallbackMetadataSource {
     }
 }
 
-fn first_item(page: &Page<Value>) -> Option<&Value> {
-    page.items.first()
-}
-
 fn required_string(value: &Value, pointer: &str, video_id: &str) -> youtube_ingest::Result<String> {
     optional_string(value, pointer).ok_or_else(|| {
         metadata_error(
@@ -152,19 +150,11 @@ fn metadata_error(video_id: &str, reason: impl Into<String>) -> IngestError {
 
 fn best_thumbnail(thumbnails: Option<&Value>) -> Option<String> {
     let thumbnails = thumbnails?.as_object()?;
-    for quality in ["maxres", "standard", "high", "medium", "default"] {
-        if let Some(url) = thumbnails
-            .get(quality)
-            .and_then(|thumbnail| thumbnail.get("url"))
-            .and_then(Value::as_str)
-        {
-            return Some(url.to_string());
-        }
-    }
-
-    thumbnails
-        .values()
-        .find_map(|thumbnail| thumbnail.get("url").and_then(Value::as_str))
+    ["maxres", "standard", "high", "medium", "default"]
+        .into_iter()
+        .filter_map(|quality| thumbnails.get(quality))
+        .chain(thumbnails.values())
+        .find_map(|thumbnail| thumbnail.get("url")?.as_str())
         .map(ToOwned::to_owned)
 }
 
@@ -206,15 +196,7 @@ fn compact_upload_date(published_at: &str) -> Option<String> {
             .filter(|(index, _)| *index != 4 && *index != 7)
             .all(|(_, byte)| byte.is_ascii_digit());
 
-    if !is_date {
-        return None;
-    }
-
-    let mut compact = String::with_capacity(8);
-    compact.push_str(&date[..4]);
-    compact.push_str(&date[5..7]);
-    compact.push_str(&date[8..10]);
-    Some(compact)
+    is_date.then(|| [&date[..4], &date[5..7], &date[8..10]].concat())
 }
 
 #[cfg(test)]
