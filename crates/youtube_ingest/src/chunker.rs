@@ -1,5 +1,5 @@
 use crate::{IngestError, Result, TimestampMs, TranscriptChunk, TranscriptSegment, VideoMetadata};
-use std::{collections::BTreeMap, fmt::Write};
+use std::collections::BTreeMap;
 use youtube_time::parse_rfc3339_timestamp;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,21 +39,12 @@ impl Chunker {
                 continue;
             }
 
-            let Some(group) = &mut current else {
-                current = Some(GroupedText::from_segment(segment));
-                continue;
-            };
-
-            let group_duration = segment.end_ms.saturating_sub(group.start_ms);
-            if group_duration <= self.window_ms {
-                group.push_segment(segment);
-                continue;
+            match &mut current {
+                Some(group) if segment.end_ms.saturating_sub(group.start_ms) <= self.window_ms => {
+                    group.push_segment(segment);
+                }
+                _ => groups.extend(current.replace(GroupedText::from_segment(segment))),
             }
-
-            if let Some(group) = current.take() {
-                groups.push(group);
-            }
-            current = Some(GroupedText::from_segment(segment));
         }
 
         if let Some(group) = current {
@@ -95,11 +86,13 @@ fn build_chunks(metadata: &VideoMetadata, grouped_text: &[GroupedText]) -> Vec<T
     let mut chunks = Vec::with_capacity(grouped_text.len());
 
     for (sequence, group) in grouped_text.iter().enumerate() {
-        let prev_text = previous_text(grouped_text, sequence);
-        let next_text = next_text(grouped_text, sequence);
+        let prev_text = sequence
+            .checked_sub(1)
+            .map(|index| grouped_text[index].text.clone());
+        let next_text = grouped_text.get(sequence + 1).map(|next| next.text.clone());
 
         chunks.push(TranscriptChunk {
-            id: chunk_id(&metadata.video_id, sequence),
+            id: format!("{}_{sequence}", metadata.video_id),
             youtuber_id: metadata.youtuber.id.clone(),
             youtuber_handle: metadata.youtuber.handle.clone(),
             youtuber_name: metadata.youtuber.name.clone(),
@@ -129,30 +122,6 @@ fn build_chunks(metadata: &VideoMetadata, grouped_text: &[GroupedText]) -> Vec<T
     }
 
     chunks
-}
-
-fn previous_text(grouped_text: &[GroupedText], sequence: usize) -> Option<String> {
-    sequence
-        .checked_sub(1)
-        .and_then(|index| grouped_text.get(index))
-        .map(|prev| prev.text.clone())
-}
-
-fn next_text(grouped_text: &[GroupedText], sequence: usize) -> Option<String> {
-    grouped_text.get(sequence + 1).map(|next| next.text.clone())
-}
-
-fn chunk_id(video_id: &str, sequence: usize) -> String {
-    let sequence_digits = if sequence == 0 {
-        1
-    } else {
-        sequence.ilog10() as usize + 1
-    };
-    let mut id = String::with_capacity(video_id.len() + 1 + sequence_digits);
-    id.push_str(video_id);
-    id.push('_');
-    write!(&mut id, "{sequence}").expect("writing to String cannot fail");
-    id
 }
 
 fn has_text(text: &str) -> bool {

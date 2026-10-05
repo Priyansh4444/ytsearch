@@ -131,42 +131,35 @@ impl YtDlpTranscriptSource {
         Ok(())
     }
 
-    async fn ytdlp_json(&self, url: impl AsRef<str>) -> youtube_ingest::Result<Value> {
+    /// A `yt-dlp` command carrying the operator's cookie, extractor and
+    /// user-agent overrides.
+    fn ytdlp_command(&self) -> Command {
         let mut command = Command::new(&self.binary);
-        command
-            .kill_on_drop(true)
-            .arg("--skip-download")
-            .arg("--dump-json")
-            .arg("--no-warnings");
-        configure_ytdlp_environment(&mut command);
-
-        let output = timeout(
-            YT_DLP_TIMEOUT,
-            command
-                .arg(url.as_ref())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output(),
-        )
-        .await
-        .map_err(|_| ytdlp_error(url.as_ref(), "yt-dlp timed out"))?
-        .map_err(|error| ytdlp_error(url.as_ref(), format!("failed to run yt-dlp: {error}")))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(ytdlp_error(
-                url.as_ref(),
-                format!("yt-dlp exited with {}: {}", output.status, stderr.trim()),
-            ));
+        command.kill_on_drop(true);
+        for (env_name, flag) in [
+            (YT_DLP_COOKIES_FILE_ENV, "--cookies"),
+            (YT_DLP_EXTRACTOR_ARGS_ENV, "--extractor-args"),
+            (YT_DLP_USER_AGENT_ENV, "--user-agent"),
+        ] {
+            if let Ok(value) = env::var(env_name)
+                && !value.trim().is_empty()
+            {
+                command.arg(flag).arg(value);
+            }
         }
-
-        serde_json::from_slice(&output.stdout).map_err(|error| {
-            ytdlp_error(url.as_ref(), format!("yt-dlp json parse failed: {error}"))
-        })
+        command
     }
 
     async fn video_json(&self, video_id: &str) -> youtube_ingest::Result<Value> {
-        self.ytdlp_json(video_url(video_id)).await
+        let mut command = self.ytdlp_command();
+        command.args(["--skip-download", "--dump-json", "--no-warnings"]);
+        run_ytdlp_json(
+            command,
+            &video_url(video_id),
+            YT_DLP_TIMEOUT,
+            "yt-dlp timed out",
+        )
+        .await
     }
 
     async fn remember_video_json(&self, video_id: &str, video: Value) {
@@ -194,14 +187,6 @@ impl YtDlpTranscriptSource {
             .await
     }
 
-    pub async fn channel_streams(
-        &self,
-        handle: &str,
-        max_videos: Option<usize>,
-    ) -> youtube_ingest::Result<Vec<YtDlpVideo>> {
-        Ok(self.channel_stream_feed(handle, max_videos).await?.videos)
-    }
-
     pub async fn channel_stream_feed(
         &self,
         handle: &str,
@@ -211,6 +196,7 @@ impl YtDlpTranscriptSource {
             .await
     }
 
+    /// `tab` is `videos` or `streams`.
     async fn channel_feed_for_tab(
         &self,
         handle: &str,
@@ -218,64 +204,20 @@ impl YtDlpTranscriptSource {
         max_videos: Option<usize>,
     ) -> youtube_ingest::Result<YtDlpChannelFeed> {
         let handle = normalize_handle(handle);
-        let url = channel_tab_url(&handle, tab)?;
-        let mut command = Command::new(&self.binary);
-        command
-            .kill_on_drop(true)
-            .arg("--flat-playlist")
-            .arg("--dump-single-json")
-            .arg("--no-warnings");
-
+        let url = format!("https://www.youtube.com/{handle}/{tab}");
+        let mut command = self.ytdlp_command();
+        command.args(["--flat-playlist", "--dump-single-json", "--no-warnings"]);
         if let Some(max_videos) = max_videos {
             command.arg("--playlist-end").arg(max_videos.to_string());
         }
-        if let Ok(cookies_file) = env::var(YT_DLP_COOKIES_FILE_ENV)
-            && !cookies_file.trim().is_empty()
-        {
-            command.arg("--cookies").arg(cookies_file);
-        }
-        if let Ok(extractor_args) = env::var(YT_DLP_EXTRACTOR_ARGS_ENV)
-            && !extractor_args.trim().is_empty()
-        {
-            command.arg("--extractor-args").arg(extractor_args);
-        }
-        if let Ok(user_agent) = env::var(YT_DLP_USER_AGENT_ENV)
-            && !user_agent.trim().is_empty()
-        {
-            command.arg("--user-agent").arg(user_agent);
-        }
-
-        let output = timeout(
+        let value = run_ytdlp_json(
+            command,
+            &url,
             Duration::from_secs(180),
-            command
-                .arg(&url)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output(),
+            "yt-dlp channel discovery timed out",
         )
-        .await
-        .map_err(|_| ytdlp_error(&url, "yt-dlp channel discovery timed out"))?
-        .map_err(|error| ytdlp_error(&url, format!("failed to run yt-dlp: {error}")))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(ytdlp_error(
-                &url,
-                format!("yt-dlp exited with {}: {}", output.status, stderr.trim()),
-            ));
-        }
-
-        let value: Value = serde_json::from_slice(&output.stdout)
-            .map_err(|error| ytdlp_error(&url, format!("yt-dlp json parse failed: {error}")))?;
+        .await?;
         Ok(ytdlp_channel_feed_from_json(&value, &handle))
-    }
-
-    pub async fn channel_videos(
-        &self,
-        handle: &str,
-        max_videos: Option<usize>,
-    ) -> youtube_ingest::Result<Vec<YtDlpVideo>> {
-        Ok(self.channel_feed(handle, max_videos).await?.videos)
     }
 
     async fn fetch_caption(
@@ -284,7 +226,7 @@ impl YtDlpTranscriptSource {
         track: &CaptionTrack,
     ) -> youtube_ingest::Result<String> {
         let mut last_error = None;
-        let attempts = env_u8(
+        let attempts = env_clamped(
             CAPTION_FETCH_ATTEMPTS_ENV,
             DEFAULT_CAPTION_FETCH_ATTEMPTS,
             1,
@@ -295,7 +237,8 @@ impl YtDlpTranscriptSource {
             match self.fetch_caption_once(video_id, track).await {
                 Ok(body) => return Ok(body),
                 Err(error) => {
-                    if attempt == 1 && is_retryable_caption_error(&error) {
+                    let retryable = is_retryable_caption_error(&error);
+                    if attempt == 1 && retryable {
                         tracing::warn!(
                             video_id,
                             language = %track.language,
@@ -312,9 +255,11 @@ impl YtDlpTranscriptSource {
                         }
                     }
                     let delay = caption_retry_delay(attempt, &error);
-                    let retryable = is_retryable_caption_error(&error);
                     last_error = Some(error);
-                    if attempt < attempts && retryable {
+                    if !retryable {
+                        break;
+                    }
+                    if attempt < attempts {
                         tracing::warn!(
                             video_id,
                             attempt,
@@ -323,8 +268,6 @@ impl YtDlpTranscriptSource {
                             "caption request failed transiently; backing off"
                         );
                         sleep(delay).await;
-                    } else if !retryable {
-                        break;
                     }
                 }
             }
@@ -351,9 +294,8 @@ impl YtDlpTranscriptSource {
             )
         })?;
 
-        let mut command = Command::new(&self.binary);
+        let mut command = self.ytdlp_command();
         command
-            .kill_on_drop(true)
             .arg("--no-playlist")
             .arg("--skip-download")
             .arg("--write-subs")
@@ -367,7 +309,6 @@ impl YtDlpTranscriptSource {
             .arg("--output")
             .arg("%(id)s.%(ext)s")
             .arg("--no-warnings");
-        configure_ytdlp_environment(&mut command);
 
         let output = timeout(
             YT_DLP_TIMEOUT,
@@ -435,7 +376,7 @@ impl YtDlpTranscriptSource {
     }
 
     async fn wait_for_caption_request_slot(&self) {
-        let interval = Duration::from_millis(env_u64(
+        let interval = Duration::from_millis(env_clamped(
             CAPTION_MIN_INTERVAL_MS_ENV,
             DEFAULT_CAPTION_MIN_INTERVAL_MS,
             0,
@@ -470,7 +411,7 @@ fn is_retryable_caption_error(error: &IngestError) -> bool {
 
 fn caption_retry_delay(attempt: u8, error: &IngestError) -> Duration {
     if is_rate_limit_error(error) {
-        let base = env_u64(
+        let base = env_clamped(
             RATE_LIMIT_RETRY_BASE_SECONDS_ENV,
             DEFAULT_RATE_LIMIT_RETRY_BASE_SECONDS,
             1,
@@ -493,30 +434,43 @@ fn is_rate_limit_error(error: &IngestError) -> bool {
     message.contains("429") || message.contains("too many requests")
 }
 
-fn env_u8(name: &str, default: u8, min: u8, max: u8) -> u8 {
+fn env_clamped<T: std::str::FromStr + Ord>(name: &str, default: T, min: T, max: T) -> T {
     env::var(name)
         .ok()
-        .and_then(|value| value.parse::<u8>().ok())
+        .and_then(|value| value.parse().ok())
         .unwrap_or(default)
         .clamp(min, max)
 }
 
-fn env_u64(name: &str, default: u64, min: u64, max: u64) -> u64 {
-    env::var(name)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(default)
-        .clamp(min, max)
-}
+/// Runs `command` against `url` and parses its stdout as JSON.
+async fn run_ytdlp_json(
+    mut command: Command,
+    url: &str,
+    limit: Duration,
+    timeout_message: &str,
+) -> youtube_ingest::Result<Value> {
+    let output = timeout(
+        limit,
+        command
+            .arg(url)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await
+    .map_err(|_| transcript_error(url, timeout_message))?
+    .map_err(|error| transcript_error(url, format!("failed to run yt-dlp: {error}")))?;
 
-fn channel_tab_url(handle: &str, tab: &str) -> youtube_ingest::Result<String> {
-    match tab {
-        "videos" | "streams" => Ok(format!("https://www.youtube.com/{handle}/{tab}")),
-        _ => Err(ytdlp_error(
-            handle,
-            format!("unsupported channel tab: {tab}"),
-        )),
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(transcript_error(
+            url,
+            format!("yt-dlp exited with {}: {}", output.status, stderr.trim()),
+        ));
     }
+
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| transcript_error(url, format!("yt-dlp json parse failed: {error}")))
 }
 
 #[async_trait]
@@ -773,24 +727,6 @@ fn caption_track(track: &Value, expected_extension: &str, language: &str) -> Opt
     })
 }
 
-fn configure_ytdlp_environment(command: &mut Command) {
-    if let Ok(cookies_file) = env::var(YT_DLP_COOKIES_FILE_ENV)
-        && !cookies_file.trim().is_empty()
-    {
-        command.arg("--cookies").arg(cookies_file);
-    }
-    if let Ok(extractor_args) = env::var(YT_DLP_EXTRACTOR_ARGS_ENV)
-        && !extractor_args.trim().is_empty()
-    {
-        command.arg("--extractor-args").arg(extractor_args);
-    }
-    if let Ok(user_agent) = env::var(YT_DLP_USER_AGENT_ENV)
-        && !user_agent.trim().is_empty()
-    {
-        command.arg("--user-agent").arg(user_agent);
-    }
-}
-
 fn read_caption_fallback(
     video_id: &str,
     directory: &Path,
@@ -975,22 +911,13 @@ fn preview_error_body(body: &str) -> String {
 }
 
 fn video_url(video_id: &str) -> String {
-    let mut url = String::with_capacity(YOUTUBE_WATCH_URL_PREFIX.len() + video_id.len());
-    url.push_str(YOUTUBE_WATCH_URL_PREFIX);
-    url.push_str(video_id);
-    url
+    format!("{YOUTUBE_WATCH_URL_PREFIX}{video_id}")
 }
 
-fn ytdlp_error(subject: &str, reason: impl Into<String>) -> IngestError {
+/// `subject` is the video ID, or the URL for channel-level failures.
+fn transcript_error(subject: &str, reason: impl Into<String>) -> IngestError {
     IngestError::TranscriptUnavailable {
         video_id: subject.to_string(),
-        reason: reason.into(),
-    }
-}
-
-fn transcript_error(video_id: &str, reason: impl Into<String>) -> IngestError {
-    IngestError::TranscriptUnavailable {
-        video_id: video_id.to_string(),
         reason: reason.into(),
     }
 }
@@ -1001,7 +928,7 @@ fn optional_string(value: &Value, key: &str) -> Option<String> {
 
 fn required_string(value: &Value, key: &str, subject: &str) -> youtube_ingest::Result<String> {
     optional_string(value, key)
-        .ok_or_else(|| ytdlp_error(subject, format!("missing required field {key}")))
+        .ok_or_else(|| transcript_error(subject, format!("missing required field {key}")))
 }
 
 fn normalize_handle(handle: &str) -> String {
@@ -1190,15 +1117,6 @@ printf '%s' '{"events":[{"tStartMs":1000,"dDurationMs":2000,"segs":[{"utf8":"fal
     }
 
     #[test]
-    fn builds_only_supported_channel_tab_urls() {
-        assert_eq!(
-            channel_tab_url("@example", "streams").unwrap(),
-            "https://www.youtube.com/@example/streams"
-        );
-        assert!(channel_tab_url("@example", "playlists").is_err());
-    }
-
-    #[test]
     fn retries_rate_limits_and_transient_transport_failures() {
         assert!(is_retryable_caption_error(&transcript_error(
             "video",
@@ -1224,18 +1142,19 @@ printf '%s' '{"events":[{"tStartMs":1000,"dDurationMs":2000,"segs":[{"utf8":"fal
         assert!(fourth > first);
         assert_eq!(last, Duration::from_secs(MAX_RATE_LIMIT_RETRY_SECONDS));
     }
-}
-#[tokio::test]
-async fn video_json_handoff_is_shared_and_one_shot() {
-    let source = YtDlpTranscriptSource::new();
-    source
-        .remember_video_json("video-id", serde_json::json!({"title": "test"}))
-        .await;
 
-    let clone = source.clone();
-    assert_eq!(
-        clone.take_video_json("video-id").await,
-        Some(serde_json::json!({"title": "test"}))
-    );
-    assert_eq!(source.take_video_json("video-id").await, None);
+    #[tokio::test]
+    async fn video_json_handoff_is_shared_and_one_shot() {
+        let source = YtDlpTranscriptSource::new();
+        source
+            .remember_video_json("video-id", serde_json::json!({"title": "test"}))
+            .await;
+
+        let clone = source.clone();
+        assert_eq!(
+            clone.take_video_json("video-id").await,
+            Some(serde_json::json!({"title": "test"}))
+        );
+        assert_eq!(source.take_video_json("video-id").await, None);
+    }
 }

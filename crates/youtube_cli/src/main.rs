@@ -2043,8 +2043,8 @@ async fn discover_videos_for_youtuber_with_ytdlp(
     handle: &str,
 ) -> Result<Vec<DiscoveredVideo>, CliError> {
     let (uploads, streams) = tokio::join!(
-        ytdlp.channel_videos(handle, None),
-        ytdlp.channel_streams(handle, None),
+        ytdlp.channel_feed(handle, None),
+        ytdlp.channel_stream_feed(handle, None),
     );
     let uploads = uploads.map_err(|error| {
         tracing::warn!(handle = %handle, %error, "yt-dlp uploads-tab discovery failed; refusing a streams-only partial catalog");
@@ -2054,7 +2054,9 @@ async fn discover_videos_for_youtuber_with_ytdlp(
         tracing::warn!(handle = %handle, %error, "yt-dlp streams-tab discovery failed; refusing an uploads-only partial catalog");
         error
     })?;
+    let streams = streams.videos;
     let mut videos = uploads
+        .videos
         .into_iter()
         .map(discovered_video_from_ytdlp_video)
         .collect::<Vec<_>>();
