@@ -261,16 +261,9 @@ impl<'a> VideoReplacement<'a> {
 pub trait SearchIndexAdmin: Send + Sync {
     async fn readiness(&self) -> Result<BackendReadiness, IndexStoreError>;
 
-    async fn publish(&self) -> Result<BackendReadiness, IndexStoreError> {
-        self.readiness().await
-    }
+    async fn publish(&self) -> Result<BackendReadiness, IndexStoreError>;
 
-    async fn channel(&self, _channel_id: &str) -> Result<Option<ChannelDocument>, IndexStoreError> {
-        Err(IndexStoreError::Unavailable {
-            backend: "index",
-            message: "channel lookup is not implemented by this backend".to_string(),
-        })
-    }
+    async fn channel(&self, channel_id: &str) -> Result<Option<ChannelDocument>, IndexStoreError>;
 
     async fn replace_video(
         &self,
