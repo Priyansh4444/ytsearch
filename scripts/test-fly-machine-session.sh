@@ -367,6 +367,11 @@ if FLY_MACHINE_SESSION_CONNECT_TIMEOUT_SECONDS=2 \
 fi
 [[ -f "$FAKE_SESSION_DIRECTORY/lease.header" ]]
 grep -F -- '--connect-timeout 2 --max-time 3' "$FAKE_CURL_LOG" >/dev/null
+: > "$temporary_directory/not-a-directory"
+expect_failure 'preserving under an unusable recovery root must fail' \
+  fly_machine_session_preserve "$FAKE_SESSION_DIRECTORY" \
+  "$temporary_directory/not-a-directory/session"
+[[ -f "$FAKE_SESSION_DIRECTORY/lease.header" ]]
 recovery_directory="$temporary_directory/preserved-stop-session"
 fly_machine_session_preserve "$FAKE_SESSION_DIRECTORY" "$recovery_directory" >/dev/null
 [[ -f "$recovery_directory/lease.header" ]]
