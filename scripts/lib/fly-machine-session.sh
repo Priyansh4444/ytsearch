@@ -615,3 +615,34 @@ fly_machine_session_preserve() {
   chmod 700 "$destination"
   printf '%s\n' "$destination"
 }
+
+# Stops the Machine and releases the lease, retrying the stop as
+# fly_machine_session_stop does. If either cannot be confirmed, the lease is
+# kept and the session moves to
+# ${RAW_RELEASE_RECOVERY_ROOT:-default}/RECOVERY_NAME-<UTC time>-<pid>.
+# Messages start with LABEL. Returns 0 when stopped and released, 1 when the
+# session was preserved, and 2 when it could not be moved and is still in
+# DIRECTORY.
+fly_machine_session_finish() {
+  if [[ "$#" -ne 6 ]]; then
+    _fly_machine_session_error \
+      'usage: fly_machine_session_finish DIRECTORY LABEL RECOVERY_NAME RETRIES POLL_ATTEMPTS INTERVAL_SECONDS'
+    return 2
+  fi
+  local directory="$1" label="$2" recovery_name="$3" recovery_root destination
+  if ! fly_machine_session_stop "$directory" "$4" "$5" "$6"; then
+    printf '%s stop could not be confirmed; retaining lease until TTL expiry\n' "$label" >&2
+  elif fly_machine_session_release "$directory"; then
+    return 0
+  else
+    printf '%s lease release failed\n' "$label" >&2
+  fi
+  recovery_root="${RAW_RELEASE_RECOVERY_ROOT:-$(fly_machine_session_default_recovery_root)}"
+  destination="$recovery_root/$recovery_name-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  if fly_machine_session_preserve "$directory" "$destination" >/dev/null; then
+    printf '%s recovery session preserved at %s\n' "$label" "$destination" >&2
+    return 1
+  fi
+  printf '%s recovery session remains at %s\n' "$label" "$directory" >&2
+  return 2
+}

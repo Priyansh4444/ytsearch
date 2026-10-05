@@ -57,6 +57,7 @@ cat > "$tmp/state.json" <<JSON
 }]
 JSON
 
+cp "$tmp/state.json" "$tmp/initial-state.json"
 jq -n --arg source "$source_commit" --arg id "$target_id" '[{
   id:$id,
   state:"stopped",
@@ -103,6 +104,10 @@ expect_failure 'builder reconciliation must reject unknown resource profiles' \
   env RAW_PUBLICATION_BUILDER_PROFILE=performance-2x \
   "$SCRIPT_DIR/reconcile-raw-publication-builder.sh"
 
+expect_staging_cleanup_failures "$tmp/initial-state.json" "builder-stage-$builder_id" \
+  env APPLY_RAW_PUBLICATION_BUILDER=configure-exact-inert-builder \
+  "$SCRIPT_DIR/reconcile-raw-publication-builder.sh"
+
 source "$SCRIPT_DIR/lib/raw-publication-builder-profile.sh"
 raw_publication_builder_profile_load
 raw_publication_builder_profile_apply_production_budgets
@@ -114,5 +119,6 @@ raw_publication_builder_profile_load
 raw_publication_builder_profile_apply_production_budgets
 [[ "$RAW_CANARY_LEASE_TTL_SECONDS" == 21600 ]]
 [[ "$PUBLICATION_TIMEOUT_SECONDS" == 2400 ]]
+
 
 printf 'raw_publication_builder_reconciliation=ok\n'
