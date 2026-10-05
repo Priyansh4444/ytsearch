@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use youtube_client::{ListResource, Query, YouTubeClient};
-use youtube_ingest::{IngestError, VideoMetadata, VideoMetadataSource, Youtuber};
+use youtube_ingest::{
+    IngestError, VideoMetadata, VideoMetadataSource, Youtuber, stable_youtuber_id,
+};
 use youtube_time::parse_duration_ms as parse_youtube_duration_ms;
 
 #[derive(Clone, Debug)]
@@ -158,32 +160,6 @@ fn best_thumbnail(thumbnails: Option<&Value>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-pub fn stable_youtuber_id(handle: &str, channel_id: &str) -> String {
-    let source = handle.strip_prefix('@').unwrap_or(handle);
-    let source = if source.is_empty() {
-        channel_id
-    } else {
-        source
-    };
-    let mut id = String::with_capacity(source.len());
-    let mut previous_was_separator = false;
-
-    for byte in source.bytes() {
-        if byte.is_ascii_alphanumeric() {
-            id.push(char::from(byte.to_ascii_lowercase()));
-            previous_was_separator = false;
-        } else if !previous_was_separator && !id.is_empty() {
-            id.push('-');
-            previous_was_separator = true;
-        }
-    }
-
-    if id.ends_with('-') {
-        id.pop();
-    }
-    id
-}
-
 fn compact_upload_date(published_at: &str) -> Option<String> {
     let date = published_at.get(..10)?;
     let bytes = date.as_bytes();
@@ -280,12 +256,6 @@ mod tests {
             compact_upload_date("2026-01-02T03:04:05Z").as_deref(),
             Some("20260102")
         );
-    }
-
-    #[test]
-    fn normalizes_youtuber_id_from_handle() {
-        assert_eq!(stable_youtuber_id("@T3 Dot GG", "fallback"), "t3-dot-gg");
-        assert_eq!(stable_youtuber_id("", "UC123"), "uc123");
     }
 
     #[tokio::test]
