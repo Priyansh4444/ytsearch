@@ -34,49 +34,27 @@ const MAX_CONCURRENT_BACKEND_SEARCHES: usize = 1;
 #[serde(deny_unknown_fields)]
 pub struct SearchParams {
     pub q: String,
-    #[serde(default)]
     pub query_by: Option<String>,
-    #[serde(default)]
     pub query_by_weights: Option<String>,
-    #[serde(default)]
     pub filter_by: Option<String>,
-    #[serde(default)]
     pub group_by: Option<String>,
-    #[serde(default)]
     pub group_limit: Option<u8>,
-    #[serde(default)]
     pub per_page: Option<u8>,
-    #[serde(default)]
     pub page: Option<u32>,
-    #[serde(default)]
     pub offset: Option<u32>,
-    #[serde(default)]
     pub limit: Option<u8>,
-    #[serde(default)]
     pub sort_by: Option<String>,
-    #[serde(default)]
     pub text_match_type: Option<String>,
-    #[serde(default)]
     pub prioritize_exact_match: Option<bool>,
-    #[serde(default)]
     pub prioritize_token_position: Option<bool>,
-    #[serde(default)]
     pub phrase_slop: Option<u8>,
-    #[serde(default)]
     pub typo_tokens_threshold: Option<u32>,
-    #[serde(default)]
     pub drop_tokens_threshold: Option<u32>,
-    #[serde(default)]
     pub drop_tokens_mode: Option<String>,
-    #[serde(default)]
     pub split_join_tokens: Option<String>,
-    #[serde(default)]
     pub highlight_fields: Option<String>,
-    #[serde(default)]
     pub include_fields: Option<String>,
-    #[serde(default)]
     pub use_cache: Option<bool>,
-    #[serde(default)]
     pub cache_ttl: Option<u64>,
 }
 
@@ -273,13 +251,13 @@ async fn search(
         .fetch_add(duration_nanos(queued.elapsed()), Ordering::Relaxed);
     let backend_started = Instant::now();
     let backend = Arc::clone(&state.backend);
-    let backend_params = params.clone();
+    let cache_ttl = params.cache_ttl.unwrap_or(60);
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         if channel_search {
-            backend.search_channels(&backend_params)
+            backend.search_channels(&params)
         } else {
-            backend.search(&backend_params)
+            backend.search(&params)
         }
     })
     .await
@@ -298,11 +276,10 @@ async fn search(
             let body = Bytes::from(serde_json::to_vec(&value).map_err(|error| {
                 ServerError::Backend(BackendError::Internal(error.to_string()))
             })?);
-            if let Some(key) = cache_key {
-                let ttl = params.cache_ttl.unwrap_or(60);
-                if let Ok(mut cache) = state.cache.lock() {
-                    cache.insert(key, body.clone(), ttl);
-                }
+            if let Some(key) = cache_key
+                && let Ok(mut cache) = state.cache.lock()
+            {
+                cache.insert(key, body.clone(), cache_ttl);
             }
             Ok(json_bytes_response(body))
         }
@@ -425,45 +402,32 @@ mod tests {
         time::Duration,
     };
 
-    struct SlowBackend;
-
-    impl SearchBackend for SlowBackend {
-        fn name(&self) -> &'static str {
-            "slow-test"
-        }
-
-        fn search(&self, _params: &SearchParams) -> Result<Value, BackendError> {
-            thread::sleep(Duration::from_millis(200));
-            Ok(json!({ "found": 1 }))
-        }
-
-        fn search_channels(&self, params: &SearchParams) -> Result<Value, BackendError> {
-            self.search(params)
-        }
-
-        fn documents(&self) -> u64 {
-            1
-        }
-
-        fn index_bytes(&self) -> u64 {
-            1
-        }
-    }
-
-    struct ConcurrencyBackend {
+    /// Sleeps for `delay` per search and records the peak concurrency.
+    struct TestBackend {
+        delay: Duration,
         active: AtomicUsize,
         maximum: AtomicUsize,
     }
 
-    impl SearchBackend for ConcurrencyBackend {
+    impl TestBackend {
+        fn new(delay: Duration) -> Self {
+            Self {
+                delay,
+                active: AtomicUsize::new(0),
+                maximum: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl SearchBackend for TestBackend {
         fn name(&self) -> &'static str {
-            "concurrency-test"
+            "test"
         }
 
         fn search(&self, _params: &SearchParams) -> Result<Value, BackendError> {
             let active = self.active.fetch_add(1, AtomicOrdering::SeqCst) + 1;
             self.maximum.fetch_max(active, AtomicOrdering::SeqCst);
-            thread::sleep(Duration::from_millis(50));
+            thread::sleep(self.delay);
             self.active.fetch_sub(1, AtomicOrdering::SeqCst);
             Ok(json!({ "found": 1 }))
         }
@@ -536,7 +500,7 @@ mod tests {
 
     #[tokio::test]
     async fn blocking_backend_search_does_not_starve_request_runtime() {
-        let state = test_state(Arc::new(SlowBackend));
+        let state = test_state(Arc::new(TestBackend::new(Duration::from_millis(200))));
         let started = Instant::now();
         let search_task = tokio::spawn(search(
             State(state.clone()),
@@ -560,10 +524,7 @@ mod tests {
 
     #[tokio::test]
     async fn backend_searches_are_serialized_to_bound_memory() {
-        let backend = Arc::new(ConcurrencyBackend {
-            active: AtomicUsize::new(0),
-            maximum: AtomicUsize::new(0),
-        });
+        let backend = Arc::new(TestBackend::new(Duration::from_millis(50)));
         let state = test_state(backend.clone());
         let request = || {
             search(

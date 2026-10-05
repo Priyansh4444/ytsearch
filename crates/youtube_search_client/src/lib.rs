@@ -133,7 +133,9 @@ impl fmt::Debug for SearchClientConfig {
 #[derive(Clone)]
 pub struct SearchClient {
     http: Client,
-    config: SearchClientConfig,
+    api_key: String,
+    search_url: Url,
+    channels_url: Url,
 }
 
 impl SearchClient {
@@ -145,41 +147,42 @@ impl SearchClient {
                 "Raw search API key must not be empty".to_string(),
             ));
         }
-        Ok(Self { http, config })
+        Ok(Self {
+            http,
+            search_url: collection_search_url(&config.base_url, &config.collection)?,
+            channels_url: collection_search_url(&config.base_url, CHANNEL_COLLECTION)?,
+            api_key: config.api_key,
+        })
     }
 
     pub async fn search(&self, query: &TextSearchQuery) -> Result<Value, SearchError> {
-        let path = format!("collections/{}/documents/search", self.config.collection);
-        let mut url = endpoint(&self.config.base_url, &path)?;
+        let mut url = self.search_url.clone();
         append_search_query_params(&mut url, query);
         self.get_json(url).await
     }
 
     pub async fn list_youtubers(&self) -> Result<Vec<ChannelDocument>, SearchError> {
         const PAGE_SIZE: u64 = 250;
-        let path = format!("collections/{CHANNEL_COLLECTION}/documents/search");
         let mut page = 1_u64;
         let mut channels = Vec::new();
         loop {
-            let mut url = endpoint(&self.config.base_url, &path)?;
+            let mut url = self.channels_url.clone();
             url.query_pairs_mut()
                 .append_pair("q", "*")
                 .append_pair("query_by", "name,handle")
                 .append_pair("per_page", &PAGE_SIZE.to_string())
                 .append_pair("page", &page.to_string());
-            let body = self.get_json(url).await?;
-            let hits = body
-                .get("hits")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+            let mut body = self.get_json(url).await?;
+            let hits = match body.get_mut("hits").map(Value::take) {
+                Some(Value::Array(hits)) => hits,
+                _ => Vec::new(),
+            };
             let hit_count = hits.len() as u64;
-            channels.extend(
-                hits.into_iter()
-                    .filter_map(|hit| hit.get("document").cloned())
-                    .map(serde_json::from_value)
-                    .collect::<Result<Vec<_>, _>>()?,
-            );
+            for mut hit in hits {
+                if let Some(document) = hit.get_mut("document") {
+                    channels.push(serde_json::from_value(document.take())?);
+                }
+            }
             let total = body
                 .get("found")
                 .and_then(Value::as_u64)
@@ -195,7 +198,7 @@ impl SearchClient {
         let response = self
             .http
             .get(url)
-            .header("x-raw-search-key", &self.config.api_key)
+            .header("x-raw-search-key", &self.api_key)
             .send()
             .await?;
         let status = response.status();
@@ -267,11 +270,13 @@ fn search_field_weights(query_by: &str) -> String {
         .join(",")
 }
 
-fn endpoint(base_url: &str, path: &str) -> Result<Url, SearchError> {
+fn collection_search_url(base_url: &str, collection: &str) -> Result<Url, SearchError> {
     let base_url = base_url.trim().trim_end_matches('/');
     validate_base_url(base_url)?;
-    Url::parse(&format!("{base_url}/{path}"))
-        .map_err(|error| SearchError::InvalidInput(error.to_string()))
+    Url::parse(&format!(
+        "{base_url}/collections/{collection}/documents/search"
+    ))
+    .map_err(|error| SearchError::InvalidInput(error.to_string()))
 }
 
 fn validate_base_url(base_url: &str) -> Result<(), SearchError> {

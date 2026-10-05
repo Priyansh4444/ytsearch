@@ -1,6 +1,6 @@
 use crate::{
-    BackendReadiness, ChannelDeletionScope, ChannelDocument, ChunkStats, IndexOperation,
-    IndexStoreError, RawGenerationManifest, RawGenerationUpload, RawPublicationJob,
+    ADMIN_REQUEST_TIMEOUT, BackendReadiness, ChannelDeletionScope, ChannelDocument, ChunkStats,
+    IndexOperation, IndexStoreError, RawGenerationManifest, RawGenerationUpload, RawPublicationJob,
     SearchIndexAdmin, VideoIdPage, VideoReplacement,
 };
 use async_trait::async_trait;
@@ -12,7 +12,6 @@ use tokio::io::AsyncWriteExt;
 const BACKEND: &str = "raw";
 const ADMIN_KEY_HEADER: &str = "x-raw-admin-key";
 const DEFAULT_PUBLICATION_TRANSFER_TIMEOUT: Duration = Duration::from_secs(45 * 60);
-use crate::ADMIN_REQUEST_TIMEOUT;
 
 #[derive(Clone, Debug)]
 pub struct RawIndexAdminConfig {
@@ -115,15 +114,19 @@ impl RawIndexAdminClient {
         request: RequestBuilder,
     ) -> Result<T, IndexStoreError> {
         let response = self.request(request).send().await.map_err(map_http)?;
-        let status = response.status();
-        if status.is_success() {
-            return response.json().await.map_err(map_http);
+        if !response.status().is_success() {
+            return Err(error_response(response).await);
         }
-        let message = response
-            .text()
-            .await
-            .unwrap_or_else(|_| format!("raw admin returned {status}"));
-        Err(map_status(status, message))
+        response.json().await.map_err(map_http)
+    }
+
+    async fn execute_job(
+        &self,
+        request: RequestBuilder,
+    ) -> Result<RawPublicationJob, IndexStoreError> {
+        let job = self.execute(request).await?;
+        validate_publication_job_response(&job)?;
+        Ok(job)
     }
 
     fn endpoint(&self, path: &str) -> String {
@@ -134,15 +137,12 @@ impl RawIndexAdminClient {
     /// every indexed video, so it gets the transfer timeout. Under the admin
     /// timeout, a 964 MB export failed two daily publications in production.
     pub async fn prepare_publication(&self) -> Result<RawPublicationJob, IndexStoreError> {
-        let job = self
-            .execute(
-                self.client
-                    .post(self.endpoint("/admin/publications/prepare"))
-                    .timeout(self.publication_timeout),
-            )
-            .await?;
-        validate_publication_job_response(&job)?;
-        Ok(job)
+        self.execute_job(
+            self.client
+                .post(self.endpoint("/admin/publications/prepare"))
+                .timeout(self.publication_timeout),
+        )
+        .await
     }
 
     pub async fn publication_status(
@@ -150,14 +150,11 @@ impl RawIndexAdminClient {
         job_id: &str,
     ) -> Result<RawPublicationJob, IndexStoreError> {
         validate_publication_job_id(job_id)?;
-        let job = self
-            .execute(
-                self.client
-                    .get(self.endpoint(&format!("/admin/publications/{job_id}"))),
-            )
-            .await?;
-        validate_publication_job_response(&job)?;
-        Ok(job)
+        self.execute_job(
+            self.client
+                .get(self.endpoint(&format!("/admin/publications/{job_id}"))),
+        )
+        .await
     }
 
     pub async fn download_publication_snapshot(
@@ -175,13 +172,8 @@ impl RawIndexAdminClient {
             .send()
             .await
             .map_err(map_http)?;
-        let status = response.status();
-        if !status.is_success() {
-            let message = response
-                .text()
-                .await
-                .unwrap_or_else(|_| format!("raw admin returned {status}"));
-            return Err(map_status(status, message));
+        if !response.status().is_success() {
+            return Err(error_response(response).await);
         }
         if response.content_length() != Some(job.snapshot_bytes) {
             return Err(IndexStoreError::InvalidInput(
@@ -256,19 +248,16 @@ impl RawIndexAdminClient {
         manifest: RawGenerationManifest,
     ) -> Result<RawPublicationJob, IndexStoreError> {
         validate_publication_job_id(&job.job_id)?;
-        let job = self
-            .execute(
-                self.client
-                    .put(self.endpoint(&format!("/admin/publications/{}/manifest", job.job_id)))
-                    .json(&RawGenerationUpload {
-                        target_sequence: job.target_sequence,
-                        compatibility: job.compatibility.clone(),
-                        manifest,
-                    }),
-            )
-            .await?;
-        validate_publication_job_response(&job)?;
-        Ok(job)
+        self.execute_job(
+            self.client
+                .put(self.endpoint(&format!("/admin/publications/{}/manifest", job.job_id)))
+                .json(&RawGenerationUpload {
+                    target_sequence: job.target_sequence,
+                    compatibility: job.compatibility.clone(),
+                    manifest,
+                }),
+        )
+        .await
     }
 
     pub async fn upload_publication_file(
@@ -281,15 +270,14 @@ impl RawIndexAdminClient {
         validate_generation_file_name(file_name)?;
         let file = tokio::fs::File::open(path).await.map_err(map_io)?;
         let bytes = file.metadata().await.map_err(map_io)?.len();
-        let response = self
-            .client
-            .put(self.endpoint(&format!("/admin/publications/{job_id}/files/{file_name}")))
-            .header(header::CONTENT_LENGTH, bytes)
-            .body(reqwest::Body::from(file))
-            .timeout(self.publication_timeout);
-        let job = self.execute(response).await?;
-        validate_publication_job_response(&job)?;
-        Ok(job)
+        self.execute_job(
+            self.client
+                .put(self.endpoint(&format!("/admin/publications/{job_id}/files/{file_name}")))
+                .header(header::CONTENT_LENGTH, bytes)
+                .body(reqwest::Body::from(file))
+                .timeout(self.publication_timeout),
+        )
+        .await
     }
 
     pub async fn activate_publication(
@@ -297,14 +285,11 @@ impl RawIndexAdminClient {
         job_id: &str,
     ) -> Result<RawPublicationJob, IndexStoreError> {
         validate_publication_job_id(job_id)?;
-        let job = self
-            .execute(
-                self.client
-                    .post(self.endpoint(&format!("/admin/publications/{job_id}/activate"))),
-            )
-            .await?;
-        validate_publication_job_response(&job)?;
-        Ok(job)
+        self.execute_job(
+            self.client
+                .post(self.endpoint(&format!("/admin/publications/{job_id}/activate"))),
+        )
+        .await
     }
 }
 
@@ -312,9 +297,7 @@ fn validate_publication_job_id(value: &str) -> Result<(), IndexStoreError> {
     let valid = value.len() == 37
         && value.as_bytes()[..20].iter().all(u8::is_ascii_digit)
         && value.as_bytes()[20] == b'-'
-        && value.as_bytes()[21..]
-            .iter()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte));
+        && is_lower_hex(&value.as_bytes()[21..]);
     if !valid {
         return Err(IndexStoreError::InvalidInput(
             "raw publication job id is invalid".to_string(),
@@ -357,16 +340,18 @@ fn validate_publication_job_response(job: &RawPublicationJob) -> Result<(), Inde
 }
 
 fn validate_blake3(label: &str, value: &str) -> Result<(), IndexStoreError> {
-    let valid = value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
-    if !valid {
+    if value.len() != 64 || !is_lower_hex(value.as_bytes()) {
         return Err(IndexStoreError::InvalidInput(format!(
             "raw publication {label} BLAKE3 digest is invalid"
         )));
     }
     Ok(())
+}
+
+fn is_lower_hex(value: &[u8]) -> bool {
+    value
+        .iter()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
 }
 
 fn map_io(error: std::io::Error) -> IndexStoreError {
@@ -514,6 +499,15 @@ fn map_http(error: reqwest::Error) -> IndexStoreError {
     } else {
         IndexStoreError::internal(BACKEND, error)
     }
+}
+
+async fn error_response(response: reqwest::Response) -> IndexStoreError {
+    let status = response.status();
+    let message = response
+        .text()
+        .await
+        .unwrap_or_else(|_| format!("raw admin returned {status}"));
+    map_status(status, message)
 }
 
 fn map_status(status: StatusCode, body: String) -> IndexStoreError {
