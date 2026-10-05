@@ -7,7 +7,12 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      "/api": "http://127.0.0.1:8787",
+      // YTSEARCH_DEV_API=https://ytsearch-api-raw-production.fly.dev runs the
+      // frontend against real data without a local backend.
+      "/api": {
+        target: process.env.YTSEARCH_DEV_API ?? "http://127.0.0.1:8787",
+        changeOrigin: true,
+      },
     },
   },
   build: {
