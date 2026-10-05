@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
-    io::Write,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -63,6 +62,18 @@ pub(super) enum FailureStage {
     Chunking,
     Import,
     Timeout,
+}
+
+impl FailureStage {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Metadata => "metadata",
+            Self::Transcript => "transcript",
+            Self::Chunking => "chunking",
+            Self::Import => "import",
+            Self::Timeout => "timeout",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -273,24 +284,23 @@ impl FailureLedger {
             } else {
                 FailureRetryState::Deferred
             };
-            report.records.push(FailureRecordSummary {
-                video_id: record.video_id.clone(),
-                creator_id: record.creator_id.clone(),
-                category,
-                retry_state,
-            });
-            accumulate_failure_count(&mut report.totals, &record, now, self.default_retry_after);
+            report.totals.add(category, retry_state);
             if let Some(creator_id) = record.creator_id.as_deref() {
                 report.attributed_records = report.attributed_records.saturating_add(1);
-                accumulate_failure_count(
-                    report.by_creator.entry(creator_id.to_string()).or_default(),
-                    &record,
-                    now,
-                    self.default_retry_after,
-                );
+                report
+                    .by_creator
+                    .entry(creator_id.to_string())
+                    .or_default()
+                    .add(category, retry_state);
             } else {
                 report.unattributed_records = report.unattributed_records.saturating_add(1);
             }
+            report.records.push(FailureRecordSummary {
+                video_id: record.video_id,
+                creator_id: record.creator_id,
+                category,
+                retry_state,
+            });
         }
         report.records.sort_by(|left, right| {
             left.creator_id
@@ -458,25 +468,21 @@ fn decision_from_record(record: &FailureRecord, now: u64, default: Duration) -> 
     }
 }
 
-fn accumulate_failure_count(
-    counts: &mut FailureCounts,
-    record: &FailureRecord,
-    now: u64,
-    default: Duration,
-) {
-    let category = effective_category(record);
-    counts.total = counts.total.saturating_add(1);
-    *counts
-        .categories
-        .entry(category.as_str().to_string())
-        .or_default() += 1;
-    if category.retryable() {
-        counts.retryable = counts.retryable.saturating_add(1);
-        if effective_retry_at(record, default).is_none_or(|retry_at| retry_at <= now) {
-            counts.ready_retry = counts.ready_retry.saturating_add(1);
+impl FailureCounts {
+    fn add(&mut self, category: FailureCategory, retry_state: FailureRetryState) {
+        self.total = self.total.saturating_add(1);
+        *self
+            .categories
+            .entry(category.as_str().to_string())
+            .or_default() += 1;
+        match retry_state {
+            FailureRetryState::Terminal => self.terminal = self.terminal.saturating_add(1),
+            FailureRetryState::Ready => {
+                self.retryable = self.retryable.saturating_add(1);
+                self.ready_retry = self.ready_retry.saturating_add(1);
+            }
+            FailureRetryState::Deferred => self.retryable = self.retryable.saturating_add(1),
         }
-    } else {
-        counts.terminal = counts.terminal.saturating_add(1);
     }
 }
 
@@ -527,26 +533,15 @@ fn read_record(path: &Path) -> std::io::Result<Option<FailureRecord>> {
 }
 
 fn write_record_atomic(path: &Path, record: &FailureRecord) -> std::io::Result<()> {
-    let directory = path.parent().expect("failure path has parent directory");
-    fs::create_dir_all(directory)?;
+    fs::create_dir_all(path.parent().expect("failure path has parent directory"))?;
     let temporary = path.with_extension(format!(
         "failed.tmp.{}.{}",
         std::process::id(),
         unix_nanos(SystemTime::now())
     ));
-    let encoded = serde_json::to_vec(record).map_err(std::io::Error::other)?;
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temporary)?;
-    file.write_all(&encoded)?;
-    file.write_all(b"\n")?;
-    file.sync_all()?;
-    if let Err(error) = fs::rename(&temporary, path) {
-        let _ = fs::remove_file(&temporary);
-        return Err(error);
-    }
-    File::open(directory)?.sync_all()
+    let mut encoded = serde_json::to_vec(record).map_err(std::io::Error::other)?;
+    encoded.push(b'\n');
+    crate::atomic_file::write(path, &temporary, &encoded)
 }
 
 fn bounded_reason(reason: &str) -> String {

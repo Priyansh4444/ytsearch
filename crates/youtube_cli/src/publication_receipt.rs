@@ -47,10 +47,7 @@ pub(super) fn prepare_workspace(
     let input_path = root.join(INPUTS);
     let expected = Receipt::for_job(job, String::new());
     if input_path.try_exists()? {
-        hash_regular_file(&input_path)?;
-        let actual: Receipt = serde_json::from_reader(fs::File::open(&input_path)?)
-            .map_err(|error| CliError::Message(format!("invalid publication inputs: {error}")))?;
-        if actual != expected {
+        if read_receipt(&input_path, "invalid publication inputs")? != expected {
             return Err(CliError::Message(
                 "publication workspace belongs to different inputs".into(),
             ));
@@ -99,16 +96,7 @@ pub(super) fn prepare_workspace(
             }
             fs::remove_file(entry.path())?;
         }
-        let pending = root.join("build-inputs.next");
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&pending)?;
-        serde_json::to_writer(&file, &expected)
-            .map_err(|error| CliError::Message(error.to_string()))?;
-        file.sync_all()?;
-        fs::rename(pending, input_path)?;
-        fs::File::open(root)?.sync_all()?;
+        write_receipt(&input_path, &root.join("build-inputs.next"), &expected)?;
         fs::File::open(
             root.parent()
                 .ok_or_else(|| CliError::Message("publication workspace has no parent".into()))?,
@@ -165,12 +153,7 @@ pub(super) fn cleanup_activated_build(
             "completed publication workspace is not a real directory".into(),
         ));
     }
-    let receipt_path = path.join(RECEIPT);
-    hash_regular_file(&receipt_path)?;
-    let receipt: Receipt =
-        serde_json::from_reader(fs::File::open(receipt_path)?).map_err(|error| {
-            CliError::Message(format!("invalid completed publication receipt: {error}"))
-        })?;
+    let receipt = read_receipt(&path.join(RECEIPT), "invalid completed publication receipt")?;
     if receipt != Receipt::for_job(confirmed, manifest_hash(&path)?) {
         return Ok(());
     }
@@ -225,23 +208,30 @@ fn hash_regular_file(path: &Path) -> Result<String, CliError> {
     Ok(hash.finalize().to_hex().to_string())
 }
 
+/// Reads a receipt only from a regular file, never through a symlink.
+fn read_receipt(path: &Path, invalid: &str) -> Result<Receipt, CliError> {
+    hash_regular_file(path)?;
+    serde_json::from_reader(fs::File::open(path)?)
+        .map_err(|error| CliError::Message(format!("{invalid}: {error}")))
+}
+
+fn write_receipt(path: &Path, pending: &Path, receipt: &Receipt) -> Result<(), CliError> {
+    let encoded =
+        serde_json::to_vec(receipt).map_err(|error| CliError::Message(error.to_string()))?;
+    Ok(crate::atomic_file::write(path, pending, &encoded)?)
+}
+
 fn manifest_hash(root: &Path) -> Result<String, CliError> {
     hash_regular_file(&root.join("generation/manifest.json"))
 }
 
 /// Called only after the detached builder has completed its full verification.
 pub(super) fn record_verified_build(root: &Path, job: &RawPublicationJob) -> Result<(), CliError> {
-    let receipt = Receipt::for_job(job, manifest_hash(root)?);
-    let pending = root.join("verified-build.next");
-    let file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&pending)?;
-    serde_json::to_writer(&file, &receipt).map_err(|error| CliError::Message(error.to_string()))?;
-    file.sync_all()?;
-    fs::rename(pending, root.join(RECEIPT))?;
-    fs::File::open(root)?.sync_all()?;
-    Ok(())
+    write_receipt(
+        &root.join(RECEIPT),
+        &root.join("verified-build.next"),
+        &Receipt::for_job(job, manifest_hash(root)?),
+    )
 }
 
 pub(super) fn resume_verified_build(
@@ -265,10 +255,9 @@ pub(super) fn resume_verified_build(
             root.display()
         )));
     }
-    hash_regular_file(&receipt_path)?;
-    let receipt: Receipt = serde_json::from_reader(fs::File::open(receipt_path)?)
-        .map_err(|error| CliError::Message(format!("invalid publication receipt: {error}")))?;
-    if receipt != Receipt::for_job(job, manifest_hash(root)?) {
+    if read_receipt(&receipt_path, "invalid publication receipt")?
+        != Receipt::for_job(job, manifest_hash(root)?)
+    {
         return Err(CliError::Message(
             "publication receipt does not match the prepared job and manifest".into(),
         ));

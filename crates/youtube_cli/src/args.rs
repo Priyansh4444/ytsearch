@@ -99,11 +99,7 @@ pub(super) struct IndexYoutuberCommand {
     #[command(flatten)]
     pub(super) youtuber: YoutuberArg,
     #[command(flatten)]
-    pub(super) youtube: YouTubeAuthArgs,
-    #[command(flatten)]
-    pub(super) search: SearchAdminArgs,
-    #[command(flatten)]
-    pub(super) collection: TranscriptCollectionArg,
+    pub(super) run: IndexRunArgs,
     #[arg(long, help = "Optional cap for a test indexing run")]
     pub(super) max_videos: Option<usize>,
     #[arg(
@@ -111,26 +107,8 @@ pub(super) struct IndexYoutuberCommand {
         help = "After existing-video filtering, index at most this many missing videos"
     )]
     pub(super) max_new_videos: Option<usize>,
-    #[arg(
-        long,
-        help = "In update mode, stop scanning newest-first after this many consecutive already-indexed videos. Use 0 to disable"
-    )]
-    pub(super) stop_after_existing: Option<usize>,
-    #[arg(long, value_enum, default_value_t = IndexMode::Update)]
-    pub(super) mode: IndexMode,
-    #[arg(
-        long,
-        help = "Acknowledge that rewipe deletes existing chunks before replacement data is imported"
-    )]
-    pub(super) allow_destructive_rewipe: bool,
     #[arg(long, default_value_t = 4, help = "Concurrent videos to index")]
     pub(super) jobs: usize,
-    #[arg(
-        long,
-        default_value_t = 300,
-        help = "Maximum seconds to spend on one video"
-    )]
-    pub(super) video_timeout_seconds: u64,
     #[arg(
         long,
         help = "Skip videos that already have chunks in the search backend"
@@ -141,21 +119,6 @@ pub(super) struct IndexYoutuberCommand {
         help = "Keep existing chunks for this YouTuber instead of wiping before import"
     )]
     pub(super) no_wipe: bool,
-    #[arg(long, value_enum, default_value_t = ContentKindFilter::All)]
-    pub(super) content_kind: ContentKindFilter,
-    #[command(flatten)]
-    pub(super) transcript: TranscriptOptions,
-    #[arg(
-        long,
-        default_value_t = DEFAULT_TRANSCRIPT_FAILURE_RETRY_SECONDS,
-        help = "Seconds before retrying a video whose transcript fetch previously failed"
-    )]
-    pub(super) transcript_failure_retry_seconds: u64,
-    #[arg(
-        long,
-        help = "Write durable mutations without building a generation; a later `ytsearch publish` makes them searchable"
-    )]
-    pub(super) defer_publish: bool,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -163,25 +126,9 @@ pub(super) struct IndexYoutubersCommand {
     #[arg(value_name = "LIST_FILE")]
     pub(super) list_file: PathBuf,
     #[command(flatten)]
-    pub(super) youtube: YouTubeAuthArgs,
-    #[command(flatten)]
-    pub(super) search: SearchAdminArgs,
-    #[command(flatten)]
-    pub(super) collection: TranscriptCollectionArg,
-    #[arg(long, value_enum, default_value_t = IndexMode::Update)]
-    pub(super) mode: IndexMode,
-    #[arg(
-        long,
-        help = "Acknowledge that rewipe deletes existing chunks before replacement data is imported"
-    )]
-    pub(super) allow_destructive_rewipe: bool,
+    pub(super) run: IndexRunArgs,
     #[arg(long, help = "Optional cap per creator for a test indexing run")]
     pub(super) max_videos: Option<usize>,
-    #[arg(
-        long,
-        help = "In update mode, stop scanning newest-first after this many consecutive already-indexed videos. Use 0 to disable"
-    )]
-    pub(super) stop_after_existing: Option<usize>,
     #[arg(
         long,
         default_value_t = 4,
@@ -194,6 +141,29 @@ pub(super) struct IndexYoutubersCommand {
         help = "Concurrent creators; automatically bounded so total video workers never exceed 16"
     )]
     pub(super) channel_jobs: usize,
+}
+
+/// Options shared by single-creator and catalog indexing runs.
+#[derive(Clone, Debug, Args)]
+pub(super) struct IndexRunArgs {
+    #[command(flatten)]
+    pub(super) youtube: YouTubeAuthArgs,
+    #[command(flatten)]
+    pub(super) search: SearchAdminArgs,
+    #[command(flatten)]
+    pub(super) collection: TranscriptCollectionArg,
+    #[arg(
+        long,
+        help = "In update mode, stop scanning newest-first after this many consecutive already-indexed videos. Use 0 to disable"
+    )]
+    pub(super) stop_after_existing: Option<usize>,
+    #[arg(long, value_enum, default_value_t = IndexMode::Update)]
+    pub(super) mode: IndexMode,
+    #[arg(
+        long,
+        help = "Acknowledge that rewipe deletes existing chunks before replacement data is imported"
+    )]
+    pub(super) allow_destructive_rewipe: bool,
     #[arg(
         long,
         default_value_t = 300,
@@ -388,16 +358,12 @@ impl SearchAdminArgs {
         &self,
         _collection: impl Into<String>,
     ) -> Result<RawIndexAdminClient, CliError> {
-        let api_url = self
-            .api_url
-            .clone()
-            .or_else(|| std::env::var("RAW_SEARCH_API_URL").ok())
-            .ok_or_else(|| CliError::Message("missing Raw admin URL".to_string()))?;
-        let admin_api_key = self
-            .admin_api_key
-            .clone()
-            .or_else(|| std::env::var("RAW_SEARCH_ADMIN_API_KEY").ok())
-            .ok_or_else(|| CliError::Message("missing Raw admin key".to_string()))?;
+        let api_url = arg_or_env(&self.api_url, "RAW_SEARCH_API_URL", "missing Raw admin URL")?;
+        let admin_api_key = arg_or_env(
+            &self.admin_api_key,
+            "RAW_SEARCH_ADMIN_API_KEY",
+            "missing Raw admin key",
+        )?;
         let publication_timeout =
             raw_publication_timeout(std::env::var(RAW_PUBLICATION_TIMEOUT_ENV).ok().as_deref())?;
         Ok(RawIndexAdminClient::new(
@@ -409,18 +375,25 @@ impl SearchAdminArgs {
 
 impl SearchQueryArgs {
     pub(super) fn client(&self, collection: impl Into<String>) -> Result<SearchClient, CliError> {
-        let api_url = self
-            .api_url
-            .clone()
-            .or_else(|| std::env::var("RAW_SEARCH_API_URL").ok())
-            .ok_or_else(|| CliError::Message("missing Raw search URL".to_string()))?;
-        let search_api_key = self
-            .search_api_key
-            .clone()
-            .or_else(|| std::env::var("RAW_SEARCH_API_KEY").ok())
-            .ok_or_else(|| CliError::Message("missing Raw search key".to_string()))?;
+        let api_url = arg_or_env(
+            &self.api_url,
+            "RAW_SEARCH_API_URL",
+            "missing Raw search URL",
+        )?;
+        let search_api_key = arg_or_env(
+            &self.search_api_key,
+            "RAW_SEARCH_API_KEY",
+            "missing Raw search key",
+        )?;
         Ok(SearchClient::new(
             SearchClientConfig::new(api_url, search_api_key).with_collection(collection),
         )?)
     }
+}
+
+fn arg_or_env(value: &Option<String>, env: &str, missing: &str) -> Result<String, CliError> {
+    value
+        .clone()
+        .or_else(|| std::env::var(env).ok())
+        .ok_or_else(|| CliError::Message(missing.to_string()))
 }
