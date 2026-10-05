@@ -11,7 +11,6 @@ set -eu
 
 INDEX_QUEUE_API_BASE_URL="$(normalize_queue_api_url "${INDEX_QUEUE_API_BASE_URL:-}")"
 
-BACKENDS="${BACKENDS:-raw}"
 QUERY="${QUERY:-the}"
 PER_PAGE="${PER_PAGE:-3}"
 
@@ -36,19 +35,6 @@ required_env() {
   fi
 }
 
-backend_url() {
-  case "$1" in
-    raw)
-      required_env RAW_SEARCH_API_BASE_URL
-      printf '%s' "$RAW_SEARCH_API_BASE_URL"
-      ;;
-    *)
-      echo "Unknown backend: $1" >&2
-      exit 1
-      ;;
-  esac
-}
-
 normalize_handle() {
   value="$1"
   case "$value" in
@@ -66,46 +52,45 @@ require_command jq
 
 printf 'backend\thandle\tindexed\tvideos\tchunks\tpublic_videos\tlatest_video\tsearch_http\tsearch_videos\tfirst_result\n'
 
-for backend in $BACKENDS; do
-  base_url="$(backend_url "$backend")"
-  channels_file="/tmp/ytsearch-youtubers-$backend.json"
-  curl -fsS "$base_url/api/youtubers" > "$channels_file"
+required_env RAW_SEARCH_API_BASE_URL
+base_url="$RAW_SEARCH_API_BASE_URL"
+channels_file="/tmp/ytsearch-youtubers-raw.json"
+curl -fsS "$base_url/api/youtubers" > "$channels_file"
 
-  for raw_handle in "$@"; do
-    handle="$(normalize_handle "$raw_handle")"
-    channel_json="$(jq -c --arg handle "$handle" '
-      .channels[]? | select((.handle | ascii_downcase) == ($handle | ascii_downcase))
-    ' "$channels_file" | head -n 1)"
+for raw_handle in "$@"; do
+  handle="$(normalize_handle "$raw_handle")"
+  channel_json="$(jq -c --arg handle "$handle" '
+    .channels[]? | select((.handle | ascii_downcase) == ($handle | ascii_downcase))
+  ' "$channels_file" | head -n 1)"
 
-    if [ -z "$channel_json" ]; then
-      videos=0
-      chunks=0
-      public_videos=""
-      latest=""
-      indexed="no"
-    else
-      videos="$(printf '%s' "$channel_json" | jq -r '.indexed_video_count // 0')"
-      chunks="$(printf '%s' "$channel_json" | jq -r '.indexed_chunk_count // 0')"
-      public_videos="$(printf '%s' "$channel_json" | jq -r '.public_video_count // ""')"
-      latest="$(printf '%s' "$channel_json" | jq -r '.latest_video_id // ""')"
-      indexed="yes"
-    fi
+  if [ -z "$channel_json" ]; then
+    videos=0
+    chunks=0
+    public_videos=""
+    latest=""
+    indexed="no"
+  else
+    videos="$(printf '%s' "$channel_json" | jq -r '.indexed_video_count // 0')"
+    chunks="$(printf '%s' "$channel_json" | jq -r '.indexed_chunk_count // 0')"
+    public_videos="$(printf '%s' "$channel_json" | jq -r '.public_video_count // ""')"
+    latest="$(printf '%s' "$channel_json" | jq -r '.latest_video_id // ""')"
+    indexed="yes"
+  fi
 
-    search_url="$base_url/api/search?q=$(encode "$QUERY")&youtuber=$(encode "$handle")&per_page=$PER_PAGE"
-    search_body="/tmp/ytsearch-channel-search-$backend-$(printf '%s' "$handle" | tr -cd '[:alnum:]').json"
-    search_http="$(curl -sS -o "$search_body" -w "%{http_code}" "$search_url" || true)"
-    if [ "$search_http" = "200" ]; then
-      search_videos="$(jq -r '.videos | length' "$search_body")"
-      first_result="$(jq -r '.videos[0].title // ""' "$search_body")"
-    else
-      search_videos=0
-      first_result=""
-    fi
+  search_url="$base_url/api/search?q=$(encode "$QUERY")&youtuber=$(encode "$handle")&per_page=$PER_PAGE"
+  search_body="/tmp/ytsearch-channel-search-raw-$(printf '%s' "$handle" | tr -cd '[:alnum:]').json"
+  search_http="$(curl -sS -o "$search_body" -w "%{http_code}" "$search_url" || true)"
+  if [ "$search_http" = "200" ]; then
+    search_videos="$(jq -r '.videos | length' "$search_body")"
+    first_result="$(jq -r '.videos[0].title // ""' "$search_body")"
+  else
+    search_videos=0
+    first_result=""
+  fi
 
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$backend" "$handle" "$indexed" "$videos" "$chunks" "$public_videos" "$latest" \
-      "$search_http" "$search_videos" "$first_result"
-  done
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    raw "$handle" "$indexed" "$videos" "$chunks" "$public_videos" "$latest" \
+    "$search_http" "$search_videos" "$first_result"
 done
 
 if [ -n "${INDEX_QUEUE_API_BASE_URL:-}" ] && [ -n "${YTSEARCH_INDEX_QUEUE_TOKEN:-}" ]; then

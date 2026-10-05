@@ -32,6 +32,7 @@ scripts/test-require-committed-rust-build-inputs.sh
 scripts/test-cloud-index-queue-entrypoint.sh
 scripts/check-fly-cost-config.sh
 scripts/test-index-conference-playlists.sh
+scripts/test-index-all-raw.sh
 scripts/test-idle-gap-fill.sh
 scripts/test-benchmark-search-tools.sh
 scripts/test-refresh-query-log.sh

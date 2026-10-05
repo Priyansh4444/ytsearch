@@ -6,7 +6,7 @@ LOG_FILE="${LOG_FILE:-/tmp/ytsearch-index-all.log}"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
-if scripts/index-all-backends-update.sh "$LIST_FILE" > "$LOG_FILE" 2>&1; then
+if "$(dirname "$0")/index-all-raw.sh" "$LIST_FILE" > "$LOG_FILE" 2>&1; then
   printf 'Indexing completed successfully. Log: %s\n' "$LOG_FILE"
 else
   status="$?"
