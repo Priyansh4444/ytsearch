@@ -595,3 +595,32 @@ fn benchmark_relevance_grouping_workload() {
         elapsed.as_secs_f64() * 1_000.0 / ROUNDS as f64
     );
 }
+
+#[test]
+fn search_response_keeps_an_empty_top_level_hits_array_for_older_frontends() {
+    let videos = video_results_from_hits(
+        &[test_hit("video1", "Title", "text")],
+        SearchSort::Relevance,
+        "q",
+    );
+    let response = SearchResponse {
+        query: "q",
+        total_moments: 1,
+        total_videos: 1,
+        totals_approximate: false,
+        total_found: 1,
+        out_of: 1,
+        time_to_first_result_ms: 0,
+        page: 1,
+        per_page: 12,
+        sort: SearchSort::Relevance,
+        mode: "lexical",
+        has_next_page: false,
+        hits: [],
+        videos: &videos,
+    };
+    let value = serde_json::to_value(&response).unwrap();
+
+    assert_eq!(value["hits"], json!([]));
+    assert_eq!(value["videos"][0]["hits"].as_array().unwrap().len(), 1);
+}
