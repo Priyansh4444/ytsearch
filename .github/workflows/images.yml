@@ -1,0 +1,97 @@
+name: Images
+
+# Builds and smoke-tests the standalone Docker images. The main CI job already
+# compiles the same Rust code natively, so this runs only when an image's own
+# inputs change, plus weekly to catch base-image drift. The Fly overlay images
+# need a production base image and are built by scripts/build-raw-overlay.sh.
+on:
+  pull_request:
+    paths:
+      - "Dockerfile*"
+      - "*.dockerignore"
+      - ".dockerignore"
+      - "compose.yaml"
+      - "scripts/cloud-index-queue-entrypoint.sh"
+      - "scripts/raw-search-entrypoint.sh"
+      - ".github/workflows/images.yml"
+  push:
+    branches: [master]
+    paths:
+      - "Dockerfile*"
+      - "*.dockerignore"
+      - ".dockerignore"
+      - "compose.yaml"
+      - "scripts/cloud-index-queue-entrypoint.sh"
+      - "scripts/raw-search-entrypoint.sh"
+      - ".github/workflows/images.yml"
+  schedule:
+    - cron: "23 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dockerfile: Dockerfile
+            smoke: api
+          - dockerfile: Dockerfile.search-api
+            smoke: api
+          - dockerfile: Dockerfile.raw-search
+            smoke: reader
+          - dockerfile: Dockerfile.frontend
+            smoke: frontend
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          tags: ytsearch-image-under-test
+          load: true
+          push: false
+          cache-from: type=gha,scope=${{ matrix.dockerfile }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.dockerfile }}
+      - name: Smoke test
+        env:
+          SMOKE: ${{ matrix.smoke }}
+        run: |
+          set -eu
+          image=ytsearch-image-under-test
+          wait_for() {
+            for _ in $(seq 1 30); do
+              curl -fsS "$1" >/dev/null 2>&1 && return 0
+              sleep 1
+            done
+            docker logs smoke || true
+            return 1
+          }
+          case "$SMOKE" in
+            api)
+              docker run -d --name smoke -p 8787:8787 \
+                -e RAW_SEARCH_API_URL=http://127.0.0.1:9 -e RAW_SEARCH_API_KEY=smoke \
+                "$image" youtube-api
+              wait_for http://127.0.0.1:8787/api/health
+              if docker run --rm --entrypoint sh "$image" -c 'command -v ytsearch' >/dev/null; then
+                docker run --rm "$image" ytsearch --help >/dev/null
+              fi
+              ;;
+            reader)
+              docker run --rm --entrypoint youtube-raw-search "$image" --help >/dev/null
+              ;;
+            frontend)
+              docker run -d --name smoke -p 8080:80 "$image"
+              wait_for http://127.0.0.1:8080/
+              ;;
+          esac
