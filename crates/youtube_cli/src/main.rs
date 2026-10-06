@@ -2379,6 +2379,23 @@ fn print_validated_youtuber(youtuber: &ValidatedYoutuber) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn admin_client_rejects_collections_raw_does_not_serve() {
+        let args = args::SearchAdminArgs {
+            backend: args::SearchBackend::Raw,
+            api_url: Some("http://127.0.0.1:1".to_string()),
+            admin_api_key: Some("test-admin-key".to_string()),
+        };
+        assert!(
+            args.client(youtube_search_client::DEFAULT_COLLECTION)
+                .is_ok()
+        );
+        let Err(error) = args.client("other-collection") else {
+            panic!("a collection Raw does not serve must be rejected");
+        };
+        assert!(error.to_string().contains("other-collection"), "{error}");
+    }
+
     // A new upload whose captions are not published yet must not fail the
     // daily catalog pass: every creator was attempted and the gap is retried
     // on its own backoff.

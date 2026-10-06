@@ -28,7 +28,8 @@ esac
 apl="['${AXIOM_QUERY_DATASET}'] | where event == \"search_query\" and backend == \"raw\" | where isnotnull(query) and query != \"\" | summarize searches=count(), p50_backend_ms=percentile(backend_search_ms, 50), max_backend_ms=max(backend_search_ms), found=max(total_found), last_seen=max(_time) by query, youtuber, sort, page | sort by searches desc | limit ${limit}"
 
 response="$(mktemp)"
-trap 'rm -f "$response"' EXIT HUP INT TERM
+trap 'rm -f "$response"' EXIT
+trap 'exit 130' HUP INT TERM
 axiom_query_to_file "$apl" "now-${window}" "$response"
 
 umask 077

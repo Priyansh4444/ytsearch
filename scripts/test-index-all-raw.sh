@@ -6,7 +6,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT INT TERM
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' INT TERM
 mkdir -p "$tmp/bin" "$tmp/repository"
 cp -R "$SCRIPT_DIR" "$tmp/repository/scripts"
 cd "$tmp/repository"

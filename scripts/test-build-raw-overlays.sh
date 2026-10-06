@@ -7,7 +7,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT INT TERM
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' INT TERM
 
 for dockerfile in "$REPOSITORY_ROOT"/Dockerfile.raw-{indexer,search}-overlay; do
   grep -Fq 'FROM rust:1.97-bookworm AS builder' "$dockerfile"

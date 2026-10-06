@@ -50,7 +50,21 @@ const EXTRA_PATHS = [
   "/api/search?q=fire&page=999",
   "/api/search?q=fire&youtuber=@nobody",
   "/api/search?q=fire&video_id=bad!",
+  "/api/search?q=fire&video_id=",
+  "/api/search?q=fire&video_id=%20",
+  "/api/search?q=",
+  "/api/search?q=fire&per_page=1",
+  "/api/search?q=fire&per_page=5",
   "/api/nope",
+];
+// Single-video searches (the frontend's "show all moments") for the first two
+// videos of each case's first page, capped like the original harness.
+const MAX_SCOPED_VIDEOS = 60;
+const SCOPED_VARIANTS: Record<string, string>[] = [
+  { per_page: "100" },
+  {},
+  { page: "2", per_page: "3" },
+  { sort: "published_desc" },
 ];
 
 function startApi(name: string, binary: string, port: number): ChildProcess {
@@ -158,11 +172,7 @@ let mismatches = 0;
 try {
   await waitHealthy("base", base, BASE_PORT);
   await waitHealthy("head", head, HEAD_PORT);
-  const paths = [
-    ...searchCaseParams(casesFile).map((params) => `/api/search?${params}`),
-    ...EXTRA_PATHS,
-  ];
-  for (const path of paths) {
+  const compare = async (path: string): Promise<unknown> => {
     requests++;
     const [a, b] = [await fetchSnapshot(BASE_PORT, path), await fetchSnapshot(HEAD_PORT, path)];
     const difference =
@@ -173,7 +183,27 @@ try {
       mismatches++;
       console.log(`MISMATCH ${path}\n  ${difference}`);
     }
+    return a.body;
+  };
+  const scoped: [query: string, videoId: string][] = [];
+  for (const params of searchCaseParams(casesFile)) {
+    const body = await compare(`/api/search?${params}`);
+    if (params.get("sort") !== "relevance" || params.get("page") !== "1") continue;
+    const videos = isRecord(body) && Array.isArray(body.videos) ? body.videos.slice(0, 2) : [];
+    for (const video of videos) {
+      if (isRecord(video) && typeof video.video_id === "string") {
+        scoped.push([params.get("q") ?? "", video.video_id]);
+      }
+    }
   }
+  for (const [q, videoId] of scoped.slice(0, MAX_SCOPED_VIDEOS)) {
+    for (const variant of SCOPED_VARIANTS) {
+      await compare(`/api/search?${new URLSearchParams({ q, video_id: videoId, ...variant })}`);
+    }
+    // The API trims the ID; a blank one once skipped the early stop.
+    await compare(`/api/search?${new URLSearchParams({ q, video_id: `  ${videoId}  ` })}`);
+  }
+  for (const path of EXTRA_PATHS) await compare(path);
 } finally {
   stop();
 }

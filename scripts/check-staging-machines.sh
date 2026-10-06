@@ -18,7 +18,8 @@ for command in curl flyctl jq; do
 done
 
 temporary_directory="$(mktemp -d)"
-trap 'rm -rf "$temporary_directory"' EXIT INT TERM
+trap 'rm -rf "$temporary_directory"' EXIT
+trap 'exit 130' INT TERM
 api_machines="$temporary_directory/api.json"
 reader_machines="$temporary_directory/readers.json"
 indexer_machines="$temporary_directory/indexers.json"

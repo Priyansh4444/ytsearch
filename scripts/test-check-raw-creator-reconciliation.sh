@@ -3,7 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 temporary_directory="$(mktemp -d)"
-trap 'rm -rf "$temporary_directory"' EXIT INT TERM
+trap 'rm -rf "$temporary_directory"' EXIT
+trap 'exit 130' INT TERM
 mkdir -p "$temporary_directory/discoveries"
 printf 'catalog-test-run\n' > "$temporary_directory/discoveries/active-run-id"
 

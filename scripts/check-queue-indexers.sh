@@ -116,7 +116,8 @@ verify_embedded_file() {
     exit 1
   }
   actual="$(mktemp)"
-  trap 'rm -f "$actual"' EXIT HUP INT TERM
+  trap 'rm -f "$actual"' EXIT
+  trap 'exit 130' HUP INT TERM
   if ! printf '%s' "$encoded" | base64 -d > "$actual" 2>/dev/null \
     || ! cmp -s "$expected_file" "$actual"; then
     echo "The raw worker has stale embedded file $guest_path." >&2

@@ -48,7 +48,8 @@ fi
   scripts/build-raw-overlay.sh scripts/require-committed-rust-build-inputs.sh
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT INT TERM
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' INT TERM
 
 # Archive only committed inputs; never copy a host-linked binary.
 git -C "$REPOSITORY_ROOT" archive "$source_commit" -- \

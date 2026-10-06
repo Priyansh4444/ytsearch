@@ -34,7 +34,8 @@ response="$temporary_directory/response.json"
 cleanup() {
   rm -rf "$temporary_directory"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 chmod 700 "$temporary_directory"
 if [[ -z "$RAW_ADMIN_API_KEY" || "$(printf '%s' "$RAW_ADMIN_API_KEY" | tr -d '\r\n')" != "$RAW_ADMIN_API_KEY" ]]; then
   printf 'RAW_ADMIN_API_KEY must be a non-empty, single-line value\n' >&2

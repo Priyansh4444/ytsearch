@@ -21,7 +21,8 @@ for command in curl flyctl jq; do
 done
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' HUP INT TERM
 
 http_get() {
   output="$1"

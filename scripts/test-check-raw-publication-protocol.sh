@@ -5,7 +5,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source_commit="$(printf '%040d' 1)"
 mismatched_commit="$(printf '%040d' 2)"
 temporary_directory="$(mktemp -d)"
-trap 'rm -rf "$temporary_directory"' EXIT INT TERM
+trap 'rm -rf "$temporary_directory"' EXIT
+trap 'exit 130' INT TERM
 mkdir -p "$temporary_directory/bin"
 
 cat > "$temporary_directory/bin/curl" <<'SH'

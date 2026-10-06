@@ -12,7 +12,8 @@ command -v flyctl >/dev/null 2>&1 || {
 }
 
 tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
+trap 'rm -f "$tmp"' EXIT
+trap 'exit 130' HUP INT TERM
 flyctl logs --app "$APP_NAME" --no-tail 2>/dev/null > "$tmp" || true
 
 strip_and_redact() {
@@ -28,7 +29,8 @@ if [ "$VERBOSE" = "1" ]; then
 fi
 
 clean="$(mktemp)"
-trap 'rm -f "$tmp" "$clean"' EXIT HUP INT TERM
+trap 'rm -f "$tmp" "$clean"' EXIT
+trap 'exit 130' HUP INT TERM
 strip_and_redact < "$tmp" > "$clean"
 
 latest_done="$(rg -i 'Done [0-9]+/[0-9]+:' "$clean" | tail -n 1 || true)"

@@ -3,7 +3,8 @@ set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' HUP INT TERM
 
 cat > "$tmp/example" <<'EOF'
 RAW_SEARCH_API_URL=

@@ -97,7 +97,8 @@ else
   cleanup_candidate() {
     rm -f "$candidate"
   }
-  trap cleanup_candidate EXIT INT TERM
+  trap cleanup_candidate EXIT
+  trap 'exit 130' INT TERM
   cp --preserve=mode "$wrangler_config" "$candidate"
   for index in "${!keys[@]}"; do
     if [[ "${current_values[index]}" != "${expected_values[index]}" ]]; then
