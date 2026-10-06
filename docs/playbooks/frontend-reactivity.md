@@ -47,3 +47,8 @@ video restarting is the usual symptom), or loses state for no visible reason.
 - **Solid warnings fail the e2e suite.** `STRICT_READ_UNTRACKED` and
   `ASYNC_OUTSIDE_LOADING_BOUNDARY` are collected in `afterEach`; read the console
   output before assuming the test logic is wrong.
+- **The CSP lives in `public/_headers`.** A new external origin (image host,
+  embed, analytics host) is blocked in production until it is added there. The
+  e2e suite runs on Vite, which does not apply `_headers`; to check the policy,
+  run `bun run build && bunx wrangler dev`, mock `/api/**` in Playwright, and
+  listen for `securitypolicyviolation` events.
