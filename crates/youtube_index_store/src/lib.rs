@@ -1,9 +1,5 @@
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroU16,
-};
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 use youtube_ingest::TranscriptChunk;
 
@@ -248,60 +244,6 @@ impl<'a> VideoReplacement<'a> {
     pub fn chunks(self) -> &'a [TranscriptChunk] {
         self.chunks
     }
-}
-
-/// Backend-neutral control plane used by indexers and repair jobs.
-///
-/// Mutations must be idempotent for a stable `idempotency_key`. Returning an
-/// operation does not imply replica visibility; callers must inspect `state`
-/// and `acknowledged_readers` when they require read-after-write guarantees.
-/// The write contract lives outside the latency-sensitive query crates so its
-/// dependencies and state cannot enter the search hot path.
-#[async_trait]
-pub trait SearchIndexAdmin: Send + Sync {
-    async fn readiness(&self) -> Result<BackendReadiness, IndexStoreError>;
-
-    async fn publish(&self) -> Result<BackendReadiness, IndexStoreError>;
-
-    async fn channel(&self, channel_id: &str) -> Result<Option<ChannelDocument>, IndexStoreError>;
-
-    async fn replace_video(
-        &self,
-        replacement: VideoReplacement<'_>,
-        idempotency_key: &str,
-    ) -> Result<IndexOperation, IndexStoreError>;
-
-    async fn delete_video(
-        &self,
-        video_id: &str,
-        idempotency_key: &str,
-    ) -> Result<IndexOperation, IndexStoreError>;
-
-    async fn upsert_channel(
-        &self,
-        channel: &ChannelDocument,
-        idempotency_key: &str,
-    ) -> Result<IndexOperation, IndexStoreError>;
-
-    async fn delete_channel(
-        &self,
-        channel_id: &str,
-        scope: ChannelDeletionScope,
-        idempotency_key: &str,
-    ) -> Result<IndexOperation, IndexStoreError>;
-
-    async fn operation(&self, operation_id: &str) -> Result<IndexOperation, IndexStoreError>;
-
-    async fn video_chunk_count(&self, video_id: &str) -> Result<u64, IndexStoreError>;
-
-    async fn indexed_video_ids(
-        &self,
-        channel_id: &str,
-        cursor: Option<&str>,
-        limit: NonZeroU16,
-    ) -> Result<VideoIdPage, IndexStoreError>;
-
-    async fn channel_stats(&self, channel_id: &str) -> Result<ChunkStats, IndexStoreError>;
 }
 
 #[cfg(test)]

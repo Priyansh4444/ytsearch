@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-async-trait = { workspace = true }
 blake3 = { version = "1.8", optional = true }
 reqwest = { workspace = true, optional = true, features = ["query", "stream"] }
 serde = { workspace = true }
