@@ -50,7 +50,10 @@ video restarting is the usual symptom), or loses state for no visible reason.
 - **The CSP lives in `public/_headers`.** A new external origin (image host,
   embed, analytics host) is blocked in production until it is added there.
   Inline `style` attributes are allowed (`style-src-attr`), but a library that
-  injects `<style>` elements is blocked. The
+  injects `<style>` elements is blocked. Cloudflare injects its Web Analytics
+  beacon only at the production edge, so `wrangler dev` never shows that
+  script; after a CSP change, check `https://search.pronsh.dev` itself for
+  `securitypolicyviolation` events. The
   e2e suite runs on Vite, which does not apply `_headers`; to check the policy,
   run `bun run build && bunx wrangler dev`, mock `/api/**` in Playwright, and
   listen for `securitypolicyviolation` events.
