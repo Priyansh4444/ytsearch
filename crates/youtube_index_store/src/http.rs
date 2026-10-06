@@ -1,9 +1,8 @@
 use crate::{
     ADMIN_REQUEST_TIMEOUT, BackendReadiness, ChannelDeletionScope, ChannelDocument, ChunkStats,
     IndexOperation, IndexStoreError, RawGenerationManifest, RawGenerationUpload, RawPublicationJob,
-    SearchIndexAdmin, VideoIdPage, VideoReplacement,
+    VideoIdPage, VideoReplacement,
 };
-use async_trait::async_trait;
 use reqwest::{Client, RequestBuilder, StatusCode, header};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{num::NonZeroU16, path::Path, time::Duration};
@@ -358,21 +357,30 @@ fn map_io(error: std::io::Error) -> IndexStoreError {
     IndexStoreError::unavailable(BACKEND, error)
 }
 
-#[async_trait]
-impl SearchIndexAdmin for RawIndexAdminClient {
-    async fn readiness(&self) -> Result<BackendReadiness, IndexStoreError> {
+/// Raw's write and control plane, used by indexers and repair jobs.
+///
+/// Mutations must be idempotent for a stable `idempotency_key`. Returning an
+/// operation does not imply replica visibility; callers must inspect `state`
+/// and `acknowledged_readers` when they require read-after-write guarantees.
+/// The write contract lives outside the latency-sensitive query crates so its
+/// dependencies and state cannot enter the search hot path.
+impl RawIndexAdminClient {
+    pub async fn readiness(&self) -> Result<BackendReadiness, IndexStoreError> {
         self.execute(self.client.get(self.endpoint("/admin/readiness")))
             .await
     }
 
-    async fn publish(&self) -> Result<BackendReadiness, IndexStoreError> {
+    pub async fn publish(&self) -> Result<BackendReadiness, IndexStoreError> {
         let _: serde_json::Value = self
             .execute(self.client.post(self.endpoint("/admin/publish")))
             .await?;
         self.readiness().await
     }
 
-    async fn channel(&self, channel_id: &str) -> Result<Option<ChannelDocument>, IndexStoreError> {
+    pub async fn channel(
+        &self,
+        channel_id: &str,
+    ) -> Result<Option<ChannelDocument>, IndexStoreError> {
         self.execute(
             self.client
                 .get(self.endpoint(&format!("/admin/channels/{channel_id}"))),
@@ -380,7 +388,7 @@ impl SearchIndexAdmin for RawIndexAdminClient {
         .await
     }
 
-    async fn replace_video(
+    pub async fn replace_video(
         &self,
         replacement: VideoReplacement<'_>,
         idempotency_key: &str,
@@ -397,7 +405,7 @@ impl SearchIndexAdmin for RawIndexAdminClient {
         .await
     }
 
-    async fn delete_video(
+    pub async fn delete_video(
         &self,
         video_id: &str,
         idempotency_key: &str,
@@ -413,7 +421,7 @@ impl SearchIndexAdmin for RawIndexAdminClient {
         .await
     }
 
-    async fn upsert_channel(
+    pub async fn upsert_channel(
         &self,
         channel: &ChannelDocument,
         idempotency_key: &str,
@@ -430,7 +438,7 @@ impl SearchIndexAdmin for RawIndexAdminClient {
         .await
     }
 
-    async fn delete_channel(
+    pub async fn delete_channel(
         &self,
         channel_id: &str,
         scope: ChannelDeletionScope,
@@ -448,7 +456,7 @@ impl SearchIndexAdmin for RawIndexAdminClient {
         .await
     }
 
-    async fn operation(&self, operation_id: &str) -> Result<IndexOperation, IndexStoreError> {
+    pub async fn operation(&self, operation_id: &str) -> Result<IndexOperation, IndexStoreError> {
         self.execute(
             self.client
                 .get(self.endpoint(&format!("/admin/operations/{operation_id}"))),
@@ -456,7 +464,7 @@ impl SearchIndexAdmin for RawIndexAdminClient {
         .await
     }
 
-    async fn video_chunk_count(&self, video_id: &str) -> Result<u64, IndexStoreError> {
+    pub async fn video_chunk_count(&self, video_id: &str) -> Result<u64, IndexStoreError> {
         let response: CountResponse = self
             .execute(
                 self.client
@@ -466,7 +474,7 @@ impl SearchIndexAdmin for RawIndexAdminClient {
         Ok(response.count)
     }
 
-    async fn indexed_video_ids(
+    pub async fn indexed_video_ids(
         &self,
         channel_id: &str,
         cursor: Option<&str>,
@@ -484,7 +492,7 @@ impl SearchIndexAdmin for RawIndexAdminClient {
         self.execute(request).await
     }
 
-    async fn channel_stats(&self, channel_id: &str) -> Result<ChunkStats, IndexStoreError> {
+    pub async fn channel_stats(&self, channel_id: &str) -> Result<ChunkStats, IndexStoreError> {
         self.execute(
             self.client
                 .get(self.endpoint(&format!("/admin/channels/{channel_id}/stats"))),

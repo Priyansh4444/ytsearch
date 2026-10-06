@@ -15,8 +15,7 @@ use youtube_client::{ListResource, Query, YouTubeClient};
 use youtube_index_store::{
     BackendReadiness, ChannelDeletionScope, ChannelDocument, ChunkStats, IndexOperation,
     IndexStoreError, RAW_GENERATION_FILES, RAW_PUBLICATION_API_VERSION, RawGenerationManifest,
-    RawIndexAdminClient, RawPublicationJob, RawPublicationStatus, SearchIndexAdmin,
-    VideoReplacement,
+    RawIndexAdminClient, RawPublicationJob, RawPublicationStatus, VideoReplacement,
 };
 use youtube_ingest::{
     Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource,
