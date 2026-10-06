@@ -13,7 +13,8 @@ cleanup() {
     rm -f "$vite_log"
   fi
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
 
 if [ -z "${PLAYWRIGHT_BASE_URL:-}" ]; then
   port="${PLAYWRIGHT_PORT:-4174}"

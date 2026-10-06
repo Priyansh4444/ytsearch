@@ -25,7 +25,8 @@ require_command jq
 require_command file
 
 work_dir="$(mktemp -d)"
-trap 'rm -rf "$work_dir"' EXIT INT TERM
+trap 'rm -rf "$work_dir"' EXIT
+trap 'exit 130' INT TERM
 channels="$work_dir/channels.tsv"
 curl -fsS "$API_BASE_URL/api/youtubers" |
   jq -r '.channels[] | select(.channel_id != "" and .avatar_url != null) | [.handle, .channel_id] | @tsv' >"$channels"

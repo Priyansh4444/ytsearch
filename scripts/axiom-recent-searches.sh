@@ -29,6 +29,7 @@ fi
 apl="['${AXIOM_QUERY_DATASET}'] | where event == \"search_query\" | where isnotnull(query) and query != \"\" | summarize searches=count(), last_seen=max(_time) by query | sort by last_seen desc | limit ${limit}"
 
 response="$(mktemp)"
-trap 'rm -f "$response"' EXIT HUP INT TERM
+trap 'rm -f "$response"' EXIT
+trap 'exit 130' HUP INT TERM
 axiom_query_to_file "$apl" "now-${window}" "$response"
 axiom_print_first_table "$response"

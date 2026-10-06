@@ -27,7 +27,8 @@ done
 }
 
 temporary_directory="$(mktemp -d)"
-trap 'rm -rf "$temporary_directory"' EXIT INT TERM
+trap 'rm -rf "$temporary_directory"' EXIT
+trap 'exit 130' INT TERM
 
 if [[ -z "$CATALOG_SNAPSHOT_JSON_PATH" ]]; then
   : "${RAW_SEARCH_ADMIN_API_KEY:?set RAW_SEARCH_ADMIN_API_KEY to read the active Raw catalog}"

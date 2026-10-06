@@ -4,7 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 runner="$SCRIPT_DIR/run-raw-publication-canary.sh"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT INT TERM
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' INT TERM
 mkdir -p "$tmp/bin"
 
 source_commit="$(git -C "$SCRIPT_DIR/.." rev-parse HEAD)"

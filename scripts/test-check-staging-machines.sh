@@ -4,7 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 checker="$SCRIPT_DIR/check-staging-machines.sh"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT INT TERM
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' INT TERM
 mkdir -p "$tmp/bin" "$tmp/apps" "$tmp/volumes"
 
 cat > "$tmp/bin/flyctl" <<'SH'

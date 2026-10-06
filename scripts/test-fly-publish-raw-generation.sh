@@ -17,7 +17,8 @@ export RAW_BUILDER_EXPECTED_IMAGE="$builder_resolved_image"
 export FAKE_PROVENANCE_SOURCE="$source_commit"
 export FAKE_PROVENANCE_BASE="registry.fly.io/ytsearch-raw-production:base@$base_digest"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' HUP INT TERM
 mkdir -p "$tmp/bin"
 export FLY_PRODUCTION_INVENTORY_PATH="$SCRIPT_DIR/testdata/fly-production-resources.json"
 export RAW_RELEASE_RECOVERY_ROOT="$tmp/recovery"

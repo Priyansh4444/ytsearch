@@ -42,7 +42,8 @@ run=1
 while [ "$run" -le "$RUNS" ]; do
   response_file="$(mktemp)"
   decoded_file="$response_file.decoded"
-  trap 'rm -f "$response_file" "$decoded_file"' EXIT INT TERM
+  trap 'rm -f "$response_file" "$decoded_file"' EXIT
+  trap 'exit 130' INT TERM
   curl_exit=0
   timing="$(curl -sS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" \
     -H "Accept-Encoding: $ACCEPT_ENCODING" -o "$response_file" \

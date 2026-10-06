@@ -18,7 +18,8 @@ STATE_FILE="${DOCTOR_STATE_FILE:-${TMPDIR:-/tmp}/ytsearch-doctor-state.json}"
 STALL_MINUTES="${STALL_MINUTES:-30}"
 
 tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
+trap 'rm -f "$tmp"' EXIT
+trap 'exit 130' HUP INT TERM
 
 if [ -n "$SNAPSHOT_FILE" ]; then
   cp "$SNAPSHOT_FILE" "$tmp"

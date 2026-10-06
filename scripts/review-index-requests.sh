@@ -72,7 +72,8 @@ review_request() {
 
 interactive_review() {
   pending_file="$(mktemp)"
-  trap 'rm -f "$pending_file"' EXIT HUP INT TERM
+  trap 'rm -f "$pending_file"' EXIT
+  trap 'exit 130' HUP INT TERM
   list_pending_json >"$pending_file"
   count="$(jq '[.requests[] | select(.status == "pending")] | length' "$pending_file")"
   if [ "$count" -eq 0 ]; then

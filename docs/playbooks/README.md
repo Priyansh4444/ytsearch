@@ -49,6 +49,10 @@ These apply to any long-running shell work in this repo:
 - Under `set -euo pipefail`, `producer | head -1` makes the producer die of
   `SIGPIPE`, the pipeline fails, and the script exits silently at that line.
   Write the producer's output to a file and read it with `grep -m1` or `awk`.
+- `trap cleanup EXIT INT TERM` runs `cleanup` on the signal and then resumes
+  the script, so it keeps going without whatever `cleanup` removed (a Fly
+  lease, temp files). Trap cleanup on `EXIT` only and add
+  `trap 'exit 130' INT TERM`; `check-all.sh` rejects the combined form.
 - `bun run test:e2e` (and so `check:all`) serves Vite on `--strictPort 4174`.
   Two worktrees running it at once fail with `net::ERR_CONNECTION_REFUSED`;
   give each run its own `PLAYWRIGHT_PORT`.

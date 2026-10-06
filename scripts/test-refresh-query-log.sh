@@ -22,7 +22,8 @@ assert_eq() {
 }
 
 tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
+trap 'rm -rf "$tmpdir"' EXIT
+trap 'exit 130' HUP INT TERM
 
 # --- tabular column-oriented response (current Axiom format) ---
 cat >"$tmpdir/tabular.json" <<'EOF'

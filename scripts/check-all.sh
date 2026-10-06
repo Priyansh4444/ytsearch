@@ -2,6 +2,11 @@
 set -eu
 
 bun run check:precommit
+# A signal trap that only cleans up lets the script resume after the signal.
+if grep -rnE '^[[:space:]]*trap [^-].* EXIT .*(INT|TERM)' scripts; then
+  echo "Trap cleanup on EXIT alone and add: trap 'exit 130' INT TERM" >&2
+  exit 1
+fi
 scripts/check-rust-packages.sh
 cargo test --workspace
 bun run test:e2e

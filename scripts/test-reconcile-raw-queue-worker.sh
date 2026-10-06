@@ -5,7 +5,8 @@ export FLY_API_TOKEN=test-secret-token
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' HUP INT TERM
 RAW_READER_MACHINES_JSON_FILE="$tmp/reader-machines.json"
 export RAW_READER_MACHINES_JSON_FILE
 jq -n '[{
@@ -277,6 +278,9 @@ case "$method:$url" in
     mv "$FAKE_FLY_STATE.next" "$FAKE_FLY_STATE"
     jq '.[0]' "$FAKE_FLY_STATE" > "$output"
     printf 'api update\n' >> "$FAKE_FLY_LOG"
+    if [ -n "${FAKE_SIGNAL_PID_FILE:-}" ]; then
+      kill -TERM "$(cat "$FAKE_SIGNAL_PID_FILE")"
+    fi
     printf '200'
     ;;
   POST:*/machines/machine-1/start)
@@ -521,5 +525,37 @@ if grep -Fx 'api update' "$tmp/lease-conflict.log"; then
   echo "a lease conflict must prevent the API update" >&2
   exit 1
 fi
+
+# A signal must stop the run: cleanup once on exit, and no Fly calls after it.
+cp "$tmp/machines.json" "$tmp/signal-state.json"
+: > "$tmp/signal.log"
+: > "$tmp/signal-curl.log"
+PATH="$tmp/fake-bin:$PATH" \
+  FAKE_FLY_LOG="$tmp/signal.log" \
+  FAKE_FLY_STATE="$tmp/signal-state.json" \
+  FAKE_FLY_LEASE="$tmp/signal-lease" \
+  FAKE_CURL_LOG="$tmp/signal-curl.log" \
+  FAKE_SIGNAL_PID_FILE="$tmp/signal.pid" \
+  FLY_CONFIG_FILE="$tmp/fly-config.yml" \
+  APPLY_QUEUE_WORKER_RECONCILIATION=1 \
+  START_QUEUE_WORKER_AFTER_RECONCILIATION=1 \
+  INDEXER_IMAGE="registry.invalid/current:two" \
+  "$SCRIPT_DIR/reconcile-raw-queue-worker.sh" >/dev/null 2>&1 &
+signal_pid=$!
+printf '%s\n' "$signal_pid" > "$tmp/signal.pid"
+signal_status=0
+wait "$signal_pid" || signal_status=$?
+[ "$signal_status" -eq 130 ] || {
+  echo "a signal must end reconciliation with status 130, got $signal_status" >&2
+  exit 1
+}
+if sed -n '/^api update$/,$p' "$tmp/signal.log" | grep -Eq '^machine |^api start$'; then
+  echo "reconciliation must not continue after a signal" >&2
+  exit 1
+fi
+[ "$(grep -cFx 'lease released' "$tmp/signal.log")" -eq 1 ] || {
+  echo "a signal must release the lease exactly once" >&2
+  exit 1
+}
 
 echo "raw_queue_worker_reconciliation=ok"

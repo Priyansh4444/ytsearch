@@ -155,7 +155,8 @@ cleanup_files() {
 if [ -z "${RECONCILED_CONFIG_FILE:-}" ]; then
   cleanup_config=1
 fi
-trap cleanup_files EXIT HUP INT TERM
+trap cleanup_files EXIT
+trap 'exit 130' HUP INT TERM
 
 write_reconciled_config() {
   jq \

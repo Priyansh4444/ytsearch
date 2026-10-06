@@ -3,7 +3,8 @@ set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' HUP INT TERM
 
 cat > "$tmp/ok.json" <<'JSON'
 {"frontend_http":200,"engine_http":200,"search":{"http":200},"indexing":{"status":"running","handle":"@test","indexed":2,"public":3},"worker":{"state":"started"}}

@@ -25,7 +25,8 @@ if [[ "$APPEND_OUTPUT" != 1 ]]; then
   : > "$OUTPUT"
 fi
 BENCHMARK_TMP="$(mktemp -d)"
-trap 'rm -rf "$BENCHMARK_TMP"' EXIT INT TERM
+trap 'rm -rf "$BENCHMARK_TMP"' EXIT
+trap 'exit 130' INT TERM
 chmod 700 "$BENCHMARK_TMP"
 SEARCH_HEADER_FILE=""
 if [[ -n "$SEARCH_API_KEY" ]]; then

@@ -3,7 +3,8 @@ set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 test_root="$(mktemp -d)"
-trap 'rm -rf "$test_root"' EXIT HUP INT TERM
+trap 'rm -rf "$test_root"' EXIT
+trap 'exit 130' HUP INT TERM
 
 mkdir -p "$test_root/repository/scripts" "$test_root/repository/crates/example/src"
 cp "$SCRIPT_DIR/require-committed-rust-build-inputs.sh" "$test_root/repository/scripts/"

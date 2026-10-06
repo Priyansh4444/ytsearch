@@ -47,7 +47,8 @@ fi
 apl="['${AXIOM_QUERY_DATASET}'] | ${time_filter} | where event == \"search_query\" | where isnotnull(query) and query != \"\" | project _time, query | sort by _time asc | limit ${limit}"
 
 response="$(mktemp)"
-trap 'rm -f "$response"' EXIT HUP INT TERM
+trap 'rm -f "$response"' EXIT
+trap 'exit 130' HUP INT TERM
 axiom_query_to_file "$apl" "$start_time" "$response"
 
 mkdir -p "$(dirname "$log_file")"
