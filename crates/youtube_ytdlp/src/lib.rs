@@ -95,9 +95,16 @@ impl YtDlpTranscriptSource {
         let body = fs::read_to_string(&path).map_err(|error| {
             transcript_error(video_id, format!("transcript cache read failed: {error}"))
         })?;
-        serde_json::from_str(&body).map(Some).map_err(|error| {
-            transcript_error(video_id, format!("transcript cache parse failed: {error}"))
-        })
+        match serde_json::from_str(&body) {
+            Ok(transcript) => Ok(Some(transcript)),
+            // A torn or empty entry (e.g. a crash before the rename reached
+            // disk) is a miss: refetching overwrites it instead of failing
+            // this video on every run.
+            Err(error) => {
+                tracing::warn!(video_id, %error, "ignoring unreadable transcript cache entry");
+                Ok(None)
+            }
+        }
     }
 
     fn write_cached_transcript(
@@ -115,7 +122,13 @@ impl YtDlpTranscriptSource {
             )
         })?;
         let path = transcript_cache_path(cache_dir, video_id);
-        let tmp_path = path.with_extension("json.tmp");
+        // Unique per write, so concurrent writers never share a temp file.
+        static WRITES: AtomicU64 = AtomicU64::new(0);
+        let tmp_path = path.with_extension(format!(
+            "json.tmp.{}.{}",
+            std::process::id(),
+            WRITES.fetch_add(1, Ordering::Relaxed)
+        ));
         let body = serde_json::to_string(transcript).map_err(|error| {
             transcript_error(
                 video_id,
@@ -971,6 +984,39 @@ fn has_text(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unreadable_cache_entries_are_misses_and_writes_leave_no_temp_files() {
+        let cache_dir = env::temp_dir().join(format!(
+            "ytsearch-transcript-cache-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&cache_dir);
+        fs::create_dir_all(&cache_dir).unwrap();
+        let source = YtDlpTranscriptSource::with_binary("yt-dlp").with_cache_dir(&cache_dir);
+
+        fs::write(transcript_cache_path(&cache_dir, "video1"), "").unwrap();
+        assert!(source.cached_transcript("video1").unwrap().is_none());
+
+        let transcript = vec![TranscriptSegment {
+            start_ms: 0,
+            end_ms: 1_000,
+            text: "hello".to_string(),
+        }];
+        source
+            .write_cached_transcript("video1", &transcript)
+            .unwrap();
+        assert_eq!(
+            source.cached_transcript("video1").unwrap(),
+            Some(transcript)
+        );
+        let names = fs::read_dir(&cache_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["video1.json"]);
+        let _ = fs::remove_dir_all(&cache_dir);
+    }
 
     #[test]
     fn selects_json3_manual_caption_before_automatic_caption() {
