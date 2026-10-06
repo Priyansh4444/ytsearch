@@ -7,9 +7,11 @@
 // captured URLs are exactly what production's request construction emits.
 /* oxlint-disable no-console -- a CLI whose output is its result. */
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+
+import { searchCaseParams } from "./search-cases";
 
 const [casesFile, apiBinary, readerPort, output] = process.argv.slice(2);
 if (!casesFile || !apiBinary || !readerPort || !output) {
@@ -18,8 +20,6 @@ if (!casesFile || !apiBinary || !readerPort || !output) {
 }
 const PROXY_PORT = 18131;
 const API_PORT = 18132;
-const SORTS = ["relevance", "published_desc", "views_desc"];
-const PAGES = [1, 2];
 
 const captured = new Set<string>();
 const proxy = createServer((incoming, outgoing) => {
@@ -70,20 +70,12 @@ try {
     await sleep(300);
   }
 
-  for (const line of readFileSync(casesFile, "utf8").split("\n")) {
-    if (!line.trim() || line.startsWith("#")) continue;
-    const [, query, youtuber] = line.split("\t");
-    for (const sort of SORTS) {
-      for (const page of PAGES) {
-        const params = new URLSearchParams({ q: query ?? "", sort, page: String(page) });
-        if (youtuber) params.set("youtuber", youtuber);
-        const response = await fetch(`http://127.0.0.1:${API_PORT}/api/search?${params}`);
-        if (!response.ok) {
-          throw new Error(`${response.status} for ${params}: ${await response.text()}`);
-        }
-        await response.arrayBuffer();
-      }
+  for (const params of searchCaseParams(casesFile)) {
+    const response = await fetch(`http://127.0.0.1:${API_PORT}/api/search?${params}`);
+    if (!response.ok) {
+      throw new Error(`${response.status} for ${params}: ${await response.text()}`);
     }
+    await response.arrayBuffer();
   }
   writeFileSync(output, [...captured].sort().join("\n") + "\n");
   console.log(`captured ${captured.size} reader requests -> ${output}`);

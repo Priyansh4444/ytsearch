@@ -26,9 +26,8 @@ ref=$1 output=$2
 
 source_dir=$REPO_ROOT
 if [ "$ref" != "." ]; then
-  source_dir="$(mktemp -d /tmp/ytsearch-perf-src.XXXXXX)"
-  git -C "$REPO_ROOT" worktree add --quiet --detach "$source_dir" "$ref"
-  trap 'git -C "$REPO_ROOT" worktree remove --force "$source_dir"; perf_cleanup' EXIT
+  perf_source "$ref" "$(mktemp -d /tmp/ytsearch-perf-src.XXXXXX)"
+  source_dir=$PERF_SOURCE
 fi
 
 # Release codegen with line tables and no stripping, so perf annotate can map
