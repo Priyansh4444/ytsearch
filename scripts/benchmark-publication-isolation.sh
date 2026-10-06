@@ -199,10 +199,13 @@ run_timed_engine() {
   duration_seconds="$2"
   : > "$output"
   deadline=$(( $(date +%s) + duration_seconds ))
-  while (( $(date +%s) < deadline )); do
+  # Check after each sweep, not before the first: a second boundary between
+  # the two `date` calls would otherwise leave the phase with no samples.
+  while :; do
     SEARCH_URL="$SEARCH_URL" SEARCH_API_KEY="$SEARCH_API_KEY" CASES_FILE="$CASES_FILE" \
       OUTPUT="$output" RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 APPEND_OUTPUT=1 \
       "$SCRIPT_DIR/benchmark-search-engine.sh" >/dev/null
+    (( $(date +%s) < deadline )) || break
   done
 }
 
@@ -507,8 +510,9 @@ done
 activation_ready_ms="$(date +%s%3N)"
 start_load_workers activation
 activation_load_started_ms="$(date +%s%3N)"
-touch "$activation_continue_file"
+# Timestamp before the signal: the builder may start as soon as the file exists.
 activation_continue_ms="$(date +%s%3N)"
+touch "$activation_continue_file"
 set +e
 wait "$publish_pid"
 publish_exit=$?
