@@ -123,8 +123,8 @@ fn reconciliation_run_id() -> std::io::Result<String> {
             format!("{RUN_ID_ENV} must be 8-128 ASCII identifier characters"),
         ));
     }
-    let _ = RUN_ID.set(run_id.clone());
-    Ok(run_id)
+    // Concurrent first callers each build an ID; all must return the one stored.
+    Ok(RUN_ID.get_or_init(|| run_id).clone())
 }
 
 const BLOCKED_CREATOR_FILE: &str = "blocked-creator";
