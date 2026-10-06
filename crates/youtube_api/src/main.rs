@@ -145,6 +145,11 @@ struct SearchResponse<'a> {
     sort: SearchSort,
     mode: &'static str,
     has_next_page: bool,
+    /// Always empty; moments live in `videos[].hits`. Frontends built before
+    /// 2026-10-05 reject a response without this array, so it stays until the
+    /// Worker serving the current frontend has been deployed and old tabs have
+    /// aged out.
+    hits: [SearchHit; 0],
     videos: &'a [SearchVideoResult],
 }
 
@@ -664,6 +669,7 @@ async fn search_handler(
         sort,
         mode: "lexical",
         has_next_page,
+        hits: [],
         videos: &videos,
     };
     let body = serde_json::to_vec(&response).map_err(std::io::Error::from)?;
