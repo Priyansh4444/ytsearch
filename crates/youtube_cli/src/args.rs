@@ -356,8 +356,16 @@ impl YouTubeAuthArgs {
 impl SearchAdminArgs {
     pub(super) fn client(
         &self,
-        _collection: impl Into<String>,
+        collection: impl Into<String>,
     ) -> Result<RawIndexAdminClient, CliError> {
+        // Raw writes always land in its single transcript collection, so any
+        // other name would write there and then fail every verifying search.
+        let collection = collection.into();
+        if collection != DEFAULT_COLLECTION {
+            return Err(CliError::Message(format!(
+                "Raw has one transcript collection, {DEFAULT_COLLECTION}; got --collection {collection}"
+            )));
+        }
         let api_url = arg_or_env(&self.api_url, "RAW_SEARCH_API_URL", "missing Raw admin URL")?;
         let admin_api_key = arg_or_env(
             &self.admin_api_key,
