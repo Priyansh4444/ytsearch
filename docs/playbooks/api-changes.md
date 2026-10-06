@@ -26,4 +26,11 @@ reader tools (`RAW_INDEX` overrides it) and the cases in
 - **Prove a probe reaches the response.** `SearchVideoResult::from_hit` sets
   `embed_url`, but `video_results_from_hits_with_policy` overwrites it later,
   so a probe there showed 0 mismatches. Check the probe with `curl` first.
+- **Run with production's flags.** Both APIs get the ranking flags from
+  `fly.raw-api.toml`; without `YTSEARCH_PRESERVE_BACKEND_RELEVANCE_ORDER`, a
+  difference on the production path would never show.
+- **An intended change hides the next one**: each request reports only its
+  first difference. Skip known changes by exact path, e.g.
+  `API_DIFF_IGNORE=body.hits scripts/perf/api-diff.sh <old-prod-commit> .`
+  (how the 2026-10-06 API release was checked against the 2026-09-24 one).
 - Ports 18140-18142 are reserved for this script.

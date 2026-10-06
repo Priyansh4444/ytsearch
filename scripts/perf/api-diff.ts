@@ -32,6 +32,11 @@ const TIMING_FIELDS = new Set([
   "result_processing_ms",
 ]);
 const HEADERS = ["content-type", "cache-control"];
+// Exact paths of intended changes, e.g. API_DIFF_IGNORE=body.hits, so they do
+// not hide the first unintended difference in the same response.
+const IGNORED_PATHS = new Set(
+  (process.env.API_DIFF_IGNORE ?? "").split(",").filter((path) => path !== ""),
+);
 // Endpoints and validation errors the benchmark cases do not reach.
 const EXTRA_PATHS = [
   "/api/health",
@@ -79,7 +84,9 @@ function startApi(name: string, binary: string, port: number): ChildProcess {
       RAW_SEARCH_API_KEY: "perf-local",
       YTSEARCH_API_ADDR: `127.0.0.1:${port}`,
       YTSEARCH_SEARCH_RATE_LIMIT_PER_MINUTE: "0",
+      // Ranking flags as set in fly.raw-api.toml.
       YTSEARCH_ENGAGEMENT_SORTS: "true",
+      YTSEARCH_PRESERVE_BACKEND_RELEVANCE_ORDER: "true",
       YTSEARCH_INDEX_QUEUE_PATH: `${workDir}/${name}-queue.jsonl`,
     },
     stdio: ["ignore", log, log],
@@ -145,7 +152,7 @@ function firstDifference(base: unknown, head: unknown, path: string): string | u
   }
   if (isRecord(base) && isRecord(head)) {
     for (const key of new Set([...Object.keys(base), ...Object.keys(head)])) {
-      if (TIMING_FIELDS.has(key)) continue;
+      if (TIMING_FIELDS.has(key) || IGNORED_PATHS.has(`${path}.${key}`)) continue;
       const difference = firstDifference(base[key], head[key], `${path}.${key}`);
       if (difference) return difference;
     }
