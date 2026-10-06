@@ -33,16 +33,15 @@ services:
         condition: service_completed_successfully
     ports:
       - "8787:8787"
+    # The public API gets search-only credentials; admin keys, the YouTube key
+    # and cookies belong to the indexing worker below.
     environment: &backend-environment
       YTSEARCH_API_ADDR: 0.0.0.0:8787
       RAW_SEARCH_API_URL: http://raw-search:8108
       RAW_SEARCH_API_KEY: ${RAW_SEARCH_API_KEY:?set RAW_SEARCH_API_KEY}
-      RAW_SEARCH_ADMIN_API_KEY: ${RAW_SEARCH_ADMIN_API_KEY:?set RAW_SEARCH_ADMIN_API_KEY}
       RAW_SEARCH_COLLECTION: youtube_transcript_chunks
       YTSEARCH_INDEX_QUEUE_PATH: /queue/index-requests.jsonl
       YTSEARCH_INDEX_QUEUE_TOKEN: ${YTSEARCH_INDEX_QUEUE_TOKEN:?set YTSEARCH_INDEX_QUEUE_TOKEN}
-      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
-      YT_DLP_COOKIES_FILE: ${YT_DLP_COOKIES_FILE:-}
     volumes:
       - queue-data:/queue
     healthcheck:
@@ -78,6 +77,9 @@ services:
         condition: service_healthy
     environment:
       <<: *backend-environment
+      RAW_SEARCH_ADMIN_API_KEY: ${RAW_SEARCH_ADMIN_API_KEY:?set RAW_SEARCH_ADMIN_API_KEY}
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      YT_DLP_COOKIES_FILE: ${YT_DLP_COOKIES_FILE:-}
       INDEX_QUEUE_API_BASE_URL: http://api:8787
       BACKENDS: raw
       QUEUE_TARGET_BACKEND: raw

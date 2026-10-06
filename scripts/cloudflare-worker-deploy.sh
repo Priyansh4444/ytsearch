@@ -15,7 +15,9 @@ export VITE_ENGAGEMENT_SORTS="true"
 export CLOUDFLARE_API_TOKEN
 
 bun run frontend:check
-bunx wrangler deploy --keep-vars
+# No --keep-vars: wrangler.jsonc is the complete set of plain vars, so a deploy
+# also removes variables that are no longer configured. Secrets are unaffected.
+bunx wrangler deploy
 
 PUBLIC_URL="${PUBLIC_URL:-https://search.pronsh.dev}"
 smoke_response="$(mktemp)"

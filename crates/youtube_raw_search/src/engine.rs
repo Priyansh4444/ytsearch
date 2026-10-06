@@ -50,6 +50,13 @@ const DOCUMENTS_FILE: &str = "documents.blocks";
 const METADATA_FILE: &str = "documents.meta";
 const DOCUMENTS_PER_BLOCK: usize = 64;
 const MOMENT_COALESCE_WINDOW_MS: u32 = 20_000;
+/// Hits returned per video group when a search does not set `group_limit`.
+const DEFAULT_GROUP_LIMIT: u8 = 5;
+
+/// Hits to return per video group: the requested limit, at least one.
+fn hits_per_group(params: &SearchParams) -> usize {
+    usize::from(params.group_limit.unwrap_or(DEFAULT_GROUP_LIMIT).max(1))
+}
 const METADATA_PREFIX_BYTES: usize = HEADER_BYTES + 8;
 const TYPO_RESULT_THRESHOLD: usize = 5;
 const DROP_RESULT_THRESHOLD: usize = 1;
@@ -1608,7 +1615,7 @@ impl RawSearchEngine {
             return Ok(None);
         }
 
-        let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
+        let hits_per_group = hits_per_group(params);
         let full_exact_mask = plans.iter().fold(0, |mask, plan| mask | plan.exact_mask());
         // Schema 9 answers a complete broad search without scoring every
         // match; the other dispositions keep the scan below.
@@ -1705,7 +1712,7 @@ impl RawSearchEngine {
             return Ok(None);
         }
 
-        let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
+        let hits_per_group = hits_per_group(params);
         let dominant_exact_mask = plan.exact_mask();
         if let Some(order) = broad_fast::accelerated_group_order(params.sort_by.as_deref())
             && let Some(analysis) = self.analyze_broad_plans(&plans, order)?
@@ -1894,7 +1901,7 @@ impl RawSearchEngine {
             return self.format_ungrouped(params, highlight_groups, matches, cache);
         }
 
-        let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
+        let hits_per_group = hits_per_group(params);
         let filter = parse_filter(params.filter_by.as_deref())?;
         // Video identifiers are dense generation-local integers. A direct slot
         // table avoids hashing every matching transcript chunk on broad queries.
@@ -2058,7 +2065,7 @@ impl RawSearchEngine {
                 )
             });
             let found = videos.len();
-            let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
+            let hits_per_group = hits_per_group(params);
             let mut grouped_hits = Vec::with_capacity(limit.min(videos.len()));
             for video_id in videos.into_iter().skip(offset).take(limit) {
                 let video = &self.inner.videos[video_id as usize];

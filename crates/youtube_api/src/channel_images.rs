@@ -1,18 +1,29 @@
 use crate::ApiError;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::sync::{Mutex, RwLock};
 use youtube_search_client::{ChannelDocument, SearchClient};
+
+/// Minimum time between creator-list refreshes caused by unknown channel IDs.
+/// Without it, every request for a made-up but well-formed ID re-listed every
+/// creator from the reader.
+const MISS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Default)]
 pub(crate) struct ChannelImageCache {
     urls: Arc<RwLock<HashMap<String, String>>>,
-    refresh_lock: Arc<Mutex<()>>,
+    /// Serializes refreshes and records when the creator list was last loaded.
+    last_refresh: Arc<Mutex<Option<Instant>>>,
 }
 
 impl ChannelImageCache {
     pub(crate) async fn replace(&self, channels: &[ChannelDocument]) {
         let urls = channel_image_urls(channels.iter());
         *self.urls.write().await = urls;
+        *self.last_refresh.lock().await = Some(Instant::now());
     }
 
     pub(crate) async fn get_or_refresh(
@@ -24,18 +35,27 @@ impl ChannelImageCache {
             return Ok(url);
         }
 
+        let unavailable = || ApiError::BadRequest("channel image unavailable".to_string());
         // Serialize refreshes without holding the URL map lock across network I/O.
-        let _refresh_guard = self.refresh_lock.lock().await;
+        let mut last_refresh = self.last_refresh.lock().await;
         if let Some(url) = self.urls.read().await.get(channel_id).cloned() {
             return Ok(url);
+        }
+        if !refresh_due(*last_refresh, Instant::now()) {
+            return Err(unavailable());
         }
 
         let channels = search.list_youtubers().await?;
         let refreshed = channel_image_urls(channels.iter());
         let result = refreshed.get(channel_id).cloned();
         *self.urls.write().await = refreshed;
-        result.ok_or_else(|| ApiError::BadRequest("channel image unavailable".to_string()))
+        *last_refresh = Some(Instant::now());
+        result.ok_or_else(unavailable)
     }
+}
+
+fn refresh_due(last_refresh: Option<Instant>, now: Instant) -> bool {
+    last_refresh.is_none_or(|last| now.duration_since(last) >= MISS_REFRESH_INTERVAL)
 }
 
 fn channel_image_urls<'a>(
@@ -74,7 +94,7 @@ pub(crate) fn is_valid_channel_id(channel_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
-fn is_allowed_youtube_image_url(url: &str) -> bool {
+pub(crate) fn is_allowed_youtube_image_url(url: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(url) else {
         return false;
     };
@@ -88,6 +108,14 @@ fn is_allowed_youtube_image_url(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refreshes_for_unknown_ids_at_most_once_per_interval() {
+        let start = Instant::now();
+        assert!(refresh_due(None, start));
+        assert!(!refresh_due(Some(start), start + Duration::from_secs(59)));
+        assert!(refresh_due(Some(start), start + MISS_REFRESH_INTERVAL));
+    }
 
     #[test]
     fn only_proxies_canonical_youtube_channel_images() {

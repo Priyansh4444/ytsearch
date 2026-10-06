@@ -11,7 +11,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
-use channel_images::{ChannelImageCache, is_valid_channel_id, resized_youtube_image_url};
+use channel_images::{
+    ChannelImageCache, is_allowed_youtube_image_url, is_valid_channel_id, resized_youtube_image_url,
+};
 use index_queue::{IndexActivity, IndexQueue, IndexQueueItem, new_index_request_id};
 use rate_limit::RateLimiter;
 use serde::{Deserialize, Serialize};
@@ -342,6 +344,17 @@ async fn main() -> Result<(), ApiError> {
         ),
         image_http: reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
+            // The first URL is checked against YouTube's image hosts; every
+            // redirect must be too, or a redirect could reach any host.
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 3 {
+                    attempt.error("too many image redirects")
+                } else if is_allowed_youtube_image_url(attempt.url().as_str()) {
+                    attempt.follow()
+                } else {
+                    attempt.error("image redirect to a disallowed host")
+                }
+            }))
             .build()
             .map_err(|error| ApiError::ChannelImage(format!("client setup failed: {error}")))?,
         channel_images: ChannelImageCache::default(),

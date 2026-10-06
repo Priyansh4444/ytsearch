@@ -88,8 +88,8 @@ exec flyctl machine run \
   --env "BACKENDS=${BACKENDS:-raw}" \
   --env "RAW_SEARCH_API_URL=${RAW_SEARCH_API_URL:-http://ytsearch-raw-production.internal:8108}" \
   --env "MODE=${MODE:-update}" \
-  --env "JOBS=${JOBS:-3}" \
-  --env "RAW_JOBS=${RAW_JOBS:-3}" \
+  --env "JOBS=${JOBS:-1}" \
+  --env "RAW_JOBS=${RAW_JOBS:-1}" \
   --env "CHANNEL_JOBS=${CHANNEL_JOBS:-1}" \
   --env "EXISTING_TAIL=${EXISTING_TAIL:-0}" \
   --env "VIDEO_TIMEOUT_SECONDS=${VIDEO_TIMEOUT_SECONDS:-300}" \

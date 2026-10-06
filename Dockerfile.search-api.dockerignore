@@ -4,6 +4,14 @@
 cookies.txt
 youtube-cookies.txt
 *.cookies.txt
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+*.credentials.json
+credentials.json
 node_modules
 target
 dist
