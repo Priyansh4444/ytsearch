@@ -3,8 +3,9 @@
 ## Fast path
 
 ```bash
-# Every benchmark case x sort x page, plus a few other endpoints and errors,
-# through the API built at both refs against one local reader. Prints
+# Every benchmark case x sort x page, single-video searches ("show all
+# moments") for each case's top two videos, and a few other endpoints and
+# errors, through the API built at both refs against one local reader. Prints
 # `requests=N mismatches=M` and the first difference of each mismatch.
 scripts/perf/api-diff.sh origin/master .
 ```
