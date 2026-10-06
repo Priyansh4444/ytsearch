@@ -6,7 +6,11 @@ pub use youtube_index_store::ChannelDocument;
 
 pub const DEFAULT_COLLECTION: &str = "youtube_transcript_chunks";
 const CHANNEL_COLLECTION: &str = "youtube_youtubers";
-const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
+// This client serves public searches, which finish in well under a second;
+// a stuck reader should fail fast (the frontend retries) rather than hold the
+// visitor for a minute.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TextSearchQuery {
@@ -140,7 +144,10 @@ pub struct SearchClient {
 
 impl SearchClient {
     pub fn new(config: SearchClientConfig) -> Result<Self, SearchError> {
-        let http = Client::builder().timeout(HTTP_TIMEOUT).build()?;
+        let http = Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .build()?;
         validate_base_url(&config.base_url)?;
         if config.api_key.is_empty() {
             return Err(SearchError::InvalidInput(

@@ -270,7 +270,7 @@ fn scanned_group_response(
     highlights: &[Vec<String>],
     dominant_exact_mask: u8,
 ) -> (Value, usize) {
-    let hits_per_group = usize::from(params.group_limit.unwrap_or(5).max(1));
+    let hits_per_group = hits_per_group(params);
     let mut groups = engine.empty_group_slots();
     let mut documents = 0;
     let mut record = |candidate: DocMatch, record: SearchDocumentRecord| {

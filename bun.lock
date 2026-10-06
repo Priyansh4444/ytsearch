@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "vite-template-solid",
+      "name": "ytsearch",
       "dependencies": {
         "@solidjs/web": "2.0.0-rc.13",
         "effect": "4.0.0",
