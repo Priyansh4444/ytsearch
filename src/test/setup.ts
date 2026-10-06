@@ -1,6 +1,10 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup } from "@solidjs/testing-library";
+import { cleanup, configure } from "@solidjs/testing-library";
 import { afterEach } from "vitest";
+
+// findBy*/waitFor default to 1 s, which parallel check:all runs on one machine
+// exceed: "opens a creator from the home swarm" timed out under load.
+configure({ asyncUtilTimeout: 5_000 });
 
 const storageValues = new Map<string, string>();
 const testStorage: Storage = {
