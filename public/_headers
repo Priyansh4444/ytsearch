@@ -1,11 +1,12 @@
 # Security headers for every page and asset the Worker serves from ./dist.
-# Scripts are same-origin Vite modules (no inline scripts); inline style
-# attributes are allowed because the creator swarm positions avatars with them.
+# Scripts are same-origin Vite modules (no inline scripts). Only inline style
+# attributes are allowed (style-src-attr), because the creator swarm positions
+# avatars with them; <style> elements and other stylesheets stay same-origin.
 # Posters load from i.ytimg.com (avatars are proxied same-origin), the player
 # from youtube-nocookie, and analytics post to PostHog when VITE_POSTHOG_KEY is
 # set. Add a new VITE_POSTHOG_HOST to connect-src before deploying it.
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://i.ytimg.com; frame-src https://www.youtube-nocookie.com; connect-src 'self' https://us.i.posthog.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data: https://i.ytimg.com; frame-src https://www.youtube-nocookie.com; connect-src 'self' https://us.i.posthog.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
