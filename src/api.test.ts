@@ -14,7 +14,6 @@ const emptySearch = (query = "rust"): SearchResponse => ({
   sort: "relevance",
   mode: "lexical",
   has_next_page: false,
-  hits: [],
   videos: [],
 });
 
@@ -89,7 +88,6 @@ describe("frontend API client", () => {
       total_moments: 1,
       total_videos: 1,
       total_found: 1,
-      hits: [boundaryHit],
       videos: [
         {
           video_id: "cursor-video",
@@ -115,7 +113,7 @@ describe("frontend API client", () => {
         sort: "relevance",
       }),
     ).resolves.toMatchObject({
-      hits: [{ prev_text: null, next_text: null }],
+      videos: [{ hits: [{ prev_text: null, next_text: null }] }],
     });
   });
 

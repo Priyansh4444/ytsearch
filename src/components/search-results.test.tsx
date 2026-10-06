@@ -52,7 +52,6 @@ const response = (videos: SearchVideoResult[]): SearchResponse => ({
   sort: "relevance",
   mode: "lexical",
   has_next_page: false,
-  hits: videos.flatMap((entry) => entry.hits),
   videos,
 });
 

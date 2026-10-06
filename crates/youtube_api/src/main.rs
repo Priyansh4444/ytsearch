@@ -145,7 +145,6 @@ struct SearchResponse<'a> {
     sort: SearchSort,
     mode: &'static str,
     has_next_page: bool,
-    hits: Vec<&'a SearchHit>,
     videos: &'a [SearchVideoResult],
 }
 
@@ -644,17 +643,14 @@ async fn search_handler(
         has_next_page = grouped_has_next_page;
     }
     let result_processing_ms = processing_started.elapsed().as_millis() as u64;
-    let hits = videos
-        .iter()
-        .flat_map(|video| &video.hits)
-        .collect::<Vec<_>>();
+    let returned_hits = videos.iter().map(|video| video.hits.len()).sum::<usize>();
     let total_moments = backend_total_moments
         .unwrap_or(if video_scope {
             backend_found
         } else {
-            hits.len() as u64
+            returned_hits as u64
         })
-        .max(hits.len() as u64);
+        .max(returned_hits as u64);
     let response = SearchResponse {
         query,
         total_moments,
@@ -668,7 +664,6 @@ async fn search_handler(
         sort,
         mode: "lexical",
         has_next_page,
-        hits,
         videos: &videos,
     };
     let body = serde_json::to_vec(&response).map_err(std::io::Error::from)?;
@@ -676,7 +671,7 @@ async fn search_handler(
         query,
         found = backend_found,
         returned_videos = response.videos.len(),
-        returned_hits = response.hits.len(),
+        returned_hits,
         backend_search_ms = timings.backend_search_ms,
         first_backend_search_ms,
         result_processing_ms,
@@ -700,7 +695,7 @@ async fn search_handler(
             total_found: response.total_found,
             out_of,
             returned_videos: response.videos.len(),
-            returned_hits: response.hits.len(),
+            returned_hits,
             has_next_page,
             duration_ms: search_started.elapsed().as_millis() as u64,
             backend_search_ms: timings.backend_search_ms,
