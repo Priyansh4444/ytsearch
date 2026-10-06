@@ -10,6 +10,8 @@ describe("analytics", () => {
   });
 
   it("queues an early search event and excludes the query text", async () => {
+    // Search pages carry the query in the URL; it must not leak through it.
+    window.history.pushState({}, "", "/?q=private%20search%20text#result-video1");
     const analytics = await import("./analytics");
 
     analytics.captureSearchSubmitted({
@@ -35,7 +37,11 @@ describe("analytics", () => {
         page: 1,
       },
     });
-    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("private search text");
+    const sent = JSON.stringify(fetchMock.mock.calls);
+    expect(sent).not.toContain("private search text");
+    expect(sent).not.toContain("private%20search%20text");
+    expect(firstPayload.batch[0].properties.$current_url).toBe(`${window.location.origin}/`);
+    window.history.pushState({}, "", "/");
   });
 
   it("initializes once and uses the configured capture host", async () => {
