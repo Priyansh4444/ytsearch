@@ -7,6 +7,7 @@ PERF_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "$PERF_DIR/../.." && pwd)"
 PERF_KEY=perf-local
 PERF_PIDS=()
+PERF_WORKTREES=()
 
 # The full-size schema-9 index. It lives in the main checkout, which linked
 # worktrees reach through git's common directory.
@@ -43,13 +44,30 @@ perf_slow_cpus() {
 }
 
 perf_cleanup() {
-  local pid
+  local pid tree
   for pid in "${PERF_PIDS[@]}"; do
     kill "$pid" 2>/dev/null || true
   done
   wait 2>/dev/null || true
+  for tree in "${PERF_WORKTREES[@]}"; do
+    git -C "$REPO_ROOT" worktree remove --force "$tree" 2>/dev/null || true
+  done
 }
 trap perf_cleanup EXIT
+
+# perf_source <git-ref|.> <dir>: sets PERF_SOURCE to a source tree for the ref.
+# `.` is the working tree, uncommitted changes included. Any other ref is
+# checked out as a detached worktree at <dir> (absent or empty), removed by
+# the EXIT trap, so building an older ref never touches your checkout.
+perf_source() {
+  if [ "$1" = . ]; then
+    PERF_SOURCE=$REPO_ROOT
+    return
+  fi
+  git -C "$REPO_ROOT" worktree add --quiet --detach "$2" "$1"
+  PERF_WORKTREES+=("$2")
+  PERF_SOURCE=$2
+}
 
 # perf_start_reader <binary> <port> <cpus> <log>: serves the index on
 # [::1]:<port> and returns once the generation is warm.
@@ -75,14 +93,19 @@ perf_start_reader() {
   done
 }
 
-# perf_driver <args...>: runs the Bun load driver on the slow CPUs when the
-# CPU is hybrid, otherwise unpinned.
-perf_driver() {
+# perf_on_slow_cpus <command...>: runs a command on the slow CPUs when the
+# CPU is hybrid, otherwise unpinned, so it does not compete with the readers.
+perf_on_slow_cpus() {
   local cpus
   cpus="$(perf_slow_cpus)"
   if [ -n "$cpus" ]; then
-    taskset -c "$cpus" bun "$PERF_DIR/reader-drive.ts" "$@"
+    taskset -c "$cpus" "$@"
   else
-    bun "$PERF_DIR/reader-drive.ts" "$@"
+    "$@"
   fi
+}
+
+# perf_driver <args...>: runs the Bun load driver (reader-drive.ts).
+perf_driver() {
+  perf_on_slow_cpus bun "$PERF_DIR/reader-drive.ts" "$@"
 }
