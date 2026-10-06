@@ -59,10 +59,14 @@ Queries reach three places in the maintained deployment:
   country header (`cf-ipcountry`) and request ID (`cf-ray`);
 - PostHog, when `VITE_POSTHOG_KEY` is set: search events carry the query's
   length and term count (not its text), sort and page; interaction events carry
-  the creator handle and the opened video's identifiers.
+  the creator handle and the opened video's identifiers. Every event carries a
+  random ID kept in `localStorage` and the page URL without its query string,
+  which holds the search text.
 
 Queries can be personal data. Minimize logged text, limit retention, give users
-notice, and support deletion where required.
+notice, and support deletion where required. The maintained deployment states
+what it does in [`public/privacy.html`](../public/privacy.html) (served at `/privacy`) (Axiom keeps
+search events for 30 days); update that page with any change here.
 
 YouTube's policies add requirements for child-directed clients and Made for Kids
 content, including embeds; do not target children without those controls.

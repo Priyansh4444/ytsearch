@@ -612,7 +612,13 @@ const App: Component = () => {
           </div>
         )}
       </Show>
-      <footer class="px-4 py-5 text-center text-sm sm:px-6 lg:px-8">
+      <footer class="flex justify-center gap-6 px-4 py-5 text-sm sm:px-6 lg:px-8">
+        <a
+          href="/privacy"
+          class="inline-flex min-h-11 items-center text-vesper-muted transition-colors hover:text-vesper-yellow"
+        >
+          Privacy
+        </a>
         <a
           href={supportUrl}
           target="_blank"
