@@ -66,7 +66,6 @@ export type SearchResponse = {
   sort: SearchSort;
   mode: "lexical";
   has_next_page: boolean;
-  hits: SearchHit[];
   videos: SearchVideoResult[];
 };
 

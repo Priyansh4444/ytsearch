@@ -16,7 +16,6 @@ const response = (hasNextPage: boolean): SearchResponse => ({
   sort: "relevance",
   mode: "lexical",
   has_next_page: hasNextPage,
-  hits: [],
   videos: [],
 });
 

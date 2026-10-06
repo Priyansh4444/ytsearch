@@ -159,7 +159,6 @@ function decodeSearchResponse(input: unknown): SearchResponse {
     ]),
     mode: literal(value.mode, ["lexical"]),
     has_next_page: boolean(value.has_next_page),
-    hits: array(value.hits, decodeSearchHit),
     videos: array(value.videos, decodeSearchVideo),
   };
 }

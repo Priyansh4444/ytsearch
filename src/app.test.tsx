@@ -79,7 +79,6 @@ const response: SearchResponse = {
   sort: "relevance",
   mode: "lexical",
   has_next_page: false,
-  hits: [],
   videos: [
     {
       video_id: "video-1",

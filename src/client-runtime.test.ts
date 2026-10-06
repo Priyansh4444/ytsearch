@@ -18,7 +18,6 @@ const emptySearchResponse = {
   sort: "relevance",
   mode: "lexical",
   has_next_page: false,
-  hits: [],
   videos: [],
 };
 
@@ -41,6 +40,22 @@ describe("browser client runtime", () => {
       "https://api.example.com/api/search?q=rust&per_page=12&page=1&sort=relevance",
       expect.objectContaining({ cache: "no-store" }),
     );
+  });
+
+  it("accepts responses from API images that still send the duplicate top-level hits", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ ...emptySearchResponse, hits: [{}] })),
+    );
+
+    const response = await runSearchTranscripts("", {
+      query: "rust",
+      youtuber: "",
+      page: 1,
+      sort: "relevance",
+    });
+    expect(response).not.toHaveProperty("hits");
+    expect(response.videos).toEqual([]);
   });
 
   it("rejects a successful response that violates the wire contract", async () => {

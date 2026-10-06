@@ -54,7 +54,7 @@ check_api() {
       echo "$label api failed during open window: HTTP $http" >&2
       exit 1
     fi
-    jq -e '(.hits | type == "array") and (.videos | type == "array")' \
+    jq -e '.videos | type == "array"' \
       /tmp/ytsearch-check-response.json >/dev/null
     echo "$label api ok: HTTP $http"
   else

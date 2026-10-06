@@ -41,7 +41,6 @@ const response = (overrides: Partial<CountedSearchResponse> = {}): CountedSearch
   sort: "relevance",
   mode: "lexical",
   has_next_page: true,
-  hits: [],
   videos: [video("a", 3), video("b", 2)],
   ...overrides,
 });
@@ -49,19 +48,6 @@ const response = (overrides: Partial<CountedSearchResponse> = {}): CountedSearch
 describe("searchResultCountLabel", () => {
   test("uses authoritative totals across pagination and every returned video", () => {
     expect(searchResultCountLabel(response())).toBe("2 shown of 15 videos · 5 shown of 41 moments");
-  });
-
-  test("does not mistake the duplicate top-level hit list for displayed moments", () => {
-    expect(
-      searchResultCountLabel(
-        response({
-          total_moments: 5,
-          total_videos: 2,
-          has_next_page: false,
-          hits: [video("duplicate", 1).hits[0]],
-        }),
-      ),
-    ).toBe("2 videos · 5 moments");
   });
 
   test("labels legacy approximate totals without claiming a complete moment count", () => {
