@@ -72,7 +72,9 @@
     "wrangler": "4.147.0"
   },
   "overrides": {
-    "postcss": "^8.5.28"
+    "miniflare": "5.20261001.0-alpha",
+    "postcss": "^8.5.28",
+    "sharp": "0.35.5"
   },
   "packageManager": "bun@1.4.0"
 }
