@@ -11,7 +11,7 @@ numbers when you remeasure; projections assume linear growth from them.
 | Corpus | 9.37M documents, 69 creators | production `out_of`, `/api/youtubers` |
 | Index size | 1.7 GB for 8.14M documents: about 210 B per document, 52 KB per video, 28 MB per creator | local full index |
 | Reader | 4 shared vCPUs, 2.5 GiB; RSS about 430 MB, index memory-mapped | `fly.raw-search.toml`, [reader playbook](playbooks/reader-performance.md) |
-| Publication | rebuilds the whole generation: 70–80 s, 2.46 GiB peak (schema 6, 2026-08-08) | [staging architecture](staging-architecture.md) |
+| Publication | rebuilds the whole generation: 71 minutes for 9.37M documents on the queue worker's 2 shared vCPUs (2026-10-07; 70–80 s on a dedicated builder in the schema-6 era) | queue worker logs |
 | Cold start | up to 193 s to checksum and open a generation (2 GB canary, 2026-08-31) | [release gate](operations/raw-publication-release.md) |
 
 ## Search traffic: ample headroom, two ceilings
@@ -38,7 +38,7 @@ Each limit grows linearly with the index (about 28 MB per average creator):
 | Limit | Now | Becomes a problem near |
 | --- | --- | --- |
 | Reader page cache: the index should stay resident beside about 0.5 GB of process memory, and activation briefly holds two generations | 1.7 GB in 2.5 GiB | about 1.5x the corpus; raise reader memory with the index |
-| Publication rebuilds everything, so its time and builder memory scale with the corpus | 70–80 s | a 10x corpus means a rebuild of roughly 13 minutes and over 20 GiB |
+| Publication rebuilds everything, so its time and builder memory scale with the corpus; on shared vCPUs the 6.25% baseline throttles it once the burst balance is spent | 71 minutes on the queue worker | already: new videos take over an hour to become searchable, and a 10x corpus would take many hours |
 | Volume: active, rollback and staging generations plus the WAL (the base index is in the image) | 6.1 GB of 20 GB | about 3x the corpus |
 | Cold start checksums every generation file before serving | up to 193 s of downtime per restart | already the longest outage a release causes |
 

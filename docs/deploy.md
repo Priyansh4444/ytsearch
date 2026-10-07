@@ -82,6 +82,12 @@ ON_DEMAND=1 scripts/fly-run-queue-indexer.sh
 scripts/check-queue-indexers.sh
 ```
 
+To move the existing worker to a new indexer image, run
+`INDEXER_IMAGE=<image> scripts/fly-run-queue-indexers.sh` while it is stopped,
+with the organization token: after reconciling it checks the reader app too.
+With an indexer-only deploy token that last check fails as unauthorized, and
+the fail-closed cleanup stops the worker again (2026-10-07).
+
 The Machine needs `QUEUE_TARGET_BACKEND=raw`, restart policy `no` and a
 persistent transcript cache; a Cloudflare Queue message wakes it, and the API's
 JSONL queue stays authoritative.
