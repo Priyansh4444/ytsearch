@@ -102,6 +102,7 @@ bun run check             # the full CI suite
 - [Indexing operations](docs/indexing-operations-guide.md): queue and repair
 - [Deployment](docs/deploy.md): the maintained Fly and Cloudflare setup
 - [Staging observability](docs/staging-observability.md): health checks and logs
+- [Capacity](docs/capacity.md): measured load, limits and what to change as it grows
 - [Playbooks](docs/playbooks/README.md): performance, dependency and frontend
   work
 
