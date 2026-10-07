@@ -90,6 +90,40 @@ validate_file_credentials() {
   echo "cloud-queue-indexer: credential preflight passed generation=$CREDENTIAL_PREFLIGHT_GENERATION"
 }
 
+# As root, run ytsearch (and so yt-dlp, which parses untrusted YouTube data)
+# as an unprivileged user; the entrypoint keeps root only for its own setup.
+INDEXER_USER="${INDEXER_USER:-ytsearch}"
+INDEXER_RUN_AS=""
+prepare_unprivileged_indexer() {
+  [ "$(id -u)" = 0 ] && id "$INDEXER_USER" >/dev/null 2>&1 && command -v gosu >/dev/null 2>&1 || return 0
+  indexer_home="${INDEXER_HOME:-$(dirname "$TRANSCRIPT_CACHE_DIR")/indexer-home}"
+  work_directory="${RAW_PUBLICATION_WORK_DIRECTORY:-/var/lib/ytsearch/raw-generation-work}"
+  mkdir -p "$indexer_home" "$TRANSCRIPT_CACHE_DIR" "$work_directory"
+  # Only files not yet owned are changed, so later starts are near-instant.
+  indexer_uid="$(id -u "$INDEXER_USER")"
+  for directory in "$indexer_home" "$TRANSCRIPT_CACHE_DIR" "$work_directory"; do
+    find "$directory" ! -uid "$indexer_uid" -exec chown -h "$INDEXER_USER:$INDEXER_USER" {} +
+  done
+  # yt-dlp writes its cookie jar back, so it gets a private copy of the secret.
+  cookies="$indexer_home/yt-dlp-cookies.txt"
+  cp "$YT_DLP_COOKIES_FILE" "$cookies"
+  chmod 600 "$cookies"
+  chown "$INDEXER_USER:$INDEXER_USER" "$cookies"
+  YT_DLP_COOKIES_FILE="$cookies"
+  INDEXER_HOME="$indexer_home"
+  export YT_DLP_COOKIES_FILE INDEXER_HOME
+  INDEXER_RUN_AS="$INDEXER_USER"
+  echo "cloud-queue-indexer: running ytsearch as $INDEXER_USER"
+}
+
+run_indexer() {
+  if [ -n "$INDEXER_RUN_AS" ]; then
+    gosu "$INDEXER_RUN_AS" env HOME="$INDEXER_HOME" "$@"
+  else
+    "$@"
+  fi
+}
+
 validate_update_schedule() {
   case "$DAILY_UPDATE_INTERVAL_SECONDS" in
     ''|*[!0-9]*)
@@ -190,7 +224,7 @@ validate_backend_scope() {
 }
 
 validate_raw_backend() {
-  if ! ytsearch init-backend --backend raw --collection "$COLLECTION"; then
+  if ! run_indexer ytsearch init-backend --backend raw --collection "$COLLECTION"; then
     echo "cloud-queue-indexer: Raw reader compatibility preflight failed" >&2
     exit 1
   fi
@@ -549,7 +583,7 @@ index_one_backend() {
 
   echo "cloud-queue-indexer: indexing $handle backend=$label jobs=$jobs"
   # shellcheck disable=SC2086
-  if ytsearch index-youtuber "$handle" \
+  if run_indexer ytsearch index-youtuber "$handle" \
     --backend "$backend" \
     --mode update \
     --collection "$COLLECTION" \
@@ -613,7 +647,7 @@ index_youtuber_for_queue_target() {
 
 publish_raw_generation() {
   echo "cloud-queue-indexer: publishing one coalesced Raw generation"
-  ytsearch publish --backend raw --collection "$COLLECTION"
+  run_indexer ytsearch publish --backend raw --collection "$COLLECTION"
 }
 
 mark_raw_publication_pending() {
@@ -652,7 +686,7 @@ index_catalog_backend() {
   # and one deferred publication boundary. Per-creator processes cannot prove
   # that their discovery results describe the same catalog pass.
   # shellcheck disable=SC2086
-  ytsearch index-youtubers "$DAILY_UPDATE_LIST_FILE" \
+  run_indexer ytsearch index-youtubers "$DAILY_UPDATE_LIST_FILE" \
     --backend "$backend" \
     --mode update \
     --collection "$COLLECTION" \
@@ -794,6 +828,7 @@ if [ "${CLOUD_INDEX_QUEUE_LIBRARY_ONLY:-0}" != "1" ]; then
   validate_backend_scope
   validate_raw_backend
   validate_file_credentials
+  prepare_unprivileged_indexer
   validate_update_schedule
   validate_idle_exit
   validate_idle_gap_fill

@@ -28,8 +28,13 @@ RUN apt-get update \
 COPY --from=deno /deno /usr/local/bin/deno
 COPY --from=builder /build/target/release/ytsearch /usr/local/bin/ytsearch
 COPY cloud-index-queue /usr/local/bin/cloud-index-queue
+# The entrypoint runs ytsearch and yt-dlp as this user (via the base image's
+# gosu); only its own setup stays root.
 RUN chmod 0755 /usr/local/bin/cloud-index-queue \
-    && /usr/local/bin/ytsearch --help >/dev/null
+    && /usr/local/bin/ytsearch --help >/dev/null \
+    && useradd --system --uid 10002 --user-group --no-create-home \
+      --home-dir /nonexistent --shell /usr/sbin/nologin ytsearch \
+    && command -v gosu >/dev/null
 
 ENTRYPOINT []
 CMD ["/bin/sh", "/usr/local/bin/cloud-index-queue"]

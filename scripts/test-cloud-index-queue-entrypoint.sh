@@ -355,4 +355,50 @@ grep -Fx "request-blocked queued" "$blocked_status_log" >/dev/null || {
   exit 1
 }
 
+
+# As root, ytsearch runs as the unprivileged indexer user with a private
+# cookie copy; fakes stand in for root-only commands.
+mkdir -p "$test_dir/root-bin"
+cat > "$test_dir/root-bin/id" <<'SH'
+#!/usr/bin/env sh
+case "$*" in
+  -u) echo 0 ;;
+  "-u ytsearch") echo 10002 ;;
+  ytsearch) exit 0 ;;
+  *) exit 1 ;;
+esac
+SH
+cat > "$test_dir/root-bin/gosu" <<'SH'
+#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$FAKE_PRIVILEGE_LOG"
+shift
+exec "$@"
+SH
+cat > "$test_dir/root-bin/chown" <<'SH'
+#!/usr/bin/env sh
+printf 'chown %s\n' "$*" >> "$FAKE_PRIVILEGE_LOG"
+SH
+chmod +x "$test_dir/root-bin/id" "$test_dir/root-bin/gosu" "$test_dir/root-bin/chown"
+: > "$test_dir/privilege.log"
+(
+  PATH="$test_dir/root-bin:$test_dir/bin:$PATH"
+  FAKE_PRIVILEGE_LOG="$test_dir/privilege.log"
+  TRANSCRIPT_CACHE_DIR="$test_dir/volume/transcript-cache"
+  RAW_PUBLICATION_WORK_DIRECTORY="$test_dir/volume/work"
+  YT_DLP_COOKIES_FILE="$test_dir/yt-dlp-cookies.txt"
+  export FAKE_PRIVILEGE_LOG RAW_PUBLICATION_WORK_DIRECTORY
+  prepare_unprivileged_indexer > "$test_dir/privilege.out"
+  test "$YT_DLP_COOKIES_FILE" = "$test_dir/volume/indexer-home/yt-dlp-cookies.txt"
+  cmp -s "$YT_DLP_COOKIES_FILE" "$test_dir/yt-dlp-cookies.txt"
+  test "$(stat -c %a "$YT_DLP_COOKIES_FILE")" = 600
+  run_indexer ytsearch init-backend --backend raw > /dev/null
+)
+grep -Fq 'running ytsearch as ytsearch' "$test_dir/privilege.out"
+grep -Fxq "ytsearch env HOME=$test_dir/volume/indexer-home ytsearch init-backend --backend raw" \
+  "$test_dir/privilege.log"
+grep -Fq "chown ytsearch:ytsearch $test_dir/volume/indexer-home/yt-dlp-cookies.txt" \
+  "$test_dir/privilege.log"
+for directory in transcript-cache work; do
+  grep -Fq "$test_dir/volume/$directory" "$test_dir/privilege.log"
+done
 echo "cloud queue transport and retry behavior passed"
