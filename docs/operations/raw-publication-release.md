@@ -111,6 +111,14 @@ the SSH process, not the server.
   runs one backend search at a time. The gate must include broad terms such as
   `react` and `fire`, keep every request below 200 ms, and see no new OOM.
 
+Every gate request travels from the operator's machine through a local Fly
+proxy, so the 200 ms limit includes that round trip. On 2026-10-07 a gate run
+from a laptop measured a 47 ms floor (fastest request) and failed the baseline
+at 235 ms on the stopword-heavy `and_the_spaced` case; the reader alone was
+about 185 ms. Run the gate from a Machine in `sjc` or another host with a
+small round trip to it, and treat a failure close to the limit as unproven
+until it is.
+
 ```bash
 SEARCH_API_KEY="$RAW_CANARY_SEARCH_API_KEY" \
 RAW_ADMIN_API_KEY="$RAW_SEARCH_ADMIN_API_KEY" \
