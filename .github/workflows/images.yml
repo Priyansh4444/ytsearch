@@ -3,7 +3,8 @@ name: Images
 # Builds and smoke-tests the standalone Docker images. The main CI job already
 # compiles the same Rust code natively, so this runs only when an image's own
 # inputs change, plus weekly to catch base-image drift. The Fly overlay images
-# need a production base image and are built by scripts/build-raw-overlay.sh.
+# need a production base image and are built by scripts/build-raw-overlay.sh;
+# Dockerfile.raw-search bakes the production corpus and only builds where it is.
 on:
   pull_request:
     paths:
@@ -47,7 +48,7 @@ jobs:
             smoke: api
           - dockerfile: Dockerfile.search-api
             smoke: api
-          - dockerfile: Dockerfile.raw-search
+          - dockerfile: Dockerfile.raw-search-selfhost
             smoke: reader
           - dockerfile: Dockerfile.frontend
             smoke: frontend
@@ -95,3 +96,49 @@ jobs:
               wait_for http://127.0.0.1:8080/
               ;;
           esac
+
+  # The README quick start: an empty self-hosted reader, a write through the
+  # admin API, a publication by the worker image, then a search that finds it.
+  self-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.raw-search-selfhost
+          tags: ytsearch-reader
+          load: true
+          cache-from: type=gha,scope=Dockerfile.raw-search-selfhost
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          tags: ytsearch-app
+          load: true
+          cache-from: type=gha,scope=Dockerfile
+      - name: Index, publish and search on an empty install
+        run: |
+          set -eu
+          admin=selfhost-admin-key search=selfhost-search-key
+          docker run -d --name reader -p 8108:8108 \
+            -e RAW_SEARCH_ADMIN_API_KEY=$admin -e RAW_SEARCH_API_KEY=$search ytsearch-reader
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8108/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8108/health || { docker logs reader; exit 1; }
+          put() {
+            curl -fsS -X PUT -H "x-raw-admin-key: $admin" -H 'content-type: application/json' \
+              "http://127.0.0.1:8108/admin/$1" -d "$2" >/dev/null
+          }
+          put channels/example '{"publication_api_version":1,"idempotency_key":"channel-1","document":{"id":"example","handle":"@example","name":"Example","channel_id":"UCexample","uploads_playlist":null,"public_video_count":1,"indexed_video_count":1,"indexed_chunk_count":1,"avatar_url":null}}'
+          put videos/vid00000001 '{"publication_api_version":1,"idempotency_key":"video-1","chunks":[{"id":"vid00000001_0","youtuber_id":"example","youtuber_handle":"@example","youtuber_name":"Example","channel_id":"UCexample","video_id":"vid00000001","title":"Self hosting works","text":"an empty install accepts its first transcript","sequence":0,"t_start_ms":0,"t_end_ms":4000,"uploader_id":"example","published_at_timestamp":1790000000}]}'
+          docker run --rm --network host \
+            -e RAW_SEARCH_API_URL=http://127.0.0.1:8108 -e RAW_SEARCH_ADMIN_API_KEY=$admin \
+            ytsearch-app ytsearch publish --backend raw
+          curl -fsS -H "x-raw-search-key: $search" \
+            'http://127.0.0.1:8108/collections/youtube_transcript_chunks/documents/search?q=transcript&query_by=text&group_by=video_id&group_limit=3' \
+            | jq -e '.found == 1 and .grouped_hits[0].hits[0].document.title == "Self hosting works"'
