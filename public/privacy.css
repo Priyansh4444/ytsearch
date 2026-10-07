@@ -1,0 +1,25 @@
+:root {
+  color-scheme: dark;
+  background: #101010;
+  color: #e6e6e6;
+  font: 16px/1.6 system-ui, sans-serif;
+}
+main {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+}
+h1 {
+  margin-bottom: 0;
+}
+h2 {
+  margin-top: 2rem;
+  font-size: 1.1rem;
+}
+a {
+  color: #ffc799;
+}
+.updated {
+  color: #a0a0a0;
+  font-size: 0.9rem;
+}

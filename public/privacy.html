@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Privacy · ytsearch</title>
+    <link rel="stylesheet" href="/privacy.css" />
+  </head>
+  <body>
+    <main>
+      <p><a href="/">← ytsearch</a></p>
+      <h1>Privacy</h1>
+      <p class="updated">Last updated 6 October 2026</p>
+
+      <p>
+        ytsearch searches the public captions of indexed YouTube creators. It has no
+        accounts and sets no cookies. This page describes what the service at
+        search.pronsh.dev processes.
+      </p>
+
+      <h2>Searches</h2>
+      <p>
+        To run and improve search, each query is logged with its text, result counts,
+        timings, the country Cloudflare reports for the request, your browser's user-agent
+        string and a request ID. These logs are stored with Axiom and deleted after 30 days.
+        Your IP address is used only in memory for rate limiting and is not logged.
+      </p>
+
+      <h2>Usage analytics</h2>
+      <p>
+        Anonymous usage events go to PostHog (US): page views and searches (query length
+        and number of words, never the query text), sort and page choices, and which
+        creator or video result you open. They carry a random ID kept in your browser's
+        local storage, not a profile of you. Cloudflare Web Analytics also counts page
+        views without cookies.
+      </p>
+
+      <h2>Stored in your browser</h2>
+      <p>
+        Your recent searches and the creator list stay in your browser's local storage and
+        are never sent anywhere; the analytics ID is sent only with the usage events above.
+        Clear recent searches on the home page, or clear site data in your browser to remove
+        everything.
+      </p>
+
+      <h2>YouTube</h2>
+      <p>
+        Thumbnails load from YouTube's image servers when results appear. The player loads
+        from youtube-nocookie.com only when you press play. YouTube then processes data under
+        the <a href="https://policies.google.com/privacy">Google Privacy Policy</a>. ytsearch
+        uses YouTube API Services; see the
+        <a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a>.
+      </p>
+
+      <h2>Creator requests</h2>
+      <p>
+        When you request a creator, we store the handle, your optional note, the time and the
+        request's status. The request is deleted once the creator is indexed; a rejected
+        request is kept as a record of the decision.
+      </p>
+
+      <h2>Hosting</h2>
+      <p>
+        Cloudflare serves the site and Fly.io runs the search servers; both process requests
+        and keep standard operational logs.
+      </p>
+
+      <h2>Contact</h2>
+      <p>
+        Questions or deletion requests:
+        <a href="https://github.com/Priyansh4444/ytsearch/issues">open an issue</a>. Report
+        security problems privately as described in
+        <a href="https://github.com/Priyansh4444/ytsearch/blob/master/SECURITY.md">SECURITY.md</a>.
+      </p>
+    </main>
+  </body>
+</html>

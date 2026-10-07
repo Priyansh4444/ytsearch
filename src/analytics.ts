@@ -56,7 +56,8 @@ function send(event: string, properties: Properties): void {
           $lib: "ytsearch",
           $process_person_profile: false,
           $is_identified: false,
-          $current_url: window.location.href,
+          // Origin and path only: search URLs carry the query text in `?q=`.
+          $current_url: `${window.location.origin}${window.location.pathname}`,
           $pathname: window.location.pathname,
           $host: window.location.host,
           ...Object.fromEntries(
