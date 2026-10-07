@@ -122,7 +122,8 @@ jobs:
       - name: Index, publish and search on an empty install
         run: |
           set -eu
-          admin=selfhost-admin-key search=selfhost-search-key
+          # Keys must be at least 24 bytes, as in the README quick start.
+          admin="$(openssl rand -hex 24)" search="$(openssl rand -hex 24)"
           docker run -d --name reader -p 8108:8108 \
             -e RAW_SEARCH_ADMIN_API_KEY=$admin -e RAW_SEARCH_API_KEY=$search ytsearch-reader
           for _ in $(seq 1 60); do
