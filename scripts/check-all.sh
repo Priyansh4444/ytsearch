@@ -11,6 +11,7 @@ scripts/check-rust-packages.sh
 cargo test --workspace
 bun run test:e2e
 scripts/check-rust-dependency-policy.sh
+bun scripts/check-licenses.ts
 scripts/check-rust-public-surface.sh
 scripts/test-setup-dev.sh
 scripts/test-doctor.sh

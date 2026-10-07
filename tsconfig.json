@@ -12,6 +12,8 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "noEmit": true,
+    // vite.config.ts imports scripts/*.ts with the extension Vite requires.
+    "allowImportingTsExtensions": true,
 
     // Type Checking & Safety
     "strict": true,

@@ -1,9 +1,10 @@
 import tailwindcss from "@tailwindcss/vite";
 import solidPlugin from "@solidjs/vite-plugin";
 import { defineConfig } from "vite";
+import { thirdPartyNotices } from "./scripts/third-party-notices.ts";
 
 export default defineConfig({
-  plugins: [tailwindcss(), solidPlugin()],
+  plugins: [tailwindcss(), solidPlugin(), thirdPartyNotices()],
   server: {
     port: 3000,
     proxy: {
