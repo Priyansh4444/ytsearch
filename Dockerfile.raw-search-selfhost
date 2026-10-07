@@ -1,0 +1,33 @@
+# The Raw reader for self-hosting (compose.yaml): it starts from an empty
+# index, and the worker publishes what it indexes. Dockerfile.raw-search is
+# the production image, which bakes the production corpus instead.
+FROM rust:1-bookworm AS builder
+WORKDIR /app
+COPY . .
+RUN cargo build --locked --release -p youtube_raw_search
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates gosu \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 rawsearch
+COPY --from=builder /app/target/release/youtube-raw-search /usr/local/bin/youtube-raw-search
+COPY scripts/raw-search-entrypoint.sh /usr/local/bin/raw-search-entrypoint
+# The worker image creates the same empty base files (gzip -n is byte-stable),
+# since a publication rebuilds each generation from the base corpus.
+RUN chmod 0755 /usr/local/bin/raw-search-entrypoint \
+    && base=/usr/local/share/ytsearch/empty-base \
+    && install -d "$base" /data/mutable \
+    && : | gzip -n > "$base/youtube_transcript_chunks.jsonl.gz" \
+    && : | gzip -n > "$base/youtube_youtubers.jsonl.gz" \
+    && : > /tmp/empty.jsonl \
+    && youtube-raw-search build /tmp/empty.jsonl /tmp/empty.jsonl /data/index \
+    && rm /tmp/empty.jsonl \
+    && chown -R rawsearch:rawsearch /data
+ENV RAW_SEARCH_BIND=0.0.0.0:8108
+ENV RAW_SEARCH_INDEX_PATH=/data/index
+ENV RAW_SEARCH_BASE_CHUNKS_GZIP=/usr/local/share/ytsearch/empty-base/youtube_transcript_chunks.jsonl.gz
+ENV RAW_SEARCH_BASE_CHANNELS_GZIP=/usr/local/share/ytsearch/empty-base/youtube_youtubers.jsonl.gz
+ENV RAW_SEARCH_STATE_DIRECTORY=/data/mutable
+EXPOSE 8108
+ENTRYPOINT ["raw-search-entrypoint"]

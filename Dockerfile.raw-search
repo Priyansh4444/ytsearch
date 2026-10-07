@@ -1,3 +1,5 @@
+# Production only: bakes the production corpus from .search-experiment.
+# Self-hosting uses Dockerfile.raw-search-selfhost.
 FROM rust:1-bookworm AS builder
 WORKDIR /app
 COPY . .

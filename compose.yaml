@@ -2,7 +2,7 @@ services:
   raw-search:
     build:
       context: .
-      dockerfile: Dockerfile.raw-search
+      dockerfile: Dockerfile.raw-search-selfhost
     restart: unless-stopped
     ports:
       - "8108:8108"
