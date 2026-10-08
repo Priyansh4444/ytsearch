@@ -38,12 +38,18 @@ const POSITION_SPOOL_FILE: &str = ".positions.spool";
 const POSTING_SPOOL_DIRECTORY: &str = ".postings.spool";
 const BIGRAM_SPOOL_DIRECTORY: &str = ".bigrams.spool";
 const POSTING_SHARDS: usize = 256;
-const MAX_POSTING_SHARD_BYTES: u64 = 32 * 1024 * 1024;
+// Every spool shard above its limit is re-partitioned by one more key byte,
+// which costs a full read and write of that shard. Builds run on their own
+// Machines, whose volumes are bandwidth-capped, so these limits trade memory
+// for fewer passes: on the full corpus (2026-10-08) raising them from 32 MiB
+// and 3 MiB halved build writes with byte-identical output, and peak RSS rose
+// from 350 MB to 530 MB.
+const MAX_POSTING_SHARD_BYTES: u64 = 256 * 1024 * 1024;
 // Pair records have substantially more decoded map overhead than unigram
-// records. Multi-key leaves are capped at 3 MiB so their decoded maps fit the
-// 32 MiB run budget. A single pair can be larger than that at corpus scale;
-// those leaves are coalesced and encoded through a constant-memory stream.
-const MAX_BIGRAM_SHARD_BYTES: u64 = 3 * 1024 * 1024;
+// records, hence the smaller limit. A single pair can exceed it at corpus
+// scale; those leaves are coalesced and encoded through a constant-memory
+// stream.
+const MAX_BIGRAM_SHARD_BYTES: u64 = 64 * 1024 * 1024;
 const MIN_BIGRAM_TERM_DOCUMENTS: u32 = 50_000;
 const DOCUMENT_RECORD_SPOOL_FILE: &str = ".documents.meta.spool";
 const DOCUMENTS_FILE: &str = "documents.blocks";

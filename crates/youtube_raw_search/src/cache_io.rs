@@ -2,6 +2,7 @@ use std::{
     fs::File,
     io::{self, BufWriter, Read, Seek, SeekFrom, Write},
     path::Path,
+    sync::atomic::{AtomicBool, Ordering},
     time::Instant,
 };
 use tokio::sync::oneshot;
@@ -11,6 +12,20 @@ mod metrics;
 use metrics::{PublicationIoMeasurement, WriterClass, record_reader, record_seek, record_writer};
 
 const DEFAULT_RECLAIM_BYTES: u64 = 8 * 1024 * 1024;
+static RETAIN_PAGE_CACHE: AtomicBool = AtomicBool::new(false);
+
+/// For processes that never serve a generation (the CLI's publication build,
+/// offline `build`): keep build pages cached and skip the per-window syncs.
+/// Spools are re-read soon after they are written, and on a volume with a
+/// bandwidth cap every dropped page is read back from disk. The reader keeps
+/// the default, so uploaded generation files cannot evict its mapped index.
+pub fn retain_build_page_cache() {
+    RETAIN_PAGE_CACHE.store(true, Ordering::Relaxed);
+}
+
+fn retaining_page_cache() -> bool {
+    RETAIN_PAGE_CACHE.load(Ordering::Relaxed)
+}
 const SEQUENTIAL_RECLAIM_BYTES: u64 = 8 * 1024 * 1024;
 #[cfg(target_os = "linux")]
 const BACKGROUND_CPU_NICE: libc::c_int = 10;
@@ -114,6 +129,10 @@ impl ColdWriter {
         let flush_started = Instant::now();
         self.output.flush()?;
         let flush_elapsed = flush_started.elapsed();
+        if retaining_page_cache() {
+            self.bytes_since_reclaim = 0;
+            return Ok(());
+        }
         let sync_started = Instant::now();
         self.output.get_ref().sync_data()?;
         let sync_elapsed = sync_started.elapsed();
@@ -278,6 +297,9 @@ fn advise_sequential(_file: &File) {}
 #[cfg(target_os = "linux")]
 fn advise_dont_need(file: &File, offset: u64, length: u64) {
     use std::os::fd::AsRawFd;
+    if retaining_page_cache() {
+        return;
+    }
     let Ok(offset) = i64::try_from(offset) else {
         return;
     };

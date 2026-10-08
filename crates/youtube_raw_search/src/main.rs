@@ -34,6 +34,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let chunks = required_path(args.next(), "chunks JSONL path")?;
             let channels = required_path(args.next(), "channels JSONL path")?;
             let index = required_path(args.next(), "index directory")?;
+            youtube_raw_search::retain_build_page_cache();
             let report = build_index(&chunks, &channels, &index)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
