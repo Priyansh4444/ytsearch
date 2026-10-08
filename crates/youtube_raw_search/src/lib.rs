@@ -9,6 +9,7 @@ mod publisher;
 mod reloadable;
 mod remote_publication;
 
+pub use cache_io::retain_build_page_cache;
 pub use engine::{
     BuildReport, RawSearchEngine, SliceReport, accelerate_generation, build_index, slice_corpus,
 };

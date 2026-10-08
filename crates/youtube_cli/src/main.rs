@@ -188,6 +188,9 @@ struct IndexStats {
 async fn main() -> ExitCode {
     let _ = dotenvy::dotenv();
     init_tracing();
+    // The CLI never serves a generation, so its publication builds keep their
+    // pages cached instead of protecting a reader's mapped index.
+    youtube_raw_search::retain_build_page_cache();
 
     let result = match Cli::parse().command {
         Command::InitBackend(command) => init_backend_command(command).await,
