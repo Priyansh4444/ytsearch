@@ -405,6 +405,7 @@ async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> 
     }
     let base_chunks = required_publication_path("RAW_SEARCH_BASE_CHUNKS_GZIP")?;
     let base_channels = required_publication_path("RAW_SEARCH_BASE_CHANNELS_GZIP")?;
+    let started = Instant::now();
     while active < required_sequence {
         let job = search.prepare_publication().await?;
         let published =
@@ -416,8 +417,28 @@ async fn publish_and_wait(search: &RawIndexAdminClient) -> Result<(), CliError> 
         }
         active = published;
     }
-    println!("Published required Raw sequence {required_sequence}");
+    // Durable per-publication evidence in the worker log: total time and the
+    // process's peak resident memory.
+    println!(
+        "Published required Raw sequence {required_sequence} in {} s, peak memory {}",
+        started.elapsed().as_secs(),
+        peak_resident_memory().unwrap_or_else(|| "unknown".to_string())
+    );
     Ok(())
+}
+
+/// This process's peak resident set size (`VmHWM`), on Linux.
+fn peak_resident_memory() -> Option<String> {
+    let status = fs::read_to_string("/proc/self/status").ok()?;
+    let kilobytes = status
+        .lines()
+        .find_map(|line| line.strip_prefix("VmHWM:"))?
+        .trim()
+        .strip_suffix("kB")?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    Some(format!("{} MB", kilobytes / 1024))
 }
 
 fn require_publication_build_space(work_root: &Path) -> Result<(), CliError> {
@@ -507,6 +528,7 @@ async fn publish_generation(
         let base_chunks = base_chunks.to_path_buf();
         let base_channels = base_channels.to_path_buf();
         let target = job.target_sequence;
+        let build_started = Instant::now();
         let detached = tokio::task::spawn_blocking(move || {
             let snapshot = MutationStore::open_snapshot_read_only(&snapshot_path)?;
             GenerationBuilder::new(base_chunks, base_channels).build(
@@ -519,6 +541,10 @@ async fn publish_generation(
         .map_err(|error| {
             CliError::Message(format!("Raw publication builder task failed: {error}"))
         })??;
+        println!(
+            "Built Raw generation {target} in {} s",
+            build_started.elapsed().as_secs()
+        );
         if detached.sequence != target {
             return Err(CliError::Message(format!(
                 "Raw detached generation sequence {} does not match job {target}",
