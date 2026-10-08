@@ -1,6 +1,50 @@
 use super::*;
 use tempfile::tempdir;
 
+/// A snapshot with its streamed chunks collected, for assertions.
+struct Materialized {
+    through_sequence: u64,
+    videos: Vec<StoredVideoMutation>,
+    channels: Vec<StoredChannelMutation>,
+}
+
+struct StoredVideoMutation {
+    chunks: Option<Vec<TranscriptChunk>>,
+}
+
+fn collect(snapshot: &MutationSnapshot, chunks: Vec<Option<Vec<TranscriptChunk>>>) -> Materialized {
+    assert_eq!(snapshot.video_ids.len(), chunks.len());
+    Materialized {
+        through_sequence: snapshot.through_sequence,
+        videos: chunks
+            .into_iter()
+            .map(|chunks| StoredVideoMutation { chunks })
+            .collect(),
+        channels: snapshot.channels.clone(),
+    }
+}
+
+fn materialize(transaction: &Transaction<'_>, through_sequence: i64) -> Materialized {
+    let snapshot = snapshot_at_sequence(transaction, through_sequence).unwrap();
+    let mut statement = transaction.prepare(VIDEO_CHUNKS_SQL).unwrap();
+    let chunks = statement
+        .query_map([through_sequence], |row| {
+            json_column::<Vec<TranscriptChunk>>(row, 0)
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    collect(&snapshot, chunks)
+}
+
+impl MutationStore {
+    fn snapshot(&self) -> Result<Materialized, IndexStoreError> {
+        self.with_snapshot(|snapshot, chunks| {
+            Ok(collect(snapshot, chunks.collect::<Result<Vec<_>, _>>()?))
+        })
+    }
+}
+
 fn chunk(video_id: &str, text: &str) -> TranscriptChunk {
     serde_json::from_value(serde_json::json!({
         "id": format!("{video_id}-0"),
@@ -214,7 +258,7 @@ fn snapshot_pins_latest_rows_to_its_captured_sequence() {
         .upsert_channel(&channel(2), "upsert-channel-new")
         .unwrap();
 
-    let captured = snapshot_at_sequence(&transaction, captured_sequence).unwrap();
+    let captured = materialize(&transaction, captured_sequence);
     transaction.commit().unwrap();
     drop(connection);
     assert_eq!(captured.through_sequence, 2);
