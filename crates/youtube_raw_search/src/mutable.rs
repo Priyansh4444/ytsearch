@@ -4,6 +4,7 @@ use rusqlite::{
     params,
 };
 use std::{
+    collections::HashSet,
     fs::{self, File},
     io,
     path::{Path, PathBuf},
@@ -32,12 +33,6 @@ pub struct MutationSnapshotExport {
 }
 
 #[derive(Clone, Debug)]
-pub struct StoredVideoMutation {
-    pub(crate) video_id: String,
-    pub(crate) chunks: Option<Vec<TranscriptChunk>>,
-}
-
-#[derive(Clone, Debug)]
 pub struct StoredChannelMutation {
     pub(crate) channel_id: String,
     pub(crate) document: Option<ChannelDocument>,
@@ -51,12 +46,24 @@ pub struct VideoMutationSummary {
     pub(crate) chunk_count: Option<u64>,
 }
 
+/// The mutations through one sequence, without video chunk bodies: those are
+/// streamed by `MutationStore::with_snapshot`, so a publication holds one
+/// video's chunks at a time rather than every chunk written since the base
+/// corpus (1.6 GB of a 2 GB worker on 2026-10-08).
 #[derive(Clone, Debug, Default)]
 pub struct MutationSnapshot {
     pub(crate) through_sequence: u64,
-    pub(crate) videos: Vec<StoredVideoMutation>,
+    pub(crate) video_ids: HashSet<String>,
     pub(crate) channels: Vec<StoredChannelMutation>,
 }
+
+const VIDEO_CHUNKS_SQL: &str =
+    "SELECT chunks_json FROM video_mutations WHERE sequence <= ?1 ORDER BY video_id";
+
+/// Each mutated video's replacement chunks in video-id order; `None` for a
+/// deleted video.
+pub(crate) type VideoChunkStream<'a> =
+    dyn Iterator<Item = Result<Option<Vec<TranscriptChunk>>, IndexStoreError>> + 'a;
 
 impl MutationStore {
     pub fn open(path: &Path) -> Result<Self, IndexStoreError> {
@@ -261,15 +268,31 @@ impl MutationStore {
             .ok_or_else(|| IndexStoreError::InvalidInput("unknown operation id".to_string()))
     }
 
-    pub(crate) fn snapshot(&self) -> Result<MutationSnapshot, IndexStoreError> {
+    /// Runs `consume` inside one read transaction, so the snapshot keys and
+    /// the streamed chunks describe the same sequence even while the store is
+    /// written.
+    pub(crate) fn with_snapshot<T>(
+        &self,
+        consume: impl FnOnce(&MutationSnapshot, &mut VideoChunkStream<'_>) -> Result<T, IndexStoreError>,
+    ) -> Result<T, IndexStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(map_sqlite)?;
         let through_sequence_sql = snapshot_sequence(&transaction)?;
         let snapshot = snapshot_at_sequence(&transaction, through_sequence_sql)?;
+        let mut statement = transaction.prepare(VIDEO_CHUNKS_SQL).map_err(map_sqlite)?;
+        let mut chunks = statement
+            .query_map([through_sequence_sql], |row| {
+                json_column::<Vec<TranscriptChunk>>(row, 0)
+            })
+            .map_err(map_sqlite)?
+            .map(|row| row.map_err(map_sqlite));
+        let result = consume(&snapshot, &mut chunks);
+        drop(chunks);
+        drop(statement);
         transaction.commit().map_err(map_sqlite)?;
-        Ok(snapshot)
+        result
     }
 
     pub(crate) fn export_snapshot(
@@ -484,21 +507,12 @@ fn snapshot_at_sequence(
     let through_sequence = u64::try_from(through_sequence_sql)
         .map_err(|error| IndexStoreError::internal(BACKEND, error))?;
     let mut video_statement = transaction
-        .prepare(
-            "SELECT video_id, chunks_json
-                 FROM video_mutations WHERE sequence <= ?1 ORDER BY video_id",
-        )
+        .prepare("SELECT video_id FROM video_mutations WHERE sequence <= ?1")
         .map_err(map_sqlite)?;
-    let videos = video_statement
-        .query_map([through_sequence_sql], |row| {
-            let chunks = json_column::<Vec<TranscriptChunk>>(row, 1)?;
-            Ok(StoredVideoMutation {
-                video_id: row.get(0)?,
-                chunks,
-            })
-        })
+    let video_ids = video_statement
+        .query_map([through_sequence_sql], |row| row.get(0))
         .map_err(map_sqlite)?
-        .collect::<rusqlite::Result<Vec<_>>>()
+        .collect::<rusqlite::Result<HashSet<String>>>()
         .map_err(map_sqlite)?;
     drop(video_statement);
 
@@ -516,7 +530,7 @@ fn snapshot_at_sequence(
 
     Ok(MutationSnapshot {
         through_sequence,
-        videos,
+        video_ids,
         channels,
     })
 }

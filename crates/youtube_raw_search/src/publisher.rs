@@ -2,12 +2,12 @@ use crate::{
     MutationStore, RawSearchEngine,
     cache_io::ColdReader,
     engine::{WarmEngine, build_publication_candidate},
-    mutable::MutationSnapshot,
+    mutable::{MutationSnapshot, VideoChunkStream},
 };
 use flate2::read::MultiGzDecoder;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     fs::{self, File},
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
@@ -116,9 +116,10 @@ impl GenerationBuilder {
                 compatibility.corpus_identity
             )));
         }
-        let snapshot = snapshot_store.snapshot()?;
-        let sequence = snapshot.through_sequence;
-        self.build_snapshot(&snapshot, output_path)?;
+        let sequence = snapshot_store.with_snapshot(|snapshot, video_chunks| {
+            self.build_snapshot(snapshot, video_chunks, output_path)?;
+            Ok(snapshot.through_sequence)
+        })?;
         sync_directory_tree(output_path)?;
         // Detached output crosses a process and storage boundary, so it must
         // pass full manifest hashes.
@@ -132,15 +133,12 @@ impl GenerationBuilder {
     fn build_snapshot(
         &self,
         snapshot: &MutationSnapshot,
+        video_chunks: &mut VideoChunkStream<'_>,
         candidate_path: &Path,
     ) -> Result<(), IndexStoreError> {
         validate_source(&self.base_chunks_gzip)?;
         validate_source(&self.base_channels_gzip)?;
-        let video_mutations = snapshot
-            .videos
-            .iter()
-            .map(|mutation| (mutation.video_id.as_str(), mutation))
-            .collect::<HashMap<_, _>>();
+        let video_mutations = &snapshot.video_ids;
         let cascaded_channels = snapshot
             .channels
             .iter()
@@ -159,7 +157,7 @@ impl GenerationBuilder {
                 Ok(key) => key,
                 Err(error) => return Some(Err(crate::Error::Json(error))),
             };
-            if video_mutations.contains_key(key.video_id.as_str())
+            if video_mutations.contains(key.video_id.as_str())
                 || cascaded_channels.contains(key.youtuber_id.as_str())
             {
                 None
@@ -167,22 +165,26 @@ impl GenerationBuilder {
                 Some(Ok(line))
             }
         });
-        let replacement_documents = snapshot
-            .videos
-            .iter()
-            .flat_map(|mutation| {
-                mutation
-                    .chunks
-                    .as_deref()
-                    .filter(|chunks| {
-                        !chunks
-                            .first()
-                            .is_some_and(|chunk| cascaded_channels.contains(chunk.youtuber_id()))
-                    })
-                    .unwrap_or_default()
-                    .iter()
-            })
-            .map(|chunk| serde_json::to_string(chunk).map_err(crate::Error::Json));
+        // One video's chunks are decoded at a time, in the same video-id order
+        // the materialized snapshot used, so the builder input is unchanged.
+        let replacement_documents = video_chunks.flat_map(|chunks| {
+            let chunks = match chunks {
+                Ok(chunks) => chunks.unwrap_or_default(),
+                Err(error) => {
+                    return vec![Err(crate::Error::Io(std::io::Error::other(error)))];
+                }
+            };
+            if chunks
+                .first()
+                .is_some_and(|chunk| cascaded_channels.contains(chunk.youtuber_id()))
+            {
+                return Vec::new();
+            }
+            chunks
+                .iter()
+                .map(|chunk| serde_json::to_string(chunk).map_err(crate::Error::Json))
+                .collect()
+        });
 
         let mut channels = BTreeMap::<String, ChannelDocument>::new();
         for line in gzip_lines(&self.base_channels_gzip)? {
