@@ -104,12 +104,15 @@ if [ "$ON_DEMAND" = "1" ]; then
   remove_arg=""
 fi
 
+# Publication is bound by the volume's bandwidth, which Fly sets by Machine
+# size: 16 MiB/s on shared-cpu-2x, 32 MiB/s on shared-cpu-4x. The 4 GB also
+# keeps more build spool pages cached (docs/capacity.md).
 indexer_cpu_kind="${INDEXER_CPU_KIND:-shared}"
-indexer_cpus="${INDEXER_CPUS:-2}"
+indexer_cpus="${INDEXER_CPUS:-4}"
 idle_exit_after_seconds="${IDLE_EXIT_AFTER_SECONDS:-0}"
 if [ "$ON_DEMAND" = "1" ]; then
   indexer_cpu_kind="${INDEXER_CPU_KIND:-shared}"
-  indexer_cpus="${INDEXER_CPUS:-2}"
+  indexer_cpus="${INDEXER_CPUS:-4}"
   idle_exit_after_seconds="${IDLE_EXIT_AFTER_SECONDS:-300}"
 fi
 
@@ -161,7 +164,7 @@ exec flyctl machine run \
   $build_args \
   --vm-cpu-kind "$indexer_cpu_kind" \
   --vm-cpus "$indexer_cpus" \
-  --vm-memory "${INDEXER_MEMORY_MB:-2048}" \
+  --vm-memory "${INDEXER_MEMORY_MB:-4096}" \
   --rootfs-size "${INDEXER_ROOTFS_SIZE_GB:-10}" \
   --swap-size "${INDEXER_SWAP_MB:-512}" \
   --volume "$VOLUME_NAME:$INDEXER_DATA_DIRECTORY" \
