@@ -16,10 +16,12 @@ numbers when you remeasure; projections assume linear growth from them.
 
 ## Search traffic: ample headroom, two ceilings
 
-- The reader runs one backend search at a time
-  (`MAX_CONCURRENT_BACKEND_SEARCHES = 1`, set after a broad query ran a 2 GB
-  reader out of memory). At the 136 ms average that is about 7 searches per
-  second; beyond it requests queue.
+- The reader runs `RAW_SEARCH_MAX_CONCURRENT_SEARCHES` backend searches at
+  once (production: 2; the code default is 1, set after a broad query ran a
+  2 GB reader out of memory before searches used bounded per-video slots). On
+  the full index with 4 cores and 4 parallel clients (2026-10-08): 61 req/s at
+  1, 108 at 2, 123 at 4, with peak anonymous memory of 154, 218 and 273 MB; a
+  broad search adds about 40 MB. Beyond the limit requests queue.
 - Shared Fly vCPUs guarantee 6.25% of a core each
   ([Fly CPU performance](https://fly.io/docs/machines/cpu-performance/)), so the
   reader sustains about 250 ms of CPU per second: roughly 1.8 searches per second
@@ -27,9 +29,9 @@ numbers when you remeasure; projections assume linear growth from them.
 - The Worker's 60-second edge cache answers repeated searches without the
   reader, and the API (0.2 ms of processing per search) is not a bottleneck.
 
-Order of changes when traffic grows: measure memory per concurrent broad
-search and raise the permit count to match the 2.5 GiB budget; then move the
-reader to performance vCPUs, which removes the baseline quota.
+Order of changes when traffic grows: raise the concurrency limit toward 4
+(the 2.5 GiB budget has room); then move the reader to performance vCPUs, which
+removes the baseline quota.
 
 ## Corpus growth: the real limits
 

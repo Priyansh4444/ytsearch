@@ -58,6 +58,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     bind,
                     api_key,
                     raw_route: true,
+                    max_concurrent_searches: max_concurrent_searches()?,
                 },
                 Arc::new(engine),
             )
@@ -117,6 +118,7 @@ async fn serve_mutable() -> Result<(), Box<dyn std::error::Error>> {
         bind,
         api_key: env::var("RAW_SEARCH_API_KEY").ok(),
         raw_route: true,
+        max_concurrent_searches: max_concurrent_searches()?,
     };
     let app = youtube_search_service::router(&search_config, search_backend)
         .merge(admin_router(admin.clone()));
@@ -144,8 +146,45 @@ fn required_path(value: Option<String>, name: &str) -> Result<PathBuf, Box<dyn s
         .ok_or_else(|| format!("missing {name}").into())
 }
 
+/// RAW_SEARCH_MAX_CONCURRENT_SEARCHES, defaulting to one search at a time.
+fn max_concurrent_searches() -> Result<usize, Box<dyn std::error::Error>> {
+    Ok(parse_max_concurrent_searches(
+        env::var("RAW_SEARCH_MAX_CONCURRENT_SEARCHES")
+            .ok()
+            .as_deref(),
+    )?)
+}
+
+fn parse_max_concurrent_searches(value: Option<&str>) -> Result<usize, String> {
+    let Some(value) = value else {
+        return Ok(youtube_search_service::DEFAULT_MAX_CONCURRENT_SEARCHES);
+    };
+    match value.parse::<usize>() {
+        Ok(searches @ 1..=youtube_search_service::MAX_CONCURRENT_SEARCHES_LIMIT) => Ok(searches),
+        _ => Err(format!(
+            "RAW_SEARCH_MAX_CONCURRENT_SEARCHES must be 1-{}, got {value}",
+            youtube_search_service::MAX_CONCURRENT_SEARCHES_LIMIT
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::parse_max_concurrent_searches;
+
+    #[test]
+    fn concurrent_search_limit_defaults_to_one_and_rejects_out_of_range() {
+        assert_eq!(parse_max_concurrent_searches(None), Ok(1));
+        assert_eq!(parse_max_concurrent_searches(Some("2")), Ok(2));
+        assert_eq!(parse_max_concurrent_searches(Some("16")), Ok(16));
+        for invalid in ["0", "17", "-1", "two", ""] {
+            assert!(
+                parse_max_concurrent_searches(Some(invalid)).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
     use super::DEFAULT_BIND;
     use std::net::{IpAddr, SocketAddr};
 
