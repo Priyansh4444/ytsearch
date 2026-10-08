@@ -25,10 +25,12 @@ const CHANNEL_COLLECTION: &str = "youtube_youtubers";
 const MAX_CACHE_TTL_SECONDS: u64 = 300;
 // A Raw search can fault and score a large posting list. Letting timed-out
 // clients leave four uncancellable spawn_blocking searches behind exceeded a
-// 2 GiB Machine before any individual request reached its own memory limit.
-// Serialize backend work; queued HTTP futures remain cancellable while the
-// active synchronous search owns the sole permit.
-const MAX_CONCURRENT_BACKEND_SEARCHES: usize = 1;
+// 2 GiB Machine before broad searches used bounded per-video slots, so the
+// default serializes backend work. Queued HTTP futures remain cancellable
+// while active searches hold the permits. RAW_SEARCH_MAX_CONCURRENT_SEARCHES
+// raises it (docs/capacity.md has the measured memory per search).
+pub const DEFAULT_MAX_CONCURRENT_SEARCHES: usize = 1;
+pub const MAX_CONCURRENT_SEARCHES_LIMIT: usize = 16;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -80,6 +82,8 @@ pub struct ServerConfig {
     pub bind: SocketAddr,
     pub api_key: Option<String>,
     pub raw_route: bool,
+    /// Backend searches that may run at once; at least 1.
+    pub max_concurrent_searches: usize,
 }
 
 #[derive(Clone)]
@@ -145,7 +149,7 @@ pub fn router(config: &ServerConfig, backend: Arc<dyn SearchBackend>) -> Router 
         started: Instant::now(),
         api_key: config.api_key.as_deref().map(Arc::from),
         cache: Arc::new(Mutex::new(SearchCache::default())),
-        search_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_BACKEND_SEARCHES)),
+        search_permits: Arc::new(Semaphore::new(config.max_concurrent_searches.max(1))),
     };
     let mut app = Router::new()
         .route("/health", get(health))
@@ -452,7 +456,7 @@ mod tests {
             started: Instant::now(),
             api_key: None,
             cache: Arc::new(Mutex::new(SearchCache::default())),
-            search_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_BACKEND_SEARCHES)),
+            search_permits: Arc::new(Semaphore::new(DEFAULT_MAX_CONCURRENT_SEARCHES)),
         }
     }
 
