@@ -71,6 +71,14 @@ flyctl secrets set --app ytsearch-api-raw-production \
 flyctl deploy --config fly.raw-api.toml --ha=false
 ```
 
+Upload notifications need one more secret, a random value shared only with
+YouTube's hub. Without it the `/api/websub/youtube` routes answer 404:
+
+```bash
+flyctl secrets set --app ytsearch-api-raw-production \
+  YTSEARCH_WEBSUB_SECRET="$(openssl rand -hex 32)"
+```
+
 ## 3. Indexer
 
 Stage the Raw URL/admin key plus optional YouTube and cookie inputs, then create

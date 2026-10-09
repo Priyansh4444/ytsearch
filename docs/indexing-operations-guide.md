@@ -124,6 +124,20 @@ The daily refresh runs one `ytsearch index-youtubers` over the whole embedded
 list: one catalog-run ID, creators in sequence, one publication at the end. One
 process per creator cannot satisfy the catalog reconciliation check.
 
+## Upload notifications
+
+The API subscribes every indexed channel to YouTube's WebSub hub at start and
+then daily (`YTSEARCH_WEBSUB_CALLBACK_URL`, signed with
+`YTSEARCH_WEBSUB_SECRET`). The hub pushes each new or edited video to
+`/api/websub/youtube`. A correctly signed push for an indexed creator queues
+one `upload-` request for that creator; repeats collapse into it until the
+worker runs. The next hourly wake indexes the creator, which also gives
+YouTube time to publish captions. The request is acked once its videos are
+written, and the generation is rebuilt with the next routine publication (at
+most every six hours) rather than once per upload. Uploads whose captions are
+not ready yet stay queued with the transcript cooldown. The daily sweep remains
+the backstop for missed pushes.
+
 ## Fetch failures
 
 Caption fetches are paced process-wide and retry timeouts, connection errors,

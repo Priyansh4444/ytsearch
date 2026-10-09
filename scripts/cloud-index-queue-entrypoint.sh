@@ -937,6 +937,23 @@ if [ "${CLOUD_INDEX_QUEUE_PREFLIGHT_ONLY:-0}" = "1" ]; then
   exit 0
 fi
 
+# ack_queue_request ID HANDLE SOURCE BACKENDS removes a completed request, or
+# puts it back in the queue for a later pass when the API refuses.
+ack_queue_request() {
+  if queue_request DELETE "/api/index-requests/$1" >/dev/null; then
+    echo "cloud-queue-indexer: acked request=$1 handle=$2"
+    forget_queue_retry "$1"
+    log_queue_event info index_request_completed "$1" "$2" "$3" "$4" "acked"
+    processed=$((processed + 1))
+  else
+    failed=$((failed + 1))
+    unresolved=$((unresolved + 1))
+    remember_queue_retry "$1" "$QUEUE_ACK_RETRY_SECONDS"
+    set_queue_status "$1" queued || true
+    log_queue_event error index_request_ack_failed "$1" "$2" "$3" "$4" "queued"
+  fi
+}
+
 process_queue_once() {
   QUEUE_HAD_WORK=0
   processed=0
@@ -980,7 +997,15 @@ process_queue_once() {
       continue
     fi
     log_queue_event info index_request_started "$request_id" "$handle" "$source_backend" "$active_backends" "running"
-    if ! mark_raw_publication_pending; then
+    # Upload notifications (`upload-` IDs from the API's WebSub callback) are
+    # routine: their writes are durable once indexed, so the request is acked
+    # at once and the generation is rebuilt with the next routine publication
+    # instead of once per upload.
+    case "$request_id" in
+      upload-*) request_publication=routine ;;
+      *) request_publication=urgent ;;
+    esac
+    if ! mark_raw_publication_pending "$request_publication"; then
       failed=$((failed + 1))
       unresolved=$((unresolved + 1))
       remember_queue_retry "$request_id" "$QUEUE_ACK_RETRY_SECONDS"
@@ -990,8 +1015,10 @@ process_queue_once() {
     fi
     index_status=0
     index_youtuber_for_queue_target "$handle" "$target_backend" --defer-publish || index_status=$?
-    publication_needed=1
-    if [ "$index_status" -eq 0 ]; then
+    [ "$request_publication" = routine ] || publication_needed=1
+    if [ "$index_status" -eq 0 ] && [ "$request_publication" = routine ]; then
+      ack_queue_request "$request_id" "$handle" "$source_backend" "$active_backends"
+    elif [ "$index_status" -eq 0 ]; then
       printf '%s\t%s\t%s\t%s\n' "$request_id" "$handle" "$source_backend" "$active_backends" >> "$tmp_success"
     else
       failed=$((failed + 1))
@@ -1036,18 +1063,7 @@ process_queue_once() {
     if publish_pending_raw_generation; then
       while IFS="$(printf '\t')" read -r request_id handle source_backend active_backends; do
         [ -n "$request_id" ] || continue
-        if queue_request DELETE "/api/index-requests/$request_id" >/dev/null; then
-          echo "cloud-queue-indexer: acked request=$request_id handle=$handle"
-          forget_queue_retry "$request_id"
-          log_queue_event info index_request_completed "$request_id" "$handle" "$source_backend" "$active_backends" "acked"
-          processed=$((processed + 1))
-        else
-          failed=$((failed + 1))
-          unresolved=$((unresolved + 1))
-          remember_queue_retry "$request_id" "$QUEUE_ACK_RETRY_SECONDS"
-          set_queue_status "$request_id" queued || true
-          log_queue_event error index_request_ack_failed "$request_id" "$handle" "$source_backend" "$active_backends" "queued"
-        fi
+        ack_queue_request "$request_id" "$handle" "$source_backend" "$active_backends"
       done < "$tmp_success"
     else
       failed=$((failed + 1))
