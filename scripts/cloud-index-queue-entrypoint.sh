@@ -20,8 +20,12 @@ QUEUE_POLL_INTERVAL_SECONDS="${QUEUE_POLL_INTERVAL_SECONDS:-60}"
 QUEUE_LOOP="${QUEUE_LOOP:-0}"
 DAILY_UPDATE_ENABLED="${DAILY_UPDATE_ENABLED:-0}"
 DAILY_UPDATE_INTERVAL_SECONDS="${DAILY_UPDATE_INTERVAL_SECONDS:-86400}"
-# A failed daily pass is retried after this delay instead of on the next poll.
+# A failed daily pass is retried after this delay, doubling per consecutive
+# failure up to the maximum. The retry time is kept on the volume, so a worker
+# that exits and wakes again does not rerun a failing pass every hour.
 DAILY_UPDATE_FAILURE_RETRY_SECONDS="${DAILY_UPDATE_FAILURE_RETRY_SECONDS:-3600}"
+DAILY_UPDATE_FAILURE_RETRY_MAX_SECONDS="${DAILY_UPDATE_FAILURE_RETRY_MAX_SECONDS:-21600}"
+DAILY_UPDATE_RETRY_FILE="${DAILY_UPDATE_RETRY_FILE:-${DAILY_UPDATE_STATE_FILE}.retry}"
 DAILY_UPDATE_INITIAL_DELAY_SECONDS="${DAILY_UPDATE_INITIAL_DELAY_SECONDS:-86400}"
 EXISTING_TAIL="${EXISTING_TAIL:-0}"
 ACK_FAILED_REQUESTS="${ACK_FAILED_REQUESTS:-0}"
@@ -141,6 +145,12 @@ validate_update_schedule() {
   case "$DAILY_UPDATE_FAILURE_RETRY_SECONDS" in
     ''|*[!0-9]*)
       echo "cloud-queue-indexer: DAILY_UPDATE_FAILURE_RETRY_SECONDS must be an integer" >&2
+      exit 1
+      ;;
+  esac
+  case "$DAILY_UPDATE_FAILURE_RETRY_MAX_SECONDS" in
+    ''|*[!0-9]*)
+      echo "cloud-queue-indexer: DAILY_UPDATE_FAILURE_RETRY_MAX_SECONDS must be an integer" >&2
       exit 1
       ;;
   esac
@@ -569,10 +579,38 @@ next_daily_update_epoch() {
       if [ "$last_completed" -gt "$now" ]; then
         printf '%s\n' "$now"
       else
-        printf '%s\n' "$(( last_completed + DAILY_UPDATE_INTERVAL_SECONDS ))"
+        due=$(( last_completed + DAILY_UPDATE_INTERVAL_SECONDS ))
+        retry_at="$(daily_update_retry_field 1)"
+        if [ -n "$retry_at" ] && [ "$retry_at" -gt "$due" ] \
+          && [ "$retry_at" -le $(( now + DAILY_UPDATE_FAILURE_RETRY_MAX_SECONDS )) ]; then
+          due="$retry_at"
+        fi
+        printf '%s\n' "$due"
       fi
       ;;
   esac
+}
+
+# daily_update_retry_field N prints field N (1 = retry epoch, 2 = consecutive
+# failures) of the retry file, or nothing when it is missing or invalid.
+daily_update_retry_field() {
+  sed -n '1p' "$DAILY_UPDATE_RETRY_FILE" 2>/dev/null | awk -v n="$1" '
+    $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ { print $n }'
+}
+
+# Records a failed daily pass and prints when it may run again.
+remember_daily_update_failure() {
+  failures=$(( $(daily_update_retry_field 2 || true) + 1 ))
+  delay="$DAILY_UPDATE_FAILURE_RETRY_SECONDS"
+  step=1
+  while [ "$step" -lt "$failures" ] && [ "$delay" -lt "$DAILY_UPDATE_FAILURE_RETRY_MAX_SECONDS" ]; do
+    delay=$(( delay * 2 ))
+    step=$(( step + 1 ))
+  done
+  [ "$delay" -le "$DAILY_UPDATE_FAILURE_RETRY_MAX_SECONDS" ] || delay="$DAILY_UPDATE_FAILURE_RETRY_MAX_SECONDS"
+  retry_at=$(( $(date +%s) + delay ))
+  remember_epoch "$DAILY_UPDATE_RETRY_FILE" "$retry_at $failures" || true
+  printf '%s\n' "$retry_at"
 }
 
 remember_daily_update_completion() {
@@ -582,6 +620,7 @@ remember_daily_update_completion() {
   tmp_state="${DAILY_UPDATE_STATE_FILE}.tmp.$$"
   printf '%s\n' "$completed_at" > "$tmp_state"
   mv "$tmp_state" "$DAILY_UPDATE_STATE_FILE"
+  rm -f "$DAILY_UPDATE_RETRY_FILE"
 }
 
 index_one_backend() {
@@ -774,12 +813,18 @@ index_daily_update_for_backends() {
       echo "cloud-queue-indexer: daily Raw update unavailable; missing RAW_SEARCH_API_URL or RAW_SEARCH_ADMIN_API_KEY" >&2
       failed=1
     else
-      if ! mark_raw_publication_pending; then
+      # Routine until the pass completes: a failed pass that is retried
+      # later must not rebuild the whole generation on every attempt.
+      if ! mark_raw_publication_pending routine; then
         log_queue_event error daily_update_marker_failed "" "" "" "raw" "failed"
         return 1
       fi
       catalog_status=0
       index_catalog_backend raw raw "$raw_jobs" || catalog_status=$?
+      echo "cloud-queue-indexer: daily catalog pass exit=$catalog_status"
+      if [ "$catalog_status" -eq 0 ] || [ "$catalog_status" -eq 75 ]; then
+        mark_raw_publication_pending urgent || failed=1
+      fi
       if [ "$catalog_status" -eq 75 ]; then
         # Every creator was attempted; only per-video gaps with a scheduled
         # retry remain (for example captions not yet published on a new
@@ -789,7 +834,7 @@ index_daily_update_for_backends() {
         failed=1
         log_queue_event error daily_update_backend_failed "" "" "" "raw" "failed"
       fi
-      if ! publish_pending_raw_generation; then
+      if pending_publication_due && ! publish_pending_raw_generation; then
         failed=1
         log_queue_event error daily_update_publication_failed "" "" "" "raw" "failed"
       fi
@@ -1066,7 +1111,7 @@ if [ "$QUEUE_LOOP" = "1" ]; then
           echo "cloud-queue-indexer: next daily update after epoch=$next_daily_update"
         else
           log_queue_event error daily_update_failed "" "" "" "$BACKENDS" "failed"
-          next_daily_update=$(( $(date +%s) + DAILY_UPDATE_FAILURE_RETRY_SECONDS ))
+          next_daily_update="$(remember_daily_update_failure)"
           echo "cloud-queue-indexer: daily update failed; retrying after epoch=$next_daily_update"
         fi
         set_index_activity "" || true
