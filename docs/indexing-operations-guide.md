@@ -169,6 +169,10 @@ scripts/check-raw-search-engine.sh
 RUNS=10 scripts/benchmark-search-cases.sh
 ```
 
+Every publication logs `Built Raw generation N in S s` and `Published required
+Raw sequence N in S s, peak memory M MB`, so its cost needs no live watching:
+`flyctl logs --app ytsearch-indexer-raw-production --no-tail | grep 'in .* s'`.
+
 For a full migration, record discovered/indexed/skipped/retryable/terminal
 counts, durable and published sequences, document/video/channel totals,
 publication duration, peak RSS, disk high-water mark, search errors, and the
