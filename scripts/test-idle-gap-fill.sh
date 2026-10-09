@@ -166,6 +166,76 @@ fi
   echo "successful daily publication must clear its durable marker" >&2
   exit 1
 }
+
+# A failed or blocked pass leaves a routine marker and does not rebuild the
+# generation again while the last publication is recent.
+ROUTINE_PUBLICATION_INTERVAL_SECONDS=21600
+for catalog_exit in 1 69; do
+  : > "$publication_log"
+  rm -f "$RAW_PENDING_PUBLICATION_FILE"
+  remember_epoch "$RAW_LAST_PUBLICATION_FILE" "$(date +%s)"
+  index_catalog_backend() { return "$catalog_exit"; }
+  if index_daily_update_for_backends >/dev/null; then
+    echo "a daily catalog exit $catalog_exit must fail the daily update" >&2
+    exit 1
+  fi
+  [ ! -s "$publication_log" ] || {
+    echo "a failed daily pass (exit $catalog_exit) must not publish before the routine interval" >&2
+    exit 1
+  }
+  grep -q ' routine$' "$RAW_PENDING_PUBLICATION_FILE" || {
+    echo "a failed daily pass must leave a routine publication marker" >&2
+    exit 1
+  }
+done
+# Every creator attempted with only retryable gaps still publishes at once.
+index_catalog_backend() { return 75; }
+if ! index_daily_update_for_backends >/dev/null; then
+  echo "a daily pass with only retryable gaps must complete" >&2
+  exit 1
+fi
+[ "$(wc -l < "$publication_log" | tr -d ' ')" -eq 1 ] || {
+  echo "a completed daily pass must publish at once despite the routine interval" >&2
+  exit 1
+}
+ROUTINE_PUBLICATION_INTERVAL_SECONDS=0
+index_catalog_backend() {
+  printf 'daily-catalog %s\n' "$*" >> "$index_log"
+}
+
+# Failed passes back off 1h, 2h, 4h, then hold at the 6h maximum, and the
+# retry time survives a worker restart.
+DAILY_UPDATE_FAILURE_RETRY_SECONDS=3600
+DAILY_UPDATE_FAILURE_RETRY_MAX_SECONDS=21600
+rm -f "$DAILY_UPDATE_RETRY_FILE"
+for expected_delay in 3600 7200 14400 21600 21600; do
+  before="$(date +%s)"
+  retry_at="$(remember_daily_update_failure)"
+  delay=$(( retry_at - before ))
+  [ "$delay" -ge "$expected_delay" ] && [ "$delay" -le $(( expected_delay + 2 )) ] || {
+    echo "expected a daily retry delay of $expected_delay, got: $delay" >&2
+    exit 1
+  }
+done
+[ "$(daily_update_retry_field 2)" = "5" ] || {
+  echo "expected five consecutive daily failures to be recorded" >&2
+  exit 1
+}
+remember_daily_update_completion 1000
+remember_epoch "$DAILY_UPDATE_RETRY_FILE" "200000 1"
+[ "$(next_daily_update_epoch 190000)" = "200000" ] || {
+  echo "a persisted retry time must delay an overdue daily pass" >&2
+  exit 1
+}
+[ "$(next_daily_update_epoch 100000)" = "87400" ] || {
+  echo "a retry time beyond the maximum backoff must be ignored" >&2
+  exit 1
+}
+remember_daily_update_completion 1000
+[ ! -f "$DAILY_UPDATE_RETRY_FILE" ] || {
+  echo "a completed daily pass must clear its retry state" >&2
+  exit 1
+}
 : > "$index_log"
 : > "$publication_log"
 printf '%s\n' @alpha @bravo > "$gap_handles"

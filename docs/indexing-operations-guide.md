@@ -108,9 +108,17 @@ work.
 Gap repair (new uploads between daily passes) starts at most every six hours
 (`IDLE_GAP_FILL_INTERVAL_SECONDS`) and publishes its changes at most every six
 hours (`ROUTINE_PUBLICATION_INTERVAL_SECONDS`); its writes stay durable until
-then. Approved requests and the daily pass still publish at once. Each
-publication rebuilds the whole generation, about an hour on the worker, so
-publishing after every few creators kept the worker running around the clock.
+then. Approved requests and a daily pass that attempted every creator still
+publish at once. Each publication rebuilds the whole generation, about an hour
+on the worker, so publishing after every few creators kept the worker running
+around the clock.
+
+A daily pass that fails or is blocked by YouTube keeps its writes under a
+routine marker and is retried after one hour, then two, then four, then every
+six (`DAILY_UPDATE_FAILURE_RETRY_SECONDS`,
+`DAILY_UPDATE_FAILURE_RETRY_MAX_SECONDS`). The retry time lives next to
+`DAILY_UPDATE_STATE_FILE` on the volume. Before that, every hourly wake saw
+the last success as overdue and reran the full sweep and rebuild.
 
 The daily refresh runs one `ytsearch index-youtubers` over the whole embedded
 list: one catalog-run ID, creators in sequence, one publication at the end. One
