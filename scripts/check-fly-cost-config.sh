@@ -27,5 +27,7 @@ require_line "$SCRIPT_DIR/fly-run-queue-indexer.sh" 'IDLE_GAP_FILL_MAX_PASSES:-1
 require_line "$SCRIPT_DIR/fly-run-queue-indexers.sh" 'DAILY_UPDATE_ENABLED:-1' "on-demand indexer must run the daily catalog pass"
 require_line "$SCRIPT_DIR/fly-run-queue-indexers.sh" 'DAILY_UPDATE_INITIAL_DELAY_SECONDS:-0' "first due daily pass must run on wake"
 require_line "$ROOT/wrangler.jsonc" '17 \* \* \* \*' "hourly repair wake must remain configured"
+require_line "$SCRIPT_DIR/reconcile-raw-queue-worker.sh" 'ROUTINE_PUBLICATION_INTERVAL_SECONDS: "21600"' "routine gap repair must publish at most every six hours"
+require_line "$SCRIPT_DIR/reconcile-raw-queue-worker.sh" 'IDLE_GAP_FILL_INTERVAL_SECONDS: "21600"' "gap repair sweeps must start at most every six hours"
 
 echo "fly_cost_config=ok raw=shared4x/2.5GiB indexer=shared2x/2GiB/on-demand"

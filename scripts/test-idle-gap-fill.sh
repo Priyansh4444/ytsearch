@@ -14,7 +14,9 @@ DAILY_UPDATE_INITIAL_DELAY_SECONDS=0
 DAILY_UPDATE_INTERVAL_SECONDS=86400
 TRANSCRIPT_CACHE_DIR="$test_dir/data/transcript-cache"
 RAW_PENDING_PUBLICATION_FILE="$test_dir/data/raw-publication.pending"
-export CLOUD_INDEX_QUEUE_LIBRARY_ONLY INDEX_QUEUE_API_BASE_URL IDLE_GAP_FILL_STATE_FILE DAILY_UPDATE_STATE_FILE DAILY_UPDATE_INITIAL_DELAY_SECONDS DAILY_UPDATE_INTERVAL_SECONDS TRANSCRIPT_CACHE_DIR RAW_PENDING_PUBLICATION_FILE
+RAW_LAST_PUBLICATION_FILE="$test_dir/data/raw-publication.last-completed"
+IDLE_GAP_FILL_STARTED_FILE="$test_dir/data/idle-gap-fill.last-started"
+export CLOUD_INDEX_QUEUE_LIBRARY_ONLY INDEX_QUEUE_API_BASE_URL IDLE_GAP_FILL_STATE_FILE DAILY_UPDATE_STATE_FILE DAILY_UPDATE_INITIAL_DELAY_SECONDS DAILY_UPDATE_INTERVAL_SECONDS TRANSCRIPT_CACHE_DIR RAW_PENDING_PUBLICATION_FILE RAW_LAST_PUBLICATION_FILE IDLE_GAP_FILL_STARTED_FILE
 . "$SCRIPT_DIR/cloud-index-queue-entrypoint.sh"
 
 status=75
@@ -226,5 +228,79 @@ fi
   echo "successful mutations before a retryable gap must still publish once" >&2
   exit 1
 }
+
+# Routine gap repair publishes at most once per interval; urgent work does not
+# wait. Each case starts from no marker.
+index_youtuber_for_backends() {
+  printf '%s\n' "$*" >> "$index_log"
+}
+publish_raw_generation() {
+  printf 'publish\n' >> "$publication_log"
+}
+ROUTINE_PUBLICATION_INTERVAL_SECONDS=3600
+rm -f "$RAW_PENDING_PUBLICATION_FILE"
+remember_epoch "$RAW_LAST_PUBLICATION_FILE" "$(date +%s)"
+printf '%s\n' @fresh > "$gap_handles"
+: > "$index_log"
+: > "$publication_log"
+process_idle_gap_batch 4
+[ "$(wc -l < "$index_log" | tr -d ' ')" -eq 1 ]
+[ ! -s "$publication_log" ] || {
+  echo "a routine batch within the interval must not publish" >&2
+  exit 1
+}
+grep -q ' routine$' "$RAW_PENDING_PUBLICATION_FILE" || {
+  echo "a deferred routine batch must keep a routine marker" >&2
+  exit 1
+}
+if pending_publication_due; then
+  echo "a routine marker must wait for the interval" >&2
+  exit 1
+fi
+
+mark_raw_publication_pending urgent
+pending_publication_due || {
+  echo "an urgent marker must publish at once" >&2
+  exit 1
+}
+mark_raw_publication_pending routine
+grep -q ' urgent$' "$RAW_PENDING_PUBLICATION_FILE" || {
+  echo "routine work must not downgrade an urgent marker" >&2
+  exit 1
+}
+
+printf '%s\n' "$(date +%s)" > "$RAW_PENDING_PUBLICATION_FILE"
+pending_publication_due || {
+  echo "a marker from an older worker must count as urgent" >&2
+  exit 1
+}
+
+rm -f "$RAW_PENDING_PUBLICATION_FILE"
+remember_epoch "$RAW_LAST_PUBLICATION_FILE" "$(( $(date +%s) - 7200 ))"
+printf '%s\n' @due > "$gap_handles"
+: > "$publication_log"
+process_idle_gap_batch 4
+[ "$(wc -l < "$publication_log" | tr -d ' ')" -eq 1 ] || {
+  echo "a routine batch past the interval must publish once" >&2
+  exit 1
+}
+[ ! -f "$RAW_PENDING_PUBLICATION_FILE" ]
+last="$(cat "$RAW_LAST_PUBLICATION_FILE")"
+[ $(( $(date +%s) - last )) -lt 60 ] || {
+  echo "a publication must record its completion time" >&2
+  exit 1
+}
+
+rm -f "$IDLE_GAP_FILL_STARTED_FILE"
+interval_elapsed 3600 "$IDLE_GAP_FILL_STARTED_FILE"
+remember_epoch "$IDLE_GAP_FILL_STARTED_FILE" "$(date +%s)"
+if interval_elapsed 3600 "$IDLE_GAP_FILL_STARTED_FILE"; then
+  echo "a gap sweep that just started must not be due again" >&2
+  exit 1
+fi
+interval_elapsed 0 "$IDLE_GAP_FILL_STARTED_FILE"
+remember_epoch "$IDLE_GAP_FILL_STARTED_FILE" "$(( $(date +%s) - 3601 ))"
+interval_elapsed 3600 "$IDLE_GAP_FILL_STARTED_FILE"
+ROUTINE_PUBLICATION_INTERVAL_SECONDS=0
 
 echo "idle gap fill and daily schedule selection passed"

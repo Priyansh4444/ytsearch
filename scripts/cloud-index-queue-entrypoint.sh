@@ -32,6 +32,13 @@ IDLE_GAP_FILL_MAX_PASSES="${IDLE_GAP_FILL_MAX_PASSES:-1}"
 IDLE_GAP_FILL_BATCH_PASSES="${IDLE_GAP_FILL_BATCH_PASSES:-4}"
 IDLE_GAP_FILL_MAX_NEW_VIDEOS="${IDLE_GAP_FILL_MAX_NEW_VIDEOS:-10}"
 RAW_PENDING_PUBLICATION_FILE="${RAW_PENDING_PUBLICATION_FILE:-/data/raw-publication.pending}"
+# A publication rebuilds the whole generation (about an hour on the worker), so
+# routine gap repair runs and publishes at most once per interval; approved
+# requests and the daily pass still publish at once. 0 keeps every batch.
+IDLE_GAP_FILL_INTERVAL_SECONDS="${IDLE_GAP_FILL_INTERVAL_SECONDS:-0}"
+ROUTINE_PUBLICATION_INTERVAL_SECONDS="${ROUTINE_PUBLICATION_INTERVAL_SECONDS:-0}"
+IDLE_GAP_FILL_STARTED_FILE="${IDLE_GAP_FILL_STARTED_FILE:-/data/idle-gap-fill.last-started}"
+RAW_LAST_PUBLICATION_FILE="${RAW_LAST_PUBLICATION_FILE:-/data/raw-publication.last-completed}"
 CREDENTIAL_PREFLIGHT_MARKER="${CREDENTIAL_PREFLIGHT_MARKER:-/run/ytsearch-credential-preflight.ok}"
 
 mkdir -p "$TRANSCRIPT_CACHE_DIR"
@@ -186,6 +193,14 @@ validate_idle_gap_fill() {
       exit 1
       ;;
   esac
+  for interval in "$IDLE_GAP_FILL_INTERVAL_SECONDS" "$ROUTINE_PUBLICATION_INTERVAL_SECONDS"; do
+    case "$interval" in
+      ''|*[!0-9]*)
+        echo "cloud-queue-indexer: gap fill and routine publication intervals must be non-negative integers" >&2
+        exit 1
+        ;;
+    esac
+  done
 }
 
 has_backend() {
@@ -650,11 +665,20 @@ publish_raw_generation() {
   run_indexer ytsearch publish --backend raw --collection "$COLLECTION"
 }
 
+# mark_raw_publication_pending [urgent|routine]: routine work never downgrades
+# an urgent marker, and a marker without a kind (older workers) is urgent.
 mark_raw_publication_pending() {
+  pending_kind="${1:-urgent}"
+  if [ "$pending_kind" = routine ] && [ -f "$RAW_PENDING_PUBLICATION_FILE" ]; then
+    case "$(sed -n '1p' "$RAW_PENDING_PUBLICATION_FILE")" in
+      *" routine") ;;
+      *) pending_kind=urgent ;;
+    esac
+  fi
   state_dir="$(dirname "$RAW_PENDING_PUBLICATION_FILE")"
   mkdir -p "$state_dir" || return 1
   pending_tmp="${RAW_PENDING_PUBLICATION_FILE}.tmp.$$"
-  printf '%s\n' "$(date +%s)" > "$pending_tmp" || return 1
+  printf '%s %s\n' "$(date +%s)" "$pending_kind" > "$pending_tmp" || return 1
   if ! mv "$pending_tmp" "$RAW_PENDING_PUBLICATION_FILE"; then
     rm -f "$pending_tmp"
     return 1
@@ -667,6 +691,34 @@ publish_pending_raw_generation() {
     return 1
   fi
   rm -f "$RAW_PENDING_PUBLICATION_FILE"
+  remember_epoch "$RAW_LAST_PUBLICATION_FILE" "$(date +%s)" || true
+}
+
+# remember_epoch FILE EPOCH writes the timestamp atomically.
+remember_epoch() {
+  mkdir -p "$(dirname "$1")" || return 1
+  printf '%s\n' "$2" > "$1.tmp.$$" && mv "$1.tmp.$$" "$1"
+}
+
+# interval_elapsed SECONDS FILE: true when the interval is 0 or the epoch in
+# FILE is missing, invalid or at least SECONDS old.
+interval_elapsed() {
+  [ "$1" -gt 0 ] || return 0
+  last="$(sed -n '1p' "$2" 2>/dev/null || true)"
+  case "$last" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  [ $(( $(date +%s) - last )) -ge "$1" ]
+}
+
+# True when a marker exists and is urgent, or routine and the interval since
+# the last publication has passed.
+pending_publication_due() {
+  [ -f "$RAW_PENDING_PUBLICATION_FILE" ] || return 1
+  case "$(sed -n '1p' "$RAW_PENDING_PUBLICATION_FILE")" in
+    *" routine") interval_elapsed "$ROUTINE_PUBLICATION_INTERVAL_SECONDS" "$RAW_LAST_PUBLICATION_FILE" ;;
+    *) return 0 ;;
+  esac
 }
 
 index_catalog_backend() {
@@ -759,7 +811,7 @@ process_idle_gap_once() {
   echo "cloud-queue-indexer: idle gap fill handle=$handle"
   log_queue_event info idle_gap_fill_started "" "$handle" "" "$BACKENDS" "running"
   set_index_activity "$handle" || true
-  if ! mark_raw_publication_pending; then
+  if ! mark_raw_publication_pending routine; then
     IDLE_GAP_HAD_WORK=0
     set_index_activity "" || true
     log_queue_event error idle_gap_marker_failed "" "$handle" "" "$BACKENDS" "failed"
@@ -801,7 +853,9 @@ process_idle_gap_batch() {
 
   if [ "$IDLE_GAP_BATCH_PASSES" -gt 0 ]; then
     IDLE_GAP_HAD_WORK=1
-    if ! publish_pending_raw_generation; then
+    if ! pending_publication_due; then
+      log_queue_event info idle_gap_batch_publication_deferred "" "" "" "$BACKENDS" "passes=$IDLE_GAP_BATCH_PASSES"
+    elif ! publish_pending_raw_generation; then
       batch_failed=1
       log_queue_event error idle_gap_batch_publication_failed "" "" "" "$BACKENDS" "failed"
     else
@@ -984,7 +1038,7 @@ if [ "$QUEUE_LOOP" = "1" ]; then
     echo "cloud-queue-indexer: daily update disabled"
   fi
   while :; do
-    if [ -f "$RAW_PENDING_PUBLICATION_FILE" ] \
+    if pending_publication_due \
       && ! publish_pending_raw_generation; then
       echo "cloud-queue-indexer: pending Raw publication failed; retrying before more work" >&2
       log_queue_event error pending_publication_retry_failed "" "" "" "$BACKENDS" "failed"
@@ -1020,7 +1074,11 @@ if [ "$QUEUE_LOOP" = "1" ]; then
     fi
     IDLE_GAP_HAD_WORK=0
     IDLE_GAP_BATCH_PASSES=0
-    if [ "$IDLE_GAP_FILL_ENABLED" = "1" ] && [ "$QUEUE_HAD_WORK" = "0" ] && [ "$DAILY_UPDATE_HAD_WORK" = "0" ] && [ "$idle_gap_passes" -lt "$IDLE_GAP_FILL_MAX_PASSES" ]; then
+    if [ "$IDLE_GAP_FILL_ENABLED" = "1" ] && [ "$QUEUE_HAD_WORK" = "0" ] && [ "$DAILY_UPDATE_HAD_WORK" = "0" ] && [ "$idle_gap_passes" -lt "$IDLE_GAP_FILL_MAX_PASSES" ] \
+      && { [ "$idle_gap_passes" -gt 0 ] || interval_elapsed "$IDLE_GAP_FILL_INTERVAL_SECONDS" "$IDLE_GAP_FILL_STARTED_FILE"; }; then
+      if [ "$idle_gap_passes" -eq 0 ]; then
+        remember_epoch "$IDLE_GAP_FILL_STARTED_FILE" "$(date +%s)" || true
+      fi
       remaining_gap_passes=$((IDLE_GAP_FILL_MAX_PASSES - idle_gap_passes))
       gap_batch_passes="$IDLE_GAP_FILL_BATCH_PASSES"
       if [ "$remaining_gap_passes" -lt "$gap_batch_passes" ]; then
@@ -1037,7 +1095,7 @@ if [ "$QUEUE_LOOP" = "1" ]; then
   done
 fi
 
-if [ -f "$RAW_PENDING_PUBLICATION_FILE" ]; then
+if pending_publication_due; then
   publish_pending_raw_generation
 fi
 process_queue_once
