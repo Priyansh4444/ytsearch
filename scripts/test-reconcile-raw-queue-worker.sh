@@ -66,6 +66,10 @@ jq -e '
   and .env.IDLE_GAP_FILL_ENABLED == "1"
   and ((.env.IDLE_GAP_FILL_MAX_PASSES | tonumber) > 0)
   and .env.IDLE_GAP_FILL_BATCH_PASSES == "4"
+  and .env.IDLE_GAP_FILL_STATE_FILE == "/var/lib/ytsearch/idle-gap-fill.cursor"
+  and .env.IDLE_GAP_FILL_INTERVAL_SECONDS == "21600"
+  and .env.ROUTINE_PUBLICATION_INTERVAL_SECONDS == "21600"
+  and .env.RAW_LAST_PUBLICATION_FILE == "/var/lib/ytsearch/raw-publication.last-completed"
   and .env.RAW_PENDING_PUBLICATION_FILE == "/var/lib/ytsearch/raw-publication.pending"
   and .init.entrypoint == ["/bin/sh"]
   and .init.cmd == ["/usr/local/bin/cloud-index-queue"]

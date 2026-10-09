@@ -105,6 +105,13 @@ deduplicate by handle and backend. The worker serves approved rows before daily
 or gap repair, exits after an idle window, and a failed row never blocks later
 work.
 
+Gap repair (new uploads between daily passes) starts at most every six hours
+(`IDLE_GAP_FILL_INTERVAL_SECONDS`) and publishes its changes at most every six
+hours (`ROUTINE_PUBLICATION_INTERVAL_SECONDS`); its writes stay durable until
+then. Approved requests and the daily pass still publish at once. Each
+publication rebuilds the whole generation, about an hour on the worker, so
+publishing after every few creators kept the worker running around the clock.
+
 The daily refresh runs one `ytsearch index-youtubers` over the whole embedded
 list: one catalog-run ID, creators in sequence, one publication at the end. One
 process per creator cannot satisfy the catalog reconciliation check.
