@@ -11,9 +11,12 @@ path = "src/main.rs"
 [dependencies]
 axum = "0.8"
 dotenvy = "0.15"
+form_urlencoded = "1.2.2"
+hmac = "0.13.0"
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha1 = "0.11.0"
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "signal", "sync"] }
 tower-http = { version = "0.6.11", features = ["compression-gzip", "cors", "trace"] }

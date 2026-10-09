@@ -2,10 +2,12 @@ mod axiom;
 mod channel_images;
 mod index_queue;
 mod rate_limit;
+mod websub;
 
 use axiom::AxiomLogger;
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
@@ -34,6 +36,7 @@ use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     trace::TraceLayer,
 };
+use websub::WebSubConfig;
 use youtube_search_client::{
     ChannelDocument, DEFAULT_COLLECTION, SearchClient, SearchClientConfig, SearchError,
     TextSearchQuery,
@@ -69,6 +72,7 @@ struct AppState {
     index_queue: IndexQueue,
     image_http: reqwest::Client,
     channel_images: ChannelImageCache,
+    websub: Option<WebSubConfig>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -119,6 +123,16 @@ struct IndexQueueParams {
 #[derive(Debug, Deserialize)]
 struct IndexStatusParams {
     handle: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSubVerifyParams {
+    #[serde(rename = "hub.mode")]
+    mode: String,
+    #[serde(rename = "hub.topic")]
+    topic: String,
+    #[serde(rename = "hub.challenge")]
+    challenge: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -362,6 +376,7 @@ async fn main() -> Result<(), ApiError> {
             .build()
             .map_err(|error| ApiError::ChannelImage(format!("client setup failed: {error}")))?,
         channel_images: ChannelImageCache::default(),
+        websub: WebSubConfig::from_env(),
     });
     let app = Router::new()
         .route("/api/health", get(health))
@@ -376,6 +391,12 @@ async fn main() -> Result<(), ApiError> {
             post(create_index_request)
                 .layer(DefaultBodyLimit::max(MAX_INDEX_REQUEST_BODY_BYTES))
                 .get(list_index_requests),
+        )
+        .route(
+            "/api/websub/youtube",
+            get(websub_verify)
+                .post(websub_notify)
+                .layer(DefaultBodyLimit::max(websub::MAX_NOTIFICATION_BYTES)),
         )
         .route("/api/index-status", get(index_status))
         .route("/api/index-activity", post(update_index_activity))
@@ -402,10 +423,13 @@ async fn main() -> Result<(), ApiError> {
         )
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
-        .with_state(state);
+        .with_state(state.clone());
 
     tracing::info!(%bind_addr, "starting ytsearch API");
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+    if let Some(config) = state.websub.clone() {
+        tokio::spawn(renew_websub_subscriptions(state.search.clone(), config));
+    }
     let result = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await;
@@ -758,6 +782,149 @@ async fn create_index_request(
             }),
         ),
     ))
+}
+
+/// Hub verification: confirm a subscription only for an indexed creator, and an
+/// unsubscription only for a creator no longer indexed, so a third party
+/// cannot cancel the subscriptions this API maintains.
+async fn websub_verify(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<WebSubVerifyParams>,
+) -> Result<Response, ApiError> {
+    if state.websub.is_none() || params.challenge.is_empty() || params.challenge.len() > 512 {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+    let Some(channel_id) = websub::channel_id_from_topic(&params.topic) else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let indexed = indexed_channel(&state, channel_id).await?.is_some();
+    let confirmed = match params.mode.as_str() {
+        "subscribe" => indexed,
+        "unsubscribe" => !indexed,
+        _ => false,
+    };
+    if !confirmed {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+    Ok(cache_response(
+        CACHE_NO_STORE,
+        (
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            params.challenge,
+        ),
+    ))
+}
+
+/// A verified upload from an indexed creator queues one update request for
+/// that creator; the queue collapses repeats until the worker runs it. Every
+/// other push is acknowledged and ignored, as WebSub requires.
+async fn websub_notify(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    let Some(config) = &state.websub else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let accepted = || cache_response(CACHE_NO_STORE, StatusCode::ACCEPTED);
+    let signature = header_string(&headers, "x-hub-signature");
+    if !websub::signature_valid(&config.secret, &body, signature.as_deref()) {
+        tracing::warn!("ignored WebSub notification with an invalid signature");
+        return Ok(accepted());
+    }
+    let Some(notification) = std::str::from_utf8(&body)
+        .ok()
+        .and_then(websub::parse_notification)
+    else {
+        return Ok(accepted());
+    };
+    let Some(channel) = indexed_channel(&state, &notification.channel_id).await? else {
+        return Ok(accepted());
+    };
+    let handle = normalize_handle(&channel.handle);
+    let request = state
+        .index_queue
+        .enqueue(IndexQueueItem {
+            id: format!("upload-{}", new_index_request_id("raw", &handle)),
+            handle,
+            note: Some(format!("YouTube upload {}", notification.video_id)),
+            requested_at: epoch_seconds(),
+            source_backend: "raw".to_string(),
+            target_backend: Some("raw".to_string()),
+            status: "queued".to_string(),
+        })
+        .await?;
+    tracing::info!(
+        request_id = %request.id,
+        handle = %request.handle,
+        video_id = %notification.video_id,
+        "queued creator update from a YouTube upload notification"
+    );
+    Ok(accepted())
+}
+
+async fn indexed_channel(
+    state: &AppState,
+    channel_id: &str,
+) -> Result<Option<ChannelDocument>, ApiError> {
+    Ok(state
+        .search
+        .list_youtubers()
+        .await?
+        .into_iter()
+        .find(|channel| channel.channel_id == channel_id))
+}
+
+/// Renews every indexed channel's subscription once a day, sooner after a
+/// failed channel listing.
+async fn renew_websub_subscriptions(search: SearchClient, config: WebSubConfig) {
+    let http = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(http) => http,
+        Err(error) => {
+            tracing::error!(%error, "WebSub renewal disabled: client setup failed");
+            return;
+        }
+    };
+    loop {
+        let wait = match search.list_youtubers().await {
+            Ok(channels) => {
+                let (mut renewed, mut failed) = (0_usize, 0_usize);
+                for channel in channels
+                    .iter()
+                    .filter(|channel| is_valid_channel_id(&channel.channel_id))
+                {
+                    let response = http
+                        .post(&config.hub_url)
+                        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                        .body(websub::subscribe_form(&config, &channel.channel_id))
+                        .send()
+                        .await;
+                    match response {
+                        Ok(response) if response.status().is_success() => renewed += 1,
+                        Ok(response) => {
+                            failed += 1;
+                            tracing::warn!(channel_id = %channel.channel_id, status = %response.status(), "WebSub subscription refused");
+                        }
+                        Err(error) => {
+                            failed += 1;
+                            tracing::warn!(channel_id = %channel.channel_id, %error, "WebSub subscription failed");
+                        }
+                    }
+                }
+                tracing::info!(renewed, failed, "renewed WebSub subscriptions");
+                websub::RENEW_INTERVAL
+            }
+            Err(error) => {
+                tracing::warn!(%error, "WebSub renewal could not list channels");
+                Duration::from_secs(60 * 60)
+            }
+        };
+        tokio::time::sleep(wait).await;
+    }
 }
 
 async fn list_index_requests(

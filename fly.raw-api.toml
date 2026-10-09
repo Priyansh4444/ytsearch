@@ -17,6 +17,8 @@ primary_region = 'sjc'
   YTSEARCH_ENGAGEMENT_SORTS = 'true'
   YTSEARCH_BACKEND_LABEL = 'raw'
   YTSEARCH_PRESERVE_BACKEND_RELEVANCE_ORDER = 'true'
+  # YouTube upload notifications; inert until YTSEARCH_WEBSUB_SECRET is set.
+  YTSEARCH_WEBSUB_CALLBACK_URL = 'https://search.pronsh.dev/api/websub/youtube'
   RUST_LOG = 'youtube_api=info,tower_http=info'
   LOG_FORMAT = 'json'
 

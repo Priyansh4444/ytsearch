@@ -303,6 +303,43 @@ process_queue_once > "$test_dir/coalesced.out" 2> "$test_dir/coalesced.err"
   exit 1
 }
 
+# An upload notification is acked once indexed and leaves a routine marker
+# instead of rebuilding the generation for every upload.
+: > "$publication_log"
+rm -f "$RAW_PENDING_PUBLICATION_FILE"
+pull_queue_tsv() { printf 'upload-1-raw-example\t@example\tworker\traw\n'; }
+process_queue_once > "$test_dir/upload.out" 2> "$test_dir/upload.err"
+grep -F "acked request=upload-1-raw-example" "$test_dir/upload.out" >/dev/null || {
+  echo "an indexed upload notification must be acknowledged at once" >&2
+  exit 1
+}
+[ ! -s "$publication_log" ] || {
+  echo "an upload notification must not publish a generation by itself" >&2
+  exit 1
+}
+grep -q ' routine$' "$RAW_PENDING_PUBLICATION_FILE" || {
+  echo "an upload notification must leave a routine publication marker" >&2
+  exit 1
+}
+# Alongside an approved request, both share that request's publication.
+pull_queue_tsv() {
+  printf 'upload-2-raw-example\t@example\tworker\traw\n'
+  printf 'request-3\t@example-two\tworker\traw\n'
+}
+process_queue_once > "$test_dir/upload-mixed.out" 2> "$test_dir/upload-mixed.err"
+[ "$(wc -l < "$publication_log" | tr -d ' ')" -eq 1 ] || {
+  echo "an approved request must still publish at once beside an upload" >&2
+  exit 1
+}
+[ "$(grep -c 'acked request=' "$test_dir/upload-mixed.out")" -eq 2 ] || {
+  echo "both the upload and the approved request must be acknowledged" >&2
+  exit 1
+}
+[ ! -f "$RAW_PENDING_PUBLICATION_FILE" ] || {
+  echo "the shared publication must clear the marker" >&2
+  exit 1
+}
+
 # A daily catalog pass whose only failures are retryable per-video gaps
 # (exit 75) completes and publishes; any other catalog failure fails it.
 daily_list="$test_dir/daily-creators.txt"
