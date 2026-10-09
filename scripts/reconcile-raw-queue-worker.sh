@@ -347,10 +347,12 @@ if [ "$http_status" != "200" ]; then
   echo "Machines API update failed: status=$http_status error=$error_message" >&2
   exit 1
 fi
+# A new image is pulled during the update; the 2 GB indexer image takes longer
+# than 30 s, and a timeout here aborted a deploy that had already applied.
 flyctl machine wait \
   --app "$APP_NAME" \
   --state settled \
-  --wait-timeout 30s \
+  --wait-timeout 300s \
   "$machine_id" >/dev/null
 
 if [ "$START_AFTER_RECONCILIATION" = "1" ]; then
