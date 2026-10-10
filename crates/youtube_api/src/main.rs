@@ -838,7 +838,15 @@ async fn websub_notify(
     else {
         return Ok(accepted());
     };
+    let now = epoch_seconds();
+    if config
+        .recent_videos
+        .seen_recently(&notification.video_id, now)
+    {
+        return Ok(accepted());
+    }
     let Some(channel) = indexed_channel(&state, &notification.channel_id).await? else {
+        config.recent_videos.remember(&notification.video_id, now);
         return Ok(accepted());
     };
     let handle = normalize_handle(&channel.handle);
@@ -848,12 +856,14 @@ async fn websub_notify(
             id: format!("upload-{}", new_index_request_id("raw", &handle)),
             handle,
             note: Some(format!("YouTube upload {}", notification.video_id)),
-            requested_at: epoch_seconds(),
+            requested_at: now,
             source_backend: "raw".to_string(),
             target_backend: Some("raw".to_string()),
             status: "queued".to_string(),
         })
         .await?;
+    // Only after the request is stored: a failed enqueue makes the hub retry.
+    config.recent_videos.remember(&notification.video_id, now);
     tracing::info!(
         request_id = %request.id,
         handle = %request.handle,
