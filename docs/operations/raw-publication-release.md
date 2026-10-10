@@ -14,7 +14,7 @@ jq '.resources | {raw_reader_canary, raw_publication_builder}' \
   config/fly-production-resources.json
 ```
 
-Both stay stopped with restart policy `no` and no services. The reader also
+Both stay stopped with restart policy `no` and no services. Their volumes are 10 GB (2026-10-10; production state was 6.1 GB). Grow one with `flyctl volumes extend` if a trial needs more; volumes cannot shrink. The reader also
 has no checks, skips DNS, and has exactly 2 shared CPUs and 2 GB. The builder is
 an inert `sleep infinity` Machine: one performance CPU and 4 GB for a full schema
 migration, two shared CPUs and 2 GB for the default incremental profile. The

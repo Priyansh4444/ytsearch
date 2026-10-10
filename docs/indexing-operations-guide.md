@@ -102,13 +102,16 @@ scripts/check-queue-indexers.sh
 
 Approval queues the row and sends a wake; rejection keeps an audit row; requests
 deduplicate by handle and backend. The worker serves approved rows before daily
-or gap repair, exits after an idle window, and a failed row never blocks later
-work.
+or gap repair, exits after one idle minute (`IDLE_EXIT_AFTER_SECONDS`), and a
+failed row never blocks later work. A wake that arrives while it is stopping
+is retried until it can start the Machine.
 
-Gap repair (new uploads between daily passes) starts at most every six hours
-(`IDLE_GAP_FILL_INTERVAL_SECONDS`) and publishes its changes at most every six
-hours (`ROUTINE_PUBLICATION_INTERVAL_SECONDS`); its writes stay durable until
-then. Approved requests and a daily pass that attempted every creator still
+Upload notifications (below) bring new uploads, so the sweeps are backstops:
+gap repair starts at most once a day (`IDLE_GAP_FILL_INTERVAL_SECONDS`), the
+full catalog pass runs every three days (`DAILY_UPDATE_INTERVAL_SECONDS`), and
+routine work publishes at most every twelve hours
+(`ROUTINE_PUBLICATION_INTERVAL_SECONDS`); its writes stay durable until then.
+Approved requests and a catalog pass that attempted every creator still
 publish at once. Each publication rebuilds the whole generation, about an hour
 on the worker, so publishing after every few creators kept the worker running
 around the clock.
@@ -134,9 +137,9 @@ one `upload-` request for that creator; repeats collapse into it until the
 worker runs. The next hourly wake indexes the creator, which also gives
 YouTube time to publish captions. The request is acked once its videos are
 written, and the generation is rebuilt with the next routine publication (at
-most every six hours) rather than once per upload. Uploads whose captions are
-not ready yet stay queued with the transcript cooldown. The daily sweep remains
-the backstop for missed pushes.
+most every twelve hours) rather than once per upload. Uploads whose captions are
+not ready yet stay queued with the transcript cooldown. Daily gap repair and
+the three-day catalog pass remain the backstop for missed pushes.
 
 ## Fetch failures
 
