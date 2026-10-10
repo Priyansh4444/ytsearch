@@ -110,7 +110,7 @@ idle_exit_after_seconds="${IDLE_EXIT_AFTER_SECONDS:-0}"
 if [ "$ON_DEMAND" = "1" ]; then
   indexer_cpu_kind="${INDEXER_CPU_KIND:-shared}"
   indexer_cpus="${INDEXER_CPUS:-2}"
-  idle_exit_after_seconds="${IDLE_EXIT_AFTER_SECONDS:-300}"
+  idle_exit_after_seconds="${IDLE_EXIT_AFTER_SECONDS:-60}"
 fi
 
 cookie_secret_args=""

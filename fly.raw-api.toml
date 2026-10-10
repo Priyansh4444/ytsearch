@@ -36,7 +36,8 @@ primary_region = 'sjc'
   initial_size = '1gb'
 
 [[vm]]
-  memory = '512mb'
+  # Peak use was 72 MB over the week of 2026-10-03.
+  memory = '256mb'
   cpu_kind = 'shared'
   cpus = 1
 
