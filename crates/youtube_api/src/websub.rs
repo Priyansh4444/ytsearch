@@ -8,7 +8,11 @@
 
 use hmac::{Hmac, KeyInit, Mac};
 use sha1::Sha1;
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 pub(crate) const DEFAULT_HUB_URL: &str = "https://pubsubhubbub.appspot.com/subscribe";
 const TOPIC_PREFIX: &str = "https://www.youtube.com/xml/feeds/videos.xml?channel_id=";
@@ -17,12 +21,17 @@ const TOPIC_PREFIX: &str = "https://www.youtube.com/xml/feeds/videos.xml?channel
 const LEASE_SECONDS: u64 = 10 * 24 * 60 * 60;
 pub(crate) const RENEW_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const MAX_NOTIFICATION_BYTES: usize = 64 * 1024;
+/// YouTube pushes a video again on every edit, often several times in the
+/// first hour. One update per video in this window is enough: the creator's
+/// queued request already covers it, and a finished one indexed it.
+const REPEAT_PUSH_WINDOW_SECONDS: u64 = 6 * 60 * 60;
 
 #[derive(Clone)]
 pub(crate) struct WebSubConfig {
     pub(crate) secret: String,
     pub(crate) callback_url: String,
     pub(crate) hub_url: String,
+    pub(crate) recent_videos: RecentVideos,
 }
 
 impl WebSubConfig {
@@ -37,7 +46,34 @@ impl WebSubConfig {
             secret,
             callback_url,
             hub_url,
+            recent_videos: RecentVideos::default(),
         })
+    }
+}
+
+/// Videos queued within the repeat window, so edits do not requeue them.
+#[derive(Clone, Default)]
+pub(crate) struct RecentVideos(Arc<Mutex<HashMap<String, u64>>>);
+
+impl RecentVideos {
+    pub(crate) fn seen_recently(&self, video_id: &str, now: u64) -> bool {
+        let videos = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        videos
+            .get(video_id)
+            .is_some_and(|queued_at| now.saturating_sub(*queued_at) < REPEAT_PUSH_WINDOW_SECONDS)
+    }
+
+    /// Records a handled push and forgets entries older than the window.
+    pub(crate) fn remember(&self, video_id: &str, now: u64) {
+        let mut videos = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        videos.retain(|_, queued_at| now.saturating_sub(*queued_at) < REPEAT_PUSH_WINDOW_SECONDS);
+        videos.insert(video_id.to_string(), now);
     }
 }
 
@@ -207,6 +243,22 @@ mod tests {
     }
 
     #[test]
+    fn repeat_pushes_are_suppressed_only_within_the_window() {
+        let recent = RecentVideos::default();
+        assert!(!recent.seen_recently("dQw4w9WgXcQ", 1_000));
+        recent.remember("dQw4w9WgXcQ", 1_000);
+        assert!(recent.seen_recently("dQw4w9WgXcQ", 1_000 + REPEAT_PUSH_WINDOW_SECONDS - 1));
+        assert!(!recent.seen_recently("dQw4w9WgXcQ", 1_000 + REPEAT_PUSH_WINDOW_SECONDS));
+        assert!(!recent.seen_recently("otherVideo1", 1_000));
+        recent.remember("otherVideo1", 1_000 + REPEAT_PUSH_WINDOW_SECONDS);
+        assert_eq!(
+            recent.0.lock().unwrap().len(),
+            1,
+            "expired entries are pruned"
+        );
+    }
+
+    #[test]
     fn topics_round_trip_and_reject_other_feeds() {
         assert_eq!(
             channel_id_from_topic(&topic_for_channel(CHANNEL)),
@@ -228,6 +280,7 @@ mod tests {
             secret: "s&cret".to_string(),
             callback_url: "https://search.example/api/websub/youtube".to_string(),
             hub_url: DEFAULT_HUB_URL.to_string(),
+            recent_videos: RecentVideos::default(),
         };
         let form = subscribe_form(&config, CHANNEL);
         let pairs: Vec<(String, String)> = form_urlencoded::parse(form.as_bytes())
