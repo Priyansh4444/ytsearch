@@ -542,11 +542,13 @@ impl RawSearchEngine {
 }
 
 /// Longest an activation waits for warm-up. It must leave headroom under the
-/// publisher's admin request timeout, which activation shares.
+/// publisher's activation request timeout for opening and swapping the
+/// generation, which take about 5 s on production and grow with the corpus.
 const ACTIVATION_WARM_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 const _: () = assert!(
-    ACTIVATION_WARM_BUDGET.as_secs() + 5 <= youtube_index_store::ADMIN_REQUEST_TIMEOUT.as_secs(),
-    "activation warm-up must finish well inside the admin request timeout"
+    ACTIVATION_WARM_BUDGET.as_secs() * 2
+        <= youtube_index_store::ACTIVATION_REQUEST_TIMEOUT.as_secs(),
+    "activation warm-up must finish well inside the activation request timeout"
 );
 
 /// An engine whose scanned files were read ahead and whose scan partitions

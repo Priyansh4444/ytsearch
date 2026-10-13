@@ -1,7 +1,7 @@
 use crate::{
-    ADMIN_REQUEST_TIMEOUT, BackendReadiness, ChannelDeletionScope, ChannelDocument, ChunkStats,
-    IndexOperation, IndexStoreError, RawGenerationManifest, RawGenerationUpload, RawPublicationJob,
-    VideoIdPage, VideoReplacement,
+    ACTIVATION_REQUEST_TIMEOUT, ADMIN_REQUEST_TIMEOUT, BackendReadiness, ChannelDeletionScope,
+    ChannelDocument, ChunkStats, IndexOperation, IndexStoreError, RawGenerationManifest,
+    RawGenerationUpload, RawPublicationJob, VideoIdPage, VideoReplacement,
 };
 use reqwest::{Client, RequestBuilder, StatusCode, header};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -286,7 +286,8 @@ impl RawIndexAdminClient {
         validate_publication_job_id(job_id)?;
         self.execute_job(
             self.client
-                .post(self.endpoint(&format!("/admin/publications/{job_id}/activate"))),
+                .post(self.endpoint(&format!("/admin/publications/{job_id}/activate")))
+                .timeout(ACTIVATION_REQUEST_TIMEOUT),
         )
         .await
     }
