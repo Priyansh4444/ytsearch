@@ -55,9 +55,11 @@ saw; reader figures are from Fly metrics.
 - The rare 502s are the API's `SearchBackend` error, seen at 10 req/s as well as
   at 119, so they are not caused by load. Their cause is not yet known.
 
-Order of changes when traffic grows: raise the concurrency limit toward 4
-(the 2.5 GiB budget has room and half the cores sat idle at 119 req/s); then
-move the reader to performance vCPUs, which removes the baseline quota.
+Order of changes when traffic grows: move the reader to performance vCPUs,
+which removes the baseline quota; then raise the concurrency limit toward 4.
+The limit stays at 2 until then: 4 adds only about 14% throughput (123 vs 108
+req/s locally), takes CPU from publication activation, which already uses most
+of its timeout, and changing it restarts the reader.
 
 ## Corpus growth: the real limits
 

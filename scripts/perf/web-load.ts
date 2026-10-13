@@ -23,6 +23,7 @@ type Sample = {
 const options = parseOptions(process.argv.slice(2));
 const queries = loadQueries(options.queries);
 const samples: Sample[] = [];
+const failures: { status: number; path: string; error: unknown }[] = [];
 const started = performance.now();
 const deadline = started + options.seconds * 1000;
 let aborted = "";
@@ -79,8 +80,9 @@ async function search(user: number): Promise<void> {
   let status = 0;
   let edgeCached = false;
   let serverMs: number | undefined;
+  const path = searchPath();
   try {
-    const response = await fetch(`${options.base}${searchPath()}`, {
+    const response = await fetch(`${options.base}${path}`, {
       headers,
       signal: AbortSignal.timeout(30_000),
     });
@@ -88,8 +90,10 @@ async function search(user: number): Promise<void> {
     const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
     edgeCached = body.edge_cached === true;
     if (typeof body.time_to_first_result_ms === "number") serverMs = body.time_to_first_result_ms;
-  } catch {
+    if (status >= 500 && failures.length < 20) failures.push({ status, path, error: body.error });
+  } catch (error) {
     status = 0;
+    if (failures.length < 20) failures.push({ status, path, error: String(error) });
   }
   samples.push({ at: at - started, ms: performance.now() - at, status, edgeCached, serverMs });
 }
@@ -155,6 +159,7 @@ console.log(
       requestsPerSecond: Number((samples.length / elapsed).toFixed(2)),
       statuses,
       aborted: aborted || null,
+      failures,
       ok: latency(ok),
       edgeCached: latency(ok.filter((sample) => sample.edgeCached)),
       uncached: latency(ok.filter((sample) => !sample.edgeCached)),
