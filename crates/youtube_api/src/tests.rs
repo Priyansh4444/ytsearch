@@ -624,3 +624,32 @@ fn search_response_keeps_an_empty_top_level_hits_array_for_older_frontends() {
     assert_eq!(value["hits"], json!([]));
     assert_eq!(value["videos"][0]["hits"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn rate_limit_trusts_the_visitor_ip_only_from_the_worker() {
+    let headers = |pairs: &[(&'static str, &'static str)]| {
+        let mut map = HeaderMap::new();
+        for (name, value) in pairs {
+            map.insert(*name, HeaderValue::from_static(value));
+        }
+        map
+    };
+    let worker = headers(&[
+        ("x-ytsearch-proxy-key", "secret"),
+        ("x-ytsearch-client-ip", "203.0.113.7"),
+        ("fly-client-ip", "104.16.0.1"),
+    ]);
+    assert_eq!(client_key(&worker, Some("secret")), "203.0.113.7");
+    // Without the configured key the header is anyone's to forge.
+    assert_eq!(client_key(&worker, None), "104.16.0.1");
+    assert_eq!(client_key(&worker, Some("other")), "104.16.0.1");
+
+    let forged = headers(&[
+        ("cf-connecting-ip", "198.18.0.1"),
+        ("x-ytsearch-client-ip", "198.18.0.2"),
+        ("x-forwarded-for", "198.18.0.3"),
+        ("fly-client-ip", "192.0.2.10"),
+    ]);
+    assert_eq!(client_key(&forged, Some("secret")), "192.0.2.10");
+    assert_eq!(client_key(&HeaderMap::new(), Some("secret")), "unknown");
+}

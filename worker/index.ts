@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import { shouldWakeIndexer } from "./wake-policy";
 import { upstreamApiBase } from "./upstream-route";
 import { requestOriginAllowed } from "./origin-policy";
+import { stampClientIp } from "./client-ip";
 import { evaluateSearchSchedule, type ScheduleEvaluation } from "../shared/service-schedule";
 import {
   type FlyMachine,
@@ -99,6 +100,11 @@ function apiResponseEffect(request: Request, url: URL, env: Env): Effect.Effect<
       upstreamApiBase(url.pathname, env.API_BASE_URL, env.INDEX_QUEUE_API_BASE_URL),
     );
     const upstreamRequest = new Request(upstreamUrl, request);
+    stampClientIp(
+      upstreamRequest,
+      request,
+      (env as Env & { API_PROXY_KEY?: string }).API_PROXY_KEY,
+    );
     const dynamicSearch = request.method === "GET" && url.pathname === "/api/search";
     const upstreamResponse = yield* fromPromise(() =>
       fetch(upstreamRequest, dynamicSearch ? { cache: "no-store" } : undefined),

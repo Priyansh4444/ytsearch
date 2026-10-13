@@ -79,6 +79,21 @@ flyctl secrets set --app ytsearch-api-raw-production \
   YTSEARCH_WEBSUB_SECRET="$(openssl rand -hex 32)"
 ```
 
+The per-visitor search limit needs a key shared only with the Worker, so that
+direct callers of the Fly hostname cannot pick their own rate-limit identity.
+Put it on the Worker and deploy the Worker first; until the API has it, the API
+ignores the Worker's headers. An API with the key and a Worker without it would
+rate-limit all website visitors as a few Cloudflare addresses:
+
+```bash
+key="$(openssl rand -hex 32)"
+printf '%s' "$key" | bunx wrangler secret put API_PROXY_KEY
+bun run deploy:frontend
+printf 'YTSEARCH_API_PROXY_KEY=%s\n' "$key" |
+  flyctl secrets import --app ytsearch-api-raw-production
+unset key
+```
+
 ## 3. Indexer
 
 Stage the Raw URL/admin key plus optional YouTube and cookie inputs, then create
