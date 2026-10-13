@@ -46,10 +46,17 @@ fi
 
 apl="['${AXIOM_QUERY_DATASET}'] | ${time_filter} | where event == \"search_query\" | where isnotnull(query) and query != \"\" | project _time, query | sort by _time asc | limit ${limit}"
 
-response="$(mktemp)"
-trap 'rm -f "$response"' EXIT
+response_directory="$(mktemp -d)"
+response="$response_directory/response.json"
+parsed_response="$response_directory/queries.txt"
+trap 'rm -rf "$response_directory"' EXIT
 trap 'exit 130' HUP INT TERM
 axiom_query_to_file "$apl" "$start_time" "$response"
+
+# Finish parsing before any log write. A pipeline ending in wc would hide jq
+# failures and could append rows emitted before a malformed response suffix.
+axiom_query_log_lines "$response" > "$parsed_response"
+count="$(wc -l < "$parsed_response" | tr -d ' ')"
 
 mkdir -p "$(dirname "$log_file")"
 if [ ! -f "$log_file" ]; then
@@ -61,7 +68,7 @@ fi
 
 # Tabular format is column-oriented. Also accept legacy matches[] if present.
 # Output lines: [time]: query
-count="$(axiom_query_log_lines "$response" | tee -a "$log_file" | wc -l | tr -d ' ')"
+cat "$parsed_response" >> "$log_file"
 
 if [ "$count" -eq 0 ]; then
   if [ -n "$last_seen" ]; then

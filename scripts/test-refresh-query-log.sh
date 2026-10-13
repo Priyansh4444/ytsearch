@@ -5,7 +5,11 @@ set -eu
 # time window selection. Does not call Axiom.
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+trap 'exit 130' HUP INT TERM
+# The query helper loads cwd-local env files. Never read the developer's env.
+cd "$tmpdir"
 . "$SCRIPT_DIR/axiom-query-lib.sh"
 failed=0
 
@@ -20,10 +24,6 @@ assert_eq() {
     failed=$((failed + 1))
   fi
 }
-
-tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
-trap 'exit 130' HUP INT TERM
 
 # --- tabular column-oriented response (current Axiom format) ---
 cat >"$tmpdir/tabular.json" <<'EOF'
@@ -123,11 +123,8 @@ sorted_wrong="$(printf '%s\n' "2026-07-28T15:30:00.5Z" "2026-07-28T15:30:00Z" | 
 assert_eq "lexicographic sort is unsafe for mixed precision" "2026-07-28T15:30:00Z" "$sorted_wrong"
 
 # bare-only log has no last_seen
-last_seen_bare="$(axiom_last_logged_time "$ROOT_DIR/query-log.txt" 2>/dev/null || true)"
-# Only assert emptiness when the real log is still legacy-only.
-if ! grep -qE '^(\[[0-9]{4}-[0-9]{2}-[0-9]{2}T|[0-9]{4}-[0-9]{2}-[0-9]{2}T)' "$ROOT_DIR/query-log.txt" 2>/dev/null; then
-  assert_eq "legacy query-log has no last_seen" "" "$last_seen_bare"
-fi
+printf 'react\nlinux\n' > "$tmpdir/bare.txt"
+assert_eq "legacy query-log has no last_seen" "" "$(axiom_last_logged_time "$tmpdir/bare.txt")"
 
 # --- request body includes startTime/endTime ---
 body_incremental="$(jq -n \
@@ -147,6 +144,83 @@ assert_eq "initial body startTime" "now-365d" "$(printf '%s' "$body_initial" | j
 report="$(axiom_print_first_table "$tmpdir/tabular.json")"
 assert_eq "report header" "_time	query" "$(printf '%s\n' "$report" | sed -n '1p')"
 assert_eq "report data rows" "3" "$(printf '%s\n' "$report" | sed -n '2,$p' | wc -l | tr -d ' ')"
+
+# Execute the actual command with no inherited credentials and a fake transport.
+mkdir "$tmpdir/bin"
+cat > "$tmpdir/bin/curl" <<'EOF'
+#!/usr/bin/env sh
+set -eu
+output=""
+authorization=""
+url=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -sS) shift ;;
+    --max-time|-w) shift 2 ;;
+    -o) output="$2"; shift 2 ;;
+    -H)
+      case "$2" in Authorization:*) authorization="$2" ;; esac
+      shift 2
+      ;;
+    -d) printf '%s' "$2" > "$FAKE_REQUEST_BODY"; shift 2 ;;
+    https://*) url="$1"; shift ;;
+    *) echo "unexpected curl argument" >&2; exit 91 ;;
+  esac
+done
+[ "$authorization" = 'Authorization: Bearer fixture-query-token' ]
+[ "$url" = 'https://axiom.invalid/v1/datasets/_apl?format=tabular' ]
+[ -n "$output" ]
+cp "$FAKE_RESPONSE_BODY" "$output"
+printf '%s' "$FAKE_HTTP_STATUS"
+EOF
+chmod +x "$tmpdir/bin/curl"
+
+run_refresh() {
+  env -i PATH="$tmpdir/bin:/usr/bin:/bin" \
+    AXIOM_API_QUERY=fixture-query-token AXIOM_API_KEY=fixture-ingest-token \
+    AXIOM_DATASET=fixture AXIOM_URL=https://axiom.invalid \
+    QUERY_LOG_FILE="$tmpdir/command-log.txt" \
+    FAKE_REQUEST_BODY="$tmpdir/request.json" \
+    FAKE_RESPONSE_BODY="$1" FAKE_HTTP_STATUS="$2" \
+    "$SCRIPT_DIR/refresh-query-log"
+}
+
+printf '[2026-07-20T00:00:00Z]: existing\n' > "$tmpdir/command-log.txt"
+cp "$tmpdir/command-log.txt" "$tmpdir/prior-log.txt"
+# jq can emit valid rows before encountering a malformed trailing JSON value.
+# Neither those rows nor a success message may survive a failed complete parse.
+cat "$tmpdir/tabular.json" > "$tmpdir/malformed.json"
+printf '\n{broken json\n' >> "$tmpdir/malformed.json"
+if run_refresh "$tmpdir/malformed.json" 200 > "$tmpdir/command-output" 2> "$tmpdir/command-error"; then
+  echo 'FAIL executable accepted HTTP 200 malformed JSON' >&2
+  failed=$((failed + 1))
+fi
+if ! cmp -s "$tmpdir/prior-log.txt" "$tmpdir/command-log.txt"; then
+  echo 'FAIL malformed JSON changed the existing query log' >&2
+  failed=$((failed + 1))
+fi
+
+printf '{"message":"fixture denied"}\n' > "$tmpdir/http-error.json"
+cp "$tmpdir/prior-log.txt" "$tmpdir/command-log.txt"
+if run_refresh "$tmpdir/http-error.json" 403 > "$tmpdir/command-output" 2> "$tmpdir/command-error"; then
+  echo 'FAIL executable accepted HTTP 403' >&2
+  failed=$((failed + 1))
+fi
+if ! cmp -s "$tmpdir/prior-log.txt" "$tmpdir/command-log.txt"; then
+  echo 'FAIL HTTP error changed the existing query log' >&2
+  failed=$((failed + 1))
+fi
+
+cp "$tmpdir/prior-log.txt" "$tmpdir/command-log.txt"
+run_refresh "$tmpdir/tabular.json" 200 > "$tmpdir/command-output"
+cat "$tmpdir/prior-log.txt" > "$tmpdir/expected-log.txt"
+printf '%s\n' "$parsed" >> "$tmpdir/expected-log.txt"
+if ! cmp -s "$tmpdir/expected-log.txt" "$tmpdir/command-log.txt"; then
+  echo 'FAIL executable did not append the valid response exactly' >&2
+  failed=$((failed + 1))
+fi
+assert_eq "executable incremental startTime" "2026-07-20T00:00:00Z" "$(jq -r .startTime "$tmpdir/request.json")"
+assert_eq "executable endTime" "now" "$(jq -r .endTime "$tmpdir/request.json")"
 
 if [ "$failed" -ne 0 ]; then
   echo "$failed assertion(s) failed" >&2
