@@ -61,10 +61,16 @@ pub struct BackendReadiness {
 
 pub const RAW_PUBLICATION_API_VERSION: u16 = 1;
 
-/// Timeout the publisher client applies to every non-transfer admin request,
-/// including activation. The reader's activation work must finish well
-/// inside it.
+/// Timeout the publisher client applies to every non-transfer admin request
+/// except activation.
 pub const ADMIN_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Timeout for the activation request. The reader opens the generation, warms
+/// it for up to its warm budget (20 s) and swaps it in; production took about
+/// 25 s for a 2 GB generation (2026-10-10 and 2026-10-12), which left 5 s under
+/// the admin timeout. A client that gives up mid-activation leaves the job
+/// unactivated until the next publication retry.
+pub const ACTIVATION_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RawGenerationCompatibility {
