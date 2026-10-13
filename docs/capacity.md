@@ -52,8 +52,8 @@ saw; reader figures are from Fly metrics.
   allows, and server time matched client time: requests waited in the reader's
   queue, not on CPU. The burst balance fell about 4% a minute, so that rate
   holds for about 20 minutes before the 0.25-core baseline applies.
-- The rare 502s are the API's `SearchBackend` error, seen at 10 req/s as well as
-  at 119, so they are not caused by load. Their cause is not yet known.
+- The rare 502s were not load: every one was a logged query with an unclosed
+  quote (`"cold start problem`), which Raw rejects; #102 closes the quote.
 
 Order of changes when traffic grows: move the reader to performance vCPUs,
 which removes the baseline quota; then raise the concurrency limit toward 4.
