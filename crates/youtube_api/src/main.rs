@@ -590,7 +590,11 @@ async fn search_handler(
     } else {
         (page, per_page.saturating_add(1))
     };
-    let backend_query = if low_signal_query { "*" } else { query };
+    let backend_query = if low_signal_query {
+        "*".to_string()
+    } else {
+        close_unterminated_phrase(query)
+    };
     let mut search_query = TextSearchQuery::new(backend_query)
         .query_by("text,title")
         .highlight_fields("text,title");
@@ -1341,6 +1345,31 @@ fn is_stopword(term: &str) -> bool {
     )
 }
 
+/// Raw rejects an unclosed quote. A visitor who types `"cold start problem`
+/// means a phrase running to the end, as in web search engines, so close it.
+/// Mirrors Raw's parser: a backslash escapes `"` and `\`. The closing quote
+/// follows a space so a trailing backslash cannot escape it.
+fn close_unterminated_phrase(query: &str) -> String {
+    let mut quoted = false;
+    let mut characters = query.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\\'
+            && characters
+                .peek()
+                .is_some_and(|next| matches!(next, '"' | '\\'))
+        {
+            characters.next();
+        } else if character == '"' {
+            quoted = !quoted;
+        }
+    }
+    if quoted {
+        format!("{query} \"")
+    } else {
+        query.to_string()
+    }
+}
+
 fn is_low_signal_query(query: &str) -> bool {
     let searchable_chars = query
         .chars()
@@ -1876,6 +1905,10 @@ impl IntoResponse for ApiError {
             | Self::InvalidBindAddress(_)
             | Self::Queue(_)
             | Self::Server(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            // Raw rejected the query itself; retrying cannot help.
+            Self::SearchBackend(SearchError::Api { status, .. }) if status.as_u16() == 400 => {
+                StatusCode::BAD_REQUEST
+            }
             Self::SearchBackend(_) | Self::UnexpectedSearchShape | Self::ChannelImage(_) => {
                 StatusCode::BAD_GATEWAY
             }

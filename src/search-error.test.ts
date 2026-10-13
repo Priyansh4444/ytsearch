@@ -19,6 +19,15 @@ describe("presentSearchError", () => {
     expect(JSON.stringify(presentation)).not.toContain("secret upstream URL");
   });
 
+  test("tells the visitor to fix a query search rejected", () => {
+    expect(
+      presentSearchError({ _tag: "ApiResponseError", status: 400, message: "private detail" }),
+    ).toEqual({
+      title: "Search couldn't read that query",
+      message: "Check the quotes and minus signs in your search, then try again.",
+    });
+  });
+
   test("uses a safe fallback for unknown failures", () => {
     expect(presentSearchError(new Error("private backend detail"))).toEqual({
       title: "Search failed",
