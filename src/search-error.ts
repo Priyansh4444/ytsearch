@@ -24,6 +24,12 @@ export const presentSearchError = (error: unknown): SearchErrorPresentation => {
         message: "Search returned an unexpected response. Try again in a moment.",
       };
     case "ApiResponseError":
+      if ((error as { readonly status?: unknown }).status === 400) {
+        return {
+          title: "Search couldn't read that query",
+          message: "Check the quotes and minus signs in your search, then try again.",
+        };
+      }
       return {
         title: "Search unavailable",
         message: "Search returned an error. Try again in a moment.",

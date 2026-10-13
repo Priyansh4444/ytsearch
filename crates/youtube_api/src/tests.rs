@@ -653,3 +653,31 @@ fn rate_limit_trusts_the_visitor_ip_only_from_the_worker() {
     assert_eq!(client_key(&forged, Some("secret")), "192.0.2.10");
     assert_eq!(client_key(&HeaderMap::new(), Some("secret")), "unknown");
 }
+
+#[test]
+fn unclosed_quotes_become_phrases_to_the_end_of_the_query() {
+    assert_eq!(
+        close_unterminated_phrase(r#""cold start problem"#),
+        r#""cold start problem ""#
+    );
+    assert_eq!(close_unterminated_phrase(r#"say "hi" "#), r#"say "hi" "#);
+    assert_eq!(close_unterminated_phrase(r#"a "b" "c"#), r#"a "b" "c ""#);
+    // Escaped quotes do not open a phrase; a trailing backslash cannot escape
+    // the added quote.
+    assert_eq!(close_unterminated_phrase(r#"6\" screen"#), r#"6\" screen"#);
+    assert_eq!(close_unterminated_phrase(r#""path\"#), r#""path\ ""#);
+}
+
+#[test]
+fn queries_raw_rejects_are_bad_requests_not_gateway_errors() {
+    let rejected = ApiError::SearchBackend(SearchError::Api {
+        status: reqwest::StatusCode::BAD_REQUEST,
+        body: "{}".to_string(),
+    });
+    assert_eq!(rejected.into_response().status(), StatusCode::BAD_REQUEST);
+    let failed = ApiError::SearchBackend(SearchError::Api {
+        status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+        body: "{}".to_string(),
+    });
+    assert_eq!(failed.into_response().status(), StatusCode::BAD_GATEWAY);
+}
