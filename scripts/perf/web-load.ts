@@ -5,8 +5,9 @@
 //     --users 100 --seconds 120 --think 20000-40000 [--burst] [--per-user-ip]
 //
 // --burst sends exactly one search per user, all at once.
-// --per-user-ip gives each user its own cf-connecting-ip so the API's per-IP
-// limit sees 100 clients; it only works against the Fly API hostname directly.
+// --per-user-ip gives each user its own client IP, the way the Worker names
+// visitors, so the API's per-IP limit sees separate clients. It needs the
+// Worker's YTSEARCH_API_PROXY_KEY from .env and the Fly API hostname as --base.
 // Output is one JSON summary on stdout; progress goes to stderr.
 /* oxlint-disable no-console -- a CLI whose output is its result. */
 import { readFileSync } from "node:fs";
@@ -21,6 +22,10 @@ type Sample = {
 };
 
 const options = parseOptions(process.argv.slice(2));
+if (options.perUserIp && !options.proxyKey) {
+  console.error("--per-user-ip needs YTSEARCH_API_PROXY_KEY (run with bun --env-file=.env)");
+  process.exit(2);
+}
 const queries = loadQueries(options.queries);
 const samples: Sample[] = [];
 const failures: { status: number; path: string; error: unknown }[] = [];
@@ -45,6 +50,7 @@ function parseOptions(argv: string[]) {
     thinkMax: thinkMax ?? thinkMin ?? 0,
     burst: argv.includes("--burst"),
     perUserIp: argv.includes("--per-user-ip"),
+    proxyKey: process.env.YTSEARCH_API_PROXY_KEY,
   };
 }
 
@@ -75,7 +81,10 @@ function searchPath(): string {
 async function search(user: number): Promise<void> {
   const headers: Record<string, string> = { "user-agent": "ytsearch-web-load/1" };
   // 198.18.0.0/15 is reserved for benchmarking, so it never names a real client.
-  if (options.perUserIp) headers["cf-connecting-ip"] = `198.18.${user >> 8}.${user & 255}`;
+  if (options.perUserIp) {
+    headers["x-ytsearch-client-ip"] = `198.18.${user >> 8}.${user & 255}`;
+    headers["x-ytsearch-proxy-key"] = options.proxyKey ?? "";
+  }
   const at = performance.now();
   let status = 0;
   let edgeCached = false;

@@ -15,8 +15,8 @@
    # Website path, realistic pacing.
    bun scripts/perf/web-load.ts --base https://search.pronsh.dev --queries query-log.txt --users 100 --seconds 120 --think 20000-40000
    # Reader capacity: API directly, one client IP per user, no think time.
-   bun scripts/perf/web-load.ts --base https://ytsearch-api-raw-production.fly.dev --queries query-log.txt \
-     --users 100 --seconds 60 --think 0-0 --per-user-ip
+   bun --env-file=.env scripts/perf/web-load.ts --base https://ytsearch-api-raw-production.fly.dev \
+     --queries query-log.txt --users 100 --seconds 60 --think 0-0 --per-user-ip
    ```
 
    The script aborts when over half the requests in 10 s fail.
@@ -31,9 +31,10 @@
 - One client IP gets 120 searches a minute; beyond that the API answers 429.
   Website runs measure that limit unless their rate stays below 2 req/s.
   Space website runs 60 s apart.
-- `--per-user-ip` works only against the Fly API hostname: Cloudflare overwrites
-  `cf-connecting-ip` on the website path. The API trusting that header from
-  direct callers is also a rate-limit bypass for anyone.
+- `--per-user-ip` names each user the way the Worker does
+  (`x-ytsearch-client-ip` with `YTSEARCH_API_PROXY_KEY`), so it needs that key
+  from `.env`. Without the key the API keys every request on `fly-client-ip`,
+  your real address, and forged `cf-connecting-ip` values are ignored (#100).
 - A burst does not test the edge cache: it stores an answer only after the
   first response, so simultaneous identical searches all reach the reader.
 - The API returns `time_to_first_result_ms`, not `search_time_ms`. It includes
