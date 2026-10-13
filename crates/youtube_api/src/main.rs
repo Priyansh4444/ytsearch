@@ -58,6 +58,9 @@ const DEFAULT_INDEX_QUEUE_MAX_ITEMS: usize = 10_000;
 const MAX_INDEX_REQUEST_BODY_BYTES: usize = 8 * 1024;
 const MAX_HANDLE_BYTES: usize = 64;
 const MAX_NOTE_CHARS: usize = 500;
+// Set by the Cloudflare Worker (worker/client-ip.ts) on every proxied request.
+const CLIENT_IP_HEADER: &str = "x-ytsearch-client-ip";
+const PROXY_KEY_HEADER: &str = "x-ytsearch-proxy-key";
 
 #[derive(Clone)]
 struct AppState {
@@ -67,6 +70,7 @@ struct AppState {
     relevance_ordering: RelevanceOrdering,
     axiom: Option<AxiomLogger>,
     rate_limiter: Arc<Mutex<RateLimiter>>,
+    proxy_key: Option<String>,
     search_rate_limit_per_minute: usize,
     index_request_rate_limit_per_minute: usize,
     index_queue: IndexQueue,
@@ -342,6 +346,9 @@ async fn main() -> Result<(), ApiError> {
         },
         axiom,
         rate_limiter: Arc::new(Mutex::new(RateLimiter::default())),
+        proxy_key: env::var("YTSEARCH_API_PROXY_KEY")
+            .ok()
+            .and_then(|key| non_empty(Some(&key)).map(str::to_string)),
         search_rate_limit_per_minute: env_usize(
             "YTSEARCH_SEARCH_RATE_LIMIT_PER_MINUTE",
             DEFAULT_SEARCH_RATE_LIMIT_PER_MINUTE,
@@ -1724,7 +1731,10 @@ async fn rate_limit(
 ) -> Result<(), ApiError> {
     if per_minute > 0 {
         state.rate_limiter.lock().await.allow(
-            format!("{scope}:{}", client_key(headers)),
+            format!(
+                "{scope}:{}",
+                client_key(headers, state.proxy_key.as_deref())
+            ),
             per_minute,
             Duration::from_secs(60),
         )?;
@@ -1732,19 +1742,38 @@ async fn rate_limit(
     Ok(())
 }
 
-fn client_key(headers: &HeaderMap) -> &str {
-    ["cf-connecting-ip", "fly-client-ip", "x-forwarded-for"]
-        .iter()
-        .filter_map(|name| headers.get(*name))
-        .filter_map(|value| value.to_str().ok())
-        .find_map(|value| {
-            value
-                .split(',')
-                .next()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        })
+/// The client a request is rate-limited as. Anyone can send `cf-connecting-ip`
+/// straight to the public Fly hostname, so only the Cloudflare Worker, proven by
+/// the shared proxy key, may name the visitor's IP. Every other request is keyed
+/// on `fly-client-ip`, which Fly's proxy overwrites.
+fn client_key<'a>(headers: &'a HeaderMap, proxy_key: Option<&str>) -> &'a str {
+    let from_worker = proxy_key.is_some_and(|key| {
+        headers
+            .get(PROXY_KEY_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| constant_time_eq(value, key))
+    });
+    from_worker
+        .then(|| first_address(headers, CLIENT_IP_HEADER))
+        .flatten()
+        .or_else(|| first_address(headers, "fly-client-ip"))
         .unwrap_or("unknown")
+}
+
+fn first_address<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    let value = headers.get(name)?.to_str().ok()?;
+    non_empty(value.split(',').next())
+}
+
+fn constant_time_eq(left: &str, right: &str) -> bool {
+    left.len() == right.len()
+        && left
+            .bytes()
+            .zip(right.bytes())
+            .fold(0_u8, |difference, (left, right)| {
+                difference | (left ^ right)
+            })
+            == 0
 }
 
 fn non_empty(value: Option<&str>) -> Option<&str> {

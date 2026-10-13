@@ -183,6 +183,31 @@ describe("scheduled search availability", () => {
     expect(fetchMock.mock.calls[0][1]).toEqual({ cache: "no-store" });
   });
 
+  test("names the visitor IP to the API only with the proxy key", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T20:00:00Z"));
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json({ videos: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    // Distinct queries, so the edge cache never answers the second search.
+    const visitor = (query: string) =>
+      new Request(`https://search.pronsh.dev/api/search?q=${query}`, {
+        headers: {
+          "cf-connecting-ip": "203.0.113.7",
+          "x-ytsearch-client-ip": "198.18.0.1",
+          "x-ytsearch-proxy-key": "forged",
+        },
+      });
+
+    await fetchWorker(visitor("rust"), testEnv({ API_PROXY_KEY: "proxy-secret" }));
+    await fetchWorker(visitor("go"), testEnv());
+
+    const [withKey, withoutKey] = fetchMock.mock.calls.map((call) => (call[0] as Request).headers);
+    expect(withKey.get("x-ytsearch-client-ip")).toBe("203.0.113.7");
+    expect(withKey.get("x-ytsearch-proxy-key")).toBe("proxy-secret");
+    expect(withoutKey.get("x-ytsearch-client-ip")).toBeNull();
+    expect(withoutKey.get("x-ytsearch-proxy-key")).toBeNull();
+  });
+
   test("also bypasses caches for development-origin search responses", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-26T20:00:00Z"));
