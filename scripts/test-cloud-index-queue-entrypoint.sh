@@ -22,6 +22,9 @@ run_credential_preflight() {
   env \
     PATH="$test_dir/bin:$PATH" \
     FAKE_RAW_BACKEND_COMPATIBLE="${FAKE_RAW_BACKEND_COMPATIBLE:-1}" \
+    TRANSCRIBE_MISSING="${TRANSCRIBE_MISSING:-0}" \
+    WHISPER_BINARY="${WHISPER_BINARY:-/missing/whisper-cli}" \
+    WHISPER_MODEL="${WHISPER_MODEL:-/missing/model.bin}" \
     CLOUD_INDEX_QUEUE_PREFLIGHT_ONLY=1 \
     INDEX_QUEUE_API_BASE_URL=https://queue.invalid \
     YTSEARCH_INDEX_QUEUE_TOKEN=test-token \
@@ -41,6 +44,15 @@ run_credential_preflight \
   "$test_dir/preflight.ok" > "$test_dir/preflight.out"
 test -f "$test_dir/preflight.ok"
 grep -Fx 'cloud-queue-indexer: credential preflight passed generation=test-generation' "$test_dir/preflight.out" >/dev/null
+
+: > "$test_dir/missing-asr.ok"
+if TRANSCRIBE_MISSING=1 run_credential_preflight \
+  "$test_dir/youtube-api-key.txt" "$test_dir/yt-dlp-cookies.txt" \
+  "$test_dir/missing-asr.ok" >/dev/null 2>&1; then
+  echo 'enabled missing transcription runtime must fail preflight' >&2
+  exit 1
+fi
+test ! -e "$test_dir/missing-asr.ok"
 
 : > "$test_dir/incompatible-reader.ok"
 if FAKE_RAW_BACKEND_COMPATIBLE=0 run_credential_preflight \
@@ -345,6 +357,9 @@ process_queue_once > "$test_dir/upload-mixed.out" 2> "$test_dir/upload-mixed.err
 daily_list="$test_dir/daily-creators.txt"
 printf '@example\n' > "$daily_list"
 DAILY_UPDATE_LIST_FILE="$daily_list"
+mkdir -p "$test_dir/api"
+printf '%s\n' '{"channels":[{"handle":"@example"}]}' > "$test_dir/api/youtubers"
+INDEX_QUEUE_API_BASE_URL="file://$test_dir"
 RAW_SEARCH_API_URL=http://raw.invalid:8108
 RAW_SEARCH_ADMIN_API_KEY=test-admin-key
 BACKENDS=raw

@@ -57,3 +57,10 @@ video restarting is the usual symptom), or loses state for no visible reason.
   e2e suite runs on Vite, which does not apply `_headers`; to check the policy,
   run `bun run build && bunx wrangler dev`, mock `/api/**` in Playwright, and
   listen for `securitypolicyviolation` events.
+
+- The lazy-boundary e2e first waits for cold Vite module transforms (bounded
+  at 60 s), then checks that the search shell appears within 1 s while the lazy
+  chunk is held. Do not conflate development compilation time with the shell
+  responsiveness assertion. Always release a routed chunk in `finally` and
+  settle its navigation promise so a failed assertion cannot leave a pending
+  `goto` behind.

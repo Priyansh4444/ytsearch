@@ -24,7 +24,9 @@ use youtube_ingest::{
 use youtube_raw_search::{GenerationBuilder, MutationStore};
 use youtube_search_client::TextSearchQuery;
 use youtube_sources::{FallbackMetadataSource, YouTubeMetadataSource};
-use youtube_transcribe::{TranscriptionConfig, VoxtypeTranscriptSource};
+use youtube_transcribe::{
+    AudioTranscriptSource, AudioTranscriptionError, TranscriptionBackend, TranscriptionConfig,
+};
 use youtube_ytdlp::{YtDlpTranscriptSource, YtDlpVideo};
 
 mod args;
@@ -63,6 +65,11 @@ enum CliError {
     IndexStore(#[from] IndexStoreError),
     #[error("ingest failed: {0}")]
     Ingest(#[from] youtube_ingest::IngestError),
+    #[error("audio transcription fallback {source}; original caption failure: {caption}")]
+    TranscriptFallback {
+        caption: String,
+        source: AudioTranscriptionError,
+    },
     #[error("upstream indexing paused after {0}; retry after the provider cooldown")]
     UpstreamBlocked(&'static str),
     #[error("{0}")]
@@ -828,6 +835,14 @@ fn validate_remove_safety(allow_destructive_remove: bool) -> Result<(), CliError
 }
 
 async fn index_youtuber(command: IndexYoutuberCommand) -> Result<(), CliError> {
+    let transcribe_source = command.run.transcript.transcriber().await?;
+    index_youtuber_with_transcriber(command, transcribe_source).await
+}
+
+async fn index_youtuber_with_transcriber(
+    command: IndexYoutuberCommand,
+    transcribe_source: Option<AudioTranscriptSource>,
+) -> Result<(), CliError> {
     let run = &command.run;
     let publication = PublicationPolicy::from_defer_flag(run.defer_publish);
     let existing_data =
@@ -907,7 +922,6 @@ async fn index_youtuber(command: IndexYoutuberCommand) -> Result<(), CliError> {
     }
 
     let metadata_source = metadata_source(youtube.as_ref(), &caption_source);
-    let transcribe_source = run.transcript.transcriber();
     let chunker = run.transcript.chunker();
     let mut stats = IndexStats {
         discovered_videos: public_videos.len(),
@@ -974,6 +988,8 @@ async fn index_youtuber(command: IndexYoutuberCommand) -> Result<(), CliError> {
         &failure_ledger,
         &youtuber_id,
         &mut stats,
+        Some(&caption_source),
+        transcribe_source.is_some(),
     );
     if let Some(limit) = command.max_new_videos {
         videos_to_index.truncate(limit);
@@ -1112,25 +1128,11 @@ async fn index_youtuber(command: IndexYoutuberCommand) -> Result<(), CliError> {
     let run_indexed_chunks = stats.indexed_chunks.saturating_add(stats.existing_chunks);
     print_index_summary(&stats);
 
-    if stats.attempted_videos > 0 && (run_indexed_videos == 0 || run_indexed_chunks == 0) {
-        if existing_data.skips_existing_videos() && stats.existing_videos > 0 {
-            let youtuber_doc = upsert_youtuber_document_from_chunks(
-                &transcript_search,
-                &youtuber,
-                &youtuber_id,
-                public_video_count,
-            )
-            .await?;
-            println!(
-                "Update pass found no new searchable chunks for {}; kept existing indexed data ({} videos, {} chunks)",
-                youtuber.handle, youtuber_doc.indexed_video_count, youtuber_doc.indexed_chunk_count
-            );
-            if publication.publishes_after_run() {
-                publish_and_wait(&transcript_search).await?;
-            }
-            return Ok(());
-        }
-
+    let retained_existing = existing_data.skips_existing_videos() && stats.existing_videos > 0;
+    if stats.attempted_videos > 0
+        && (run_indexed_videos == 0 || run_indexed_chunks == 0)
+        && !retained_existing
+    {
         if let Err(error) = transcript_search
             .delete_channel(
                 &youtuber_id,
@@ -1172,14 +1174,17 @@ async fn index_youtuber(command: IndexYoutuberCommand) -> Result<(), CliError> {
         publish_and_wait(&transcript_search).await?;
     }
 
-    if stats.retryable_failures > 0 {
-        return Err(CliError::RetryableGaps(format!(
-            "Indexing {} published available videos but retained {} retryable video gap(s); the queue request must remain for retry",
-            youtuber.handle, stats.retryable_failures
-        )));
-    }
+    completed_index_result(&youtuber.handle, &stats)
+}
 
-    Ok(())
+fn completed_index_result(handle: &str, stats: &IndexStats) -> Result<(), CliError> {
+    if stats.retryable_failures == 0 {
+        return Ok(());
+    }
+    Err(CliError::RetryableGaps(format!(
+        "Indexing {handle} retained {} retryable video gap(s); the queue request must remain for retry",
+        stats.retryable_failures
+    )))
 }
 
 /// The run finished; only per-video gaps with a scheduled retry remain.
@@ -1217,6 +1222,8 @@ fn catalog_outcome(failures: Vec<(String, CliError)>) -> Result<(), CliError> {
 }
 
 async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), CliError> {
+    // Construct and preflight once: clones share the invocation-wide ASR budget.
+    let transcribe_source = command.run.transcript.transcriber().await?;
     let cache_dir = &command.run.transcript.transcript_cache_dir;
     let publication_search = command
         .run
@@ -1254,7 +1261,13 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
                 skip_existing: false,
                 no_wipe: false,
             };
-            tasks.spawn(async move { (failed_handle, index_youtuber(child).await) });
+            let transcribe_source = transcribe_source.clone();
+            tasks.spawn(async move {
+                (
+                    failed_handle,
+                    index_youtuber_with_transcriber(child, transcribe_source).await,
+                )
+            });
         }
 
         let Some(result) = tasks.join_next().await else {
@@ -1401,10 +1414,21 @@ fn defer_recent_transcript_failures(
     failure_ledger: &FailureLedger,
     creator_id: &str,
     stats: &mut IndexStats,
+    caption_source: Option<&YtDlpTranscriptSource>,
+    fallback_ready: bool,
 ) {
     videos.retain(|video| {
         failure_ledger.attribute(&video.video_id, creator_id);
-        let decision = failure_ledger.decision(&video.video_id);
+        let cached = caption_source.is_some_and(|source| {
+            match source.cached_transcript(&video.video_id) {
+                Ok(transcript) => transcript.is_some(),
+                Err(error) => {
+                    tracing::warn!(video_id = %video.video_id, %error, "cannot inspect recovery transcript cache");
+                    false
+                }
+            }
+        });
+        let decision = failure_ledger.decision_for(&video.video_id, fallback_ready, cached);
         if decision.deferred {
             stats.deferred_transcript_failures =
                 stats.deferred_transcript_failures.saturating_add(1);
@@ -1467,15 +1491,31 @@ impl TranscriptOptions {
         }
     }
 
-    fn transcriber(&self) -> Option<VoxtypeTranscriptSource> {
-        self.transcribe_missing.then(|| {
-            VoxtypeTranscriptSource::with_config(
-                TranscriptionConfig::default()
-                    .with_cache_dir(self.transcription_cache_dir.clone())
-                    .with_chunk_seconds(self.transcription_chunk_seconds)
-                    .with_voxtype_engine(self.voxtype_engine.clone()),
-            )
-        })
+    async fn transcriber(&self) -> Result<Option<AudioTranscriptSource>, CliError> {
+        if !self.transcribe_missing {
+            return Ok(None);
+        }
+        let backend = match self.transcription_backend {
+            TranscriptionBackendArg::Voxtype => TranscriptionBackend::Voxtype,
+            TranscriptionBackendArg::WhisperCpp => TranscriptionBackend::WhisperCpp {
+                binary: self.whisper_binary.clone(),
+                model: self.whisper_model.clone().ok_or_else(|| {
+                    CliError::Message("--whisper-model is required for whisper-cpp".to_string())
+                })?,
+                threads: usize::from(self.whisper_threads),
+            },
+        };
+        let source = AudioTranscriptSource::with_config(
+            TranscriptionConfig::default()
+                .with_cache_dir(self.transcription_cache_dir.clone())
+                .with_caption_cache_dir(self.transcript_cache_dir.clone())
+                .with_chunk_seconds(self.transcription_chunk_seconds)
+                .with_voxtype_engine(self.voxtype_engine.clone())
+                .with_backend(backend)
+                .with_budget(Duration::from_secs(self.transcription_budget_seconds)),
+        );
+        source.preflight().await?;
+        Ok(Some(source))
     }
 
     fn chunker(&self) -> Chunker {
@@ -1537,7 +1577,7 @@ async fn index_discovered_video(
     youtuber_id: String,
     metadata_source: Arc<FallbackMetadataSource>,
     caption_source: YtDlpTranscriptSource,
-    transcribe_source: Option<VoxtypeTranscriptSource>,
+    transcribe_source: Option<AudioTranscriptSource>,
     chunker: Chunker,
     search: RawIndexAdminClient,
     content_kind_filter: ContentKindFilter,
@@ -1635,13 +1675,29 @@ async fn index_discovered_video(
                 total_ms = elapsed_ms(indexing_started),
                 "skipped transcript"
             );
-            return Ok(skipped_video(
-                video,
-                &failure_ledger,
-                &metadata.youtuber.id,
-                FailureStage::Transcript,
-                error,
-            ));
+            let reason = error.to_string();
+            let category = match &error {
+                CliError::TranscriptFallback { source, .. } => failure_ledger
+                    .record_transcription_failure(
+                        &video.video_id,
+                        &metadata.youtuber.id,
+                        &source.to_string(),
+                        &reason,
+                        matches!(source, AudioTranscriptionError::Deferred),
+                    ),
+                _ => failure_ledger.record_transcript_failure(
+                    &video.video_id,
+                    &metadata.youtuber.id,
+                    &reason,
+                    metadata.published_at.as_deref(),
+                ),
+            };
+            return Ok(IndexVideoOutcome::Skipped {
+                video_id: video.video_id,
+                title: video.title,
+                reason: format!("transcript: {reason}"),
+                category,
+            });
         }
     };
     let transcript_ms = elapsed_ms(transcript_started);
@@ -1801,7 +1857,7 @@ async fn index_video_command(command: IndexVideoCommand) -> Result<(), CliError>
 
     let caption_source = command.transcript.caption_source();
     let metadata_source = metadata_source(youtube.as_ref(), &caption_source);
-    let transcribe_source = command.transcript.transcriber();
+    let transcribe_source = command.transcript.transcriber().await?;
     let chunker = command.transcript.chunker();
 
     println!("Indexing video: {video_id}");
@@ -2213,7 +2269,7 @@ async fn fetch_recent_uploads(
 async fn fetch_transcript_with_optional_fallback(
     video_id: &str,
     caption_source: &YtDlpTranscriptSource,
-    transcribe_source: Option<&VoxtypeTranscriptSource>,
+    transcribe_source: Option<&AudioTranscriptSource>,
 ) -> Result<(Vec<TranscriptSegment>, bool), CliError> {
     match caption_source.transcript_for_video(video_id).await {
         Ok(transcript) => Ok((transcript, false)),
@@ -2222,9 +2278,18 @@ async fn fetch_transcript_with_optional_fallback(
                 return Err(caption_error.into());
             };
 
-            tracing::info!(video_id, error = %caption_error, "captions unavailable, trying local audio transcription");
-            println!("  captions unavailable, trying local audio transcription: {caption_error}");
-            let transcript = transcribe_source.transcript_for_video(video_id).await?;
+            if !failure_ledger::allows_audio_fallback(&caption_error.to_string()) {
+                return Err(caption_error.into());
+            }
+            tracing::info!(video_id, error = %caption_error, "captions unavailable, trying audio transcription");
+            println!("  captions unavailable, trying audio transcription: {caption_error}");
+            let transcript = transcribe_source
+                .transcribe(video_id)
+                .await
+                .map_err(|source| CliError::TranscriptFallback {
+                    caption: caption_error.to_string(),
+                    source,
+                })?;
             Ok((transcript, true))
         }
     }
@@ -2422,6 +2487,23 @@ mod tests {
             panic!("a collection Raw does not serve must be rejected");
         };
         assert!(error.to_string().contains("other-collection"), "{error}");
+    }
+
+    #[test]
+    fn an_update_with_only_existing_chunks_keeps_retryable_gaps_queued() {
+        let mut stats = IndexStats {
+            existing_videos: 1,
+            existing_chunks: 10,
+            skipped_videos: 1,
+            retryable_failures: 1,
+            ..IndexStats::default()
+        };
+        assert!(matches!(
+            completed_index_result("@creator", &stats),
+            Err(CliError::RetryableGaps(_))
+        ));
+        stats.retryable_failures = 0;
+        assert!(completed_index_result("@creator", &stats).is_ok());
     }
 
     // A new upload whose captions are not published yet must not fail the
@@ -2662,6 +2744,101 @@ mod tests {
     }
 
     #[test]
+    fn transcription_cli_requires_a_model_and_positive_bounds() {
+        let base = [
+            "ytsearch",
+            "index-youtuber",
+            "@creator",
+            "--transcribe-missing",
+            "--transcription-backend",
+            "whisper-cpp",
+        ];
+        assert!(Cli::try_parse_from(base).is_err());
+        let mut configured = base.to_vec();
+        configured.extend([
+            "--whisper-model",
+            "/tmp/base.en.bin",
+            "--whisper-threads",
+            "2",
+            "--transcription-budget-seconds",
+            "480",
+        ]);
+        let parsed = Cli::try_parse_from(configured.clone()).unwrap();
+        let Command::IndexYoutuber(command) = parsed.command else {
+            panic!("wrong command")
+        };
+        assert_eq!(
+            command.run.transcript.transcription_backend,
+            TranscriptionBackendArg::WhisperCpp
+        );
+        assert_eq!(command.run.transcript.transcription_budget_seconds, 480);
+        configured.extend(["--transcription-budget-seconds", "0"]);
+        assert!(Cli::try_parse_from(configured).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "ytsearch",
+                "index-youtuber",
+                "@creator",
+                "--whisper-threads",
+                "0"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn validated_portable_cache_reopens_only_its_captionless_video() {
+        let root = std::env::temp_dir().join(format!(
+            "ytsearch-portable-recovery-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let ledger = FailureLedger::new(root.join(".failures"), Duration::from_secs(3_600));
+        for id in ["ready", "corrupt", "empty", "later"] {
+            ledger.record(
+                id,
+                "creator",
+                FailureStage::Transcript,
+                "no usable captions",
+            );
+        }
+        fs::write(
+            root.join("ready.json"),
+            br#"[{"start_ms":0,"end_ms":1000,"text":"working portable transcript"}]"#,
+        )
+        .unwrap();
+        fs::write(root.join("corrupt.json"), b"{").unwrap();
+        fs::write(root.join("empty.json"), b"[]").unwrap();
+        let source = YtDlpTranscriptSource::new().with_cache_dir(&root);
+        let mut videos = ["ready", "corrupt", "empty", "later"]
+            .into_iter()
+            .map(video)
+            .collect::<Vec<_>>();
+        let mut stats = IndexStats::default();
+        defer_recent_transcript_failures(
+            &mut videos,
+            &ledger,
+            "creator",
+            &mut stats,
+            Some(&source),
+            false,
+        );
+        assert_eq!(
+            videos
+                .iter()
+                .map(|video| video.video_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ready"]
+        );
+        assert_eq!(stats.deferred_transcript_failures, 3);
+        assert_eq!(ledger.report().unwrap().total_records, 4);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn recent_transcript_failures_do_not_block_later_missing_videos() {
         let failure_dir = std::env::temp_dir().join(format!(
             "ytsearch-transcript-failure-test-{}",
@@ -2678,7 +2855,7 @@ mod tests {
         let mut videos = vec![video("failed-video"), video("next-video")];
         let mut stats = IndexStats::default();
 
-        defer_recent_transcript_failures(&mut videos, &ledger, "creator", &mut stats);
+        defer_recent_transcript_failures(&mut videos, &ledger, "creator", &mut stats, None, false);
 
         assert_eq!(
             videos

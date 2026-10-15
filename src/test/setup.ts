@@ -1,6 +1,15 @@
-import "@testing-library/jest-dom/vitest";
+import * as matchers from "@testing-library/jest-dom/matchers";
+import type { TestingLibraryMatchers } from "@testing-library/jest-dom/matchers";
 import { cleanup, configure } from "@solidjs/testing-library";
-import { afterEach } from "vitest";
+import { afterEach, expect } from "vitest";
+
+// jest-dom's /vitest entry still augments Vitest 4's Assertion<T>. Vitest 5
+// exposes Matchers<return type, received type> for custom matcher declarations.
+declare module "vitest" {
+  interface Matchers<R extends void | Promise<void>, T> extends TestingLibraryMatchers<T, R> {}
+}
+
+expect.extend(matchers);
 
 // findBy*/waitFor default to 1 s, which parallel check:all runs on one machine
 // exceed: "opens a creator from the home swarm" timed out under load.

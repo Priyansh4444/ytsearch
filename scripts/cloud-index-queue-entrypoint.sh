@@ -7,6 +7,12 @@ JOBS="${JOBS:-1}"
 COLLECTION="${COLLECTION:-youtube_transcript_chunks}"
 VIDEO_TIMEOUT_SECONDS="${VIDEO_TIMEOUT_SECONDS:-600}"
 TRANSCRIPT_CACHE_DIR="${TRANSCRIPT_CACHE_DIR:-/data/transcript-cache}"
+TRANSCRIBE_MISSING="${TRANSCRIBE_MISSING:-0}"
+TRANSCRIPTION_CACHE_DIR="${TRANSCRIPTION_CACHE_DIR:-$TRANSCRIPT_CACHE_DIR/.transcription}"
+WHISPER_BINARY="${WHISPER_BINARY:-/usr/local/bin/whisper-cli}"
+WHISPER_MODEL="${WHISPER_MODEL:-/usr/local/share/ytsearch-asr/ggml-base.en.bin}"
+WHISPER_THREADS="${WHISPER_THREADS:-2}"
+TRANSCRIPTION_BUDGET_SECONDS="${TRANSCRIPTION_BUDGET_SECONDS:-480}"
 TRANSCRIPT_FAILURE_RETRY_SECONDS="${TRANSCRIPT_FAILURE_RETRY_SECONDS:-21600}"
 QUEUE_RETRY_STATE_FILE="${QUEUE_RETRY_STATE_FILE:-/data/queue-retries.tsv}"
 QUEUE_ACK_RETRY_SECONDS="${QUEUE_ACK_RETRY_SECONDS:-300}"
@@ -97,8 +103,6 @@ validate_file_credentials() {
   fi
   YOUTUBE_API_KEY="$youtube_api_key"
   export YOUTUBE_API_KEY
-  : > "$CREDENTIAL_PREFLIGHT_MARKER"
-  echo "cloud-queue-indexer: credential preflight passed generation=$CREDENTIAL_PREFLIGHT_GENERATION"
 }
 
 # As root, run ytsearch (and so yt-dlp, which parses untrusted YouTube data)
@@ -132,6 +136,41 @@ run_indexer() {
     gosu "$INDEXER_RUN_AS" env HOME="$INDEXER_HOME" "$@"
   else
     "$@"
+  fi
+}
+
+# One argument boundary for approved requests, catalog refreshes and idle repair.
+run_with_transcription() {
+  if [ "$TRANSCRIBE_MISSING" = 1 ]; then
+    run_indexer "$@" --transcribe-missing --transcription-backend whisper-cpp \
+      --whisper-binary "$WHISPER_BINARY" --whisper-model "$WHISPER_MODEL" \
+      --whisper-threads "$WHISPER_THREADS" \
+      --transcription-cache-dir "$TRANSCRIPTION_CACHE_DIR" \
+      --transcription-budget-seconds "$TRANSCRIPTION_BUDGET_SECONDS"
+  else
+    run_indexer "$@"
+  fi
+}
+
+validate_transcription() {
+  case "$TRANSCRIBE_MISSING" in
+    0) return 0 ;;
+    1) ;;
+    *) echo 'cloud-queue-indexer: TRANSCRIBE_MISSING must be 0 or 1' >&2; exit 1 ;;
+  esac
+  for value in "$WHISPER_THREADS" "$TRANSCRIPTION_BUDGET_SECONDS"; do
+    case "$value" in
+      ''|*[!0-9]*|0) echo 'cloud-queue-indexer: transcription bounds must be positive integers' >&2; exit 1 ;;
+    esac
+  done
+  if [ "$TRANSCRIPTION_BUDGET_SECONDS" -ge "$VIDEO_TIMEOUT_SECONDS" ]; then
+    echo 'cloud-queue-indexer: transcription budget must be below the video timeout' >&2
+    exit 1
+  fi
+  if [ ! -s "$WHISPER_MODEL" ] || [ ! -r "$WHISPER_MODEL" ] \
+    || ! run_indexer "$WHISPER_BINARY" --help >/dev/null 2>&1; then
+    echo 'cloud-queue-indexer: enabled Whisper runtime/model is unavailable' >&2
+    exit 1
   fi
 }
 
@@ -637,7 +676,7 @@ index_one_backend() {
 
   echo "cloud-queue-indexer: indexing $handle backend=$label jobs=$jobs"
   # shellcheck disable=SC2086
-  if run_indexer ytsearch index-youtuber "$handle" \
+  if run_with_transcription ytsearch index-youtuber "$handle" \
     --backend "$backend" \
     --mode update \
     --collection "$COLLECTION" \
@@ -777,7 +816,7 @@ index_catalog_backend() {
   # and one deferred publication boundary. Per-creator processes cannot prove
   # that their discovery results describe the same catalog pass.
   # shellcheck disable=SC2086
-  run_indexer ytsearch index-youtubers "$DAILY_UPDATE_LIST_FILE" \
+  run_with_transcription ytsearch index-youtubers "$DAILY_UPDATE_LIST_FILE" \
     --backend "$backend" \
     --mode update \
     --collection "$COLLECTION" \
@@ -792,7 +831,80 @@ index_catalog_backend() {
     "$@"
 }
 
-index_daily_update_for_backends() {
+# Build one approved refresh catalog. Canonical lines retain their labels and
+# spelling; directory-only handles extend it even when their count gap is zero.
+build_daily_update_catalog() {
+  python3 - "$1" "$2" <<'PYTHON'
+import json
+import os
+import pathlib
+import re
+import sys
+import urllib.request
+
+# The output is ordered canonical lines followed by unseen directory handles;
+# membership uses the same ASCII identity as youtube_ingest::stable_youtuber_id.
+canonical_lines: list[str] = []
+seen_ids: set[str] = set()
+directory_handles: list[str] = []
+
+
+def creator_identity(handle: object) -> str:
+    if not isinstance(handle, str) or not handle.startswith("@"):
+        raise ValueError("creator handle must be a string beginning with @")
+    source = handle[1:]
+    if not source or any(not (char.isalnum() or char in "_.-") for char in source):
+        raise ValueError("creator handle contains invalid characters")
+    identity = re.sub(r"[^A-Za-z0-9]+", "-", source).lower().strip("-")
+    if not identity:
+        raise ValueError("creator handle has no stable identity")
+    return identity
+
+
+try:
+    source, destination = map(pathlib.Path, sys.argv[1:])
+    for line in source.read_text(encoding="utf-8").splitlines(keepends=True):
+        entry = line.strip()
+        if not entry or entry.startswith("#"):
+            canonical_lines.append(line)
+            continue
+        identity = creator_identity(entry.split("|", 1)[0].strip())
+        if identity not in seen_ids:
+            seen_ids.add(identity)
+            canonical_lines.append(line)
+    if not seen_ids:
+        raise ValueError("canonical creator list has no usable entries")
+
+    url = os.environ["INDEX_QUEUE_API_BASE_URL"].rstrip("/") + "/api/youtubers"
+    with urllib.request.urlopen(url, timeout=30) as response:
+        body = json.load(response)
+    if not isinstance(body, dict) or not isinstance(body.get("channels"), list):
+        raise ValueError("approved directory must contain a channels array")
+    for channel in body["channels"]:
+        if not isinstance(channel, dict):
+            raise ValueError("approved directory contains a non-object channel")
+        handle = channel.get("handle")
+        identity = creator_identity(handle)
+        if identity not in seen_ids:
+            seen_ids.add(identity)
+            directory_handles.append(handle)
+
+    # Validate the entire directory before writing any catalog content. A failed
+    # read must not silently turn a partial canonical pass into a full sweep.
+    catalog = "".join(canonical_lines)
+    if catalog and not catalog.endswith("\n"):
+        catalog += "\n"
+    catalog += "".join(handle + "\n" for handle in directory_handles)
+    destination.write_text(catalog, encoding="utf-8")
+except (OSError, ValueError, KeyError) as error:
+    print(f"cloud-queue-indexer: daily approved catalog failed: {error}", file=sys.stderr)
+    sys.exit(1)
+PYTHON
+}
+
+# Isolate the temporary list and its cleanup from the queue daemon's state and
+# traps, including failures before indexing or during deferred publication.
+index_daily_update_for_backends() (
   if [ ! -f "$DAILY_UPDATE_LIST_FILE" ]; then
     echo "cloud-queue-indexer: daily update failed; list file not found: $DAILY_UPDATE_LIST_FILE" >&2
     return 1
@@ -804,6 +916,18 @@ index_daily_update_for_backends() {
     echo "cloud-queue-indexer: daily update failed; creator list has no usable entries" >&2
     return 1
   fi
+
+  daily_catalog_file="$(mktemp "${TMPDIR:-/tmp}/ytsearch-daily-catalog.XXXXXX")" || return 1
+  trap 'rm -f "$daily_catalog_file"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  if ! build_daily_update_catalog "$DAILY_UPDATE_LIST_FILE" "$daily_catalog_file"; then
+    log_queue_event error daily_update_catalog_failed "" "" "" "raw" "failed"
+    return 1
+  fi
+  # The unprivileged indexer needs to read this public-only creator list.
+  chmod 644 "$daily_catalog_file" || return 1
+  DAILY_UPDATE_LIST_FILE="$daily_catalog_file"
 
   failed=0
   raw_jobs="${RAW_JOBS:-$JOBS}"
@@ -842,7 +966,7 @@ index_daily_update_for_backends() {
   fi
 
   return "$failed"
-}
+)
 
 process_idle_gap_once() {
   IDLE_GAP_HAD_WORK=0
@@ -894,6 +1018,13 @@ process_idle_gap_batch() {
     if [ "$batch_failed" -eq 1 ]; then
       break
     fi
+    if [ "$IDLE_GAP_BATCH_PASSES" -lt "$maximum_passes" ]; then
+      waiting_queue="$(pull_queue_tsv)" || break
+      if [ -n "$waiting_queue" ]; then
+        echo 'cloud-queue-indexer: yielding gap repair to queued requests'
+        break
+      fi
+    fi
   done
 
   if [ "$IDLE_GAP_BATCH_PASSES" -gt 0 ]; then
@@ -928,9 +1059,12 @@ if [ "${CLOUD_INDEX_QUEUE_LIBRARY_ONLY:-0}" != "1" ]; then
   validate_raw_backend
   validate_file_credentials
   prepare_unprivileged_indexer
+  validate_transcription
   validate_update_schedule
   validate_idle_exit
   validate_idle_gap_fill
+  : > "$CREDENTIAL_PREFLIGHT_MARKER"
+  echo "cloud-queue-indexer: credential preflight passed generation=$CREDENTIAL_PREFLIGHT_GENERATION"
 fi
 
 if [ "${CLOUD_INDEX_QUEUE_PREFLIGHT_ONLY:-0}" = "1" ]; then
@@ -1135,6 +1269,10 @@ if [ "$QUEUE_LOOP" = "1" ]; then
     fi
     IDLE_GAP_HAD_WORK=0
     IDLE_GAP_BATCH_PASSES=0
+    if [ "$idle_gap_passes" -ge "$IDLE_GAP_FILL_MAX_PASSES" ] \
+      && interval_elapsed "$IDLE_GAP_FILL_INTERVAL_SECONDS" "$IDLE_GAP_FILL_STARTED_FILE"; then
+      idle_gap_passes=0
+    fi
     if [ "$IDLE_GAP_FILL_ENABLED" = "1" ] && [ "$QUEUE_HAD_WORK" = "0" ] && [ "$DAILY_UPDATE_HAD_WORK" = "0" ] && [ "$idle_gap_passes" -lt "$IDLE_GAP_FILL_MAX_PASSES" ] \
       && { [ "$idle_gap_passes" -gt 0 ] || interval_elapsed "$IDLE_GAP_FILL_INTERVAL_SECONDS" "$IDLE_GAP_FILL_STARTED_FILE"; }; then
       if [ "$idle_gap_passes" -eq 0 ]; then

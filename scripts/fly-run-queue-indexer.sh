@@ -185,6 +185,11 @@ exec flyctl machine run \
   --env "QUEUE_LOOP=${QUEUE_LOOP:-$QUEUE_DAEMON}" \
   --env "QUEUE_POLL_INTERVAL_SECONDS=${QUEUE_POLL_INTERVAL_SECONDS:-30}" \
   --env "TRANSCRIPT_CACHE_DIR=$INDEXER_DATA_DIRECTORY/transcript-cache" \
+  --env "TRANSCRIBE_MISSING=${TRANSCRIBE_MISSING:-1}" \
+  --env "WHISPER_BINARY=${WHISPER_BINARY:-/usr/local/bin/whisper-cli}" \
+  --env "WHISPER_MODEL=${WHISPER_MODEL:-/usr/local/share/ytsearch-asr/ggml-base.en.bin}" \
+  --env "WHISPER_THREADS=${WHISPER_THREADS:-2}" \
+  --env "TRANSCRIPTION_BUDGET_SECONDS=${TRANSCRIPTION_BUDGET_SECONDS:-480}" \
   --env "QUEUE_RETRY_STATE_FILE=${QUEUE_RETRY_STATE_FILE:-$INDEXER_DATA_DIRECTORY/queue-retries.tsv}" \
   --env "QUEUE_ACK_RETRY_SECONDS=${QUEUE_ACK_RETRY_SECONDS:-300}" \
   --env "IDLE_EXIT_AFTER_SECONDS=$idle_exit_after_seconds" \
