@@ -142,6 +142,11 @@ response mode.
 - Videos absent from a snapshot are untouched. An empty video replacement,
   explicit video deletion and `rewipe` are unsupported. A shortened nonempty
   complete video snapshot removes its obsolete passages after replacement.
+- Keep the model directory immutable while a process starts. Checksum verification
+  streams local files before the tokenizer and ORT reopen their paths; it does not
+  freeze a private copy. Concurrent external replacement or in-place edits between
+  verification and loading are unsupported. Prepare a new version in a separate
+  directory, then start a process with that path rather than editing live assets.
 - Do not reuse a collection for different dimensions, prompts, tokenizer,
   token cap, model or passage schema. Creation records the full semantic profile
   in Qdrant metadata; startup, readiness and searches refuse incompatible

@@ -60,6 +60,15 @@ the successful fresh judge used the inherited provider. The first review was on 
 synthesized ORT loader, importer, API, scripts and docs and found no blockers.
 Final runtime verification below covers the synthesized artifact.
 
+The delayed cross-provider judge later completed its own runtime trial and also
+recommended the guarded importer with direct ORT inference. Its overlap/profile
+and mixed-case findings refer to the prototypes and are fixed in the final code.
+It also highlighted the file-backed loader's verification/load interval. The
+pilot assumes operator-managed model assets remain immutable during startup;
+checksums do not freeze a private copy. This is explicit in the playbook. Retaining
+that boundary avoids a second private weight copy and preserves the measured
+low-memory loader. A deployment should supply immutable versioned model assets.
+
 ## Operational boundary
 
 This is a local snapshot pilot. Its loopback service and explicit API opt-in let
