@@ -42,6 +42,20 @@ describe("browser client runtime", () => {
     );
   });
 
+  it("accepts the opt-in semantic response mode", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          Response.json({ ...emptySearchResponse, mode: "semantic", totals_approximate: true }),
+        ),
+    );
+    await expect(
+      runSearchTranscripts("", { query: "rust", youtuber: "", page: 1, sort: "relevance" }),
+    ).resolves.toMatchObject({ mode: "semantic", totals_approximate: true });
+  });
+
   it("accepts responses from API images that still send the duplicate top-level hits", async () => {
     vi.stubGlobal(
       "fetch",

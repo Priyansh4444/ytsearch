@@ -157,7 +157,7 @@ function decodeSearchResponse(input: unknown): SearchResponse {
       "published_desc",
       "published_asc",
     ]),
-    mode: literal(value.mode, ["lexical"]),
+    mode: literal(value.mode, ["lexical", "semantic"]),
     has_next_page: boolean(value.has_next_page),
     videos: array(value.videos, decodeSearchVideo),
   };
