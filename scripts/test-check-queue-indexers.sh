@@ -34,6 +34,11 @@ fixture() {
         QUEUE_LOOP:"1",
         DAILY_UPDATE_ENABLED:"1",
         DAILY_UPDATE_INTERVAL_SECONDS:"86400",
+        TRANSCRIBE_MISSING:"1",
+        WHISPER_BINARY:"/usr/local/bin/whisper-cli",
+        WHISPER_MODEL:"/usr/local/share/ytsearch-asr/ggml-base.en.bin",
+        WHISPER_THREADS:"2",
+        TRANSCRIPTION_BUDGET_SECONDS:"480",
         DAILY_UPDATE_INITIAL_DELAY_SECONDS:"0",
         DAILY_UPDATE_STATE_FILE:"/var/lib/ytsearch/daily-update.last-completed",
         QUEUE_ONE_REQUEST_PER_PASS:"0",
@@ -202,7 +207,7 @@ jq '. + [{
 }]' "$tmp/healthy.json" >"$tmp/repair.json"
 MACHINES_JSON_FILE="$tmp/repair.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null
 
-for field in DAILY_UPDATE_ENABLED DAILY_UPDATE_INTERVAL_SECONDS DAILY_UPDATE_INITIAL_DELAY_SECONDS DAILY_UPDATE_STATE_FILE; do
+for field in DAILY_UPDATE_ENABLED DAILY_UPDATE_INTERVAL_SECONDS DAILY_UPDATE_INITIAL_DELAY_SECONDS DAILY_UPDATE_STATE_FILE TRANSCRIBE_MISSING WHISPER_BINARY WHISPER_MODEL WHISPER_THREADS TRANSCRIPTION_BUDGET_SECONDS; do
   jq --arg field "$field" '.[0].config.env[$field] = "invalid"' "$tmp/healthy.json" > "$tmp/invalid-daily.json"
   if MACHINES_JSON_FILE="$tmp/invalid-daily.json" "$SCRIPT_DIR/check-queue-indexers.sh" >/dev/null 2>&1; then
     echo "invalid daily setting $field must fail" >&2
