@@ -781,6 +781,20 @@ echo 'recovered useful speech'
     }
 
     #[tokio::test]
+    async fn completed_speech_free_audio_releases_the_bounded_work_cache() {
+        let fixture = Fixture::new();
+        fixture.audio("silent");
+        let mut config = fixture.config();
+        config.voxtype_binary = fixture.script("voxtype", "exit 0").to_string_lossy().into();
+        let source = AudioTranscriptSource::with_config(config);
+        let error = source.transcribe("silent").await.unwrap_err();
+        assert!(error.to_string().contains("no usable speech"));
+        assert!(!fixture.0.join("cache/silent.json").exists());
+        assert!(!fixture.0.join("work/silent").exists());
+        assert_eq!(audio_cache_bytes(&fixture.0.join("work")).unwrap(), 0);
+    }
+
+    #[tokio::test]
     async fn clones_share_budget_and_cancellation_debits_active_work() {
         let fixture = Fixture::new();
         fixture.audio("video");
