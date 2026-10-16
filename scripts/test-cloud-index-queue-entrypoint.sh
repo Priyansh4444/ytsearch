@@ -106,6 +106,25 @@ TRANSCRIPT_FAILURE_RETRY_SECONDS=21600
 export CLOUD_INDEX_QUEUE_LIBRARY_ONLY INDEX_QUEUE_API_BASE_URL YTSEARCH_INDEX_QUEUE_TOKEN TRANSCRIPT_CACHE_DIR QUEUE_RETRY_STATE_FILE RAW_PENDING_PUBLICATION_FILE TRANSCRIPT_FAILURE_RETRY_SECONDS
 . "$SCRIPT_DIR/cloud-index-queue-entrypoint.sh"
 
+# Legacy requests without a target must keep the CLI's retry status too. The
+# backend wrapper must not overwrite the queue pass's failure counter.
+(
+RAW_SEARCH_API_URL=http://raw.invalid:8108
+RAW_SEARCH_ADMIN_API_KEY=test-admin-key
+run_indexer() { return "$FAKE_INDEX_EXIT"; }
+failed=41
+for expected in 69 70 75 1; do
+  FAKE_INDEX_EXIT="$expected"
+  actual=0
+  index_youtuber_for_queue_target @legacy "" --defer-publish >/dev/null 2>&1 || actual=$?
+  [ "$actual" -eq "$expected" ] || {
+    echo "legacy queue request lost retry exit $expected: got $actual" >&2
+    exit 1
+  }
+  [ "$failed" -eq 41 ]
+done
+)
+
 printf 'pending\n' > "$RAW_PENDING_PUBLICATION_FILE"
 timeout 5 env \
   PATH="$test_dir/bin:$PATH" CLOUD_INDEX_QUEUE_LIBRARY_ONLY=0 \
@@ -386,7 +405,7 @@ grep -Fx daily_update_backend_gaps "$daily_events" >/dev/null || {
   echo "a gaps-only daily pass must be logged as completed with gaps" >&2
   exit 1
 }
-for stub_status in 1 69; do
+for stub_status in 1 69 70; do
   index_catalog_backend() { return "$stub_status"; }
   if index_daily_update_for_backends > /dev/null 2>&1; then
     echo "a daily pass with catalog status $stub_status must fail" >&2
@@ -406,6 +425,21 @@ grep -Fx "request-blocked queued" "$blocked_status_log" >/dev/null || {
   echo "an upstream-blocked request must return to the queue" >&2
   exit 1
 }
+
+# Backend unavailability (exit 70) retains the request with a short retry,
+# without applying the transcript/provider cooldown or marking it completed.
+: > "$QUEUE_RETRY_STATE_FILE"
+: > "$blocked_status_log"
+index_youtuber_for_queue_target() { return 70; }
+backend_retry_started="$(date +%s)"
+if process_queue_once > /dev/null 2>&1; then
+  echo "an unavailable backend must leave an unresolved request" >&2
+  exit 1
+fi
+grep -Fx "request-blocked queued" "$blocked_status_log" >/dev/null
+retry_at="$(awk -F '\t' '$1 == "request-blocked" { print $2 }' "$QUEUE_RETRY_STATE_FILE")"
+[ "$retry_at" -ge $(( backend_retry_started + QUEUE_ACK_RETRY_SECONDS )) ]
+[ "$retry_at" -le $(( $(date +%s) + QUEUE_ACK_RETRY_SECONDS )) ]
 
 
 # As root, ytsearch runs as the unprivileged indexer user with a private

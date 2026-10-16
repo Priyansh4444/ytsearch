@@ -692,7 +692,7 @@ index_one_backend() {
   fi
 }
 
-index_youtuber_for_backends() {
+index_youtuber_for_backends() (
   handle="$1"
   shift
   failed=0
@@ -703,15 +703,17 @@ index_youtuber_for_backends() {
       echo "cloud-queue-indexer: raw unavailable; missing RAW_SEARCH_API_URL or RAW_SEARCH_ADMIN_API_KEY" >&2
       failed=1
     else
-      if ! index_one_backend raw raw "$raw_jobs" "$handle" "$@"; then
-        failed=1
+      if index_one_backend raw raw "$raw_jobs" "$handle" "$@"; then
+        :
+      else
+        failed=$?
         echo "cloud-queue-indexer: backend failed handle=$handle backend=raw" >&2
       fi
     fi
   fi
 
   return "$failed"
-}
+)
 
 index_youtuber_for_queue_target() {
   handle="$1"
@@ -1168,6 +1170,13 @@ process_queue_once() {
           set_queue_status "$request_id" queued || true
           log_queue_event error index_request_failed_ack_error "$request_id" "$handle" "$source_backend" "$active_backends" "queued"
         fi
+      elif [ "$index_status" -eq 70 ]; then
+        # A temporary backend connection/service failure needs a short retry,
+        # independent of the longer YouTube/transcript cooldown.
+        unresolved=$((unresolved + 1))
+        remember_queue_retry "$request_id" "$QUEUE_ACK_RETRY_SECONDS"
+        set_queue_status "$request_id" queued || true
+        log_queue_event warn index_request_backend_unavailable "$request_id" "$handle" "$source_backend" "$active_backends" "queued"
       elif [ "$index_status" -eq 75 ] || [ "$index_status" -eq 69 ]; then
         # 75: only retryable per-video gaps remain. 69: a bot challenge or rate
         # limit stopped the run. Either way put the request back into the

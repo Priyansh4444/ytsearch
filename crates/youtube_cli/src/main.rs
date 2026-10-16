@@ -212,18 +212,19 @@ async fn main() -> ExitCode {
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error @ CliError::RetryableGaps(_)) => {
-            eprintln!("{error}");
-            ExitCode::from(EXIT_RETRYABLE_GAPS)
-        }
-        Err(error @ CliError::UpstreamBlocked(_)) => {
-            eprintln!("{error}");
-            ExitCode::from(EXIT_UPSTREAM_BLOCKED)
-        }
         Err(error) => {
             eprintln!("{error}");
-            ExitCode::FAILURE
+            ExitCode::from(cli_error_exit_code(&error))
         }
+    }
+}
+
+fn cli_error_exit_code(error: &CliError) -> u8 {
+    match error {
+        CliError::RetryableGaps(_) => EXIT_RETRYABLE_GAPS,
+        CliError::UpstreamBlocked(_) => EXIT_UPSTREAM_BLOCKED,
+        CliError::IndexStore(IndexStoreError::Unavailable { .. }) => EXIT_BACKEND_UNAVAILABLE,
+        _ => 1,
     }
 }
 
@@ -1191,6 +1192,8 @@ fn completed_index_result(handle: &str, stats: &IndexStats) -> Result<(), CliErr
 const EXIT_RETRYABLE_GAPS: u8 = 75;
 /// A bot challenge or rate limit stopped the run before every video was tried.
 const EXIT_UPSTREAM_BLOCKED: u8 = 69;
+/// A transient index backend failure stopped the run; retry without a YouTube cooldown.
+const EXIT_BACKEND_UNAVAILABLE: u8 = 70;
 
 /// A catalog run is complete when every creator was attempted and the only
 /// failures are retryable per-video gaps: those stay in the failure ledger
@@ -1203,6 +1206,12 @@ fn catalog_outcome(failures: Vec<(String, CliError)>) -> Result<(), CliError> {
     let only_gaps = failures
         .iter()
         .all(|(_, error)| matches!(error, CliError::RetryableGaps(_)));
+    let only_backend_or_gaps = failures.iter().all(|(_, error)| {
+        matches!(
+            error,
+            CliError::RetryableGaps(_) | CliError::IndexStore(IndexStoreError::Unavailable { .. })
+        )
+    });
     let summary = failures
         .iter()
         .map(|(handle, error)| format!("{handle}: {error}"))
@@ -1213,6 +1222,15 @@ fn catalog_outcome(failures: Vec<(String, CliError)>) -> Result<(), CliError> {
             "{} YouTuber(s) retained retryable video gaps after every requested creator was attempted: {summary}",
             failures.len()
         )))
+    } else if only_backend_or_gaps {
+        Err(IndexStoreError::unavailable(
+            "raw",
+            format!(
+                "{} YouTuber(s) could not complete because the backend was unavailable: {summary}",
+                failures.len()
+            ),
+        )
+        .into())
     } else {
         Err(CliError::Message(format!(
             "{} YouTuber(s) failed after every requested creator was attempted: {summary}",
@@ -2078,25 +2096,32 @@ async fn validate_youtuber_with_ytdlp(
     max_videos: u8,
 ) -> Result<ValidatedYoutuber, CliError> {
     let limit = Some(usize::from(max_videos.max(1)));
-    let feed = match ytdlp.channel_feed(handle, limit).await {
-        Ok(feed) if !feed.videos.is_empty() => feed,
-        Ok(_) => {
-            println!("  uploads tab is empty; validating against streams tab");
-            ytdlp.channel_stream_feed(handle, limit).await?
-        }
-        Err(upload_error) => match ytdlp.channel_stream_feed(handle, limit).await {
-            Ok(feed) => {
-                println!("  uploads tab failed ({upload_error}); validating against streams tab");
-                feed
+    let mut selected_feed = None;
+    let mut first_error = None;
+    for tab in ["uploads", "streams", "shorts"] {
+        let result = match tab {
+            "uploads" => ytdlp.channel_feed(handle, limit).await,
+            "streams" => ytdlp.channel_stream_feed(handle, limit).await,
+            _ => ytdlp.channel_shorts_feed(handle, limit).await,
+        };
+        match result {
+            Ok(feed) if !feed.videos.is_empty() => {
+                selected_feed = Some(feed);
+                break;
             }
-            Err(_) => return Err(upload_error.into()),
-        },
-    };
-    if feed.videos.is_empty() {
-        return Err(CliError::Message(format!(
-            "No public uploads or streams found for handle {handle}"
-        )));
+            Ok(_) => println!("  {tab} tab is empty; checking another tab for validation"),
+            Err(error) => {
+                println!("  {tab} tab failed ({error}); checking another tab for validation");
+                first_error.get_or_insert(error);
+            }
+        }
     }
+    let feed = selected_feed.ok_or_else(|| match first_error {
+        Some(error) => CliError::from(error),
+        None => CliError::Message(format!(
+            "No public uploads, streams, or Shorts found for handle {handle}"
+        )),
+    })?;
     let uploads_playlist = uploads_playlist_from_channel_id(&feed.channel_id);
 
     Ok(ValidatedYoutuber {
@@ -2127,16 +2152,21 @@ async fn discover_videos_for_youtuber_with_ytdlp(
     ytdlp: &YtDlpTranscriptSource,
     handle: &str,
 ) -> Result<Vec<DiscoveredVideo>, CliError> {
-    let (uploads, streams) = tokio::join!(
+    let (uploads, streams, shorts) = tokio::join!(
         ytdlp.channel_feed(handle, None),
         ytdlp.channel_stream_feed(handle, None),
+        ytdlp.channel_shorts_feed(handle, None),
     );
     let uploads = uploads.map_err(|error| {
-        tracing::warn!(handle = %handle, %error, "yt-dlp uploads-tab discovery failed; refusing a streams-only partial catalog");
+        tracing::warn!(handle = %handle, %error, "yt-dlp uploads-tab discovery failed; refusing a partial catalog");
         error
     })?;
     let streams = streams.map_err(|error| {
-        tracing::warn!(handle = %handle, %error, "yt-dlp streams-tab discovery failed; refusing an uploads-only partial catalog");
+        tracing::warn!(handle = %handle, %error, "yt-dlp streams-tab discovery failed; refusing a partial catalog");
+        error
+    })?;
+    let shorts = shorts.map_err(|error| {
+        tracing::warn!(handle = %handle, %error, "yt-dlp shorts-tab discovery failed; refusing a partial catalog");
         error
     })?;
     let streams = streams.videos;
@@ -2150,6 +2180,16 @@ async fn discover_videos_for_youtuber_with_ytdlp(
         streams.len()
     );
     videos.extend(streams.into_iter().map(discovered_video_from_ytdlp_video));
+    println!(
+        "  discovery source: yt-dlp shorts tab ({} entries)",
+        shorts.videos.len()
+    );
+    videos.extend(
+        shorts
+            .videos
+            .into_iter()
+            .map(discovered_video_from_ytdlp_video),
+    );
 
     Ok(dedupe_discovered_videos(videos))
 }
@@ -2472,6 +2512,88 @@ fn print_validated_youtuber(youtuber: &ValidatedYoutuber) {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn channel_discovery_includes_shorts_and_rejects_partial_tabs() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const CHILD: &str = "YTSEARCH_CHANNEL_DISCOVERY_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            // The source reads its binary and session from the environment. Run
+            // in a child so parallel tests cannot observe the fixture settings.
+            let fixture = tempfile::tempdir().unwrap();
+            let binary = fixture.path().join("yt-dlp");
+            fs::write(
+                &binary,
+                r#"#!/bin/sh
+set -eu
+url=
+for arg in "$@"; do url="$arg"; done
+case "$url" in
+  */@fail-videos/videos|*/@fail-streams/streams|*/@fail-shorts/shorts)
+    echo 'fixture tab discovery failed' >&2
+    exit 1 ;;
+  */@shorts-only/videos|*/@shorts-only/streams)
+    entries='[]' ;;
+  */videos)
+    entries='[{"id":"upload","title":"Upload"},{"id":"duplicate","title":"Duplicate"}]' ;;
+  */streams)
+    entries='[{"id":"stream","title":"Stream"},{"id":"duplicate","title":"Duplicate"}]' ;;
+  */shorts)
+    entries='[{"id":"short","title":"Short"},{"id":"duplicate","title":"Duplicate"}]' ;;
+  *) exit 2 ;;
+esac
+printf '{"id":"UCfixture","channel_id":"UCfixture","channel":"Fixture","entries":%s}' "$entries"
+"#,
+            )
+            .unwrap();
+            fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::channel_discovery_includes_shorts_and_rejects_partial_tabs",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("YT_DLP_BINARY", binary)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr),
+            );
+            return;
+        }
+
+        let source = YtDlpTranscriptSource::new();
+        let videos = discover_videos_for_youtuber_with_ytdlp(&source, "@fixture")
+            .await
+            .unwrap();
+        assert_eq!(
+            videos
+                .iter()
+                .map(|video| video.video_id.as_str())
+                .collect::<Vec<_>>(),
+            ["upload", "duplicate", "stream", "short"],
+        );
+        for handle in ["@fail-videos", "@fail-streams", "@fail-shorts"] {
+            assert!(
+                discover_videos_for_youtuber_with_ytdlp(&source, handle)
+                    .await
+                    .is_err(),
+                "{handle} must fall back instead of returning a partial catalog",
+            );
+        }
+        let youtuber = validate_youtuber_with_ytdlp(&source, "@shorts-only", 1)
+            .await
+            .unwrap();
+        assert_eq!(youtuber.channel_id, "UCfixture");
+        assert_eq!(youtuber.recent_uploads.len(), 1);
+        assert_eq!(youtuber.recent_uploads[0].video_id, "short");
+    }
+
     #[test]
     fn admin_client_rejects_collections_raw_does_not_serve() {
         let args = args::SearchAdminArgs {
@@ -2544,8 +2666,90 @@ mod tests {
     }
 
     #[test]
+    fn backend_unavailability_exits_retryably_without_a_provider_cooldown_message() {
+        let error = CliError::IndexStore(IndexStoreError::unavailable(
+            "raw",
+            "channel stats request timed out",
+        ));
+        assert_eq!(cli_error_exit_code(&error), EXIT_BACKEND_UNAVAILABLE);
+        assert!(
+            error
+                .to_string()
+                .contains("channel stats request timed out")
+        );
+        assert!(!error.to_string().contains("provider cooldown"));
+        assert_eq!(
+            cli_error_exit_code(&CliError::RetryableGaps("caption gap".to_string())),
+            EXIT_RETRYABLE_GAPS,
+        );
+        assert_eq!(
+            cli_error_exit_code(&CliError::UpstreamBlocked("rate_limited")),
+            EXIT_UPSTREAM_BLOCKED,
+        );
+    }
+
+    #[test]
+    fn catalog_preserves_backend_unavailability_as_a_retryable_outcome() {
+        for include_gap in [false, true] {
+            let mut failures = vec![(
+                "@offline".to_string(),
+                CliError::IndexStore(IndexStoreError::unavailable(
+                    "raw",
+                    "channel stats request timed out",
+                )),
+            )];
+            if include_gap {
+                failures.push((
+                    "@gap".to_string(),
+                    CliError::RetryableGaps("caption gap".to_string()),
+                ));
+            }
+            let error = catalog_outcome(failures).unwrap_err();
+            assert_eq!(cli_error_exit_code(&error), EXIT_BACKEND_UNAVAILABLE);
+            assert!(error.to_string().contains("@offline"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("channel stats request timed out")
+            );
+            assert!(!error.to_string().contains("provider cooldown"));
+            if include_gap {
+                assert!(error.to_string().contains("@gap"));
+            }
+        }
+    }
+
+    #[test]
+    fn backend_errors_other_than_unavailable_remain_fatal_in_a_mixed_catalog() {
+        for fatal in [
+            IndexStoreError::InvalidInput("invalid collection".to_string()),
+            IndexStoreError::Conflict("operation conflict".to_string()),
+            IndexStoreError::internal("raw", "unauthorized"),
+            IndexStoreError::internal("raw", "invalid response"),
+        ] {
+            let error = CliError::IndexStore(fatal);
+            assert_eq!(cli_error_exit_code(&error), 1);
+            let result = catalog_outcome(vec![
+                ("@fatal".to_string(), error),
+                (
+                    "@gap".to_string(),
+                    CliError::RetryableGaps("caption gap".to_string()),
+                ),
+                (
+                    "@offline".to_string(),
+                    CliError::IndexStore(IndexStoreError::unavailable("raw", "timeout")),
+                ),
+            ]);
+            assert!(matches!(result, Err(CliError::Message(_))));
+            assert_eq!(cli_error_exit_code(&result.unwrap_err()), 1);
+        }
+    }
+
+    #[test]
     fn gaps_and_upstream_blocks_use_distinct_exit_codes() {
         assert_ne!(EXIT_RETRYABLE_GAPS, EXIT_UPSTREAM_BLOCKED);
+        assert_ne!(EXIT_BACKEND_UNAVAILABLE, EXIT_UPSTREAM_BLOCKED);
+        assert_ne!(EXIT_BACKEND_UNAVAILABLE, EXIT_RETRYABLE_GAPS);
         assert_eq!(EXIT_RETRYABLE_GAPS, 75);
     }
 

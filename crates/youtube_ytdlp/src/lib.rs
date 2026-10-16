@@ -307,7 +307,16 @@ impl YtDlpTranscriptSource {
             .await
     }
 
-    /// `tab` is `videos` or `streams`.
+    pub async fn channel_shorts_feed(
+        &self,
+        handle: &str,
+        max_videos: Option<usize>,
+    ) -> youtube_ingest::Result<YtDlpChannelFeed> {
+        self.channel_feed_for_tab(handle, "shorts", max_videos)
+            .await
+    }
+
+    /// `tab` is `videos`, `streams`, or `shorts`.
     async fn channel_feed_for_tab(
         &self,
         handle: &str,

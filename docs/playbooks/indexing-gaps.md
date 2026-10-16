@@ -102,3 +102,18 @@
   cover the interval. Preserve that cost cap when forcing a one-off full repair.
 - The cloud image has no `ps` or `curl`. Inspect selected `/proc` fields with
   Python instead of installing diagnostic packages on a production Machine.
+- Newer Fly CLI versions can panic in `ssh.selectContainer` against classic
+  Machines. Use `flyctl ssh console --no-container --machine <id>` to select
+  the VM explicitly. `--container app` does not work on these Machines.
+- Complete discovery includes `/videos`, `/streams` and `/shorts`. Omitting
+  Shorts excluded 888 Google for Developers IDs on 2026-10-16, of which 84
+  were not already indexed. Merge and deduplicate all three tabs; if any tab
+  fails, use the uploads-playlist fallback rather than accepting a partial set.
+- CLI exit 70 means typed backend unavailability (connection/timeout/service),
+  distinct from YouTube blocking (69) and completed per-video gaps (75).
+  Queue requests retain 70 with the short acknowledgement retry (300 seconds),
+  rather than marking them permanently failed. A catalog containing backend
+  unavailability is incomplete and must not advance its completion marker.
+  Preserve these statuses through legacy requests without a target backend.
+
+- [Cloud fallback verification, 2026-10-16](../transcription-fallback-verification-2026-10-16.md) records the real captionless-video canary, budget resume, durable import, publication, search and cache-reuse evidence.
