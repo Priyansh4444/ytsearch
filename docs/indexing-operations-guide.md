@@ -108,7 +108,7 @@ is retried until it can start the Machine.
 
 Upload notifications (below) bring new uploads, so the sweeps are backstops:
 gap repair starts at most once a day (`IDLE_GAP_FILL_INTERVAL_SECONDS`), the
-full catalog pass runs every three days (`DAILY_UPDATE_INTERVAL_SECONDS`), and
+full catalog pass runs every 24 hours (`DAILY_UPDATE_INTERVAL_SECONDS`), and
 routine work publishes at most every twelve hours
 (`ROUTINE_PUBLICATION_INTERVAL_SECONDS`); its writes stay durable until then.
 Approved requests and a catalog pass that attempted every creator still

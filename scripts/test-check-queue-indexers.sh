@@ -33,7 +33,7 @@ fixture() {
         QUEUE_TARGET_BACKEND:"raw",
         QUEUE_LOOP:"1",
         DAILY_UPDATE_ENABLED:"1",
-        DAILY_UPDATE_INTERVAL_SECONDS:"259200",
+        DAILY_UPDATE_INTERVAL_SECONDS:"86400",
         DAILY_UPDATE_INITIAL_DELAY_SECONDS:"0",
         DAILY_UPDATE_STATE_FILE:"/var/lib/ytsearch/daily-update.last-completed",
         QUEUE_ONE_REQUEST_PER_PASS:"0",

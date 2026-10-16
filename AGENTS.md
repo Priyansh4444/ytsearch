@@ -54,9 +54,11 @@ Indexing and queue:
 - `scripts/indexed-channels.txt` is the creator list for bulk and daily updates.
 - Exactly one queue worker may use the JSONL queue. Queue failures must log and
   never block later requests.
-- The cloud indexer image has `yt-dlp` (with Deno for its EJS solver) and
-  `ffmpeg` but not `voxtype`: videos without captions are skipped unless their
-  transcripts were cached locally and uploaded.
+- The cloud indexer image has `yt-dlp` (with Deno for its EJS solver),
+  `ffmpeg`, and pinned CPU whisper.cpp/base.en. `TRANSCRIBE_MISSING=1` enables
+  captionless fallback with a shared 480-second budget and resumable chunks.
+  Voxtype remains the local CLI default. Final transcript caches are portable;
+  inaccessible and speech-free videos retain explicit classified outcomes.
 
 ## Verify before declaring done
 

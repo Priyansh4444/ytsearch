@@ -61,7 +61,7 @@ if ! printf '%s' "$machines" | jq -e \
     and ($required_states == "" or (.state as $state | ($required_states | split(",") | index($state)) != null))
     and (.config.env.QUEUE_LOOP == "1")
     and (.config.env.DAILY_UPDATE_ENABLED == "1")
-    and (.config.env.DAILY_UPDATE_INTERVAL_SECONDS == "259200")
+    and (.config.env.DAILY_UPDATE_INTERVAL_SECONDS == "86400")
     and (.config.env.DAILY_UPDATE_INITIAL_DELAY_SECONDS == "0")
     and (.config.env.DAILY_UPDATE_STATE_FILE == "/var/lib/ytsearch/daily-update.last-completed")
     and ((.config.env.IDLE_EXIT_AFTER_SECONDS | tonumber?) // 0) > 0
