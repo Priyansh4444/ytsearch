@@ -357,6 +357,9 @@ impl AudioTranscriptSource {
             start_ms = end_ms;
         }
         if transcript.is_empty() {
+            // Every chunk completed, so no work remains to resume. Keeping
+            // terminal speech-free audio would consume the bounded cache.
+            let _ = fs::remove_dir_all(directory).await;
             return Err(failed(video_id, "audio transcription produced no usable speech").into());
         }
         self.downloader
