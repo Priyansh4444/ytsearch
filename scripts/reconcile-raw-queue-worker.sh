@@ -215,7 +215,7 @@ write_reconciled_config() {
       ROUTINE_PUBLICATION_INTERVAL_SECONDS: "43200",
       RAW_LAST_PUBLICATION_FILE: "/var/lib/ytsearch/raw-publication.last-completed",
       DAILY_UPDATE_ENABLED: "1",
-      DAILY_UPDATE_INTERVAL_SECONDS: "86400",
+      DAILY_UPDATE_INTERVAL_SECONDS: "259200",
       DAILY_UPDATE_INITIAL_DELAY_SECONDS: "0",
       DAILY_UPDATE_STATE_FILE: "/var/lib/ytsearch/daily-update.last-completed",
       DAILY_UPDATE_LIST_FILE: "/tmp/daily-indexed-channels.txt",

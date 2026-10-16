@@ -33,7 +33,7 @@ fixture() {
         QUEUE_TARGET_BACKEND:"raw",
         QUEUE_LOOP:"1",
         DAILY_UPDATE_ENABLED:"1",
-        DAILY_UPDATE_INTERVAL_SECONDS:"86400",
+        DAILY_UPDATE_INTERVAL_SECONDS:"259200",
         TRANSCRIBE_MISSING:"1",
         WHISPER_BINARY:"/usr/local/bin/whisper-cli",
         WHISPER_MODEL:"/usr/local/share/ytsearch-asr/ggml-base.en.bin",

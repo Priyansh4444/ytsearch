@@ -95,3 +95,10 @@
   `-10` where the parser required `u32`. Signed event times, clipping negative
   starts at zero while preserving the end, prevent one event from discarding
   the whole transcript.
+
+- The “daily update” command name does not imply a 24-hour production cadence.
+  The full catalog sweep intentionally runs every three days under
+  `scripts/check-fly-cost-config.sh`; upload notifications and daily gap repair
+  cover the interval. Preserve that cost cap when forcing a one-off full repair.
+- The cloud image has no `ps` or `curl`. Inspect selected `/proc` fields with
+  Python instead of installing diagnostic packages on a production Machine.

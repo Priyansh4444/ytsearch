@@ -66,7 +66,7 @@ if ! printf '%s' "$machines" | jq -e \
     and (.config.env.WHISPER_THREADS == "2")
     and (.config.env.TRANSCRIPTION_BUDGET_SECONDS == "480")
     and (.config.env.DAILY_UPDATE_ENABLED == "1")
-    and (.config.env.DAILY_UPDATE_INTERVAL_SECONDS == "86400")
+    and (.config.env.DAILY_UPDATE_INTERVAL_SECONDS == "259200")
     and (.config.env.DAILY_UPDATE_INITIAL_DELAY_SECONDS == "0")
     and (.config.env.DAILY_UPDATE_STATE_FILE == "/var/lib/ytsearch/daily-update.last-completed")
     and ((.config.env.IDLE_EXIT_AFTER_SECONDS | tonumber?) // 0) > 0
