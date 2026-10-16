@@ -554,12 +554,11 @@ fn parse_whisper_output(
             continue;
         }
         let duration = end_ms - start_ms;
-        // Whisper timestamp tokens advance in 20ms frames. A decoded final
-        // token can land one frame beyond the actual audio boundary.
-        if segment.offsets.from >= segment.offsets.to
-            || segment.offsets.to > duration.saturating_add(20)
-        {
-            return Err(failed(video_id, "whisper returned out-of-range timestamps"));
+        // Whisper may extend its final decoded segment beyond the supplied
+        // audio (observed 29.600..30.600 on a 30s chunk). Keep its intersection
+        // with real audio; padding alone must never become searchable text.
+        if segment.offsets.from >= segment.offsets.to {
+            return Err(failed(video_id, "whisper returned reversed timestamps"));
         }
         if segment.offsets.from >= duration {
             continue;
@@ -721,14 +720,15 @@ mod tests {
         assert!(
             parse_whisper_output(
                 "id",
-                br#"{"transcription":[{"offsets":{"from":0,"to":30021},"text":"bad"}]}"#,
+                br#"{"transcription":[{"offsets":{"from":100,"to":10},"text":"bad"}]}"#,
                 0,
                 30_000
             )
             .is_err()
         );
-        let boundary = parse_whisper_output("id", br#"{"transcription":[{"offsets":{"from":29520,"to":30020},"text":" some custom..."}]}"#, 30_000, 60_000).unwrap();
-        assert_eq!((boundary[0].start_ms, boundary[0].end_ms), (59_520, 60_000));
+        let boundary = parse_whisper_output("id", br#"{"transcription":[{"offsets":{"from":29600,"to":30600},"text":" collect the data"},{"offsets":{"from":30600,"to":31000},"text":"padding only"}]}"#, 30_000, 60_000).unwrap();
+        assert_eq!(boundary.len(), 1);
+        assert_eq!((boundary[0].start_ms, boundary[0].end_ms), (59_600, 60_000));
         assert!(parse_whisper_output("id", b"runtime logs", 0, 30_000).is_err());
         assert!(
             parse_whisper_output("id", br#"{"transcription":[]}"#, 0, 30_000)

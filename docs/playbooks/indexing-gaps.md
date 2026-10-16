@@ -63,9 +63,11 @@
   audio files; a full work cache allows existing videos to resume before new
   downloads. Final transcripts commit atomically to `$TRANSCRIPT_CACHE_DIR/<id>.json`
   only after every chunk completes; successful commits remove intermediate audio.
-- Whisper uses 20ms timestamp frames. Clamp a final offset at most one frame
-  beyond the chunk boundary; reject larger or unordered ranges. The real canary
-  produced `29520..30020` on a 30-second chunk, exposing this boundary case.
+- Whisper can decode a final segment beyond the supplied audio window. Clip
+  segments to their intersection with actual audio, discard padding-only segments,
+  and reject reversed or unordered ranges. The real canary produced both
+  `29520..30020` and `29600..30600` on 30-second chunks. A one-frame tolerance
+  handled the first case but failed the next; clipping handles the underlying boundary.
 - Keep the invocation budget below `VIDEO_TIMEOUT_SECONDS`. Source clones share
   a serialized inference slot, and cancellation consumes elapsed active budget.
   Do not give every video a new budget inside a catalog process.
