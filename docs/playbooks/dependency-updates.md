@@ -55,6 +55,12 @@ Re-check these on every update; delete an entry once it no longer applies.
 
 ## Registry audit (2026-10-15)
 
+Follow-up on 2026-10-16: refreshed
+[Wrangler 4.151.1](https://registry.npmjs.org/wrangler/4.151.1) and
+[Cloudflare Vitest plugin 1.4.4](https://registry.npmjs.org/@cloudflare/vitest-plugin/1.4.4).
+Both select Miniflare `5.20261012.1-beta`; the override follows that version.
+Workerd remains `1.20261012.1`. The entries below record the initial upgrade.
+
 - Queried every npm dist-tag and the latest stable version of every direct Rust
   dependency with `bun run deps:outdated`; `cargo update --verbose` refreshed
   semver-compatible Rust releases. The direct dependency audit leaves only tower-http 0.7
