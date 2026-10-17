@@ -87,10 +87,16 @@ reserve. The existing publication-only builder remains stopped on its 10 GB
 volume. Publication passed the space gate and began downloading the mutation
 snapshot through sequence 10212 after the extension.
 
-The catalog sweep and transcription backlog remain active. A fresh complete-run
-reconciliation is still required after their publication; mixed historical
-manifests must not be presented as a completed repair. Private, paid, unavailable
-and speech-free videos retain explicit outcomes.
+Ten historical failed requests were restored to the runnable queue, one per
+creator without an active retry. Eight belong to existing indexed creators; two
+are previously attempted legacy Raw requests for Ben Eater and Real Engineering,
+which have no indexed profiles yet. Pending and rejected requests were untouched.
+The new catalog merge also covers their profiles once indexing creates them.
+
+Bulk repair remains queued behind the pending publication. A fresh complete-run
+reconciliation is still required after the catalog sweep publishes; mixed
+historical manifests must not be presented as a completed repair. Private, paid,
+unavailable and speech-free videos retain explicit outcomes.
 
 Validation: `bun run check:precommit` and `bun run check` passed, including
 350 Rust tests, all 18 browser scenarios, Worker/frontend tests, operational
