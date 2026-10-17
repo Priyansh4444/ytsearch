@@ -15,6 +15,9 @@ import type {
 
 const DEFAULT_PER_PAGE = 12;
 const RETRY_DELAY_MS = 250;
+// Experimental builds set VITE_SEARCH_MODE=semantic. The API keeps low-signal
+// queries and date sorts lexical, and answers lexically if semantic is down.
+const SEARCH_MODE = import.meta.env.VITE_SEARCH_MODE === "semantic" ? "semantic" : undefined;
 
 export async function runSearchTranscripts(
   apiBaseUrl: string,
@@ -28,6 +31,7 @@ export async function runSearchTranscripts(
     sort: request.sort,
   });
   if (request.youtuber) params.set("youtuber", request.youtuber);
+  if (SEARCH_MODE) params.set("mode", SEARCH_MODE);
   const attempt = () =>
     requestWireJson(
       `${apiBaseUrl}/api/search?${params.toString()}`,
@@ -53,6 +57,7 @@ export function runSearchVideoMoments(
   signal?: AbortSignal,
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q: query, video_id: videoId, per_page: "100" });
+  if (SEARCH_MODE) params.set("mode", SEARCH_MODE);
   return requestWireJson(
     `${apiBaseUrl}/api/search?${params.toString()}`,
     "Could not load every matching moment",

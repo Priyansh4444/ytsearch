@@ -42,6 +42,24 @@ describe("browser client runtime", () => {
     );
   });
 
+  it("requests semantic mode only in a VITE_SEARCH_MODE=semantic build", async () => {
+    vi.stubEnv("VITE_SEARCH_MODE", "semantic");
+    vi.resetModules();
+    try {
+      const { runSearchTranscripts: semanticSearch } = await import("./client-runtime");
+      const fetchMock = vi.fn().mockResolvedValue(Response.json(emptySearchResponse));
+      vi.stubGlobal("fetch", fetchMock);
+      await semanticSearch("", { query: "rust", youtuber: "", page: 1, sort: "relevance" });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/search?q=rust&per_page=12&page=1&sort=relevance&mode=semantic",
+        expect.anything(),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
   it("accepts the opt-in semantic response mode", async () => {
     vi.stubGlobal(
       "fetch",

@@ -98,7 +98,18 @@ async fn run() -> Result<()> {
     }
     let model_dir = env::var("SEMANTIC_MODEL_DIR")
         .map_err(|_| Error::Input("SEMANTIC_MODEL_DIR is required"))?;
-    let gemma = Gemma::load(Path::new(&model_dir))?;
+    // Serving keeps one ORT thread. A one-off import may use more cores through
+    // SEMANTIC_INDEX_THREADS; vectors are the same, only throughput changes.
+    let intra_threads = if args[0] == "index" {
+        env::var("SEMANTIC_INDEX_THREADS")
+            .ok()
+            .map(|v| v.parse::<usize>().ok().filter(|n| (1..=64).contains(n)))
+            .unwrap_or(Some(1))
+            .ok_or(Error::Input("SEMANTIC_INDEX_THREADS must be 1..64"))?
+    } else {
+        1
+    };
+    let gemma = Gemma::load(Path::new(&model_dir), intra_threads)?;
     if args[0] == "index" {
         let count_tokens = gemma.counter();
         let _writer_lock = store.writer_lock()?;

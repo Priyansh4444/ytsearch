@@ -109,8 +109,68 @@ service is unset, busy, unreachable or returns an invalid answer, `mode=semantic
 answers lexically and logs a warning; the response `mode` says which ran, so a
 client can show the option even before the service is deployed. Invalid filters
 still return 400. Unknown modes fail deserialization.
-No frontend control changes are included; its decoder merely accepts the new
-response mode.
+The frontend has no toggle. A build with `VITE_SEARCH_MODE=semantic` sends
+`mode=semantic` on every search; production builds leave it unset.
+
+## Experimental Fly site
+
+`ytsearch-semantic-experimental` (https://ytsearch-semantic-experimental.fly.dev)
+is a test site, not production. One machine runs nginx, `youtube-api`,
+`youtube-semantic` and Qdrant from
+[Dockerfile.semantic-experimental](../../Dockerfile.semantic-experimental). nginx
+sends `/api/search` to the local API first. Anything it cannot answer
+semantically (`I`, date sorts, semantic down) fails against a closed local Raw
+port, and nginx retries it on the public production API. Other `/api` reads go
+to production and writes are refused, so the site holds no Raw key and cannot
+queue index requests. It stops when idle; the first request after that waits for
+a cold start.
+
+Data is imported locally, where cores are plentiful, then moved as a Qdrant
+snapshot. Build snapshots from a Raw backup archive with
+[build-semantic-snapshots.py](../../scripts/build-semantic-snapshots.py), which
+normalizes per-video display metadata and skips videos the importer would
+reject. Import with `SEMANTIC_INDEX_THREADS=8`: on a 16-thread laptop that is
+about 3.9 passages/s against 1.25 on one thread, while 14 threads was slower.
+
+```bash
+python3 scripts/build-semantic-snapshots.py ~/.cache/ytsearch/schema9/youtube_transcript_chunks.jsonl.gz \
+  /tmp/semantic-snapshots --creator @t3dotgg --newest 300
+for f in /tmp/semantic-snapshots/snapshot-*.jsonl; do
+  SEMANTIC_INDEX_THREADS=8 target/release/youtube-semantic index "$f"
+done
+```
+
+Ship the collection as a Qdrant snapshot. SSH does not count as traffic for
+Fly's idle stop, so keep the machine awake with HTTP requests while uploading:
+
+```bash
+C=ytsearch_semantic_pilot_experimental_128 A=ytsearch-semantic-experimental
+curl -fsS -X POST "$SEMANTIC_QDRANT_URL/collections/$C/snapshots?wait=true"   # prints the snapshot name
+(while sleep 10; do curl -fsS -o /dev/null https://$A.fly.dev/healthz; done) & keepalive=$!
+flyctl ssh sftp put -a $A path/to/$C-*.snapshot /data/qdrant/snapshots/upload.snapshot
+flyctl ssh console -a $A -C "curl -fsS -X PUT 'http://127.0.0.1:6333/collections/$C/snapshots/recover?wait=true' \
+  -H 'Content-Type: application/json' -d '{\"location\":\"file:///data/qdrant/snapshots/upload.snapshot\"}'"
+flyctl ssh console -a $A -C "rm /data/qdrant/snapshots/upload.snapshot"
+kill $keepalive
+```
+
+The semantic service retries every 30 s until the collection exists, then
+`mode` in `/api/search` responses turns `semantic`. Deploy with
+`flyctl deploy --config fly.semantic-experimental.toml --ha=false --remote-only`;
+the collection lives on the volume and survives deploys.
+
+Traps found while building the site:
+
+- The Qdrant release binary needs glibc 2.38+, so the runtime image is Debian
+  trixie; on bookworm Qdrant exits at once and nothing listens on 8080.
+- `prepare-semantic-assets.py` writes mode-600 files. The image runs
+  `chmod -R a+rX` because the services are unprivileged; otherwise the semantic
+  service reports only "local model unavailable or inference failed".
+- Raw backups carry engagement counts on only some chunks of a video and old
+  creator names after a channel rename. The importer requires one value per
+  video, so the snapshot builder normalizes both.
+- A snapshot that fails preflight writes nothing, but earlier snapshots stay
+  imported; fix the input and rerun the same loop, which skips finished points.
 
 ## Traps
 

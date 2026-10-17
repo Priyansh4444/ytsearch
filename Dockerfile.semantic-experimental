@@ -1,0 +1,48 @@
+# Experimental semantic-search site: one machine with the frontend (nginx),
+# youtube-api, youtube-semantic and Qdrant. Lexical answers come from the public
+# production API through nginx, so this image holds no Raw credentials.
+# See docs/playbooks/semantic-pilot.md ("Experimental Fly site").
+FROM rust:1-bookworm AS rust
+WORKDIR /app
+COPY . .
+RUN cargo build --locked --release -p youtube_api -p youtube_semantic
+
+FROM python:3.12-slim AS assets
+COPY scripts/prepare-semantic-assets.py /build/scripts/prepare-semantic-assets.py
+# Downloads pinned model, ONNX Runtime and Qdrant releases and verifies every
+# checksum. It writes through private temp files; the services run unprivileged.
+RUN python -I /build/scripts/prepare-semantic-assets.py --directory /opt/semantic \
+    && rm -rf /opt/semantic/.downloads \
+    && chmod -R a+rX /opt/semantic
+
+FROM oven/bun:1 AS frontend
+WORKDIR /app
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+COPY . .
+ENV VITE_API_BASE_URL= \
+    VITE_INDEX_QUEUE_API_BASE_URL= \
+    VITE_ENGAGEMENT_SORTS=true \
+    VITE_SEARCH_MODE=semantic
+RUN bun run build
+
+# trixie: the Qdrant release binary needs glibc 2.38+, bookworm ships 2.36.
+FROM debian:trixie-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl nginx \
+    && rm -rf /var/lib/apt/lists/* /etc/nginx/sites-enabled \
+    && useradd --create-home --uid 10001 semantic
+COPY --from=assets /opt/semantic /opt/semantic
+COPY --from=rust /app/target/release/youtube-api /app/target/release/youtube-semantic /usr/local/bin/
+COPY --from=frontend /app/dist /usr/share/nginx/html
+COPY config/qdrant-semantic.local.yaml /opt/semantic/qdrant.yaml
+COPY deploy/semantic-experimental/nginx.conf /etc/nginx/nginx.conf
+COPY deploy/semantic-experimental/entrypoint.sh /usr/local/bin/semantic-experimental
+ENV SEMANTIC_MODEL_DIR=/opt/semantic/model \
+    ORT_DYLIB_PATH=/opt/semantic/runtime/onnxruntime-linux-x64-1.31.0/lib/libonnxruntime.so.1.31.0 \
+    SEMANTIC_QDRANT_URL=http://127.0.0.1:6333 \
+    SEMANTIC_COLLECTION=ytsearch_semantic_pilot_experimental_128 \
+    SEMANTIC_DIMENSIONS=128 \
+    SEMANTIC_BIND=127.0.0.1:8790
+EXPOSE 8080
+CMD ["semantic-experimental"]

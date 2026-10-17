@@ -12,7 +12,10 @@ creator data.
 | Raw engine | `ytsearch-raw-production` | Reloadable index and publisher; always on (`SEARCH_SCHEDULE_MODE=always_on`) |
 | Raw indexer | `ytsearch-indexer-raw-production` | One on-demand queue worker, woken through Cloudflare Queue |
 
-These three Fly apps are the whole footprint, and `raw` is the only backend id.
+These three Fly apps are the whole production footprint, and `raw` is the only
+backend id. `ytsearch-semantic-experimental` is a separate, idle-stopping test site
+for semantic search that holds no Raw credentials; see
+[the semantic pilot playbook](docs/playbooks/semantic-pilot.md#experimental-fly-site).
 
 ## Read first
 

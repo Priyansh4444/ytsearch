@@ -14,7 +14,7 @@ pub(crate) struct Gemma {
     tokenizer: Tokenizer,
 }
 impl Gemma {
-    pub(crate) fn load(dir: &Path) -> Result<Self> {
+    pub(crate) fn load(dir: &Path, intra_threads: usize) -> Result<Self> {
         // Hash in bounded buffers, then let ORT map external weights from local files.
         for (name, expected) in ASSETS {
             let mut file = std::fs::File::open(dir.join(name)).map_err(|_| Error::Model)?;
@@ -44,7 +44,7 @@ impl Gemma {
         environment.set_log_level(ort::logging::LogLevel::Fatal);
         let session = Session::builder(&environment)
             .map_err(|_| Error::Model)?
-            .with_intra_threads(1)
+            .with_intra_threads(intra_threads)
             .map_err(|_| Error::Model)?
             .with_inter_threads(1)
             .map_err(|_| Error::Model)?
