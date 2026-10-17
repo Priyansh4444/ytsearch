@@ -1,5 +1,9 @@
 # Creator video gap audit, 2026-10-15
 
+This records the pre-rollout snapshot. The dependency/dashboard release and cloud
+fallback are now deployed; see the [2026-10-17 production confirmation](transcription-fallback-verification-2026-10-16.md#production-confirmation-2026-10-17)
+for actual public-search evidence and the remaining reconciliation work.
+
 The production snapshot captured around 12:18 UTC reports 41,399 indexed videos
 across 69 creators and 42,427 reported public videos. Its count difference is
 1,028. The live catalog continues to change. This is a diagnostic snapshot,

@@ -117,3 +117,17 @@
   Preserve these statuses through legacy requests without a target backend.
 
 - [Cloud fallback verification, 2026-10-16](../transcription-fallback-verification-2026-10-16.md) records the real captionless-video canary, budget resume, durable import, publication, search and cache-reuse evidence.
+- On shared CPUs, inference can exceed the two-minute ffmpeg/ffprobe helper
+  timeout. Five production records exposed that mismatch with the shared
+  480-second budget. Give inference the remaining invocation budget; keep
+  cancellation, checkpoint resume and bounded helper commands. The virtual-time
+  regression crosses the former deadline without waiting two real minutes.
+- Speech-free inference is terminal work, not resumable work. Remove its audio
+  and checkpoints after every chunk completes, or terminal videos eventually
+  fill the bounded work cache and prevent new downloads.
+- Publication and the transcription cache share the queue worker volume. The
+  10 GB volume fell to 7.45 GB free once the bounded ASR cache reached 1.53 GB;
+  publication requires 8 GB free and therefore prevented all later repair work.
+  On 2026-10-17 the worker volume grew to 12 GB and publication passed the gate.
+  Provision 12 GB for this worker, retain the 8 GB reserve and preserve partial
+  transcripts. The empty publication-only builder can remain at 10 GB.

@@ -18,7 +18,8 @@ APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-raw-production}"
 FLY_REGION="${FLY_REGION:-sjc}"
 QUEUE_TARGET_BACKEND="${QUEUE_TARGET_BACKEND:-}"
 ON_DEMAND="${ON_DEMAND:-0}"
-VOLUME_SIZE_GB="${INDEXER_VOLUME_SIZE_GB:-10}"
+# Leave eight GB for publication alongside portable transcripts and bounded ASR work.
+VOLUME_SIZE_GB="${INDEXER_VOLUME_SIZE_GB:-12}"
 DAILY_UPDATE_LIST_SOURCE="${DAILY_UPDATE_LIST_SOURCE:-scripts/indexed-channels.txt}"
 INDEXER_DATA_DIRECTORY="${INDEXER_DATA_DIRECTORY:-/var/lib/ytsearch}"
 
