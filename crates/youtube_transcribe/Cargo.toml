@@ -13,4 +13,4 @@ youtube_ingest = { path = "../youtube_ingest" }
 youtube_ytdlp = { path = "../youtube_ytdlp" }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

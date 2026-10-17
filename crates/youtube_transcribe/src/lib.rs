@@ -798,6 +798,48 @@ echo 'recovered useful speech'
     }
 
     #[tokio::test]
+    async fn slow_inference_uses_the_remaining_invocation_budget() {
+        let fixture = Fixture::new();
+        fixture.audio("slow");
+        let started = fixture.0.join("started");
+        let release = fixture.0.join("release");
+        let mut config = fixture.config().with_budget(Duration::from_secs(480));
+        config.voxtype_binary = fixture
+            .script(
+                "voxtype",
+                &format!(
+                    "touch '{}'\nwhile [ ! -f '{}' ]; do sleep 0.01; done\necho 'slow useful speech'",
+                    started.display(),
+                    release.display()
+                ),
+            )
+            .to_string_lossy()
+            .into();
+        let source = AudioTranscriptSource::with_config(config);
+        let task = tokio::spawn(async move { source.transcribe("slow").await });
+        let started_wait = Instant::now();
+        while !started.exists() {
+            assert!(started_wait.elapsed() < Duration::from_secs(5));
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        tokio::time::pause();
+        tokio::time::advance(CHUNK_TIMEOUT + Duration::from_secs(1)).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        let still_running = !task.is_finished();
+        std::fs::write(release, "resume").unwrap();
+        tokio::time::resume();
+        let result = task.await.unwrap();
+        assert!(
+            still_running,
+            "inference stopped at the helper subprocess deadline"
+        );
+        assert_eq!(result.unwrap().len(), 3);
+        assert!(fixture.0.join("cache/slow.json").exists());
+    }
+
+    #[tokio::test]
     async fn clones_share_budget_and_cancellation_debits_active_work() {
         let fixture = Fixture::new();
         fixture.audio("video");
