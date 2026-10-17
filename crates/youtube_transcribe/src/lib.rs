@@ -339,6 +339,7 @@ impl AudioTranscriptSource {
                         &directory.join("whisper-result"),
                         start_ms,
                         end_ms,
+                        budget.remaining(),
                     )
                     .await?;
                 let checkpoint = ChunkCheckpoint {
@@ -426,6 +427,7 @@ impl AudioTranscriptSource {
         output: &Path,
         start_ms: u32,
         end_ms: u32,
+        remaining: Duration,
     ) -> youtube_ingest::Result<Vec<TranscriptSegment>> {
         match &self.config.backend {
             TranscriptionBackend::Voxtype => {
@@ -435,7 +437,7 @@ impl AudioTranscriptSource {
                     command.arg("--engine").arg(engine);
                 }
                 command.arg(chunk);
-                let bytes = run(video_id, &mut command).await?;
+                let bytes = run_with_timeout(video_id, &mut command, remaining).await?;
                 let text = normalize_transcriber_output(&String::from_utf8_lossy(&bytes));
                 Ok(if text.is_empty() {
                     Vec::new()
@@ -464,7 +466,7 @@ impl AudioTranscriptSource {
                     .arg(output)
                     .arg("-t")
                     .arg(threads.to_string());
-                run(video_id, &mut command).await?;
+                run_with_timeout(video_id, &mut command, remaining).await?;
                 let bytes = fs::read(&output_file)
                     .await
                     .map_err(|error| failed(video_id, error))?;
@@ -500,8 +502,16 @@ async fn check_binary(binary: &Path, argument: &str) -> youtube_ingest::Result<(
 }
 
 async fn run(video_id: &str, command: &mut Command) -> youtube_ingest::Result<Vec<u8>> {
+    run_with_timeout(video_id, command, CHUNK_TIMEOUT).await
+}
+
+async fn run_with_timeout(
+    video_id: &str,
+    command: &mut Command,
+    remaining: Duration,
+) -> youtube_ingest::Result<Vec<u8>> {
     let output = timeout(
-        CHUNK_TIMEOUT,
+        remaining,
         command
             .kill_on_drop(true)
             .stdout(Stdio::piped())
