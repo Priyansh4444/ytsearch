@@ -207,6 +207,21 @@ impl Store {
         }
         Ok(())
     }
+    // Same embedded content, newer display metadata (views, likes, names): replace
+    // the payload in place and keep the stored vector.
+    pub(crate) async fn overwrite_payload(&self, passage: &Passage) -> Result<()> {
+        let result = self
+            .json(
+                Method::PUT,
+                "/points/payload?wait=true",
+                Some(json!({"payload":passage,"points":[passage.id]})),
+            )
+            .await?;
+        if result["status"] != "completed" {
+            return Err(Error::Store);
+        }
+        Ok(())
+    }
     pub(crate) async fn remove_obsolete(&self, ids: &[String]) -> Result<()> {
         // IDs were captured before writing replacements. Delete by ID, not "not in snapshot" filters.
         for batch in ids.chunks(128) {
@@ -229,7 +244,8 @@ impl Store {
         filter: &SearchFilter,
         limit: usize,
     ) -> Result<Vec<Value>> {
-        self.ready().await?;
+        // Collection config is validated at startup and by /ready, not per query;
+        // the per-hit profile_id check below still rejects a swapped collection.
         if vector.len() != self.profile.dimensions.size() || vector.iter().any(|x| !x.is_finite()) {
             return Err(Error::Model);
         }

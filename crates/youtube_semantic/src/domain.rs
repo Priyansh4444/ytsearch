@@ -188,6 +188,21 @@ fn display_metadata(chunk: &Chunk) -> serde_json::Map<String, Value> {
     .collect()
 }
 
+// The point ID covers exactly what determines the vector and its timestamp: the
+// profile and the embedded title/text at one time range. Views, likes, names and
+// other display payload may change daily without forcing a re-embed.
+fn passage_id(passage: &Passage) -> Result<String> {
+    let identity = json!({
+        "profile_id": passage.profile_id,
+        "video_id": passage.video_id,
+        "title": passage.title,
+        "text_digest": passage.text_digest,
+        "t_start_ms": passage.t_start_ms,
+        "t_end_ms": passage.t_end_ms,
+    });
+    Ok(Uuid::new_v5(&Uuid::NAMESPACE_URL, &serde_json::to_vec(&identity)?).to_string())
+}
+
 // A video is the reconciliation unit. Never split one video across snapshots.
 // Long individual chunks are rejected, never truncated or assigned invented times.
 pub(crate) fn passages(
@@ -258,7 +273,7 @@ pub(crate) fn passages(
             t_end_ms: range_end,
             metadata,
         };
-        passage.id = Uuid::new_v5(&Uuid::NAMESPACE_URL, &serde_json::to_vec(&passage)?).to_string();
+        passage.id = passage_id(&passage)?;
         output.push(passage);
         start = end;
     }
@@ -358,6 +373,13 @@ mod tests {
         let mut changed = chunks.to_vec();
         changed[0].text = "changed".into();
         assert_ne!(a[0].id, passages(&changed, &p, |_| Ok(10)).unwrap()[0].id);
+        let mut counted = chunks.to_vec();
+        for chunk in &mut counted {
+            chunk.metadata.insert("view_count".into(), json!(42));
+        }
+        let counted = passages(&counted, &p, |_| Ok(10)).unwrap();
+        assert_eq!(a[0].id, counted[0].id, "display metadata must not re-embed");
+        assert_ne!(a[0].source_revision, counted[0].source_revision);
         assert!(passages(&[chunk("a", 0, 60_001)], &p, |_| Ok(10)).is_err());
         assert!(passages(&[chunk("a", 10, 20), chunk("b", 9, 20)], &p, |_| Ok(10)).is_err());
         assert_eq!(

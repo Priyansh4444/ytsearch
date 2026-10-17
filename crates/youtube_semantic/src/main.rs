@@ -161,7 +161,7 @@ async fn run() -> Result<()> {
         let state = Arc::new(Service {
             store,
             inference,
-            admission: Arc::new(Semaphore::new(1)),
+            admission: Arc::new(Semaphore::new(model::QUEUE_DEPTH)),
         });
         let bind = env::var("SEMANTIC_BIND").unwrap_or_else(|_| "127.0.0.1:8790".into());
         let bind: std::net::SocketAddr = bind
@@ -269,6 +269,7 @@ impl<R: BufRead> VideoReader<R> {
 // Separate the reconciliation decision from effects so retries have one explicit state transition.
 struct Replacement {
     missing: Vec<usize>,
+    stale_payload: Vec<usize>,
     obsolete: Vec<String>,
 }
 fn replacement(
@@ -277,15 +278,18 @@ fn replacement(
 ) -> Result<Replacement> {
     let mut remaining = existing.clone();
     let mut missing = Vec::new();
+    let mut stale_payload = Vec::new();
     for (i, p) in desired.iter().enumerate() {
         match remaining.remove(&p.id) {
             Some(payload) if payload == serde_json::to_value(p)? => (),
-            Some(_) => return Err(Error::Profile),
+            // The ID pins the embedded content, so only display payload differs.
+            Some(_) => stale_payload.push(i),
             None => missing.push(i),
         }
     }
     Ok(Replacement {
         missing,
+        stale_payload,
         obsolete: remaining.into_keys().collect(),
     })
 }
@@ -301,6 +305,9 @@ async fn replace_video(store: &Store, inference: &Inference, desired: &[Passage]
             .embed(document_prompt(&passage.title, &passage.text))
             .await?;
         store.upsert(passage, vector).await?;
+    }
+    for &i in &plan.stale_payload {
+        store.overwrite_payload(&desired[i]).await?;
     }
     // This is reached only once EVERY replacement point has a successful durable acknowledgment.
     // Failure/retry leaves old passages reachable; rerun skips completed content IDs and converges.
@@ -439,8 +446,11 @@ mod tests {
                 .obsolete
                 .is_empty()
         );
-        existing.insert(desired[0].id.clone(), json!({"corrupt":"payload"}));
-        assert!(replacement(&existing, &desired).is_err());
+        // Same content ID, different payload (e.g. a new view count): overwrite, never re-embed.
+        existing.insert(desired[0].id.clone(), json!({"view_count":1}));
+        let plan = replacement(&existing, &desired).unwrap();
+        assert!(plan.missing.is_empty());
+        assert_eq!(plan.stale_payload, vec![0]);
     }
 }
 
@@ -453,6 +463,7 @@ mod transport_tests {
     struct Fake {
         points: HashMap<String, Value>,
         writes: usize,
+        payload_writes: usize,
         deletes: usize,
         fail_at: usize,
     }
@@ -477,6 +488,16 @@ mod transport_tests {
         );
         Json(json!({"status":"ok","result":{"status":"completed"}})).into_response()
     }
+    async fn overwrite(State(state): State<FakeState>, Json(body): Json<Value>) -> Json<Value> {
+        let mut state = state.lock().unwrap();
+        state.payload_writes += 1;
+        for id in body["points"].as_array().unwrap() {
+            state
+                .points
+                .insert(id.as_str().unwrap().into(), body["payload"].clone());
+        }
+        Json(json!({"status":"ok","result":{"status":"completed"}}))
+    }
     async fn delete(State(state): State<FakeState>, Json(body): Json<Value>) -> Json<Value> {
         let mut state = state.lock().unwrap();
         state.deletes += 1;
@@ -496,6 +517,7 @@ mod transport_tests {
             .route("/collections/{name}/points/scroll", post(scroll))
             .route("/collections/{name}/points", put(upsert))
             .route("/collections/{name}/points/delete", post(delete))
+            .route("/collections/{name}/points/payload", put(overwrite))
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -548,6 +570,20 @@ mod transport_tests {
             0
         );
         assert_eq!(state.lock().unwrap().points.len(), 1);
+        // A daily metadata refresh rewrites the payload in place: no embedding, no new point.
+        let mut refreshed = desired[..1].to_vec();
+        refreshed[0]
+            .metadata
+            .insert("view_count".into(), json!(1_000_001));
+        assert_eq!(
+            replace_video(&store, &inference, &refreshed).await.unwrap(),
+            0
+        );
+        {
+            let state = state.lock().unwrap();
+            assert_eq!((state.writes, state.payload_writes), (3, 1));
+            assert_eq!(state.points[&refreshed[0].id]["view_count"], 1_000_001);
+        }
         server.abort();
     }
 }

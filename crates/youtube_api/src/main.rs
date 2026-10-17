@@ -586,8 +586,15 @@ async fn search_handler(
     if sort == SearchSort::Relevance && low_signal_query {
         sort = SearchSort::PublishedDesc;
     }
+    // Semantic mode is an opt-in improvement, never a hard dependency: when the
+    // service is absent, busy or down, answer lexically. `mode` says which ran.
     if params.mode.uses_semantic(sort, low_signal_query) {
-        return semantic::response(&state, &params, query, per_page, page).await;
+        match semantic::response(&state, &params, query, per_page, page).await {
+            Err(ApiError::SemanticUnavailable) => {
+                tracing::warn!("semantic search unavailable; answering lexically");
+            }
+            answer => return answer,
+        }
     }
     let search_started = Instant::now();
     // A video-scoped request loads every matching moment of one video. Any

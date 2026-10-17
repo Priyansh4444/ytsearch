@@ -5,6 +5,10 @@ use std::{io::Read, path::Path};
 use tokenizers::Tokenizer;
 use tokio::sync::{mpsc, oneshot};
 
+/// Searches that may wait for the one inference thread (~30-70 ms each) before
+/// new ones are told the service is busy.
+pub(crate) const QUEUE_DEPTH: usize = 8;
+
 pub(crate) struct Gemma {
     session: Session,
     tokenizer: Tokenizer,
@@ -87,7 +91,7 @@ impl Gemma {
         normalize(values.to_vec(), profile.dimensions)
     }
     pub(crate) fn worker(mut self, profile: Profile) -> Inference {
-        let (send, mut recv) = mpsc::channel::<Work>(1);
+        let (send, mut recv) = mpsc::channel::<Work>(QUEUE_DEPTH);
         // Exactly one long-lived inference thread, rather than per-request blocking tasks.
         std::thread::spawn(move || {
             while let Some(work) = recv.blocking_recv() {
@@ -111,9 +115,11 @@ impl Inference {
     }
     #[cfg(test)]
     pub(crate) fn fake() -> Self {
-        let (send, mut recv) = mpsc::channel::<Work>(1);
+        let (send, mut recv) = mpsc::channel::<Work>(QUEUE_DEPTH);
         tokio::spawn(async move {
             while let Some(work) = recv.recv().await {
+                // Serial and slow enough that concurrent callers must queue.
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                 let _ = work.reply.send(Ok(vec![1. / 128f32.sqrt(); 128]));
             }
         });
@@ -121,12 +127,32 @@ impl Inference {
     }
     pub(crate) async fn embed(&self, text: String) -> Result<Vec<f32>> {
         let (reply, receiver) = oneshot::channel();
-        self.0
-            .try_send(Work { text, reply })
-            .map_err(|_| Error::Busy)?;
-        tokio::time::timeout(std::time::Duration::from_secs(30), receiver)
-            .await
-            .map_err(|_| Error::Busy)?
-            .map_err(|_| Error::Model)?
+        // Queue behind the single inference thread; the caller's admission
+        // semaphore bounds how many can wait, and the timeout bounds how long.
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            self.0
+                .send(Work { text, reply })
+                .await
+                .map_err(|_| Error::Model)?;
+            receiver.await.map_err(|_| Error::Model)?
+        })
+        .await
+        .map_err(|_| Error::Busy)?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn concurrent_searches_queue_instead_of_failing() {
+        let inference = Inference::fake();
+        let searches = (0..QUEUE_DEPTH).map(|i| {
+            let inference = inference.clone();
+            tokio::spawn(async move { inference.embed(format!("query {i}")).await })
+        });
+        for search in searches.collect::<Vec<_>>() {
+            assert_eq!(search.await.unwrap().unwrap().len(), 128);
+        }
     }
 }

@@ -3,6 +3,7 @@
 
 import argparse
 import collections
+import concurrent.futures
 import hashlib
 import http.server
 import json
@@ -155,12 +156,25 @@ def main():
             assert index()["embedded_passages"] == 0
             remaining = request(service + "/search", {"q": "star", "filter": {"video_id": "astronomy"}, "limit": 10})["hits"]
             assert len(remaining) == 1 and remaining[0]["document"]["t_end_ms"] == 30000
+            # A metadata-only refresh (daily view counts) overwrites payloads without re-embedding.
+            snapshot(source, [dict(row, view_count=1234) for row in (rows[0], rows[2])])
+            assert index()["embedded_passages"] == 0
+            refreshed = request(service + "/search", {"q": "star", "filter": {"video_id": "astronomy"}, "limit": 10})["hits"]
+            assert len(refreshed) == 1 and refreshed[0]["document"]["view_count"] == 1234
+            # Simultaneous searches queue behind the one inference thread instead of failing.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+                burst = list(pool.map(lambda i: request(service + "/search", {"q": f"black hole {i}", "limit": 5}), range(6)))
+            assert all(result["hits"] for result in burst)
+            # With the semantic service down, mode=semantic still answers, lexically.
+            server.terminate()
+            server.wait(timeout=5)
+            assert search({"q": "collapsed star", "mode": "semantic"})["mode"] == "lexical"
             params = request(qbase + "/collections/" + collection)["result"]["config"]["params"]
             assert params["vectors"]["datatype"] == "float16" and params["vectors"]["on_disk"]
             assert params["on_disk_payload"]
             print(json.dumps({"ok": True, "initial_passages": 3, "repeat_embedded": 0,
                               "embedding_ms": response["timings"]["embedding_ms"],
-                              "checks": ["real inference", "creator/video filters", "mixed-case handles", "API cards", "lexical routes", "truncation rejection", "shrink cleanup", "on-disk float16 storage"],
+                              "checks": ["real inference", "creator/video filters", "mixed-case handles", "API cards", "lexical routes", "truncation rejection", "shrink cleanup", "metadata refresh without re-embed", "concurrent burst queues", "lexical fallback when semantic is down", "on-disk float16 storage"],
                               "raw_fixture_requests": len(raw_requests)}))
         finally:
             for process in reversed(processes):

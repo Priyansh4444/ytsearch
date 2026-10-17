@@ -160,4 +160,30 @@ mod tests {
             Mode::Semantic
         );
     }
+
+    // search_handler answers lexically on SemanticUnavailable, so a busy or
+    // unreachable service must surface as exactly that error, never a 4xx/5xx.
+    #[tokio::test]
+    async fn busy_or_unreachable_service_triggers_the_lexical_fallback() {
+        let params: SearchParams = serde_json::from_value(json!({"q":"rust"})).unwrap();
+        let busy = axum::Router::new().route(
+            "/search",
+            axum::routing::post(|| async { StatusCode::TOO_MANY_REQUESTS }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let busy_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, busy).await.unwrap() });
+        let error = Client::new(&busy_url).unwrap().hits("rust", &params).await;
+        assert!(matches!(error, Err(ApiError::SemanticUnavailable)));
+        server.abort();
+
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closed_url = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        let error = Client::new(&closed_url)
+            .unwrap()
+            .hits("rust", &params)
+            .await;
+        assert!(matches!(error, Err(ApiError::SemanticUnavailable)));
+    }
 }

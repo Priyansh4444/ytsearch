@@ -35,11 +35,15 @@ Grafts from the direct prototype: file-backed ORT graph loading, streaming asset
 hashes, explicit tensor extraction, an inference wait timeout and disk-backed
 Qdrant payloads. Parent review additionally requires disk-backed vectors and
 checks both storage flags when opening a collection. The recovered version's
-single admitted request and one-item channel remain; the larger alternative
-queue was rejected.
+single admitted request and one-item channel were later replaced by an
+eight-search queue: with one admitted request, two simultaneous users meant one
+error. The API also falls back to lexical search when semantic is unavailable.
 Full-video hashes were rejected for identity because an unrelated late caption
 edit would re-embed every passage; passage-local source hashes keep unaffected
-passages reusable. No implementation uses Python for serving or inference.
+passages reusable. Later review found the point ID also hashed display metadata,
+so a daily view-count refresh would have re-embedded every passage; IDs now cover
+only embedded content and time range, and metadata changes overwrite payloads.
+No implementation uses Python for serving or inference.
 
 The real-caption trial exposed a shared prototype assumption: source chunks can
 overlap in time. The existing `youtube_ingest::Chunker` preserves YouTube overlaps.

@@ -104,8 +104,11 @@ curl -fsS 'http://127.0.0.1:8787/api/search?q=collapsed%20star&mode=semantic&you
 
 The optional API adapter holds no Qdrant credentials and adds no inference
 packages to `youtube_api`. Without that environment variable, normal API startup
-and lexical queries need neither model assets nor Qdrant; explicit semantic
-relevance requests return a sanitized 503. Unknown modes fail deserialization.
+and lexical queries need neither model assets nor Qdrant. When the semantic
+service is unset, busy, unreachable or returns an invalid answer, `mode=semantic`
+answers lexically and logs a warning; the response `mode` says which ran, so a
+client can show the option even before the service is deployed. Invalid filters
+still return 400. Unknown modes fail deserialization.
 No frontend control changes are included; its decoder merely accepts the new
 response mode.
 
@@ -160,9 +163,12 @@ response mode.
 
 The named shapes are `EmbeddingDimensions` (128 default or 256), `Profile`,
 `Passage`, `SearchFilter`, `SnapshotReceipt`, and a content-based replacement
-plan. UUIDv5 IDs include the passage content/profile and source revision. Each
-passage carries a SHA256 text digest and a source revision digest of its original
-contributing chunk documents. Display metadata never overwrites identity fields.
+plan. UUIDv5 point IDs cover only what determines the vector and its time range:
+profile, video, title, text digest and start/end. Each passage also carries a
+source revision digest of its original contributing chunk documents. A changed
+view/like/comment count or creator name keeps the ID, so the importer overwrites
+that payload in place (`PUT /points/payload`) instead of re-embedding the video.
+Display metadata never overwrites identity fields.
 
 EmbeddingGemma's query prompt is `task: search result | query: {q}`; the document
 prompt is `title: {title} | text: {text}`. The tokenizer inserts BOS. The Q4 graph
@@ -187,9 +193,10 @@ existing reqwest transport for this small REST surface. Gemma inference in Raw,
 Managed inference, larger models, turbopuffer, hybrid fusion and continuous
 production ingestion are outside the requested cost and pilot scope.
 
-There is one persistent inference worker, a one-item channel, one admitted search
-request, batch size one, one ORT intra/inter-op thread and single-item
-tokenization. Busy work returns 429. No blocking task is allocated per query. Inference waits time out after 30 seconds; the underlying CPU call
+There is one persistent inference worker, batch size one, one ORT intra/inter-op
+thread and single-item tokenization. Up to eight searches (`QUEUE_DEPTH`) wait
+for that worker, about 0.5 s at the measured 30-70 ms per query; beyond that the
+service returns 429 and the API falls back to lexical search. No blocking task is allocated per query. Inference waits time out after 30 seconds; the underlying CPU call
 finishes on the single worker. Qdrant calls time out after 15 seconds; API service
 calls after 30.
 HTTP bodies and Qdrant responses have byte caps. Transport errors omit URLs,
