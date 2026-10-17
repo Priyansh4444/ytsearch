@@ -7,6 +7,7 @@ last person, and the facts that are expensive to look up.
 
 | Playbook | Use it when |
 | --- | --- |
+| [search-quality.md](search-quality.md) | Preserving ranking, creator filtering, timestamp grouping and low-signal query behavior |
 | [reader-performance.md](reader-performance.md) | Profiling or speeding up the Raw reader, or proving a reader change returns identical results |
 | [api-changes.md](api-changes.md) | Refactoring `youtube_api`, or proving an API change returns identical responses |
 | [dependency-updates.md](dependency-updates.md) | Updating JS or Rust dependencies, or a bundle budget fails |
