@@ -1,0 +1,254 @@
+[
+ {
+  "tid": "T00",
+  "video_id": "VUyib5mR8Pg",
+  "title": "Anthropic can\u2019t help themselves\u2026",
+  "t_start_ms": 625040,
+  "t_end_ms": 668079
+ },
+ {
+  "tid": "T01",
+  "video_id": "1p334v40npw",
+  "title": "I'm scared to make this video",
+  "t_start_ms": 870880,
+  "t_end_ms": 909440
+ },
+ {
+  "tid": "T02",
+  "video_id": "kEPLuEjVr_4",
+  "title": "So close to Opus at 1/10th the price (GLM-4.7 and Minimax M2.1 showdown)",
+  "t_start_ms": 1043839,
+  "t_end_ms": 1083320
+ },
+ {
+  "tid": "T03",
+  "video_id": "JMTSX7GdDxk",
+  "title": "React 19.2 Dropped Early???",
+  "t_start_ms": 685600,
+  "t_end_ms": 723440
+ },
+ {
+  "tid": "T04",
+  "video_id": "C84YEp-8-hI",
+  "title": "Watch this if you hate React Server Components",
+  "t_start_ms": 1510280,
+  "t_end_ms": 1555080
+ },
+ {
+  "tid": "T05",
+  "video_id": "r3NDk9UuPK8",
+  "title": "There's a startup making botnets using Chrome extensions?",
+  "t_start_ms": 798160,
+  "t_end_ms": 841680
+ },
+ {
+  "tid": "T06",
+  "video_id": "vUARWTh7AGc",
+  "title": "Vite costs money now? wtf is Vite+",
+  "t_start_ms": 1599440,
+  "t_end_ms": 1641039
+ },
+ {
+  "tid": "T07",
+  "video_id": "w4gqOWUw230",
+  "title": "Life after TypeScript",
+  "t_start_ms": 1097440,
+  "t_end_ms": 1134880
+ },
+ {
+  "tid": "T08",
+  "video_id": "v1MptV67kSI",
+  "title": "Claude Code's favorite tech stack",
+  "t_start_ms": 1783920,
+  "t_end_ms": 1822120
+ },
+ {
+  "tid": "T09",
+  "video_id": "xBM307YwVRw",
+  "title": "I can't believe he was right.",
+  "t_start_ms": 804399,
+  "t_end_ms": 846560
+ },
+ {
+  "tid": "T10",
+  "video_id": "x7p5cClmdfI",
+  "title": "NVIDIA calls out Anthropic",
+  "t_start_ms": 1055919,
+  "t_end_ms": 1100400
+ },
+ {
+  "tid": "T11",
+  "video_id": "_goOUJkkxUk",
+  "title": "Anthropic fights back",
+  "t_start_ms": 792400,
+  "t_end_ms": 834720
+ },
+ {
+  "tid": "T12",
+  "video_id": "J8O9LLpJNrg",
+  "title": "Seriously, Anthropic??",
+  "t_start_ms": 944840,
+  "t_end_ms": 983480
+ },
+ {
+  "tid": "T13",
+  "video_id": "pzUn9wTCgcw",
+  "title": "Jira and Linear are legacy software",
+  "t_start_ms": 343919,
+  "t_end_ms": 383520
+ },
+ {
+  "tid": "T14",
+  "video_id": "u0L8vQz0X2g",
+  "title": "A free model just appeared in Cursor (and it\u2019s really good at code)",
+  "t_start_ms": 526000,
+  "t_end_ms": 570480
+ },
+ {
+  "tid": "T15",
+  "video_id": "h6ukrWyqOm4",
+  "title": "I'm so f***ing tired of Obsidian.",
+  "t_start_ms": 858560,
+  "t_end_ms": 903520
+ },
+ {
+  "tid": "T16",
+  "video_id": "wnfxSxP8pGs",
+  "title": "I need to rant about local models",
+  "t_start_ms": 1213640,
+  "t_end_ms": 1258200
+ },
+ {
+  "tid": "T17",
+  "video_id": "xTSar1SEmIU",
+  "title": "The Github Tax (I can't believe they actually did this...)",
+  "t_start_ms": 347400,
+  "t_end_ms": 390640
+ },
+ {
+  "tid": "T18",
+  "video_id": "6qIZTmaJc0Y",
+  "title": "The real reason Claude got dumber",
+  "t_start_ms": 1234880,
+  "t_end_ms": 1277120
+ },
+ {
+  "tid": "T19",
+  "video_id": "J8lxHyQmcaI",
+  "title": "The end of the GPU era",
+  "t_start_ms": 780000,
+  "t_end_ms": 824880
+ },
+ {
+  "tid": "T20",
+  "video_id": "JMYspR42HFM",
+  "title": "Claude Code vs Codex vs Cursor (an honest comparison)",
+  "t_start_ms": 953759,
+  "t_end_ms": 994560
+ },
+ {
+  "tid": "T21",
+  "video_id": "I82j7AzMU80",
+  "title": "How does Claude Code *actually* work?",
+  "t_start_ms": 1080240,
+  "t_end_ms": 1120640
+ },
+ {
+  "tid": "T22",
+  "video_id": "RYWrK2hsIB8",
+  "title": "Never mind (OpenAI won again)",
+  "t_start_ms": 2152800,
+  "t_end_ms": 2197440
+ },
+ {
+  "tid": "T23",
+  "video_id": "Yj9677a3y6c",
+  "title": "Bun got bought by Anthropic (yes really)",
+  "t_start_ms": 950240,
+  "t_end_ms": 991839
+ },
+ {
+  "tid": "T24",
+  "video_id": "lWsZT-2pQL4",
+  "title": "The painful truth about startups (my story)",
+  "t_start_ms": 1119120,
+  "t_end_ms": 1157520
+ },
+ {
+  "tid": "T25",
+  "video_id": "xjucOlb_mFM",
+  "title": "I didn\u2019t expect this from Anthropic",
+  "t_start_ms": 1438640,
+  "t_end_ms": 1481320
+ },
+ {
+  "tid": "T26",
+  "video_id": "Dgm_Rr5JtaU",
+  "title": "NVIDIA's first real competition (Google is KILLING it)",
+  "t_start_ms": 722240,
+  "t_end_ms": 764560
+ },
+ {
+  "tid": "T27",
+  "video_id": "-9w2Yr1JyvI",
+  "title": "OpenAI is burning cash",
+  "t_start_ms": 412960,
+  "t_end_ms": 457199
+ },
+ {
+  "tid": "T28",
+  "video_id": "_7SNl2kqWSM",
+  "title": "Is this the end of Chrome?",
+  "t_start_ms": 808560,
+  "t_end_ms": 847519
+ },
+ {
+  "tid": "T29",
+  "video_id": "05YgaYY2V2M",
+  "title": "It's not just you (gpt-5 got dumber)",
+  "t_start_ms": 502960,
+  "t_end_ms": 545920
+ },
+ {
+  "tid": "T30",
+  "video_id": "6kZPt-AELVk",
+  "title": "I\u2019m so tired.",
+  "t_start_ms": 459360,
+  "t_end_ms": 497680
+ },
+ {
+  "tid": "T31",
+  "video_id": "dOEDZdqq5m8",
+  "title": "Google got forced to open up Android",
+  "t_start_ms": 1080720,
+  "t_end_ms": 1120960
+ },
+ {
+  "tid": "T32",
+  "video_id": "ZINQTR6H5dI",
+  "title": "Anthropic study shows AI makes devs dumb",
+  "t_start_ms": 1506400,
+  "t_end_ms": 1549039
+ },
+ {
+  "tid": "T33",
+  "video_id": "fxxpQhJyupQ",
+  "title": "Microsoft and OpenAI break up (Amazon is pumped)",
+  "t_start_ms": 1143760,
+  "t_end_ms": 1187040
+ },
+ {
+  "tid": "T34",
+  "video_id": "tV8wTuY4b0E",
+  "title": "This is good, actually",
+  "t_start_ms": 858720,
+  "t_end_ms": 902680
+ },
+ {
+  "tid": "T35",
+  "video_id": "bPde0LHofQ4",
+  "title": "Predicting OpenAI's future via their acquisitions",
+  "t_start_ms": 521599,
+  "t_end_ms": 561839
+ }
+]

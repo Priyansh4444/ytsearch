@@ -112,6 +112,15 @@ still return 400. Unknown modes fail deserialization.
 The frontend has no toggle. A build with `VITE_SEARCH_MODE=semantic` sends
 `mode=semantic` on every search; production builds leave it unset.
 
+## Ranking evaluation
+
+[ranking-eval-2026-10-17.md](../experiments/semantic/ranking-eval-2026-10-17.md)
+compares lexical, semantic and fused rankings over 152 judged queries in six use
+cases. Semantic wins questions, topics and vague queries; lexical wins exact
+quotes and typos; a gated hybrid scores best overall. Re-run it with
+[semantic-eval.py](../../scripts/semantic-eval.py) after any model, passage or
+fusion change, and write a fresh query set before tuning anything it measured.
+
 ## Experimental Fly site
 
 `ytsearch-semantic-experimental` (https://ytsearch-semantic-experimental.fly.dev)
