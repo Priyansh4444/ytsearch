@@ -294,13 +294,19 @@ impl DocumentTable {
             return Err(Error::Corrupt(format!("document {id} is out of bounds")));
         }
         let offset = METADATA_PREFIX_BYTES + id as usize * DOCUMENT_RECORD_BYTES;
+        // `open` validates the complete fixed-width table; check this record once.
+        let bytes = self
+            .file
+            .bytes()
+            .get(offset..offset + DOCUMENT_RECORD_BYTES)
+            .ok_or_else(|| Error::Corrupt("u32 extends beyond file".to_string()))?;
         Ok(DocumentRecord {
-            block: read_u32(self.file.bytes(), offset)?,
-            offset: read_u32(self.file.bytes(), offset + 4)?,
-            length: read_u32(self.file.bytes(), offset + 8)?,
-            video: read_u32(self.file.bytes(), offset + 12)?,
-            tokens: read_u32(self.file.bytes(), offset + 16)?,
-            t_start_ms: read_u32(self.file.bytes(), offset + 20)?,
+            block: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            offset: u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+            length: u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
+            video: u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]),
+            tokens: u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]),
+            t_start_ms: u32::from_le_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]),
         })
     }
 
@@ -629,4 +635,99 @@ fn prefetch_hot_mappings(inner: &EngineInner) {
         elapsed_ms = started.elapsed().as_millis() as u64,
         "prefetched raw generation mappings"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    // Handwritten RAWMET02 bytes, independent of the metadata writer. Distinct
+    // byte patterns expose endian, field-order and record-stride mistakes.
+    const DOCUMENT_METADATA_FIXTURE: &[u8] = &[
+        b'R', b'A', b'W', b'M', b'E', b'T', b'0', b'2', // magic
+        2, 0, 0, 0, 1, 0, 0, 0, // two documents, version one
+        1, 0, 0, 0, 0, 0, 0, 0, // one block, reserved
+        0x04, 0x03, 0x02, 0x01, // first: block
+        0x40, 0x30, 0x20, 0x10, // offset
+        0x88, 0x77, 0x66, 0x55, // length
+        0xef, 0xcd, 0xab, 0x90, // video
+        0x01, 0x00, 0x00, 0x80, // tokens
+        0xff, 0xff, 0xff, 0xff, // t_start_ms
+        9, 0, 0, 0, 10, 0, 0, 0, 11, 0, 0, 0, // second: block, offset, length
+        12, 0, 0, 0, 13, 0, 0, 0, 14, 0, 0, 0, // video, tokens, t_start_ms
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // block metadata
+    ];
+
+    #[test]
+    fn document_metadata_decodes_literal_little_endian_records() {
+        let root = TempDir::new().expect("temp dir");
+        let path = root.path().join("metadata.bin");
+        fs::write(&path, DOCUMENT_METADATA_FIXTURE).expect("write literal metadata");
+        let table = DocumentTable::open(&path).expect("open literal metadata");
+
+        let first = table.document(0).expect("first record");
+        assert_eq!(
+            (
+                first.block,
+                first.offset,
+                first.length,
+                first.video,
+                first.tokens,
+                first.t_start_ms
+            ),
+            (
+                0x01020304,
+                0x10203040,
+                0x55667788,
+                0x90abcdef,
+                0x80000001,
+                u32::MAX
+            )
+        );
+        let last = table.document(1).expect("last record");
+        assert_eq!(
+            (
+                last.block,
+                last.offset,
+                last.length,
+                last.video,
+                last.tokens,
+                last.t_start_ms
+            ),
+            (9, 10, 11, 12, 13, 14)
+        );
+        for id in [2, u32::MAX] {
+            assert!(matches!(
+                table.document(id),
+                Err(Error::Corrupt(message)) if message == format!("document {id} is out of bounds")
+            ));
+        }
+    }
+
+    #[test]
+    fn document_metadata_open_rejects_every_truncated_record_boundary() {
+        let root = TempDir::new().expect("temp dir");
+        let path = root.path().join("metadata.bin");
+        // Once the count fields are readable, no partial record or block table
+        // may enter the reader. The final byte of the final block matters too.
+        for length in 24..DOCUMENT_METADATA_FIXTURE.len() {
+            fs::write(&path, &DOCUMENT_METADATA_FIXTURE[..length])
+                .expect("write truncated metadata");
+            assert!(
+                matches!(
+                    DocumentTable::open(&path),
+                    Err(Error::Corrupt(message)) if message == "metadata file has an invalid length"
+                ),
+                "accepted metadata of length {length}"
+            );
+        }
+        let mut oversized = DOCUMENT_METADATA_FIXTURE.to_vec();
+        oversized.push(0);
+        fs::write(&path, oversized).expect("write oversized metadata");
+        assert!(matches!(
+            DocumentTable::open(&path),
+            Err(Error::Corrupt(message)) if message == "metadata file has an invalid length"
+        ));
+    }
 }
