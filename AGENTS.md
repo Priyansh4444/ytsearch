@@ -39,6 +39,7 @@ Read only the relevant material. Use the available `workflow` skill for substant
 | --- | --- |
 | Live operations, indexing, deploys, session recovery | [Operations skill](.agents/skills/ytsearch-operations/SKILL.md) |
 | Search behavior or relevance | [Search contract](docs/playbooks/search-quality.md) |
+| Optional semantic pilot and experimental site | [Semantic pilot](docs/playbooks/semantic-pilot.md) |
 | Dependencies, frontend, API, performance | [Playbook index](docs/playbooks/README.md) |
 
 ## Verification

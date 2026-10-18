@@ -1,0 +1,18 @@
+# Run from the repository root. Storage is ignored by git.
+storage:
+  storage_path: ./data/semantic/qdrant-storage
+  snapshots_path: ./data/semantic/qdrant-snapshots
+  performance:
+    max_search_threads: 1
+    optimizer_cpu_budget: 1
+  optimizers:
+    default_segment_number: 1
+    max_optimization_threads: 1
+  hnsw_index:
+    max_indexing_threads: 1
+service:
+  host: 127.0.0.1
+  http_port: 16333
+  grpc_port: 16334
+  max_workers: 1
+telemetry_disabled: true

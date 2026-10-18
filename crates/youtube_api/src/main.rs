@@ -2,6 +2,7 @@ mod axiom;
 mod channel_images;
 mod index_queue;
 mod rate_limit;
+mod semantic;
 mod websub;
 
 use axiom::AxiomLogger;
@@ -65,6 +66,7 @@ const PROXY_KEY_HEADER: &str = "x-ytsearch-proxy-key";
 #[derive(Clone)]
 struct AppState {
     search: SearchClient,
+    semantic: Option<semantic::Client>,
     backend_label: String,
     engagement_sorts_enabled: bool,
     relevance_ordering: RelevanceOrdering,
@@ -88,6 +90,8 @@ enum RelevanceOrdering {
 #[derive(Debug, Deserialize)]
 struct SearchParams {
     q: String,
+    #[serde(default)]
+    mode: semantic::Mode,
     youtuber: Option<String>,
     video_id: Option<String>,
     per_page: Option<u8>,
@@ -312,6 +316,8 @@ enum ApiError {
     ChannelImage(String),
     #[error("search backend failed: {0}")]
     SearchBackend(#[from] SearchError),
+    #[error("semantic search is disabled or unavailable")]
+    SemanticUnavailable,
     #[error("search response had an unexpected shape")]
     UnexpectedSearchShape,
     #[error("server failed: {0}")]
@@ -337,6 +343,7 @@ async fn main() -> Result<(), ApiError> {
         .unwrap_or((None, None));
     let state = Arc::new(AppState {
         search: search_client,
+        semantic: semantic::Client::from_env()?,
         backend_label: env::var("YTSEARCH_BACKEND_LABEL").unwrap_or_else(|_| "raw".to_string()),
         engagement_sorts_enabled: env_bool("YTSEARCH_ENGAGEMENT_SORTS", false),
         relevance_ordering: if env_bool("YTSEARCH_PRESERVE_BACKEND_RELEVANCE_ORDER", false) {
@@ -578,6 +585,16 @@ async fn search_handler(
     let low_signal_query = is_low_signal_query(query);
     if sort == SearchSort::Relevance && low_signal_query {
         sort = SearchSort::PublishedDesc;
+    }
+    // Semantic mode is an opt-in improvement, never a hard dependency: when the
+    // service is absent, busy or down, answer lexically. `mode` says which ran.
+    if params.mode.uses_semantic(sort, low_signal_query) {
+        match semantic::response(&state, &params, query, per_page, page).await {
+            Err(ApiError::SemanticUnavailable) => {
+                tracing::warn!("semantic search unavailable; answering lexically");
+            }
+            answer => return answer,
+        }
     }
     let search_started = Instant::now();
     // A video-scoped request loads every matching moment of one video. Any
@@ -1900,7 +1917,7 @@ impl IntoResponse for ApiError {
             Self::EmptyQuery | Self::InvalidHandle | Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
-            Self::QueueFull => StatusCode::SERVICE_UNAVAILABLE,
+            Self::QueueFull | Self::SemanticUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::MissingEnv(_)
             | Self::InvalidBindAddress(_)
             | Self::Queue(_)

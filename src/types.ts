@@ -64,7 +64,7 @@ export type SearchResponse = {
   page: number;
   per_page: number;
   sort: SearchSort;
-  mode: "lexical";
+  mode: "lexical" | "semantic";
   has_next_page: boolean;
   videos: SearchVideoResult[];
 };

@@ -1,0 +1,301 @@
+{
+  "date": "2026-10-15",
+  "environment": "local Linux x86_64, debug Rust build; other builds ran concurrently; not Fly or a load test",
+  "scope": {
+    "videos": 5,
+    "source_chunks": 151,
+    "semantic_passages_initial": 23,
+    "source": "complete cached caption files with public metadata; not a representative quality evaluation"
+  },
+  "model": {
+    "repository": "onnx-community/embeddinggemma-300m-ONNX",
+    "revision": "5090578d9565bb06545b4552f76e6bc2c93e4a66",
+    "weights": "Q4",
+    "activations": "float32",
+    "dimensions": 128,
+    "max_prompt_tokens": 512,
+    "runtime": "ONNX Runtime 1.31.0, ort rc.14, one CPU thread"
+  },
+  "initial_import": {
+    "embedded_passages": 23,
+    "profile_id": "39c7f2f90146a477d9144c822335b8e87e811a44e77b1dd0ff204f535767db50",
+    "videos": 5,
+    "seconds": 22.279,
+    "peak_rss_kib": 412080
+  },
+  "repeat_import": {
+    "embedded_passages": 0,
+    "profile_id": "39c7f2f90146a477d9144c822335b8e87e811a44e77b1dd0ff204f535767db50",
+    "videos": 5,
+    "seconds": 9.097,
+    "peak_rss_kib": 411620
+  },
+  "shrink_import": {
+    "embedded_passages": 1,
+    "profile_id": "39c7f2f90146a477d9144c822335b8e87e811a44e77b1dd0ff204f535767db50",
+    "videos": 5,
+    "seconds": 9.464,
+    "peak_rss_kib": 412032
+  },
+  "repeat_shrink": {
+    "embedded_passages": 0,
+    "profile_id": "39c7f2f90146a477d9144c822335b8e87e811a44e77b1dd0ff204f535767db50",
+    "videos": 5,
+    "seconds": 9.548,
+    "peak_rss_kib": 412128
+  },
+  "queries": [
+    {
+      "q": "Why should I avoid server actions in Next.js?",
+      "filter": {},
+      "timings": {
+        "embedding_ms": 71,
+        "total_ms": 79
+      },
+      "top": [
+        {
+          "video_id": "-IuipU1vLSQ",
+          "score": 0.7909,
+          "range": [
+            40,
+            55320
+          ]
+        },
+        {
+          "video_id": "-IuipU1vLSQ",
+          "score": 0.7495,
+          "range": [
+            52920,
+            107479
+          ]
+        },
+        {
+          "video_id": "-IuipU1vLSQ",
+          "score": 0.7295,
+          "range": [
+            271639,
+            325759
+          ]
+        }
+      ]
+    },
+    {
+      "q": "Can a polygon have just two sides?",
+      "filter": {},
+      "timings": {
+        "embedding_ms": 52,
+        "total_ms": 60
+      },
+      "top": [
+        {
+          "video_id": "-UAUiSJP8tU",
+          "score": 0.6499,
+          "range": [
+            80,
+            58039
+          ]
+        },
+        {
+          "video_id": "-UAUiSJP8tU",
+          "score": 0.4973,
+          "range": [
+            56559,
+            61840
+          ]
+        },
+        {
+          "video_id": "-URHimp1bJc",
+          "score": 0.3642,
+          "range": [
+            120,
+            55039
+          ]
+        }
+      ]
+    },
+    {
+      "q": "An AI agent that works autonomously for a long time",
+      "filter": {},
+      "timings": {
+        "embedding_ms": 56,
+        "total_ms": 66
+      },
+      "top": [
+        {
+          "video_id": "-2nCxItGNvE",
+          "score": 0.5499,
+          "range": [
+            87120,
+            141640
+          ]
+        },
+        {
+          "video_id": "-2nCxItGNvE",
+          "score": 0.5099,
+          "range": [
+            10480,
+            12500
+          ]
+        },
+        {
+          "video_id": "-IuipU1vLSQ",
+          "score": 0.5092,
+          "range": [
+            104680,
+            161120
+          ]
+        }
+      ]
+    },
+    {
+      "q": "server actions",
+      "filter": {
+        "creator": "@Rasmic"
+      },
+      "timings": {
+        "embedding_ms": 35,
+        "total_ms": 47
+      },
+      "top": [
+        {
+          "video_id": "-IuipU1vLSQ",
+          "score": 0.6933,
+          "range": [
+            214799,
+            273720
+          ]
+        },
+        {
+          "video_id": "-IuipU1vLSQ",
+          "score": 0.6511,
+          "range": [
+            52920,
+            107479
+          ]
+        },
+        {
+          "video_id": "-IuipU1vLSQ",
+          "score": 0.6422,
+          "range": [
+            271639,
+            325759
+          ]
+        }
+      ]
+    },
+    {
+      "q": "polygon",
+      "filter": {
+        "video_id": "-UAUiSJP8tU"
+      },
+      "timings": {
+        "embedding_ms": 32,
+        "total_ms": 40
+      },
+      "top": [
+        {
+          "video_id": "-UAUiSJP8tU",
+          "score": 0.5726,
+          "range": [
+            80,
+            58039
+          ]
+        },
+        {
+          "video_id": "-UAUiSJP8tU",
+          "score": 0.4719,
+          "range": [
+            56559,
+            61840
+          ]
+        }
+      ]
+    },
+    {
+      "q": "server actions",
+      "filter": {
+        "creator": "@absent"
+      },
+      "timings": {
+        "embedding_ms": 35,
+        "total_ms": 42
+      },
+      "top": []
+    }
+  ],
+  "api_checks": [
+    {
+      "params": {
+        "q": "avoid server actions",
+        "mode": "semantic",
+        "youtuber": "@Rasmic"
+      },
+      "mode": "semantic",
+      "sort": "relevance",
+      "videos": [
+        "-IuipU1vLSQ",
+        "-6mJF5wsLrU"
+      ],
+      "approximate": true
+    },
+    {
+      "params": {
+        "q": "I",
+        "mode": "semantic",
+        "youtuber": "@t3dotgg"
+      },
+      "mode": "lexical",
+      "sort": "published_desc",
+      "videos": [],
+      "approximate": true
+    },
+    {
+      "params": {
+        "q": "fable on high",
+        "youtuber": "@t3dotgg"
+      },
+      "mode": "lexical",
+      "sort": "relevance",
+      "videos": [],
+      "approximate": true
+    },
+    {
+      "params": {
+        "q": "server actions",
+        "mode": "semantic",
+        "sort": "published_asc"
+      },
+      "mode": "lexical",
+      "sort": "published_asc",
+      "videos": [],
+      "approximate": true
+    }
+  ],
+  "truncated_receipt_rejected": true,
+  "collection": {
+    "points_after_shrink": 16,
+    "vectors": {
+      "size": 128,
+      "distance": "Cosine",
+      "on_disk": true,
+      "datatype": "float16"
+    }
+  },
+  "service_rss_kib": 343848,
+  "loader_comparison": {
+    "fastembed_service_rss_kib": 651212,
+    "direct_service_rss_kib": 343848,
+    "fastembed_index_peak_kib": 862216,
+    "direct_index_peak_kib": 412080,
+    "post_float16_max_coordinate_difference": 0.0,
+    "compared_points_after_shrink": 16
+  },
+  "verification": {
+    "precommit": "passed inside bun run check",
+    "rust_tests_passed": 345,
+    "frontend_tests_passed": 122,
+    "worker_tests_passed": 40,
+    "browser_tests_passed": 18,
+    "full_check": "four pre-existing youtube_index_store Hawk findings; later stages not reached"
+  }
+}

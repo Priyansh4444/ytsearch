@@ -32,6 +32,7 @@ app.config.timestamp_*.js
 data/
 backups/
 query-log.txt
+/.qdrant-initialized
 
 # Temp
 gitignore
@@ -39,3 +40,4 @@ gitignore
 # System Files
 .DS_Store
 Thumbs.db
+__pycache__/

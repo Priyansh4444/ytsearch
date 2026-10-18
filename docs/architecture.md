@@ -40,6 +40,7 @@ generation.
 | `youtube_raw_search` | Inverted index, ranking, mutation WAL, publication, recovery, and reloadable reader |
 | `youtube_cli` | Validation, channel/video indexing, repair, deletion, and direct search |
 | `youtube_api` | Public search, channel directory, and durable approval queue |
+| `youtube_semantic` | Opt-in local Qdrant / EmbeddingGemma snapshot pilot binary; outside production ingestion |
 
 ## Credential boundary
 
