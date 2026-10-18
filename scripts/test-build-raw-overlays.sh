@@ -102,6 +102,10 @@ check_build() {
   printf '%s\n' ./.cargo/config.toml ./Cargo.lock ./Cargo.toml \
     ./crates/stub/src/lib.rs ./Dockerfile ./fly.toml "./$entrypoint" \
     "./$entrypoint_source" | sort > "$tmp/expected-context"
+  if [[ "$role" = indexer ]]; then
+    printf '%s\n' ./scripts/build-whisper-cpp.sh >> "$tmp/expected-context"
+    sort -o "$tmp/expected-context" "$tmp/expected-context"
+  fi
   diff "$tmp/expected-context" "$tmp/fly-context"
   cmp "$repository/Dockerfile.$overlay" "$tmp/fly-context.dockerfile"
   cmp "$repository/fly.$overlay.toml" "$tmp/fly-context.fly-toml"
@@ -128,12 +132,14 @@ jq -e '.app == "ytsearch-indexer-raw-production"' "$tmp/default-app.json" >/dev/
 for path in crates/stub/src/lib.rs Dockerfile.raw-search-overlay \
   Dockerfile.raw-indexer-overlay scripts/raw-search-entrypoint.sh \
   scripts/cloud-index-queue-entrypoint.sh scripts/build-raw-overlay.sh \
+  scripts/build-whisper-cpp.sh \
   scripts/require-committed-rust-build-inputs.sh; do
   cp "$repository/$path" "$tmp/original"
   printf '\n# uncommitted\n' >> "$repository/$path"
   case "$path" in
     *search*) roles=(reader) ;;
     *indexer*|*cloud-index*) roles=(indexer) ;;
+    *whisper*) roles=(indexer) ;;
     *) roles=(reader indexer) ;;
   esac
   for role in "${roles[@]}"; do

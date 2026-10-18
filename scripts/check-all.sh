@@ -36,6 +36,7 @@ scripts/test-raw-search-entrypoint.sh
 scripts/test-stage-raw-reader-canary.sh
 scripts/test-require-committed-rust-build-inputs.sh
 scripts/test-cloud-index-queue-entrypoint.sh
+scripts/test-report-video-gaps.sh
 scripts/check-fly-cost-config.sh
 scripts/test-index-conference-playlists.sh
 scripts/test-index-all-raw.sh

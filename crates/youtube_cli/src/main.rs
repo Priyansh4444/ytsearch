@@ -24,7 +24,9 @@ use youtube_ingest::{
 use youtube_raw_search::{GenerationBuilder, MutationStore};
 use youtube_search_client::TextSearchQuery;
 use youtube_sources::{FallbackMetadataSource, YouTubeMetadataSource};
-use youtube_transcribe::{TranscriptionConfig, VoxtypeTranscriptSource};
+use youtube_transcribe::{
+    AudioTranscriptSource, AudioTranscriptionError, TranscriptionBackend, TranscriptionConfig,
+};
 use youtube_ytdlp::{YtDlpTranscriptSource, YtDlpVideo};
 
 mod args;
@@ -63,6 +65,11 @@ enum CliError {
     IndexStore(#[from] IndexStoreError),
     #[error("ingest failed: {0}")]
     Ingest(#[from] youtube_ingest::IngestError),
+    #[error("audio transcription fallback {source}; original caption failure: {caption}")]
+    TranscriptFallback {
+        caption: String,
+        source: AudioTranscriptionError,
+    },
     #[error("upstream indexing paused after {0}; retry after the provider cooldown")]
     UpstreamBlocked(&'static str),
     #[error("{0}")]
@@ -205,18 +212,19 @@ async fn main() -> ExitCode {
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error @ CliError::RetryableGaps(_)) => {
-            eprintln!("{error}");
-            ExitCode::from(EXIT_RETRYABLE_GAPS)
-        }
-        Err(error @ CliError::UpstreamBlocked(_)) => {
-            eprintln!("{error}");
-            ExitCode::from(EXIT_UPSTREAM_BLOCKED)
-        }
         Err(error) => {
             eprintln!("{error}");
-            ExitCode::FAILURE
+            ExitCode::from(cli_error_exit_code(&error))
         }
+    }
+}
+
+fn cli_error_exit_code(error: &CliError) -> u8 {
+    match error {
+        CliError::RetryableGaps(_) => EXIT_RETRYABLE_GAPS,
+        CliError::UpstreamBlocked(_) => EXIT_UPSTREAM_BLOCKED,
+        CliError::IndexStore(IndexStoreError::Unavailable { .. }) => EXIT_BACKEND_UNAVAILABLE,
+        _ => 1,
     }
 }
 
@@ -828,6 +836,14 @@ fn validate_remove_safety(allow_destructive_remove: bool) -> Result<(), CliError
 }
 
 async fn index_youtuber(command: IndexYoutuberCommand) -> Result<(), CliError> {
+    let transcribe_source = command.run.transcript.transcriber().await?;
+    index_youtuber_with_transcriber(command, transcribe_source).await
+}
+
+async fn index_youtuber_with_transcriber(
+    command: IndexYoutuberCommand,
+    transcribe_source: Option<AudioTranscriptSource>,
+) -> Result<(), CliError> {
     let run = &command.run;
     let publication = PublicationPolicy::from_defer_flag(run.defer_publish);
     let existing_data =
@@ -907,7 +923,6 @@ async fn index_youtuber(command: IndexYoutuberCommand) -> Result<(), CliError> {
     }
 
     let metadata_source = metadata_source(youtube.as_ref(), &caption_source);
-    let transcribe_source = run.transcript.transcriber();
     let chunker = run.transcript.chunker();
     let mut stats = IndexStats {
         discovered_videos: public_videos.len(),
@@ -974,6 +989,8 @@ async fn index_youtuber(command: IndexYoutuberCommand) -> Result<(), CliError> {
         &failure_ledger,
         &youtuber_id,
         &mut stats,
+        Some(&caption_source),
+        transcribe_source.is_some(),
     );
     if let Some(limit) = command.max_new_videos {
         videos_to_index.truncate(limit);
@@ -1112,25 +1129,11 @@ async fn index_youtuber(command: IndexYoutuberCommand) -> Result<(), CliError> {
     let run_indexed_chunks = stats.indexed_chunks.saturating_add(stats.existing_chunks);
     print_index_summary(&stats);
 
-    if stats.attempted_videos > 0 && (run_indexed_videos == 0 || run_indexed_chunks == 0) {
-        if existing_data.skips_existing_videos() && stats.existing_videos > 0 {
-            let youtuber_doc = upsert_youtuber_document_from_chunks(
-                &transcript_search,
-                &youtuber,
-                &youtuber_id,
-                public_video_count,
-            )
-            .await?;
-            println!(
-                "Update pass found no new searchable chunks for {}; kept existing indexed data ({} videos, {} chunks)",
-                youtuber.handle, youtuber_doc.indexed_video_count, youtuber_doc.indexed_chunk_count
-            );
-            if publication.publishes_after_run() {
-                publish_and_wait(&transcript_search).await?;
-            }
-            return Ok(());
-        }
-
+    let retained_existing = existing_data.skips_existing_videos() && stats.existing_videos > 0;
+    if stats.attempted_videos > 0
+        && (run_indexed_videos == 0 || run_indexed_chunks == 0)
+        && !retained_existing
+    {
         if let Err(error) = transcript_search
             .delete_channel(
                 &youtuber_id,
@@ -1172,20 +1175,25 @@ async fn index_youtuber(command: IndexYoutuberCommand) -> Result<(), CliError> {
         publish_and_wait(&transcript_search).await?;
     }
 
-    if stats.retryable_failures > 0 {
-        return Err(CliError::RetryableGaps(format!(
-            "Indexing {} published available videos but retained {} retryable video gap(s); the queue request must remain for retry",
-            youtuber.handle, stats.retryable_failures
-        )));
-    }
+    completed_index_result(&youtuber.handle, &stats)
+}
 
-    Ok(())
+fn completed_index_result(handle: &str, stats: &IndexStats) -> Result<(), CliError> {
+    if stats.retryable_failures == 0 {
+        return Ok(());
+    }
+    Err(CliError::RetryableGaps(format!(
+        "Indexing {handle} retained {} retryable video gap(s); the queue request must remain for retry",
+        stats.retryable_failures
+    )))
 }
 
 /// The run finished; only per-video gaps with a scheduled retry remain.
 const EXIT_RETRYABLE_GAPS: u8 = 75;
 /// A bot challenge or rate limit stopped the run before every video was tried.
 const EXIT_UPSTREAM_BLOCKED: u8 = 69;
+/// A transient index backend failure stopped the run; retry without a YouTube cooldown.
+const EXIT_BACKEND_UNAVAILABLE: u8 = 70;
 
 /// A catalog run is complete when every creator was attempted and the only
 /// failures are retryable per-video gaps: those stay in the failure ledger
@@ -1198,6 +1206,12 @@ fn catalog_outcome(failures: Vec<(String, CliError)>) -> Result<(), CliError> {
     let only_gaps = failures
         .iter()
         .all(|(_, error)| matches!(error, CliError::RetryableGaps(_)));
+    let only_backend_or_gaps = failures.iter().all(|(_, error)| {
+        matches!(
+            error,
+            CliError::RetryableGaps(_) | CliError::IndexStore(IndexStoreError::Unavailable { .. })
+        )
+    });
     let summary = failures
         .iter()
         .map(|(handle, error)| format!("{handle}: {error}"))
@@ -1208,6 +1222,15 @@ fn catalog_outcome(failures: Vec<(String, CliError)>) -> Result<(), CliError> {
             "{} YouTuber(s) retained retryable video gaps after every requested creator was attempted: {summary}",
             failures.len()
         )))
+    } else if only_backend_or_gaps {
+        Err(IndexStoreError::unavailable(
+            "raw",
+            format!(
+                "{} YouTuber(s) could not complete because the backend was unavailable: {summary}",
+                failures.len()
+            ),
+        )
+        .into())
     } else {
         Err(CliError::Message(format!(
             "{} YouTuber(s) failed after every requested creator was attempted: {summary}",
@@ -1217,6 +1240,8 @@ fn catalog_outcome(failures: Vec<(String, CliError)>) -> Result<(), CliError> {
 }
 
 async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), CliError> {
+    // Construct and preflight once: clones share the invocation-wide ASR budget.
+    let transcribe_source = command.run.transcript.transcriber().await?;
     let cache_dir = &command.run.transcript.transcript_cache_dir;
     let publication_search = command
         .run
@@ -1254,7 +1279,13 @@ async fn index_youtubers_command(command: IndexYoutubersCommand) -> Result<(), C
                 skip_existing: false,
                 no_wipe: false,
             };
-            tasks.spawn(async move { (failed_handle, index_youtuber(child).await) });
+            let transcribe_source = transcribe_source.clone();
+            tasks.spawn(async move {
+                (
+                    failed_handle,
+                    index_youtuber_with_transcriber(child, transcribe_source).await,
+                )
+            });
         }
 
         let Some(result) = tasks.join_next().await else {
@@ -1401,10 +1432,21 @@ fn defer_recent_transcript_failures(
     failure_ledger: &FailureLedger,
     creator_id: &str,
     stats: &mut IndexStats,
+    caption_source: Option<&YtDlpTranscriptSource>,
+    fallback_ready: bool,
 ) {
     videos.retain(|video| {
         failure_ledger.attribute(&video.video_id, creator_id);
-        let decision = failure_ledger.decision(&video.video_id);
+        let cached = caption_source.is_some_and(|source| {
+            match source.cached_transcript(&video.video_id) {
+                Ok(transcript) => transcript.is_some(),
+                Err(error) => {
+                    tracing::warn!(video_id = %video.video_id, %error, "cannot inspect recovery transcript cache");
+                    false
+                }
+            }
+        });
+        let decision = failure_ledger.decision_for(&video.video_id, fallback_ready, cached);
         if decision.deferred {
             stats.deferred_transcript_failures =
                 stats.deferred_transcript_failures.saturating_add(1);
@@ -1467,15 +1509,31 @@ impl TranscriptOptions {
         }
     }
 
-    fn transcriber(&self) -> Option<VoxtypeTranscriptSource> {
-        self.transcribe_missing.then(|| {
-            VoxtypeTranscriptSource::with_config(
-                TranscriptionConfig::default()
-                    .with_cache_dir(self.transcription_cache_dir.clone())
-                    .with_chunk_seconds(self.transcription_chunk_seconds)
-                    .with_voxtype_engine(self.voxtype_engine.clone()),
-            )
-        })
+    async fn transcriber(&self) -> Result<Option<AudioTranscriptSource>, CliError> {
+        if !self.transcribe_missing {
+            return Ok(None);
+        }
+        let backend = match self.transcription_backend {
+            TranscriptionBackendArg::Voxtype => TranscriptionBackend::Voxtype,
+            TranscriptionBackendArg::WhisperCpp => TranscriptionBackend::WhisperCpp {
+                binary: self.whisper_binary.clone(),
+                model: self.whisper_model.clone().ok_or_else(|| {
+                    CliError::Message("--whisper-model is required for whisper-cpp".to_string())
+                })?,
+                threads: usize::from(self.whisper_threads),
+            },
+        };
+        let source = AudioTranscriptSource::with_config(
+            TranscriptionConfig::default()
+                .with_cache_dir(self.transcription_cache_dir.clone())
+                .with_caption_cache_dir(self.transcript_cache_dir.clone())
+                .with_chunk_seconds(self.transcription_chunk_seconds)
+                .with_voxtype_engine(self.voxtype_engine.clone())
+                .with_backend(backend)
+                .with_budget(Duration::from_secs(self.transcription_budget_seconds)),
+        );
+        source.preflight().await?;
+        Ok(Some(source))
     }
 
     fn chunker(&self) -> Chunker {
@@ -1537,7 +1595,7 @@ async fn index_discovered_video(
     youtuber_id: String,
     metadata_source: Arc<FallbackMetadataSource>,
     caption_source: YtDlpTranscriptSource,
-    transcribe_source: Option<VoxtypeTranscriptSource>,
+    transcribe_source: Option<AudioTranscriptSource>,
     chunker: Chunker,
     search: RawIndexAdminClient,
     content_kind_filter: ContentKindFilter,
@@ -1635,13 +1693,29 @@ async fn index_discovered_video(
                 total_ms = elapsed_ms(indexing_started),
                 "skipped transcript"
             );
-            return Ok(skipped_video(
-                video,
-                &failure_ledger,
-                &metadata.youtuber.id,
-                FailureStage::Transcript,
-                error,
-            ));
+            let reason = error.to_string();
+            let category = match &error {
+                CliError::TranscriptFallback { source, .. } => failure_ledger
+                    .record_transcription_failure(
+                        &video.video_id,
+                        &metadata.youtuber.id,
+                        &source.to_string(),
+                        &reason,
+                        matches!(source, AudioTranscriptionError::Deferred),
+                    ),
+                _ => failure_ledger.record_transcript_failure(
+                    &video.video_id,
+                    &metadata.youtuber.id,
+                    &reason,
+                    metadata.published_at.as_deref(),
+                ),
+            };
+            return Ok(IndexVideoOutcome::Skipped {
+                video_id: video.video_id,
+                title: video.title,
+                reason: format!("transcript: {reason}"),
+                category,
+            });
         }
     };
     let transcript_ms = elapsed_ms(transcript_started);
@@ -1801,7 +1875,7 @@ async fn index_video_command(command: IndexVideoCommand) -> Result<(), CliError>
 
     let caption_source = command.transcript.caption_source();
     let metadata_source = metadata_source(youtube.as_ref(), &caption_source);
-    let transcribe_source = command.transcript.transcriber();
+    let transcribe_source = command.transcript.transcriber().await?;
     let chunker = command.transcript.chunker();
 
     println!("Indexing video: {video_id}");
@@ -2022,25 +2096,32 @@ async fn validate_youtuber_with_ytdlp(
     max_videos: u8,
 ) -> Result<ValidatedYoutuber, CliError> {
     let limit = Some(usize::from(max_videos.max(1)));
-    let feed = match ytdlp.channel_feed(handle, limit).await {
-        Ok(feed) if !feed.videos.is_empty() => feed,
-        Ok(_) => {
-            println!("  uploads tab is empty; validating against streams tab");
-            ytdlp.channel_stream_feed(handle, limit).await?
-        }
-        Err(upload_error) => match ytdlp.channel_stream_feed(handle, limit).await {
-            Ok(feed) => {
-                println!("  uploads tab failed ({upload_error}); validating against streams tab");
-                feed
+    let mut selected_feed = None;
+    let mut first_error = None;
+    for tab in ["uploads", "streams", "shorts"] {
+        let result = match tab {
+            "uploads" => ytdlp.channel_feed(handle, limit).await,
+            "streams" => ytdlp.channel_stream_feed(handle, limit).await,
+            _ => ytdlp.channel_shorts_feed(handle, limit).await,
+        };
+        match result {
+            Ok(feed) if !feed.videos.is_empty() => {
+                selected_feed = Some(feed);
+                break;
             }
-            Err(_) => return Err(upload_error.into()),
-        },
-    };
-    if feed.videos.is_empty() {
-        return Err(CliError::Message(format!(
-            "No public uploads or streams found for handle {handle}"
-        )));
+            Ok(_) => println!("  {tab} tab is empty; checking another tab for validation"),
+            Err(error) => {
+                println!("  {tab} tab failed ({error}); checking another tab for validation");
+                first_error.get_or_insert(error);
+            }
+        }
     }
+    let feed = selected_feed.ok_or_else(|| match first_error {
+        Some(error) => CliError::from(error),
+        None => CliError::Message(format!(
+            "No public uploads, streams, or Shorts found for handle {handle}"
+        )),
+    })?;
     let uploads_playlist = uploads_playlist_from_channel_id(&feed.channel_id);
 
     Ok(ValidatedYoutuber {
@@ -2071,16 +2152,21 @@ async fn discover_videos_for_youtuber_with_ytdlp(
     ytdlp: &YtDlpTranscriptSource,
     handle: &str,
 ) -> Result<Vec<DiscoveredVideo>, CliError> {
-    let (uploads, streams) = tokio::join!(
+    let (uploads, streams, shorts) = tokio::join!(
         ytdlp.channel_feed(handle, None),
         ytdlp.channel_stream_feed(handle, None),
+        ytdlp.channel_shorts_feed(handle, None),
     );
     let uploads = uploads.map_err(|error| {
-        tracing::warn!(handle = %handle, %error, "yt-dlp uploads-tab discovery failed; refusing a streams-only partial catalog");
+        tracing::warn!(handle = %handle, %error, "yt-dlp uploads-tab discovery failed; refusing a partial catalog");
         error
     })?;
     let streams = streams.map_err(|error| {
-        tracing::warn!(handle = %handle, %error, "yt-dlp streams-tab discovery failed; refusing an uploads-only partial catalog");
+        tracing::warn!(handle = %handle, %error, "yt-dlp streams-tab discovery failed; refusing a partial catalog");
+        error
+    })?;
+    let shorts = shorts.map_err(|error| {
+        tracing::warn!(handle = %handle, %error, "yt-dlp shorts-tab discovery failed; refusing a partial catalog");
         error
     })?;
     let streams = streams.videos;
@@ -2094,6 +2180,16 @@ async fn discover_videos_for_youtuber_with_ytdlp(
         streams.len()
     );
     videos.extend(streams.into_iter().map(discovered_video_from_ytdlp_video));
+    println!(
+        "  discovery source: yt-dlp shorts tab ({} entries)",
+        shorts.videos.len()
+    );
+    videos.extend(
+        shorts
+            .videos
+            .into_iter()
+            .map(discovered_video_from_ytdlp_video),
+    );
 
     Ok(dedupe_discovered_videos(videos))
 }
@@ -2213,7 +2309,7 @@ async fn fetch_recent_uploads(
 async fn fetch_transcript_with_optional_fallback(
     video_id: &str,
     caption_source: &YtDlpTranscriptSource,
-    transcribe_source: Option<&VoxtypeTranscriptSource>,
+    transcribe_source: Option<&AudioTranscriptSource>,
 ) -> Result<(Vec<TranscriptSegment>, bool), CliError> {
     match caption_source.transcript_for_video(video_id).await {
         Ok(transcript) => Ok((transcript, false)),
@@ -2222,9 +2318,18 @@ async fn fetch_transcript_with_optional_fallback(
                 return Err(caption_error.into());
             };
 
-            tracing::info!(video_id, error = %caption_error, "captions unavailable, trying local audio transcription");
-            println!("  captions unavailable, trying local audio transcription: {caption_error}");
-            let transcript = transcribe_source.transcript_for_video(video_id).await?;
+            if !failure_ledger::allows_audio_fallback(&caption_error.to_string()) {
+                return Err(caption_error.into());
+            }
+            tracing::info!(video_id, error = %caption_error, "captions unavailable, trying audio transcription");
+            println!("  captions unavailable, trying audio transcription: {caption_error}");
+            let transcript = transcribe_source
+                .transcribe(video_id)
+                .await
+                .map_err(|source| CliError::TranscriptFallback {
+                    caption: caption_error.to_string(),
+                    source,
+                })?;
             Ok((transcript, true))
         }
     }
@@ -2407,6 +2512,88 @@ fn print_validated_youtuber(youtuber: &ValidatedYoutuber) {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn channel_discovery_includes_shorts_and_rejects_partial_tabs() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const CHILD: &str = "YTSEARCH_CHANNEL_DISCOVERY_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            // The source reads its binary and session from the environment. Run
+            // in a child so parallel tests cannot observe the fixture settings.
+            let fixture = tempfile::tempdir().unwrap();
+            let binary = fixture.path().join("yt-dlp");
+            fs::write(
+                &binary,
+                r#"#!/bin/sh
+set -eu
+url=
+for arg in "$@"; do url="$arg"; done
+case "$url" in
+  */@fail-videos/videos|*/@fail-streams/streams|*/@fail-shorts/shorts)
+    echo 'fixture tab discovery failed' >&2
+    exit 1 ;;
+  */@shorts-only/videos|*/@shorts-only/streams)
+    entries='[]' ;;
+  */videos)
+    entries='[{"id":"upload","title":"Upload"},{"id":"duplicate","title":"Duplicate"}]' ;;
+  */streams)
+    entries='[{"id":"stream","title":"Stream"},{"id":"duplicate","title":"Duplicate"}]' ;;
+  */shorts)
+    entries='[{"id":"short","title":"Short"},{"id":"duplicate","title":"Duplicate"}]' ;;
+  *) exit 2 ;;
+esac
+printf '{"id":"UCfixture","channel_id":"UCfixture","channel":"Fixture","entries":%s}' "$entries"
+"#,
+            )
+            .unwrap();
+            fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::channel_discovery_includes_shorts_and_rejects_partial_tabs",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("YT_DLP_BINARY", binary)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr),
+            );
+            return;
+        }
+
+        let source = YtDlpTranscriptSource::new();
+        let videos = discover_videos_for_youtuber_with_ytdlp(&source, "@fixture")
+            .await
+            .unwrap();
+        assert_eq!(
+            videos
+                .iter()
+                .map(|video| video.video_id.as_str())
+                .collect::<Vec<_>>(),
+            ["upload", "duplicate", "stream", "short"],
+        );
+        for handle in ["@fail-videos", "@fail-streams", "@fail-shorts"] {
+            assert!(
+                discover_videos_for_youtuber_with_ytdlp(&source, handle)
+                    .await
+                    .is_err(),
+                "{handle} must fall back instead of returning a partial catalog",
+            );
+        }
+        let youtuber = validate_youtuber_with_ytdlp(&source, "@shorts-only", 1)
+            .await
+            .unwrap();
+        assert_eq!(youtuber.channel_id, "UCfixture");
+        assert_eq!(youtuber.recent_uploads.len(), 1);
+        assert_eq!(youtuber.recent_uploads[0].video_id, "short");
+    }
+
     #[test]
     fn admin_client_rejects_collections_raw_does_not_serve() {
         let args = args::SearchAdminArgs {
@@ -2422,6 +2609,23 @@ mod tests {
             panic!("a collection Raw does not serve must be rejected");
         };
         assert!(error.to_string().contains("other-collection"), "{error}");
+    }
+
+    #[test]
+    fn an_update_with_only_existing_chunks_keeps_retryable_gaps_queued() {
+        let mut stats = IndexStats {
+            existing_videos: 1,
+            existing_chunks: 10,
+            skipped_videos: 1,
+            retryable_failures: 1,
+            ..IndexStats::default()
+        };
+        assert!(matches!(
+            completed_index_result("@creator", &stats),
+            Err(CliError::RetryableGaps(_))
+        ));
+        stats.retryable_failures = 0;
+        assert!(completed_index_result("@creator", &stats).is_ok());
     }
 
     // A new upload whose captions are not published yet must not fail the
@@ -2462,8 +2666,90 @@ mod tests {
     }
 
     #[test]
+    fn backend_unavailability_exits_retryably_without_a_provider_cooldown_message() {
+        let error = CliError::IndexStore(IndexStoreError::unavailable(
+            "raw",
+            "channel stats request timed out",
+        ));
+        assert_eq!(cli_error_exit_code(&error), EXIT_BACKEND_UNAVAILABLE);
+        assert!(
+            error
+                .to_string()
+                .contains("channel stats request timed out")
+        );
+        assert!(!error.to_string().contains("provider cooldown"));
+        assert_eq!(
+            cli_error_exit_code(&CliError::RetryableGaps("caption gap".to_string())),
+            EXIT_RETRYABLE_GAPS,
+        );
+        assert_eq!(
+            cli_error_exit_code(&CliError::UpstreamBlocked("rate_limited")),
+            EXIT_UPSTREAM_BLOCKED,
+        );
+    }
+
+    #[test]
+    fn catalog_preserves_backend_unavailability_as_a_retryable_outcome() {
+        for include_gap in [false, true] {
+            let mut failures = vec![(
+                "@offline".to_string(),
+                CliError::IndexStore(IndexStoreError::unavailable(
+                    "raw",
+                    "channel stats request timed out",
+                )),
+            )];
+            if include_gap {
+                failures.push((
+                    "@gap".to_string(),
+                    CliError::RetryableGaps("caption gap".to_string()),
+                ));
+            }
+            let error = catalog_outcome(failures).unwrap_err();
+            assert_eq!(cli_error_exit_code(&error), EXIT_BACKEND_UNAVAILABLE);
+            assert!(error.to_string().contains("@offline"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("channel stats request timed out")
+            );
+            assert!(!error.to_string().contains("provider cooldown"));
+            if include_gap {
+                assert!(error.to_string().contains("@gap"));
+            }
+        }
+    }
+
+    #[test]
+    fn backend_errors_other_than_unavailable_remain_fatal_in_a_mixed_catalog() {
+        for fatal in [
+            IndexStoreError::InvalidInput("invalid collection".to_string()),
+            IndexStoreError::Conflict("operation conflict".to_string()),
+            IndexStoreError::internal("raw", "unauthorized"),
+            IndexStoreError::internal("raw", "invalid response"),
+        ] {
+            let error = CliError::IndexStore(fatal);
+            assert_eq!(cli_error_exit_code(&error), 1);
+            let result = catalog_outcome(vec![
+                ("@fatal".to_string(), error),
+                (
+                    "@gap".to_string(),
+                    CliError::RetryableGaps("caption gap".to_string()),
+                ),
+                (
+                    "@offline".to_string(),
+                    CliError::IndexStore(IndexStoreError::unavailable("raw", "timeout")),
+                ),
+            ]);
+            assert!(matches!(result, Err(CliError::Message(_))));
+            assert_eq!(cli_error_exit_code(&result.unwrap_err()), 1);
+        }
+    }
+
+    #[test]
     fn gaps_and_upstream_blocks_use_distinct_exit_codes() {
         assert_ne!(EXIT_RETRYABLE_GAPS, EXIT_UPSTREAM_BLOCKED);
+        assert_ne!(EXIT_BACKEND_UNAVAILABLE, EXIT_UPSTREAM_BLOCKED);
+        assert_ne!(EXIT_BACKEND_UNAVAILABLE, EXIT_RETRYABLE_GAPS);
         assert_eq!(EXIT_RETRYABLE_GAPS, 75);
     }
 
@@ -2662,6 +2948,101 @@ mod tests {
     }
 
     #[test]
+    fn transcription_cli_requires_a_model_and_positive_bounds() {
+        let base = [
+            "ytsearch",
+            "index-youtuber",
+            "@creator",
+            "--transcribe-missing",
+            "--transcription-backend",
+            "whisper-cpp",
+        ];
+        assert!(Cli::try_parse_from(base).is_err());
+        let mut configured = base.to_vec();
+        configured.extend([
+            "--whisper-model",
+            "/tmp/base.en.bin",
+            "--whisper-threads",
+            "2",
+            "--transcription-budget-seconds",
+            "480",
+        ]);
+        let parsed = Cli::try_parse_from(configured.clone()).unwrap();
+        let Command::IndexYoutuber(command) = parsed.command else {
+            panic!("wrong command")
+        };
+        assert_eq!(
+            command.run.transcript.transcription_backend,
+            TranscriptionBackendArg::WhisperCpp
+        );
+        assert_eq!(command.run.transcript.transcription_budget_seconds, 480);
+        configured.extend(["--transcription-budget-seconds", "0"]);
+        assert!(Cli::try_parse_from(configured).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "ytsearch",
+                "index-youtuber",
+                "@creator",
+                "--whisper-threads",
+                "0"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn validated_portable_cache_reopens_only_its_captionless_video() {
+        let root = std::env::temp_dir().join(format!(
+            "ytsearch-portable-recovery-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let ledger = FailureLedger::new(root.join(".failures"), Duration::from_secs(3_600));
+        for id in ["ready", "corrupt", "empty", "later"] {
+            ledger.record(
+                id,
+                "creator",
+                FailureStage::Transcript,
+                "no usable captions",
+            );
+        }
+        fs::write(
+            root.join("ready.json"),
+            br#"[{"start_ms":0,"end_ms":1000,"text":"working portable transcript"}]"#,
+        )
+        .unwrap();
+        fs::write(root.join("corrupt.json"), b"{").unwrap();
+        fs::write(root.join("empty.json"), b"[]").unwrap();
+        let source = YtDlpTranscriptSource::new().with_cache_dir(&root);
+        let mut videos = ["ready", "corrupt", "empty", "later"]
+            .into_iter()
+            .map(video)
+            .collect::<Vec<_>>();
+        let mut stats = IndexStats::default();
+        defer_recent_transcript_failures(
+            &mut videos,
+            &ledger,
+            "creator",
+            &mut stats,
+            Some(&source),
+            false,
+        );
+        assert_eq!(
+            videos
+                .iter()
+                .map(|video| video.video_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ready"]
+        );
+        assert_eq!(stats.deferred_transcript_failures, 3);
+        assert_eq!(ledger.report().unwrap().total_records, 4);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn recent_transcript_failures_do_not_block_later_missing_videos() {
         let failure_dir = std::env::temp_dir().join(format!(
             "ytsearch-transcript-failure-test-{}",
@@ -2678,7 +3059,7 @@ mod tests {
         let mut videos = vec![video("failed-video"), video("next-video")];
         let mut stats = IndexStats::default();
 
-        defer_recent_transcript_failures(&mut videos, &ledger, "creator", &mut stats);
+        defer_recent_transcript_failures(&mut videos, &ledger, "creator", &mut stats, None, false);
 
         assert_eq!(
             videos

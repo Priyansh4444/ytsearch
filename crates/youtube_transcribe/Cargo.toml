@@ -5,9 +5,12 @@ edition = "2024"
 publish = false
 
 [dependencies]
-async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["fs", "process", "time"] }
+tokio = { workspace = true, features = ["fs", "process", "sync", "time"] }
 tracing = { workspace = true }
 youtube_ingest = { path = "../youtube_ingest" }
+youtube_ytdlp = { path = "../youtube_ytdlp" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
