@@ -58,6 +58,7 @@ def main():
     # Deliberately do not inherit service credentials or a repository .env.
     clean_env = {key: os.environ[key] for key in ["PATH", "HOME"] if key in os.environ}
     processes, logs = [], []
+    malformed_service = None
     raw_requests = []
 
     class RawFixture(http.server.BaseHTTPRequestHandler):
@@ -169,14 +170,33 @@ def main():
             server.terminate()
             server.wait(timeout=5)
             assert search({"q": "collapsed star", "mode": "semantic"})["mode"] == "lexical"
+            # An invalid backend hit must also fall back, even if its JSON envelope is valid.
+            class MalformedSemantic(http.server.BaseHTTPRequestHandler):
+                def do_POST(self):
+                    body = json.dumps({"mode": "semantic", "hits": [{"document": {}}]}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, *_):
+                    pass
+
+            malformed_service = http.server.ThreadingHTTPServer(("127.0.0.1", sport), MalformedSemantic)
+            threading.Thread(target=malformed_service.serve_forever, daemon=True).start()
+            assert search({"q": "collapsed star", "mode": "semantic"})["mode"] == "lexical"
             params = request(qbase + "/collections/" + collection)["result"]["config"]["params"]
             assert params["vectors"]["datatype"] == "float16" and params["vectors"]["on_disk"]
             assert params["on_disk_payload"]
             print(json.dumps({"ok": True, "initial_passages": 3, "repeat_embedded": 0,
                               "embedding_ms": response["timings"]["embedding_ms"],
-                              "checks": ["real inference", "creator/video filters", "mixed-case handles", "API cards", "lexical routes", "truncation rejection", "shrink cleanup", "metadata refresh without re-embed", "concurrent burst queues", "lexical fallback when semantic is down", "on-disk float16 storage"],
+                              "checks": ["real inference", "creator/video filters", "mixed-case handles", "API cards", "lexical routes", "truncation rejection", "shrink cleanup", "metadata refresh without re-embed", "concurrent burst queues", "lexical fallback when semantic is down", "lexical fallback on malformed semantic hits", "on-disk float16 storage"],
                               "raw_fixture_requests": len(raw_requests)}))
         finally:
+            if malformed_service is not None:
+                malformed_service.shutdown()
+                malformed_service.server_close()
             for process in reversed(processes):
                 process.terminate()
                 try:

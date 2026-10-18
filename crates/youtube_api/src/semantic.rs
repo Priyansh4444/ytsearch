@@ -47,7 +47,7 @@ impl Client {
             .map_err(|_| ApiError::SemanticUnavailable)?;
         Ok(Self { http, url })
     }
-    async fn hits(&self, query: &str, params: &SearchParams) -> Result<Value, ApiError> {
+    async fn hits(&self, query: &str, params: &SearchParams) -> Result<Vec<SearchHit>, ApiError> {
         let creator = non_empty(params.youtuber.as_deref()).map(canonical_creator);
         let video_id = non_empty(params.video_id.as_deref());
         let mut response = self
@@ -84,7 +84,7 @@ impl Client {
         {
             return Err(ApiError::SemanticUnavailable);
         }
-        Ok(value)
+        parse_hits(&value).map_err(|_| ApiError::SemanticUnavailable)
     }
 }
 fn canonical_creator(handle: &str) -> String {
@@ -102,8 +102,7 @@ pub(super) async fn response(
         .as_ref()
         .ok_or(ApiError::SemanticUnavailable)?;
     let started = Instant::now();
-    let raw = client.hits(query, params).await?;
-    let hits = parse_hits(&raw)?;
+    let hits = client.hits(query, params).await?;
     let moments = hits.len() as u64;
     // Preserve Qdrant order through the existing card/timestamp hydration path.
     let videos = video_results_from_hits_with_policy(
@@ -164,7 +163,7 @@ mod tests {
     // search_handler answers lexically on SemanticUnavailable, so a busy or
     // unreachable service must surface as exactly that error, never a 4xx/5xx.
     #[tokio::test]
-    async fn busy_or_unreachable_service_triggers_the_lexical_fallback() {
+    async fn busy_unreachable_or_malformed_service_triggers_the_lexical_fallback() {
         let params: SearchParams = serde_json::from_value(json!({"q":"rust"})).unwrap();
         let busy = axum::Router::new().route(
             "/search",
@@ -174,6 +173,23 @@ mod tests {
         let busy_url = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, busy).await.unwrap() });
         let error = Client::new(&busy_url).unwrap().hits("rust", &params).await;
+        assert!(matches!(error, Err(ApiError::SemanticUnavailable)));
+        server.abort();
+
+        // A valid envelope cannot make malformed backend documents into API errors.
+        let malformed = axum::Router::new().route(
+            "/search",
+            axum::routing::post(|| async {
+                Json(json!({"mode":"semantic", "hits":[{"document":{}}]}))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let malformed_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, malformed).await.unwrap() });
+        let error = Client::new(&malformed_url)
+            .unwrap()
+            .hits("rust", &params)
+            .await;
         assert!(matches!(error, Err(ApiError::SemanticUnavailable)));
         server.abort();
 
