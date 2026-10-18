@@ -123,9 +123,13 @@ six (`DAILY_UPDATE_FAILURE_RETRY_SECONDS`,
 `DAILY_UPDATE_STATE_FILE` on the volume. Before that, every hourly wake saw
 the last success as overdue and reran the full sweep and rebuild.
 
-The daily refresh runs one `ytsearch index-youtubers` over the whole embedded
-list: one catalog-run ID, creators in sequence, one publication at the end. One
-process per creator cannot satisfy the catalog reconciliation check.
+The daily refresh merges the embedded creator list with the public indexed
+directory, including creators whose reported counts currently match. It keeps
+canonical aliases and labels, deduplicates stable creator IDs, and rejects an
+unreadable or malformed directory before indexing. One `ytsearch index-youtubers`
+owns the resulting temporary list: one catalog-run ID, creators in sequence, one
+publication at the end. One process per creator cannot satisfy the catalog
+reconciliation check. The temporary list is removed after success or failure.
 
 ## Upload notifications
 
@@ -146,7 +150,11 @@ the three-day catalog pass remain the backstop for missed pushes.
 Caption fetches are paced process-wide and retry timeouts, connection errors,
 429 and 5xx with bounded backoff. If the direct caption URL keeps failing,
 `yt-dlp` downloads the English subtitles through the same limits; when neither
-has an English track the video is recorded as `no_captions`.
+has an English track the video is recorded as `no_captions`. For a known upload
+published within the last seven days, missing captions are instead `scheduled`
+so the normal cooldown gives automatic captions time to arrive. Existing old
+captionless records keep their terminal policy; members-only and paid videos
+are `private` access restrictions.
 
 Exhausted videos get a versioned, atomically written record under
 `<transcript-cache>/.failures`, classified as bot challenge, throttling,
@@ -210,3 +218,19 @@ counts, durable and published sequences, document/video/channel totals,
 publication duration, peak RSS, disk high-water mark, search errors, and the
 relevance matrix's totals and first results. Deployment order is in
 [Deployment](deploy.md); recovery in [Disaster recovery](disaster-recovery.md).
+
+## Audio fallback
+
+Cloud queue, daily catalog and idle repair can recover public English speech
+without caption tracks using the pinned whisper.cpp/base.en runtime in the indexer
+image. Enable with `TRANSCRIBE_MISSING=1`; keep `JOBS=1 CHANNEL_JOBS=1`.
+The shared `TRANSCRIPTION_BUDGET_SECONDS` (default 480) bounds each CLI invocation,
+not each video. Incomplete work checkpoints and resumes on later passes; it does
+not become a successful empty transcript or clear the failure record. Read
+[the indexing gaps playbook](playbooks/indexing-gaps.md) for cache and retry rules.
+
+For local CLI use, `--transcribe-missing` retains Voxtype as its default backend.
+Cloud-compatible explicit flags are `--transcription-backend whisper-cpp`,
+`--whisper-binary`, `--whisper-model`, `--whisper-threads` and
+`--transcription-budget-seconds`. Final cache files are portable between local
+and cloud runs and can be consumed without inference enabled.

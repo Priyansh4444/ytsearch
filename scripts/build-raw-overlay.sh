@@ -33,6 +33,10 @@ for command in flyctl git jq tar; do
 done
 
 source_commit="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
+extra_build_inputs=()
+if [[ "$kind" = raw-indexer-overlay ]]; then
+  extra_build_inputs=(scripts/build-whisper-cpp.sh)
+fi
 if [[ ! "$BASE_IMAGE" =~ @sha256:([0-9a-f]{64})$ ]]; then
   printf 'BASE_IMAGE must name an immutable sha256 digest, got: %s\n' "$BASE_IMAGE" >&2
   exit 1
@@ -45,6 +49,7 @@ if [[ -n "${IMAGE_LABEL:-}" && "$IMAGE_LABEL" != "$image_label" ]]; then
 fi
 "$SCRIPT_DIR/require-committed-rust-build-inputs.sh" "$source_commit" \
   "Dockerfile.$overlay" "fly.$overlay.toml" "$entrypoint_source" \
+  "${extra_build_inputs[@]}" \
   scripts/build-raw-overlay.sh scripts/require-committed-rust-build-inputs.sh
 
 tmp="$(mktemp -d)"
@@ -54,7 +59,7 @@ trap 'exit 130' INT TERM
 # Archive only committed inputs; never copy a host-linked binary.
 git -C "$REPOSITORY_ROOT" archive "$source_commit" -- \
   .cargo Cargo.toml Cargo.lock crates "Dockerfile.$overlay" "fly.$overlay.toml" \
-  "$entrypoint_source" | tar -x -C "$tmp"
+  "$entrypoint_source" "${extra_build_inputs[@]}" | tar -x -C "$tmp"
 cp "$tmp/$entrypoint_source" "$tmp/$entrypoint"
 mv "$tmp/Dockerfile.$overlay" "$tmp/Dockerfile"
 mv "$tmp/fly.$overlay.toml" "$tmp/fly.toml"

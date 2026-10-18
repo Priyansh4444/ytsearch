@@ -59,12 +59,6 @@ struct UpsertChannelRequest<'a> {
 }
 
 #[derive(Serialize)]
-struct DeleteVideoRequest<'a> {
-    publication_api_version: u16,
-    idempotency_key: &'a str,
-}
-
-#[derive(Serialize)]
 struct DeleteChannelRequest<'a> {
     publication_api_version: u16,
     idempotency_key: &'a str,
@@ -371,13 +365,6 @@ impl RawIndexAdminClient {
             .await
     }
 
-    pub async fn publish(&self) -> Result<BackendReadiness, IndexStoreError> {
-        let _: serde_json::Value = self
-            .execute(self.client.post(self.endpoint("/admin/publish")))
-            .await?;
-        self.readiness().await
-    }
-
     pub async fn channel(
         &self,
         channel_id: &str,
@@ -401,22 +388,6 @@ impl RawIndexAdminClient {
                     publication_api_version: crate::RAW_PUBLICATION_API_VERSION,
                     idempotency_key,
                     chunks: replacement.chunks(),
-                }),
-        )
-        .await
-    }
-
-    pub async fn delete_video(
-        &self,
-        video_id: &str,
-        idempotency_key: &str,
-    ) -> Result<IndexOperation, IndexStoreError> {
-        self.execute(
-            self.client
-                .delete(self.endpoint(&format!("/admin/videos/{video_id}")))
-                .query(&DeleteVideoRequest {
-                    publication_api_version: crate::RAW_PUBLICATION_API_VERSION,
-                    idempotency_key,
                 }),
         )
         .await
@@ -453,14 +424,6 @@ impl RawIndexAdminClient {
                     idempotency_key,
                     cascade: scope.cascades_videos(),
                 }),
-        )
-        .await
-    }
-
-    pub async fn operation(&self, operation_id: &str) -> Result<IndexOperation, IndexStoreError> {
-        self.execute(
-            self.client
-                .get(self.endpoint(&format!("/admin/operations/{operation_id}"))),
         )
         .await
     }

@@ -6,25 +6,30 @@
 @appledeveloper | Apple Developer (WWDC; broad channel until playlist scoping is available)
 @appliedscience | Applied Science
 @ardens. | Ardens
+@arjay_the_dev | Arjay McCandless
 @asianometry | Asianometry
 @bawad | Ben Awad
 @benjdicken | Ben Dicken
 @bettersoftwareconference | Better Software Conference
 @bmdavis419 | Ben Davis
-@BrodieRobertson | Brodie Robertson
 @brancheducation | Branch Education
+@BrodieRobertson | Brodie Robertson
 @bycloudai | bycloud
 @codebullet | Code Bullet
+@commonluke | commonLuke
 @computerphile | Computerphile
 @convex-dev | Convex
 @cursor_ai | Cursor
 @DEFCONConference | DEF CON Conference
 @dougdoug | DougDoug
+@dreamsofcode | Dreams of Code
 @dwarkeshpatel | Dwarkesh Patel
 @fireship | Fireship
+@fknight | ForrestKnight
 @googledevelopers | Google for Developers (Google I/O; broad channel until playlist scoping is available)
 @hankschannel | Hank Green
 @healthygamergg | HealthyGamerGG
+@hoog-youtube | Hoog
 @hyperplexed | Hyperplexed
 @jeffgeerling | Jeff Geerling
 @lauriewired | LaurieWired
@@ -40,6 +45,7 @@
 @neetcode | NeetCode
 @nerd-snipe | Nerd Snipe
 @planetscale | PlanetScale
+@portalrunner | PortalRunner
 @practicalengineeringchannel | Practical Engineering
 @pragmaticengineer | The Pragmatic Engineer
 @rasmic | Ras Mic
@@ -54,6 +60,7 @@
 @technologyconnections | Technology Connections
 @theavocoder | Lydia Hallie
 @theprimeagen | ThePrimeagen
+@thestanduppod | TheStandupPod
 @TomScottGo | Tom Scott
 @TwoMinutePapers | Two Minute Papers
 @VercelHQ | Vercel

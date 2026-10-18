@@ -9,7 +9,15 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 RUN cargo build --locked --release -p youtube_cli
 
-FROM denoland/deno:bin-2.8.1 AS deno
+FROM denoland/deno:bin-2.9.7 AS deno
+
+FROM debian:bookworm-slim AS asr-builder
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential cmake git curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY scripts/build-whisper-cpp.sh /tmp/build-whisper-cpp.sh
+RUN /bin/sh /tmp/build-whisper-cpp.sh
+
 FROM ${BASE_IMAGE}
 ARG BASE_IMAGE
 ARG SOURCE_COMMIT
@@ -21,11 +29,14 @@ RUN install -d -m 0755 /usr/local/share/ytsearch-release \
 
 USER root
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg python3-pip \
+    && apt-get install -y --no-install-recommends ffmpeg python3-pip libstdc++6 \
     && python3 -m pip install --no-cache-dir --break-system-packages --upgrade 'yt-dlp[default]' \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=deno /deno /usr/local/bin/deno
+COPY --from=asr-builder /opt/ytsearch-asr /opt/ytsearch-asr
+RUN ln -s /opt/ytsearch-asr/bin/whisper-cli /usr/local/bin/whisper-cli \
+    && ln -s /opt/ytsearch-asr/share /usr/local/share/ytsearch-asr
 COPY --from=builder /build/target/release/ytsearch /usr/local/bin/ytsearch
 COPY cloud-index-queue /usr/local/bin/cloud-index-queue
 # The entrypoint runs ytsearch and yt-dlp as this user (via the base image's
@@ -35,6 +46,12 @@ RUN chmod 0755 /usr/local/bin/cloud-index-queue \
     && useradd --system --uid 10002 --user-group --no-create-home \
       --home-dir /nonexistent --shell /usr/sbin/nologin ytsearch \
     && command -v gosu >/dev/null
+
+ENV TRANSCRIBE_MISSING=1 \
+    WHISPER_BINARY=/usr/local/bin/whisper-cli \
+    WHISPER_MODEL=/usr/local/share/ytsearch-asr/ggml-base.en.bin \
+    WHISPER_THREADS=2 \
+    TRANSCRIPTION_BUDGET_SECONDS=480
 
 ENTRYPOINT []
 CMD ["/bin/sh", "/usr/local/bin/cloud-index-queue"]

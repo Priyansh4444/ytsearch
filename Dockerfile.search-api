@@ -1,9 +1,13 @@
 FROM rust:1-bookworm AS builder
+ARG SOURCE_COMMIT
+ENV YTSEARCH_SOURCE_COMMIT=${SOURCE_COMMIT}
 WORKDIR /app
 COPY . .
 RUN cargo build --locked --release -p youtube_api
 
 FROM debian:bookworm-slim
+ARG SOURCE_COMMIT
+LABEL org.opencontainers.image.revision=${SOURCE_COMMIT}
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
