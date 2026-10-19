@@ -1125,19 +1125,21 @@ async fn index_youtuber_with_transcriber(
         }
     }
 
-    let run_indexed_videos = stats.indexed_videos.saturating_add(stats.existing_videos);
-    let run_indexed_chunks = stats.indexed_chunks.saturating_add(stats.existing_chunks);
     print_index_summary(&stats);
 
-    let retained_existing = existing_data.skips_existing_videos() && stats.existing_videos > 0;
-    if stats.attempted_videos > 0
-        && (run_indexed_videos == 0 || run_indexed_chunks == 0)
-        && !retained_existing
-    {
+    // A capped or deferred batch says nothing about chunks retained from earlier runs.
+    let youtuber_doc = upsert_youtuber_document_from_chunks(
+        &transcript_search,
+        &youtuber,
+        &youtuber_id,
+        public_video_count,
+    )
+    .await?;
+    if youtuber_doc.indexed_chunk_count == 0 {
         if let Err(error) = transcript_search
             .delete_channel(
                 &youtuber_id,
-                ChannelDeletionScope::ChannelAndVideos,
+                ChannelDeletionScope::ChannelOnly,
                 &unique_operation_key("remove-empty-channel", &youtuber_id),
             )
             .await
@@ -1163,13 +1165,6 @@ async fn index_youtuber_with_transcriber(
         };
     }
 
-    let youtuber_doc = upsert_youtuber_document_from_chunks(
-        &transcript_search,
-        &youtuber,
-        &youtuber_id,
-        public_video_count,
-    )
-    .await?;
     println!("Upserted YouTuber document: {}", youtuber_doc.id);
     if publication.publishes_after_run() {
         publish_and_wait(&transcript_search).await?;
