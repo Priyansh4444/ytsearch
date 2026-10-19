@@ -1125,19 +1125,20 @@ async fn index_youtuber_with_transcriber(
         }
     }
 
-    let run_indexed_videos = stats.indexed_videos.saturating_add(stats.existing_videos);
-    let run_indexed_chunks = stats.indexed_chunks.saturating_add(stats.existing_chunks);
     print_index_summary(&stats);
 
-    let retained_existing = existing_data.skips_existing_videos() && stats.existing_videos > 0;
-    if stats.attempted_videos > 0
-        && (run_indexed_videos == 0 || run_indexed_chunks == 0)
-        && !retained_existing
-    {
+    // A capped or deferred batch says nothing about chunks retained from earlier runs.
+    let stored_chunks = transcript_search.channel_stats(&youtuber_id).await?;
+    if stored_chunks.indexed_chunks == 0 {
+        // The latest channel mutation must retain an acknowledged rewipe's cascade.
+        let deletion_scope = match existing_data.channel {
+            ExistingChannelPolicy::Retain => ChannelDeletionScope::ChannelOnly,
+            ExistingChannelPolicy::Rewipe => ChannelDeletionScope::ChannelAndVideos,
+        };
         if let Err(error) = transcript_search
             .delete_channel(
                 &youtuber_id,
-                ChannelDeletionScope::ChannelAndVideos,
+                deletion_scope,
                 &unique_operation_key("remove-empty-channel", &youtuber_id),
             )
             .await

@@ -30,5 +30,7 @@ youtube_ytdlp = { path = "../youtube_ytdlp" }
 youtube_time = { path = "../youtube_time" }
 
 [dev-dependencies]
+axum = "0.8"
 flate2 = "1"
 tempfile = "3"
+youtube_search_service = { path = "../youtube_search_service" }
