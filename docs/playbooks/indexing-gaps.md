@@ -37,6 +37,11 @@
 
 ## Traps
 
+- Raw channel deletion is staged. A profile upsert replaces its pending tombstone,
+  and `ChannelOnly` drops a previous cascade. Check merged counts before the final
+  upsert; preserve acknowledged `rewipe` scope during empty-run cleanup, while
+  update cleanup stays profile-only. Verify through publication and search;
+  a mock that deletes chunks immediately cannot prove this behavior.
 - A public/discovered count includes discoverable members-only and paid videos.
   Their metadata can be visible while captions require access. These are access
   restrictions (`private`), not a broken transcript parser or ordinary retries.
