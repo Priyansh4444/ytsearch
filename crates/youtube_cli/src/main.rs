@@ -1128,18 +1128,17 @@ async fn index_youtuber_with_transcriber(
     print_index_summary(&stats);
 
     // A capped or deferred batch says nothing about chunks retained from earlier runs.
-    let youtuber_doc = upsert_youtuber_document_from_chunks(
-        &transcript_search,
-        &youtuber,
-        &youtuber_id,
-        public_video_count,
-    )
-    .await?;
-    if youtuber_doc.indexed_chunk_count == 0 {
+    let stored_chunks = transcript_search.channel_stats(&youtuber_id).await?;
+    if stored_chunks.indexed_chunks == 0 {
+        // The latest channel mutation must retain an acknowledged rewipe's cascade.
+        let deletion_scope = match existing_data.channel {
+            ExistingChannelPolicy::Retain => ChannelDeletionScope::ChannelOnly,
+            ExistingChannelPolicy::Rewipe => ChannelDeletionScope::ChannelAndVideos,
+        };
         if let Err(error) = transcript_search
             .delete_channel(
                 &youtuber_id,
-                ChannelDeletionScope::ChannelOnly,
+                deletion_scope,
                 &unique_operation_key("remove-empty-channel", &youtuber_id),
             )
             .await
@@ -1165,6 +1164,13 @@ async fn index_youtuber_with_transcriber(
         };
     }
 
+    let youtuber_doc = upsert_youtuber_document_from_chunks(
+        &transcript_search,
+        &youtuber,
+        &youtuber_id,
+        public_video_count,
+    )
+    .await?;
     println!("Upserted YouTuber document: {}", youtuber_doc.id);
     if publication.publishes_after_run() {
         publish_and_wait(&transcript_search).await?;
