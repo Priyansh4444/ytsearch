@@ -2895,6 +2895,7 @@ dependencies = [
 name = "youtube_cli"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
  "clap",
  "dotenvy",
@@ -2912,6 +2913,7 @@ dependencies = [
  "youtube_ingest",
  "youtube_raw_search",
  "youtube_search_client",
+ "youtube_search_service",
  "youtube_sources",
  "youtube_time",
  "youtube_transcribe",
