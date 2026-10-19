@@ -37,6 +37,7 @@ scripts/test-stage-raw-reader-canary.sh
 scripts/test-require-committed-rust-build-inputs.sh
 scripts/test-cloud-index-queue-entrypoint.sh
 scripts/test-report-video-gaps.sh
+python3 -I scripts/test-semantic-snapshots.py
 scripts/check-fly-cost-config.sh
 scripts/test-index-conference-playlists.sh
 scripts/test-index-all-raw.sh
