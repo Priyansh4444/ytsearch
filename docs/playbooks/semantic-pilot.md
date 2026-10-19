@@ -131,11 +131,16 @@ snapshot. Build snapshots from a Raw backup archive with
 normalizes per-video display metadata and skips videos the importer would
 reject. Import with `SEMANTIC_INDEX_THREADS=8`: on a 16-thread laptop that is
 about 3.9 passages/s against 1.25 on one thread, while 14 threads was slower.
+Each export claims a fresh output directory. Existing paths, including empty
+directories, are rejected so stale batches cannot join a later export. Keep a
+failed export separate and choose a fresh path for the next attempt.
 
 ```bash
+set -eu
+snapshot_dir="$(mktemp -d)/snapshots"
 python3 scripts/build-semantic-snapshots.py ~/.cache/ytsearch/schema9/youtube_transcript_chunks.jsonl.gz \
-  /tmp/semantic-snapshots --creator @t3dotgg --newest 300
-for f in /tmp/semantic-snapshots/snapshot-*.jsonl; do
+  "$snapshot_dir" --creator @t3dotgg --newest 300
+for f in "$snapshot_dir"/snapshot-*.jsonl; do
   SEMANTIC_INDEX_THREADS=8 target/release/youtube-semantic index "$f"
 done
 ```

@@ -5,6 +5,7 @@ Reads youtube_transcript_chunks.jsonl.gz once, keeps the chosen creators, and
 writes snapshot-NNN.jsonl files (at most 128 complete videos, sorted by video_id
 then timestamp) each with the SNAPSHOT.jsonl.manifest.json receipt the importer
 requires. Videos the pilot importer would reject are skipped and counted.
+OUT_DIR must be a fresh path; existing directories are never reused.
 
 usage: build-semantic-snapshots.py ARCHIVE OUT_DIR --creator @handle [...]
        [--newest N]   keep only each creator's N most recently published videos
@@ -84,7 +85,10 @@ def main():
         keep.extend(items[: args.newest] if args.newest else items)
     keep.sort(key=lambda item: item[1])  # the importer requires video_id order
 
-    args.out.mkdir(parents=True, exist_ok=True)
+    try:
+        args.out.mkdir(parents=True)
+    except FileExistsError:
+        parser.error("choose a fresh output directory; existing exports are never overwritten")
     batches, batch, batch_bytes = [], [], 0
     for item in keep:
         size = sum(len(line.encode()) for line in item[2])
