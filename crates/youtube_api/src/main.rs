@@ -1,5 +1,6 @@
 mod axiom;
 mod channel_images;
+mod hybrid;
 mod index_queue;
 mod rate_limit;
 mod semantic;
@@ -586,14 +587,24 @@ async fn search_handler(
     if sort == SearchSort::Relevance && low_signal_query {
         sort = SearchSort::PublishedDesc;
     }
-    // Semantic mode is an opt-in improvement, never a hard dependency: when the
-    // service is absent, busy or down, answer lexically. `mode` says which ran.
-    if params.mode.uses_semantic(sort, low_signal_query) {
-        match semantic::response(&state, &params, query, per_page, page).await {
-            Err(ApiError::SemanticUnavailable) => {
-                tracing::warn!("semantic search unavailable; answering lexically");
+    // Semantic and hybrid modes are opt-in improvements, never hard dependencies:
+    // when the service is absent, busy or down, answer lexically. `mode` in the
+    // response says which ran.
+    match params
+        .mode
+        .route(sort, low_signal_query, params.video_id.is_some())
+    {
+        semantic::Mode::Lexical => {}
+        semantic::Mode::Semantic => {
+            match semantic::response(&state, &params, query, per_page, page).await {
+                Err(ApiError::SemanticUnavailable) => {
+                    tracing::warn!("semantic search unavailable; answering lexically");
+                }
+                answer => return answer,
             }
-            answer => return answer,
+        }
+        semantic::Mode::Hybrid => {
+            return hybrid::response(&state, &params, query, per_page, page).await;
         }
     }
     let search_started = Instant::now();

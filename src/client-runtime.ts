@@ -15,9 +15,12 @@ import type {
 
 const DEFAULT_PER_PAGE = 12;
 const RETRY_DELAY_MS = 250;
-// Experimental builds set VITE_SEARCH_MODE=semantic. The API keeps low-signal
-// queries and date sorts lexical, and answers lexically if semantic is down.
-const SEARCH_MODE = import.meta.env.VITE_SEARCH_MODE === "semantic" ? "semantic" : undefined;
+// Experimental builds set VITE_SEARCH_MODE to semantic or hybrid. The API keeps
+// low-signal queries and date sorts lexical, and answers lexically if semantic
+// is down; the response's `mode` says which engine answered.
+const SEARCH_MODE = (["semantic", "hybrid"] as const).find(
+  (mode) => mode === import.meta.env.VITE_SEARCH_MODE,
+);
 
 export async function runSearchTranscripts(
   apiBaseUrl: string,
@@ -162,7 +165,7 @@ function decodeSearchResponse(input: unknown): SearchResponse {
       "published_desc",
       "published_asc",
     ]),
-    mode: literal(value.mode, ["lexical", "semantic"]),
+    mode: literal(value.mode, ["lexical", "semantic", "hybrid"]),
     has_next_page: boolean(value.has_next_page),
     videos: array(value.videos, decodeSearchVideo),
   };

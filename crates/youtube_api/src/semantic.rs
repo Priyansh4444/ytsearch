@@ -7,10 +7,18 @@ pub(super) enum Mode {
     #[default]
     Lexical,
     Semantic,
+    Hybrid,
 }
 impl Mode {
-    pub(super) fn uses_semantic(self, sort: SearchSort, low_signal: bool) -> bool {
-        self == Self::Semantic && sort == SearchSort::Relevance && !low_signal
+    /// The engine that answers. Low-signal queries and explicit sorts stay
+    /// lexical; a video-scoped moment lookup in hybrid mode uses semantic, which
+    /// filters by video directly.
+    pub(super) fn route(self, sort: SearchSort, low_signal: bool, video_scope: bool) -> Self {
+        match self {
+            _ if sort != SearchSort::Relevance || low_signal => Self::Lexical,
+            Self::Hybrid if video_scope => Self::Semantic,
+            mode => mode,
+        }
     }
 }
 #[derive(Clone)]
@@ -47,7 +55,11 @@ impl Client {
             .map_err(|_| ApiError::SemanticUnavailable)?;
         Ok(Self { http, url })
     }
-    async fn hits(&self, query: &str, params: &SearchParams) -> Result<Vec<SearchHit>, ApiError> {
+    pub(super) async fn hits(
+        &self,
+        query: &str,
+        params: &SearchParams,
+    ) -> Result<Vec<SearchHit>, ApiError> {
         let creator = non_empty(params.youtuber.as_deref()).map(canonical_creator);
         let video_id = non_empty(params.video_id.as_deref());
         let mut response = self
@@ -137,9 +149,20 @@ mod tests {
     use super::*;
     #[test]
     fn opt_in_preserves_low_signal_and_explicit_sorts() {
-        assert!(!Mode::Lexical.uses_semantic(SearchSort::Relevance, false));
-        assert!(Mode::Semantic.uses_semantic(SearchSort::Relevance, false));
-        assert!(!Mode::Semantic.uses_semantic(SearchSort::Relevance, is_low_signal_query("I")));
+        let relevance = |mode: Mode, query: &str, video_scope: bool| {
+            mode.route(
+                SearchSort::Relevance,
+                is_low_signal_query(query),
+                video_scope,
+            )
+        };
+        assert_eq!(relevance(Mode::Lexical, "rust", false), Mode::Lexical);
+        assert_eq!(relevance(Mode::Semantic, "rust", false), Mode::Semantic);
+        assert_eq!(relevance(Mode::Hybrid, "why rust?", false), Mode::Hybrid);
+        assert_eq!(relevance(Mode::Hybrid, "why rust?", true), Mode::Semantic);
+        for mode in [Mode::Semantic, Mode::Hybrid] {
+            assert_eq!(relevance(mode, "I", false), Mode::Lexical);
+        }
         for sort in [
             SearchSort::PublishedAsc,
             SearchSort::PublishedDesc,
@@ -148,12 +171,18 @@ mod tests {
             SearchSort::LikesDesc,
             SearchSort::CommentsDesc,
         ] {
-            assert!(!Mode::Semantic.uses_semantic(sort, false));
+            for mode in [Mode::Semantic, Mode::Hybrid] {
+                assert_eq!(mode.route(sort, false, false), Mode::Lexical);
+            }
         }
         assert_eq!(canonical_creator("@aiDotEngineer"), "@aidotengineer");
         assert_eq!(canonical_creator("aiDotEngineer"), "@aidotengineer");
         assert!(Client::new("http://user:password@127.0.0.1:8790").is_err());
-        assert!(serde_json::from_value::<Mode>(json!("hybrid")).is_err());
+        assert!(serde_json::from_value::<Mode>(json!("fused")).is_err());
+        assert_eq!(
+            serde_json::from_value::<Mode>(json!("hybrid")).unwrap(),
+            Mode::Hybrid
+        );
         assert_eq!(
             serde_json::from_value::<Mode>(json!("semantic")).unwrap(),
             Mode::Semantic

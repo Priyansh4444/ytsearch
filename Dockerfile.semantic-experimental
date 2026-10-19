@@ -1,11 +1,12 @@
-# Experimental semantic-search site: one machine with the frontend (nginx),
-# youtube-api, youtube-semantic and Qdrant. Lexical answers come from the public
-# production API through nginx, so this image holds no Raw credentials.
+# Experimental semantic and hybrid search site: one machine with the frontend
+# (nginx), youtube-api, youtube-semantic, Qdrant and a Raw reader over the same
+# videos (uploaded to the volume). It holds no production credentials; when the
+# local index is missing, nginx retries searches on the public production API.
 # See docs/playbooks/semantic-pilot.md ("Experimental Fly site").
 FROM rust:1-bookworm AS rust
 WORKDIR /app
 COPY . .
-RUN cargo build --locked --release -p youtube_api -p youtube_semantic
+RUN cargo build --locked --release -p youtube_api -p youtube_semantic -p youtube_raw_search
 
 FROM python:3.12-slim AS assets
 COPY scripts/prepare-semantic-assets.py /build/scripts/prepare-semantic-assets.py
@@ -23,7 +24,7 @@ COPY . .
 ENV VITE_API_BASE_URL= \
     VITE_INDEX_QUEUE_API_BASE_URL= \
     VITE_ENGAGEMENT_SORTS=true \
-    VITE_SEARCH_MODE=semantic
+    VITE_SEARCH_MODE=hybrid
 RUN bun run build
 
 # trixie: the Qdrant release binary needs glibc 2.38+, bookworm ships 2.36.
@@ -33,7 +34,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* /etc/nginx/sites-enabled \
     && useradd --create-home --uid 10001 semantic
 COPY --from=assets /opt/semantic /opt/semantic
-COPY --from=rust /app/target/release/youtube-api /app/target/release/youtube-semantic /usr/local/bin/
+COPY --from=rust /app/target/release/youtube-api /app/target/release/youtube-semantic \
+    /app/target/release/youtube-raw-search /usr/local/bin/
 COPY --from=frontend /app/dist /usr/share/nginx/html
 COPY config/qdrant-semantic.local.yaml /opt/semantic/qdrant.yaml
 COPY deploy/semantic-experimental/nginx.conf /etc/nginx/nginx.conf

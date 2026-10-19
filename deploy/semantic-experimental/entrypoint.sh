@@ -26,11 +26,22 @@ done
   done
 ) &
 
-# Lexical search is answered by production via nginx, so this API's Raw backend
-# is a closed local port: any lexical attempt fails fast and nginx retries it.
+# A Raw index of the same videos, when uploaded, answers lexical and hybrid
+# search here. Its key is generated per boot and never leaves the machine.
+# Without an index, Raw is a closed local port: lexical attempts fail fast and
+# nginx retries them on production.
+raw_url=http://127.0.0.1:9
+raw_key="$(head -c 24 /dev/urandom | base64 | tr -d '/+=')"
+if [[ -f /data/raw-index/manifest.json ]]; then
+  RAW_SEARCH_BIND=127.0.0.1:8108 RAW_SEARCH_API_KEY="$raw_key" \
+    as_app youtube-raw-search serve /data/raw-index &
+  raw_url=http://127.0.0.1:8108
+fi
+
 YTSEARCH_API_ADDR=127.0.0.1:8787 \
-  RAW_SEARCH_API_URL=http://127.0.0.1:9 \
-  RAW_SEARCH_API_KEY=unused-lexical-answers-come-from-production \
+  RAW_SEARCH_API_URL="$raw_url" \
+  RAW_SEARCH_API_KEY="$raw_key" \
+  YTSEARCH_PRESERVE_BACKEND_RELEVANCE_ORDER=true \
   SEMANTIC_SEARCH_URL=http://127.0.0.1:8790 \
   YTSEARCH_INDEX_QUEUE_PATH=/data/index-requests-unused.jsonl \
   YTSEARCH_ENGAGEMENT_SORTS=true \
