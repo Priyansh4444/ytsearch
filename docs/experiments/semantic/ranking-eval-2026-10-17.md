@@ -99,9 +99,51 @@ None of the 152 semantic requests fell back to lexical.
 4. Re-run on a larger corpus before trusting absolute numbers. 300 videos
    flatters both engines; more distractors will lower scores.
 
+## Follow-up: question rewriting and `mode=hybrid` (2026-10-18)
+
+To answer specific questions, a rule-based rewrite turns a question into a
+keyword query for Raw: it drops question words, auxiliaries, pronouns, asking
+verbs ("say", "think", "explain") and filler ("Theo", "video"), keeps quoted
+phrases, and leaves non-questions unchanged ("why did Anthropic try to ban
+OpenCode?" → `Anthropic try ban OpenCode`). Hybrid then fuses the rewritten Raw
+ranking with semantic using the gate above (`gated_rw`). The rules and the
+candidate routings were fixed before a **held-out set** of 30 new questions, on
+30 videos not used before, was run.
+
+Run against a local stack (Raw and semantic over the same 300 videos,
+`scripts/run-semantic-local-stack.sh`), as served by `youtube_api` `mode=hybrid`
+([dev scores](scores-dev-local-2026-10-18.json),
+[held-out scores](scores-heldout-2026-10-18.json)):
+
+| Held-out questions (n=30) | MRR@10 | Recall@10 | Moment@1 |
+| --- | --: | --: | --: |
+| Lexical, original question | 0.24 | 0.37 | 0.10 |
+| Lexical, rewritten | 0.50 | 0.70 | 0.23 |
+| Semantic | **0.67** | **0.93** | 0.37 |
+| Gated hybrid, original question | 0.48 | 0.90 | 0.23 |
+| **Hybrid (rewritten + gated)** | **0.67** | 0.87 | **0.43** |
+
+Hybrid matches semantic's ranking on questions and finds the exact moment more
+often, while keeping lexical's exact-quote score on the dev set (0.96 vs 0.24
+for semantic). Rewriting alone doubles lexical's question score. Routing every
+question semantic-led tied with the gate on held-out questions but misrouted
+quotes that begin with "did", so the simpler gate shipped. On the dev set,
+hybrid's "the video where…" score fell from 0.75 to 0.70 because queries
+starting with "how" are rewritten (n=16; within noise, but worth watching).
+
+Fused cards show semantic's moments for videos both engines found. Taking
+lexical's moments (with highlights) when fusion is lexical-led raised dev quote
+moment@1 from 0.86 to 0.89 but lowered held-out question moment@1 from 0.43 to
+0.37, so it was not adopted.
+
+Served `mode=hybrid` reproduced the offline simulation exactly: identical top 10
+for all 182 dev and held-out queries. Hybrid latency on the local stack was p50
+86 ms / p95 188 ms, the same as semantic alone, since both engines run
+concurrently.
+
 ## Caveats
 
-One person (the agent) wrote the queries after reading the targets, and graded
+The held-out questions reduce, but do not remove, the bias below. One person (the agent) wrote the queries after reading the targets, and graded
 the topic pool. Paraphrases avoid the target's distinctive words but are still
 informed by them. The query set is small (12–36 per use case), so differences
 under about 0.1 are within noise. Raw rankings contain transcript text and stay

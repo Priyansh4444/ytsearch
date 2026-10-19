@@ -1,0 +1,31 @@
+# category	target	query  (held out: written before the rewriter or routing was run on them)
+question	H00	can you reuse a component block globally in Ripple?
+question	H01	why would open weight models winning lead to AI communism?
+question	H02	how did Opus do at building the archive chat feature?
+question	H03	how fast is Minecraft built in pure CSS compared to the real game?
+question	H04	what do OpenAI's leaked reasoning traces look like?
+question	H05	why did the Cloudflare free tier keep timing out in Theo's benchmark?
+question	H06	why did GitHub create Atom?
+question	H07	is the Claude desktop app better than the CLI?
+question	H08	why did Astro struggle once you can vibe code your own plugins?
+question	H09	what does it mean that the terminal app pulls in your Chrome profile and passwords?
+question	H10	what is stock dilution when a company raises money?
+question	H11	where should GraphQL sit between the client, the server and the database?
+question	H12	how does the Clawdbot creator use Codex and commit to main?
+question	H13	does Sonnet 4.5 snitch when it only has a CLI in SnitchBench?
+question	H14	what caused the Cloudflare dashboard outage with React?
+question	H15	why is reviewing AI generated pull requests so hard?
+question	H16	what is Kairos in the leaked Claude Code source?
+question	H17	how did Cursor's Composer do at updating SnitchBench to AI SDK v5?
+question	H18	what does the TypeScript team say about build performance after TypeScript 7?
+question	H19	why did Graphite join Cursor?
+question	H20	why do some developers think React is insane?
+question	H21	why is a Mac Studio good for running big local models?
+question	H22	what design style does Gemini keep reaching for?
+question	H23	what went wrong when the model was asked to update the script?
+question	H24	can Claude Code call Codex as another agent?
+question	H25	what does React Canary make simpler for loading states?
+question	H26	is Vercel a good place to host large static files?
+question	H27	why was building an IDE so hard for GitHub?
+question	H28	what does the Kimi K2 license require?
+question	H29	how was Bun ported from Zig to Rust with AI workflows?
