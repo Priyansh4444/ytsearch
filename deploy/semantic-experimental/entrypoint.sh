@@ -47,6 +47,13 @@ YTSEARCH_API_ADDR=127.0.0.1:8787 \
   YTSEARCH_ENGAGEMENT_SORTS=true \
   as_app youtube-api &
 
+# Accept traffic only once semantic is ready, so the first request after an idle
+# stop waits a few seconds instead of getting a silently lexical answer. Bounded,
+# so a missing collection still serves lexically after 90 s.
+for _ in $(seq 180); do
+  curl -fsS http://127.0.0.1:8790/ready >/dev/null 2>&1 && break
+  sleep 0.5
+done
 nginx -g 'daemon off;' &
 wait -n
 exit 1

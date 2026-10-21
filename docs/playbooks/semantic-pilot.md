@@ -155,8 +155,12 @@ to the local API; if that fails (for example before a Raw index is uploaded),
 nginx retries the read on the public production API. The schedule comes from
 the production Worker and writes are refused, so the site holds no production
 credentials and cannot queue index requests. The local Raw key is generated at
-each boot and never leaves the machine. It stops when idle; the first request
-after that waits for a cold start.
+each boot and never leaves the machine. It stops when idle. nginx starts only
+once the semantic service is ready (at most 90 s), so the first request after an
+idle stop waits about 24 s, almost all ONNX Runtime loading the model on two
+shared vCPUs, and then gets a full hybrid answer. Starting nginx first answered
+in ~4 s but silently lexically for the first ~10 s, which made questions look
+broken.
 
 Data is imported locally, where cores are plentiful, then moved as a Qdrant
 snapshot. Build snapshots from a Raw backup archive with
