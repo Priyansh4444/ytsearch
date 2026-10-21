@@ -148,6 +148,39 @@ for all 182 dev and held-out queries. Hybrid latency on the local stack was p50
 86 ms / p95 188 ms, the same as semantic alone, since both engines run
 concurrently.
 
+## Follow-up: focused moments over all 1,072 videos (2026-10-21)
+
+With every Theo video indexed, `who is dan abramov` ranks the Dan Abramov
+interview, "Dan Is Back" and "Dan Quit His Job" first. The moments were still
+poor: a semantic hit is a whole passage (about 1,000 characters, 55 s) shown
+from its first line without highlights, and "show all moments" in hybrid asked
+semantic alone, which ranks every passage of the video (88 moments for the
+Dan Abramov interview, 5 of them mentioning Dan). Hybrid now focuses each
+passage on the lines matching the query and lists Raw matches for a video
+([semantic pilot](../../playbooks/semantic-pilot.md)).
+
+Same local stack and query sets, before and after; video rankings are
+unchanged. "First moment in window" means the top video is the target and its
+first moment starts within the target window ±10 s (all 1,072 videos, so
+there are more distractors than in the 300-video tables above):
+
+| | Dev (n=136) first moment in window | Held-out (n=30) | Characters shown per moment |
+| --- | --: | --: | --: |
+| Whole passages | 29 | 3 | 962 |
+| **Focused** | **41** | **4** | **241** |
+
+Moment@1 as defined above (any of three moments overlapping the target ±30 s)
+fell by one query in each of three dev categories. All four changes were
+passages 40–60 s from the target whose long range reached into the 30 s slack;
+the focused moment is just as far away. Held-out question moment@1 was 0.40
+both ways.
+
+The remaining errors are mostly in the transcripts. 685 of the 1,072 videos
+(everything before mid-2025) have YouTube auto-captions without punctuation
+that mishear names: about 40% of HTMX mentions read "HTM X" or "HDMX" and two
+thirds of Supabase mentions read "superbase". Exact matching and highlights
+miss those; semantic partly recovers them.
+
 ## Caveats
 
 The held-out questions reduce, but do not remove, the bias below. One person (the agent) wrote the queries after reading the targets, and graded

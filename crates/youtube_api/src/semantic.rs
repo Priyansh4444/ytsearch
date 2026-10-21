@@ -11,13 +11,12 @@ pub(super) enum Mode {
 }
 impl Mode {
     /// The engine that answers. Low-signal queries and explicit sorts stay
-    /// lexical; a video-scoped moment lookup in hybrid mode uses semantic, which
-    /// filters by video directly.
-    pub(super) fn route(self, sort: SearchSort, low_signal: bool, video_scope: bool) -> Self {
-        match self {
-            _ if sort != SearchSort::Relevance || low_signal => Self::Lexical,
-            Self::Hybrid if video_scope => Self::Semantic,
-            mode => mode,
+    /// lexical.
+    pub(super) fn route(self, sort: SearchSort, low_signal: bool) -> Self {
+        if sort != SearchSort::Relevance || low_signal {
+            Self::Lexical
+        } else {
+            self
         }
     }
 }
@@ -114,7 +113,7 @@ pub(super) async fn response(
         .as_ref()
         .ok_or(ApiError::SemanticUnavailable)?;
     let started = Instant::now();
-    let hits = client.hits(query, params).await?;
+    let hits = hybrid::focus_moments(client.hits(query, params).await?, query, &[]);
     let moments = hits.len() as u64;
     // Preserve Qdrant order through the existing card/timestamp hydration path.
     let videos = video_results_from_hits_with_policy(
@@ -149,19 +148,13 @@ mod tests {
     use super::*;
     #[test]
     fn opt_in_preserves_low_signal_and_explicit_sorts() {
-        let relevance = |mode: Mode, query: &str, video_scope: bool| {
-            mode.route(
-                SearchSort::Relevance,
-                is_low_signal_query(query),
-                video_scope,
-            )
-        };
-        assert_eq!(relevance(Mode::Lexical, "rust", false), Mode::Lexical);
-        assert_eq!(relevance(Mode::Semantic, "rust", false), Mode::Semantic);
-        assert_eq!(relevance(Mode::Hybrid, "why rust?", false), Mode::Hybrid);
-        assert_eq!(relevance(Mode::Hybrid, "why rust?", true), Mode::Semantic);
+        let relevance =
+            |mode: Mode, query: &str| mode.route(SearchSort::Relevance, is_low_signal_query(query));
+        assert_eq!(relevance(Mode::Lexical, "rust"), Mode::Lexical);
+        assert_eq!(relevance(Mode::Semantic, "rust"), Mode::Semantic);
+        assert_eq!(relevance(Mode::Hybrid, "why rust?"), Mode::Hybrid);
         for mode in [Mode::Semantic, Mode::Hybrid] {
-            assert_eq!(relevance(mode, "I", false), Mode::Lexical);
+            assert_eq!(relevance(mode, "I"), Mode::Lexical);
         }
         for sort in [
             SearchSort::PublishedAsc,
@@ -172,7 +165,7 @@ mod tests {
             SearchSort::CommentsDesc,
         ] {
             for mode in [Mode::Semantic, Mode::Hybrid] {
-                assert_eq!(mode.route(sort, false, false), Mode::Lexical);
+                assert_eq!(mode.route(sort, false), Mode::Lexical);
             }
         }
         assert_eq!(canonical_creator("@aiDotEngineer"), "@aidotengineer");
