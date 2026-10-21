@@ -42,6 +42,8 @@ bin="$root/target/release"
 assets="$root/data/semantic"
 logs="$state/local-stack"
 mkdir -p "$logs"
+# Qdrant writes .qdrant-initialized into its working directory.
+cd "$state"
 for binary in youtube-api youtube-semantic youtube-raw-search; do
   [[ -x "$bin/$binary" ]] || { echo "missing $bin/$binary: cargo build --release" >&2; exit 1; }
 done
