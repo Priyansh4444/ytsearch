@@ -131,6 +131,13 @@ quotes that begin with "did", so the simpler gate shipped. On the dev set,
 hybrid's "the video where…" score fell from 0.75 to 0.70 because queries
 starting with "how" are rewritten (n=16; within noise, but worth watching).
 
+The rewrite also fixes a production lexical weakness: leading question words
+cut recall. On production (all of Theo's videos), `who is dan abramov` returns 4
+videos and `dan abramov` returns 39; the rewrite sends the latter. Questions
+about something outside the indexed videos can only find passing mentions: the
+experimental site's first 300 videos (Jun 2025 – Aug 2026) held none of Theo's
+Dan Abramov videos (2021–2024), so it was extended to all 1,072.
+
 Fused cards show semantic's moments for videos both engines found. Taking
 lexical's moments (with highlights) when fusion is lexical-led raised dev quote
 moment@1 from 0.86 to 0.89 but lowered held-out question moment@1 from 0.43 to

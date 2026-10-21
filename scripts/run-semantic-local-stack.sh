@@ -48,8 +48,10 @@ wait_for() {
 detach() {
   local name="$1"
   shift
-  setsid "$@" >"$logs/$name.log" 2>&1 < /dev/null &
-  echo "$!" >"$logs/$name.pid"
+  # setsid may fork, so $! can be a parent that exits at once; the process
+  # records its own PID before exec instead.
+  setsid bash -c 'echo "$$" >"$1"; shift; exec "$@"' _ "$logs/$name.pid" "$@" \
+    >"$logs/$name.log" 2>&1 < /dev/null &
 }
 
 QDRANT__SERVICE__HTTP_PORT=16401 QDRANT__SERVICE__GRPC_PORT=16402 \
