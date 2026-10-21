@@ -14,12 +14,22 @@
 # command line of the shell running it, which then kills itself (exit 144).
 set -euo pipefail
 if [[ "${1:-}" == stop && $# -eq 2 ]]; then
+  pids=()
   for pid_file in "$2"/local-stack/*.pid; do
     [[ -f "$pid_file" ]] || continue
-    kill "$(cat "$pid_file")" 2>/dev/null || true
+    pids+=("$(cat "$pid_file")")
+    kill "${pids[-1]}" 2>/dev/null || true
     rm -f "$pid_file"
   done
-  exit 0
+  # Qdrant holds its WAL lock until it exits; a restart before then panics.
+  for _ in $(seq 60); do
+    alive=0
+    for pid in "${pids[@]}"; do kill -0 "$pid" 2>/dev/null && alive=1; done
+    ((alive)) || exit 0
+    sleep 0.5
+  done
+  echo "processes still running after 30 s: ${pids[*]}" >&2
+  exit 1
 fi
 if [[ $# -ne 2 ]]; then
   echo "usage: $0 STATE_DIR RAW_INDEX_DIR | $0 stop STATE_DIR" >&2

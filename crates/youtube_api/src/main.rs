@@ -590,10 +590,8 @@ async fn search_handler(
     // Semantic and hybrid modes are opt-in improvements, never hard dependencies:
     // when the service is absent, busy or down, answer lexically. `mode` in the
     // response says which ran.
-    match params
-        .mode
-        .route(sort, low_signal_query, params.video_id.is_some())
-    {
+    let video_id = validated_video_id(&params)?;
+    match params.mode.route(sort, low_signal_query) {
         semantic::Mode::Lexical => {}
         semantic::Mode::Semantic => {
             match semantic::response(&state, &params, query, per_page, page).await {
@@ -604,7 +602,12 @@ async fn search_handler(
             }
         }
         semantic::Mode::Hybrid => {
-            return hybrid::response(&state, &params, query, per_page, page).await;
+            return match video_id {
+                Some(video_id) => {
+                    hybrid::video_response(&state, &params, query, video_id, per_page, page).await
+                }
+                None => hybrid::response(&state, &params, query, per_page, page).await,
+            };
         }
     }
     let search_started = Instant::now();
@@ -661,13 +664,7 @@ async fn search_handler(
     if let Some(youtuber) = non_empty(params.youtuber.as_deref()) {
         search_query = search_query.youtuber_handle(normalize_handle(youtuber));
     }
-    if let Some(video_id) = non_empty(params.video_id.as_deref()) {
-        if !video_id
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-        {
-            return Err(ApiError::BadRequest("invalid video id".to_string()));
-        }
+    if let Some(video_id) = video_id {
         search_query = search_query.filter_by(format!("video_id:={video_id}"));
     }
 
@@ -1565,14 +1562,8 @@ impl SearchHit {
         };
         let (timestamp, youtube_url, embed_url) = match match_kind {
             MatchKind::Transcript => {
-                let seconds = t_start_ms / 1000;
-                (
-                    Some(format_timestamp(t_start_ms)),
-                    format!("https://www.youtube.com/watch?v={video_id}&t={seconds}s"),
-                    format!(
-                        "https://www.youtube-nocookie.com/embed/{video_id}?start={seconds}&rel=0"
-                    ),
-                )
+                let (timestamp, youtube_url, embed_url) = moment_links(&video_id, t_start_ms);
+                (Some(timestamp), youtube_url, embed_url)
             }
             MatchKind::Title => (
                 None,
@@ -1607,6 +1598,30 @@ impl SearchHit {
             group_match_count,
         })
     }
+}
+
+/// The requested video, checked before it reaches a backend filter.
+fn validated_video_id(params: &SearchParams) -> Result<Option<&str>, ApiError> {
+    match non_empty(params.video_id.as_deref()) {
+        Some(video_id)
+            if !video_id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            }) =>
+        {
+            Err(ApiError::BadRequest("invalid video id".to_string()))
+        }
+        video_id => Ok(video_id),
+    }
+}
+
+/// Timestamp, watch URL and embed URL of a transcript moment.
+fn moment_links(video_id: &str, t_start_ms: u32) -> (String, String, String) {
+    let seconds = t_start_ms / 1000;
+    (
+        format_timestamp(t_start_ms),
+        format!("https://www.youtube.com/watch?v={video_id}&t={seconds}s"),
+        format!("https://www.youtube-nocookie.com/embed/{video_id}?start={seconds}&rel=0"),
+    )
 }
 
 fn highlight_for_field(hit: &Value, field: &str) -> Option<String> {

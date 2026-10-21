@@ -264,6 +264,174 @@ fn fuse(
         .collect()
 }
 
+/// Caption lines a focused semantic moment shows, about as much as one Raw hit
+/// with its neighbors.
+const FOCUS_LINES: usize = 2;
+
+/// Byte ranges of the words `content_words` would see in `text`.
+fn word_spans(text: &str) -> Vec<(usize, usize)> {
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '\'' || c == '\u{2019}';
+    let mut spans = Vec::new();
+    let mut start = None;
+    for (index, c) in text.char_indices().chain([(text.len(), ' ')]) {
+        match (start, is_word(c)) {
+            (None, true) => start = Some(index),
+            (Some(from), false) => {
+                spans.push((from, index));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
+/// The wanted word `token` spells, allowing a plural or possessive ending. No
+/// prefixes: `react` must not mark `Preact` or `reactive`.
+fn wanted_word<'a>(token: &str, wanted: &'a BTreeSet<String>) -> Option<&'a String> {
+    let lowered = normalize_apostrophes(&token.to_ascii_lowercase());
+    let word = lowered.trim_matches('\'');
+    [
+        Some(word),
+        word.strip_suffix("'s"),
+        word.strip_suffix('s'),
+        word.strip_suffix("es"),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|candidate| wanted.get(candidate))
+}
+
+fn push_escaped(text: &str, output: &mut String) {
+    for c in text.chars() {
+        match c {
+            '&' => output.push_str("&amp;"),
+            '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
+            '"' => output.push_str("&quot;"),
+            '\'' => output.push_str("&#39;"),
+            _ => output.push(c),
+        }
+    }
+}
+
+/// `text` escaped as Raw escapes snippets, with wanted words marked; `None`
+/// when nothing matched, as Raw omits highlights.
+fn highlight(text: &str, wanted: &BTreeSet<String>) -> Option<String> {
+    let mut output = String::new();
+    let mut last = 0;
+    for (start, end) in word_spans(text) {
+        if wanted_word(&text[start..end], wanted).is_some() {
+            push_escaped(&text[last..start], &mut output);
+            output.push_str("<mark>");
+            push_escaped(&text[start..end], &mut output);
+            output.push_str("</mark>");
+            last = end;
+        }
+    }
+    (last > 0).then(|| {
+        push_escaped(&text[last..], &mut output);
+        output
+    })
+}
+
+fn matched_words(lines: &[&str], wanted: &BTreeSet<String>) -> usize {
+    let mut matched = BTreeSet::new();
+    for line in lines {
+        for (start, end) in word_spans(line) {
+            matched.extend(wanted_word(&line[start..end], wanted));
+        }
+    }
+    matched.len()
+}
+
+/// Narrow a semantic passage (about a minute of captions, one Raw chunk per
+/// line) to the moment that answers. A Raw hit of the same video inside the
+/// passage is used as is: its time and highlight are exact. Otherwise the
+/// `FOCUS_LINES` lines matching the most query words are kept, with the lines
+/// around them as context, and the start time is interpolated from the
+/// position of those lines in the passage. With no match the passage opening
+/// is kept, whose start time is exact.
+fn focus(
+    mut hit: SearchHit,
+    wanted: &BTreeSet<String>,
+    lexical: &[&SearchHit],
+    used: &HashSet<String>,
+) -> SearchHit {
+    if let Some(exact) = lexical.iter().find(|candidate| {
+        candidate.match_kind == MatchKind::Transcript
+            && (hit.t_start_ms..hit.t_end_ms).contains(&candidate.t_start_ms)
+            && !used.contains(&candidate.id)
+    }) {
+        return (*exact).clone();
+    }
+    let text = std::mem::take(&mut hit.text);
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let width = FOCUS_LINES.min(lines.len());
+    let best = (0..=lines.len() - width)
+        .max_by_key(|&first| {
+            (
+                matched_words(&lines[first..first + width], wanted),
+                Reverse(first),
+            )
+        })
+        .unwrap_or(0);
+    let length = |lines: &[&str]| {
+        lines
+            .iter()
+            .map(|line| line.chars().count() as u64)
+            .sum::<u64>()
+    };
+    let at = |chars: u64| {
+        let span = u64::from(hit.t_end_ms.saturating_sub(hit.t_start_ms));
+        hit.t_start_ms + (span * chars / length(&lines).max(1)) as u32
+    };
+    let (t_start_ms, t_end_ms) = (
+        at(length(&lines[..best])),
+        at(length(&lines[..best + width])),
+    );
+    hit.text = lines[best..best + width].join(" ");
+    hit.prev_text = best.checked_sub(1).map(|before| lines[before].to_string());
+    hit.next_text = lines.get(best + width).map(|after| after.to_string());
+    hit.text_highlight = highlight(&hit.text, wanted);
+    (hit.timestamp, hit.youtube_url, hit.embed_url) = {
+        let (timestamp, youtube_url, embed_url) = moment_links(&hit.video_id, t_start_ms);
+        (Some(timestamp), youtube_url, embed_url)
+    };
+    (hit.t_start_ms, hit.t_end_ms) = (t_start_ms, t_end_ms);
+    hit
+}
+
+/// Focus each semantic moment on the words of `query`, in semantic order. A Raw
+/// hit serves one moment: passages overlap at their edges.
+pub(super) fn focus_moments(
+    hits: Vec<SearchHit>,
+    query: &str,
+    lexical: &[SearchVideoResult],
+) -> Vec<SearchHit> {
+    let wanted = content_words(&lexical_query(query));
+    let mut by_video = HashMap::<&str, Vec<&SearchHit>>::new();
+    for video in lexical {
+        by_video.insert(&video.video_id, video.hits.iter().collect());
+    }
+    let mut used = HashSet::new();
+    let mut moments = Vec::with_capacity(hits.len());
+    for hit in hits {
+        let candidates = by_video
+            .get(hit.video_id.as_str())
+            .map_or(&[][..], Vec::as_slice);
+        let moment = focus(hit, &wanted, candidates, &used);
+        if used.insert(moment.id.clone()) {
+            moments.push(moment);
+        }
+    }
+    moments
+}
+
 async fn lexical_candidates(
     state: &AppState,
     params: &SearchParams,
@@ -304,18 +472,110 @@ async fn semantic_candidates(
     state: &AppState,
     params: &SearchParams,
     query: &str,
-) -> Result<Vec<SearchVideoResult>, ApiError> {
+) -> Result<Vec<SearchHit>, ApiError> {
     let client = state
         .semantic
         .as_ref()
         .ok_or(ApiError::SemanticUnavailable)?;
-    let hits = client.hits(query, params).await?;
-    Ok(video_results_from_hits_with_policy(
-        hits,
+    client.hits(query, params).await
+}
+
+/// Semantic moments listed for one video: the ones its card shows. Semantic
+/// ranks every passage of the video, so past its best few the list is the rest
+/// of the transcript.
+const VIDEO_SEMANTIC_MOMENTS: usize = INITIAL_GROUP_LIMIT as usize;
+
+/// Moments of one video, the request behind "show all moments": semantic's
+/// best few, focused, then every Raw match of the rewritten query not already
+/// shown. Without semantic, only the Raw matches.
+fn video_moments(
+    semantic: Result<Vec<SearchHit>, ApiError>,
+    query: &str,
+    lexical: Vec<SearchHit>,
+) -> Result<(Vec<SearchHit>, &'static str), ApiError> {
+    let semantic = match semantic {
+        Ok(mut hits) => {
+            hits.truncate(VIDEO_SEMANTIC_MOMENTS);
+            hits
+        }
+        Err(ApiError::SemanticUnavailable) => {
+            tracing::warn!("semantic search unavailable; answering video moments lexically");
+            return Ok((lexical, "lexical"));
+        }
+        Err(error) => return Err(error),
+    };
+    let lexical_video = video_results_from_hits_with_policy(
+        lexical.clone(),
         SearchSort::Relevance,
         query,
         RelevanceOrdering::Backend,
-    ))
+    );
+    let mut moments = focus_moments(semantic, query, &lexical_video);
+    let shown: HashSet<String> = moments.iter().map(|hit| hit.id.clone()).collect();
+    moments.extend(lexical.into_iter().filter(|hit| !shown.contains(&hit.id)));
+    Ok((moments, "hybrid"))
+}
+
+pub(super) async fn video_response(
+    state: &AppState,
+    params: &SearchParams,
+    query: &str,
+    video_id: &str,
+    per_page: u8,
+    page: u32,
+) -> Result<Response, ApiError> {
+    let started = Instant::now();
+    let lexical_query = lexical_query(query);
+    let mut search_query = TextSearchQuery::new(close_unterminated_phrase(&lexical_query))
+        .query_by("text,title")
+        .highlight_fields("text,title")
+        .per_page(VIDEO_SCOPE_PAGE_SIZE)
+        .page(1)
+        .without_grouping()
+        .filter_by(format!("video_id:={video_id}"));
+    if let Some(youtuber) = non_empty(params.youtuber.as_deref()) {
+        search_query = search_query.youtuber_handle(normalize_handle(youtuber));
+    }
+    let lexical = async {
+        let raw = state.search.search(&search_query).await?;
+        collect_hits(
+            &state.search,
+            &search_query,
+            raw,
+            VIDEO_SCOPE_PAGE_SIZE,
+            VIDEO_SCOPE_MAX_PAGE_FETCHES,
+            usize::MAX,
+            &mut SearchCollectionTimings::default(),
+        )
+        .await
+    };
+    let (lexical, semantic) = tokio::join!(lexical, semantic_candidates(state, params, query));
+    let (moments, mode) = video_moments(semantic, query, lexical?)?;
+    let videos = video_results_from_hits_with_policy(
+        moments,
+        SearchSort::Relevance,
+        query,
+        RelevanceOrdering::Backend,
+    );
+    let total_moments = videos.iter().map(|video| video.hits.len() as u64).sum();
+    let offset = (page - 1).saturating_mul(u32::from(per_page)) as usize;
+    let (videos, has_next_page) = page_of_videos(videos, offset, per_page);
+    Ok(no_store_json(SearchResponse {
+        query,
+        total_moments,
+        total_videos: videos.len() as u64,
+        totals_approximate: false,
+        total_found: total_moments,
+        out_of: total_moments,
+        time_to_first_result_ms: started.elapsed().as_millis() as u64,
+        page,
+        per_page,
+        sort: SearchSort::Relevance,
+        mode,
+        has_next_page,
+        hits: [],
+        videos: &videos,
+    }))
 }
 
 /// Fused answer, or the rewritten lexical answer when semantic is unavailable.
@@ -335,6 +595,12 @@ pub(super) async fn response(
     let lexical = lexical?;
     let (videos, mode, lead) = match semantic {
         Ok(semantic) => {
+            let semantic = video_results_from_hits_with_policy(
+                focus_moments(semantic, query, &lexical),
+                SearchSort::Relevance,
+                query,
+                RelevanceOrdering::Backend,
+            );
             let lead = Lead::of(&lexical_query, &lexical);
             (fuse(lexical, semantic, lead), "hybrid", Some(lead))
         }
@@ -402,12 +668,12 @@ mod tests {
         assert_eq!(lexical_query("what do you think?"), "what do you think?");
     }
 
-    fn video(id: &str, highlights: &[&str]) -> SearchVideoResult {
-        let hit: SearchHit = SearchHit {
-            id: format!("{id}-0"),
-            video_id: id.into(),
-            title: id.into(),
-            text: String::new(),
+    fn hit(video_id: &str, id: &str, text: &str, t_start_ms: u32, t_end_ms: u32) -> SearchHit {
+        SearchHit {
+            id: id.into(),
+            video_id: video_id.into(),
+            title: video_id.into(),
+            text: text.into(),
             prev_text: None,
             next_text: None,
             text_highlight: None,
@@ -421,13 +687,17 @@ mod tests {
             like_count: 0,
             comment_count: 0,
             content_kind: ContentKind::Video,
-            t_start_ms: 0,
-            t_end_ms: 1,
+            t_start_ms,
+            t_end_ms,
             timestamp: None,
             youtube_url: String::new(),
             embed_url: String::new(),
             group_match_count: None,
-        };
+        }
+    }
+
+    fn video(id: &str, highlights: &[&str]) -> SearchVideoResult {
+        let hit = hit(id, &format!("{id}-0"), "", 0, 1);
         let mut result = SearchVideoResult::from_hit(&hit);
         result.hits = highlights
             .iter()
@@ -531,5 +801,122 @@ mod tests {
             checked += 1;
         }
         assert!(checked >= 60, "fixture lost its cases");
+    }
+
+    fn lexical_video(hits: Vec<SearchHit>) -> SearchVideoResult {
+        let mut video = SearchVideoResult::from_hit(&hits[0]);
+        video.hits = hits;
+        video
+    }
+
+    fn ten_char_lines() -> SearchHit {
+        // Five 10-character caption lines over 50 s: each line is 10 s.
+        let text = "intro line\nmore intro\nbun's fast\nthan nodes\nouttro bit";
+        hit("v", "passage", text, 100_000, 150_000)
+    }
+
+    #[test]
+    fn focus_keeps_the_lines_matching_most_query_words_at_their_time() {
+        let [moment] = focus_moments(vec![ten_char_lines()], "is bun faster than node?", &[])
+            .try_into()
+            .unwrap();
+        assert_eq!(moment.text, "bun's fast than nodes");
+        assert_eq!(moment.prev_text.as_deref(), Some("more intro"));
+        assert_eq!(moment.next_text.as_deref(), Some("outtro bit"));
+        // `fast` is not `faster`: only plural and possessive endings match.
+        assert_eq!(
+            moment.text_highlight.as_deref(),
+            Some("<mark>bun&#39;s</mark> fast than <mark>nodes</mark>")
+        );
+        assert_eq!((moment.t_start_ms, moment.t_end_ms), (120_000, 140_000));
+        assert_eq!(moment.timestamp.as_deref(), Some("2:00"));
+        assert_eq!(
+            moment.youtube_url,
+            "https://www.youtube.com/watch?v=v&t=120s"
+        );
+        assert_eq!(
+            moment.embed_url,
+            "https://www.youtube-nocookie.com/embed/v?start=120&rel=0"
+        );
+    }
+
+    #[test]
+    fn focus_without_a_matching_word_keeps_the_passage_opening_and_its_exact_time() {
+        let [moment] = focus_moments(vec![ten_char_lines()], "why is rust popular?", &[])
+            .try_into()
+            .unwrap();
+        assert_eq!(moment.text, "intro line more intro");
+        assert_eq!(
+            (moment.prev_text, moment.next_text.as_deref()),
+            (None, Some("bun's fast"))
+        );
+        assert_eq!(moment.text_highlight, None);
+        assert_eq!(
+            (moment.t_start_ms, moment.timestamp.as_deref()),
+            (100_000, Some("1:40"))
+        );
+    }
+
+    #[test]
+    fn highlight_escapes_like_raw_and_marks_whole_words_only() {
+        let wanted = content_words("react");
+        assert_eq!(
+            highlight("Preact & <React's> reactive", &wanted).as_deref(),
+            Some("Preact &amp; &lt;<mark>React&#39;s</mark>&gt; reactive")
+        );
+        assert_eq!(highlight("Preact is reactive", &wanted), None);
+    }
+
+    #[test]
+    fn overlapping_passages_each_take_a_different_exact_raw_hit() {
+        let passages = vec![
+            hit("v", "p1", "a\nb", 0, 60_000),
+            hit("v", "p2", "c\nd", 58_000, 120_000),
+            hit("v", "p3", "e\nf", 300_000, 360_000),
+        ];
+        // Raw order: the edge hit lies in both p1 and p2, the last in neither.
+        let lexical = [lexical_video(vec![
+            hit("v", "edge", "rust", 58_500, 62_000),
+            hit("v", "inside-p2", "rust", 70_000, 75_000),
+            hit("v", "outside", "rust", 200_000, 205_000),
+        ])];
+        let moments = focus_moments(passages, "why rust?", &lexical);
+        let ids: Vec<&str> = moments.iter().map(|moment| moment.id.as_str()).collect();
+        assert_eq!(ids, ["edge", "inside-p2", "p3"]);
+        assert_eq!(moments[1].t_start_ms, 70_000);
+    }
+
+    #[test]
+    fn video_moments_list_the_cards_semantic_moments_then_the_other_raw_matches() {
+        let semantic: Vec<SearchHit> = (0..5)
+            .map(|i| {
+                hit(
+                    "v",
+                    &format!("p{i}"),
+                    "x\ny",
+                    i * 100_000,
+                    i * 100_000 + 60_000,
+                )
+            })
+            .collect();
+        let lexical = vec![
+            hit("v", "in-p1", "rust", 110_000, 115_000),
+            hit("v", "in-p4", "rust", 410_000, 415_000),
+        ];
+        let (moments, mode) = video_moments(Ok(semantic), "why rust?", lexical.clone()).unwrap();
+        let ids: Vec<&str> = moments.iter().map(|moment| moment.id.as_str()).collect();
+        assert_eq!((ids, mode), (vec!["p0", "in-p1", "p2", "in-p4"], "hybrid"));
+
+        let (moments, mode) = video_moments(
+            Err(ApiError::SemanticUnavailable),
+            "why rust?",
+            lexical.clone(),
+        )
+        .unwrap();
+        assert_eq!((moments.len(), mode), (2, "lexical"));
+        assert!(matches!(
+            video_moments(Err(ApiError::BadRequest("q".into())), "why rust?", lexical),
+            Err(ApiError::BadRequest(_))
+        ));
     }
 }
