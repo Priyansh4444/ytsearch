@@ -4,6 +4,8 @@
   semantic-eval.py [--set dev|heldout] [--base URL] fetch OUT.json   query, save raw rankings
   semantic-eval.py [--set dev|heldout] pool  OUT.json   print pooled topic results for grading
   semantic-eval.py [--set dev|heldout] score OUT.json   print metrics (needs topic grades for nDCG)
+  semantic-eval.py [--set dev|heldout] judge OUT.json GRADES.tsv   grade the topic pool with a Workers AI model
+  semantic-eval.py [--grades GRADES.tsv] score OUT.json  score against other topic grades
   semantic-eval.py rewrite QUERY...                     show the question rewrite
 
 `--base` is one API that answers both `mode=lexical` and `mode=semantic`: the
@@ -25,6 +27,17 @@ fuses it semantic-led (1:3) for questions and is `gated` otherwise. The rules
 were fixed before the held-out set was run. youtube_api implements the same
 rewrite; its tests compare against this one.
 
+`judge` grades the same pool `pool` prints with JUDGE_MODEL on Workers AI and
+writes a grades file in the hand-graded format, so new query sets can be scored
+without grading by hand; it also prints its agreement with the hand grades for
+the queries both cover. It needs CLOUDFLARE_ACCOUNT_ID and either
+CLOUDFLARE_API_TOKEN (Workers AI read) or a `wrangler login` session. Against
+the dev hand grades it agreed exactly on 66% of 120 results and within one grade
+on 98%, grading more leniently; it kept lexical (~0.5 nDCG@5) far below semantic
+and hybrid (~0.8) but reordered engines within 0.08 of each other. Use it to
+catch large gains and regressions on new query sets, not to separate close
+engines. A run costs about one neuron per query, inside the free allocation.
+
 Lexical rankings come from the production API and are restricted to the semantic
 corpus (corpus-*.txt), so both engines compete over the same videos. Known-item
 queries name a target moment; a moment hit means one of the top video's first
@@ -39,6 +52,8 @@ import re
 import statistics
 import sys
 import time
+import os
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -55,6 +70,12 @@ KNOWN_ITEM = ["quote", "paraphrase", "question", "typo", "vague"]
 ENGINES = ["lexical", "semantic", "rrf", "rrf_sem2", "gated", "lexical_rw", "gated_rw", "question_routed",
            "hybrid"]
 GATE_COVERAGE = 0.75
+JUDGE_MODEL = "@cf/google/gemma-4-26b-a4b-it"
+JUDGE_RUBRIC = (
+    "You grade search results for a YouTube transcript search engine. For the query, grade each result: "
+    "2 = on topic (answers the query or is centrally about it), 1 = partly relevant (related, or mentions it "
+    "meaningfully), 0 = off-topic or only an accidental word match. Judge from the title and the transcript "
+    'snippets. Reply with only JSON: {"grades": {"<id>": <0|1|2>, ...}} covering every id.')
 STOPWORDS = set("""a an and are as at be but by can do does did for from had has have how i if in
 into is it its it's me my no not of on or our so than that the their them then there these they this
 to too up us was we were what when where which who why will with would you your""".split())
@@ -194,20 +215,105 @@ def moment_hit(video, target):
     return any(h["t_start_ms"] <= hi and h["t_end_ms"] >= lo for h in video["hits"])
 
 
-def pool(out):
+def pooled(out):
+    """(query, [(video_id, title, snippets)]) for each topic query: every engine's top 5."""
     corpus = set(CORPUS.read_text().split())
     for row in json.loads(out.read_text()):
         if row["category"] != "topic":
             continue
         ranked = rankings(row, corpus)
-        print(f"\n### {row['query']}")
         seen = {}
         for engine in ENGINES:
             for video in ranked[engine][:POOL_DEPTH]:
                 seen.setdefault(video["video_id"], video)
-        for vid, video in seen.items():
-            snippets = " | ".join(h["text"][:150] for h in video["hits"][:2])
-            print(f"{vid}\t{video['title'][:80]}\t{snippets}")
+        yield row["query"], [(vid, v["title"][:80], " | ".join(h["text"][:150] for h in v["hits"][:2]))
+                             for vid, v in seen.items()]
+
+
+def pool(out):
+    for query, videos in pooled(out):
+        print(f"\n### {query}")
+        for vid, title, snippets in videos:
+            print(f"{vid}\t{title}\t{snippets}")
+
+
+def read_grades(path):
+    grades = {}
+    for line in path.read_text().splitlines() if path.exists() else []:
+        if line and not line.startswith("#"):
+            query, video_id, grade = line.split("\t")
+            grades[(query, video_id)] = int(grade)
+    return grades
+
+
+def parse_judgement(text, count):
+    """Grades 0-2 for ids 0..count-1 from a judge reply; models wrap the JSON in fences and
+    write keys as "0" or "[0]". None unless every id is graded exactly once."""
+    match = re.search(r"\{.*\}", text or "", re.S)
+    try:
+        graded = json.loads(match.group(0))["grades"] if match else {}
+    except (ValueError, KeyError, TypeError):
+        return None
+    grades = {}
+    for key, grade in graded.items() if isinstance(graded, dict) else []:
+        digits = re.sub(r"\D", "", str(key))
+        if digits and int(digits) < count and grade in (0, 1, 2) and int(digits) not in grades:
+            grades[int(digits)] = grade
+    return [grades[i] for i in range(count)] if len(grades) == count else None
+
+
+def workers_ai(model, body):
+    account = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    token = os.environ.get("CLOUDFLARE_API_TOKEN")
+    if not token:
+        config = pathlib.Path.home() / ".config/.wrangler/config/default.toml"
+        found = re.search(r'^oauth_token\s*=\s*"([^"]+)"', config.read_text(), re.M) if config.exists() else None
+        token = found and found.group(1)
+    if not account or not token:
+        sys.exit("judge needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN or a wrangler login")
+    request = urllib.request.Request(
+        f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{model}",
+        data=json.dumps(body).encode(), method="POST",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                return json.load(response)["result"]
+        except urllib.error.HTTPError as error:
+            if error.code == 401:
+                sys.exit("Workers AI rejected the credentials; for a wrangler login run `bunx wrangler whoami`")
+            if error.code not in (429, 500, 502, 503) or attempt == 2:
+                raise
+            time.sleep(2 * (attempt + 1))
+
+
+def judge(out, grades_out):
+    hand = read_grades(GRADES)
+    lines, pairs, neurons = [f"# query\tvideo_id\tgrade (0 off-topic, 1 partly relevant, 2 on topic); judged by {JUDGE_MODEL}"
+                             " from title + top snippets"], [], 0.0
+    for query, videos in pooled(out):
+        prompt = "\n".join([f"Query: {query}"] + [f"[{i}] title: {title} - snippets: {snippets}"
+                                                    for i, (_, title, snippets) in enumerate(videos)])
+        for _ in range(2):
+            result = workers_ai(JUDGE_MODEL, {
+                "messages": [{"role": "system", "content": JUDGE_RUBRIC}, {"role": "user", "content": prompt}],
+                "max_tokens": 1500, "temperature": 0, "chat_template_kwargs": {"enable_thinking": False}})
+            neurons += (result.get("usage") or {}).get("neurons") or 0
+            grades = parse_judgement(result["choices"][0]["message"].get("content"), len(videos))
+            if grades:
+                break
+        else:
+            sys.exit(f"judge reply for {query!r} did not grade all {len(videos)} results twice; nothing written")
+        for (vid, _, _), grade in zip(videos, grades):
+            lines.append(f"{query}\t{vid}\t{grade}")
+            if (query, vid) in hand:
+                pairs.append((hand[(query, vid)], grade))
+    pathlib.Path(grades_out).write_text("\n".join(lines) + "\n")
+    print(f"wrote {len(lines) - 1} grades to {grades_out} ({neurons:.0f} neurons)")
+    if pairs:
+        exact = sum(h == j for h, j in pairs) / len(pairs)
+        within = sum(abs(h - j) <= 1 for h, j in pairs) / len(pairs)
+        print(f"agreement with {GRADES.name} on {len(pairs)} results: exact {exact:.2f}, within one grade {within:.2f}")
 
 
 def dcg(grades):
@@ -217,12 +323,7 @@ def dcg(grades):
 def score(out):
     corpus = set(CORPUS.read_text().split())
     targets = {t["tid"]: t for t in json.loads(TARGETS.read_text())}
-    grades = {}
-    if GRADES.exists():
-        for line in GRADES.read_text().splitlines():
-            if line and not line.startswith("#"):
-                query, video_id, grade = line.split("\t")
-                grades[(query, video_id)] = int(grade)
+    grades = read_grades(GRADES)
     rows = json.loads(out.read_text())
     report = {"known_item": {}, "topic": {}, "latency_ms": {}, "fallbacks": 0}
     for category in KNOWN_ITEM:
@@ -270,15 +371,21 @@ def score(out):
 
 
 def main():
-    global QUERIES, TARGETS
+    global QUERIES, TARGETS, GRADES
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--set", choices=sorted(SETS), default="dev")
     parser.add_argument("--base", default=BASE)
     parser.add_argument("--delay", type=float, default=1.2)
-    parser.add_argument("command", choices=["fetch", "pool", "score", "rewrite"])
+    parser.add_argument("--grades", type=pathlib.Path, default=GRADES, help="topic grades read by score")
+    parser.add_argument("command", choices=["fetch", "pool", "score", "judge", "rewrite"])
     parser.add_argument("args", nargs="+")
     args = parser.parse_args()
     QUERIES, TARGETS = SETS[args.set]
+    if args.command == "judge":
+        if len(args.args) != 2:
+            parser.error("judge needs OUT.json GRADES.tsv")
+        return judge(pathlib.Path(args.args[0]), args.args[1])
+    GRADES = args.grades
     if args.command == "rewrite":
         for query in args.args:
             print(f"{query}\t{rewrite(query)}")
