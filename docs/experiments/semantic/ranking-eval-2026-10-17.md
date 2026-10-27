@@ -181,6 +181,28 @@ that mishear names: about 40% of HTMX mentions read "HTM X" or "HDMX" and two
 thirds of Supabase mentions read "superbase". Exact matching and highlights
 miss those; semantic partly recovers them.
 
+## Follow-up: an automatic judge (2026-10-26)
+
+`scripts/semantic-eval.py judge` grades the topic pool with Gemma 4 26B
+(`@cf/google/gemma-4-26b-a4b-it`, thinking off) on Workers AI. On the dev pool it
+agreed exactly with the hand grades on 66% of 120 results and within one grade
+on 98% (two results were two grades apart); it is more lenient, moving 12
+off-topic results to partly relevant and 14 partly relevant ones to on topic.
+nDCG@5 under each set of grades:
+
+| Grades | lexical | semantic | gated_rw | hybrid |
+| --- | --: | --: | --: | --: |
+| Hand | 0.50 | 0.88 | 0.82 | 0.83 |
+| Judge | 0.52 | 0.80 | 0.82 | 0.83 |
+
+The judge preserves the lexical-versus-semantic gap but not the order among
+engines within 0.08 of each other, which this set cannot separate anyway. On
+production probes of 2026-10-22 it agreed exactly with spot-checked Haiku grades
+on 83% of 196 results. Workers AI's `bge-reranker-base` was tried on the same
+probes: reranking production's candidates plus the rewritten query's raised
+topic nDCG@5 (judged) from 0.59 to 0.87, but cost two exact-quote and one
+keyword known-item hits and about 350 ms per search, so it was not adopted.
+
 ## Caveats
 
 The held-out questions reduce, but do not remove, the bias below. One person (the agent) wrote the queries after reading the targets, and graded
