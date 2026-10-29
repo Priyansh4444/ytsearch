@@ -85,17 +85,28 @@ check_frontend_config() {
   asset_path="${asset_path#/}"
   curl -fsS --max-time "$CURL_MAX_TIME" "${frontend_url%/}/$asset_path" >"$bundle_file"
   asset_directory="${asset_path%/*}"
-  # Vite may move the Effect runtime and its API constants into a lazy chunk.
-  # Inspect direct entry imports too, otherwise a healthy split build looks
-  # indistinguishable from a bundle with no configured API routes.
-  grep -oE '\./[A-Za-z0-9._-]+\.js' "$bundle_file" | sort -u |
-    while IFS= read -r chunk_path; do
+  # Vite splits the client runtime, which holds the API routes, into a lazy
+  # chunk that the entry bundle only reaches through another chunk. Follow chunk
+  # references a few levels deep; stopping at the entry's direct imports made a
+  # healthy production frontend look like a bundle with no configured routes.
+  fetched=" "
+  round=0
+  while [ "$round" -lt 4 ]; do
+    pending="$(grep -oE '\./[A-Za-z0-9._-]+\.js' "$bundle_file" | sort -u)"
+    new_chunks=0
+    for chunk_path in $pending; do
       chunk_path="${chunk_path#./}"
+      case "$fetched" in *" $chunk_path "*) continue ;; esac
+      fetched="$fetched$chunk_path "
+      new_chunks=1
       curl -fsS --max-time "$CURL_MAX_TIME" \
         "${frontend_url%/}/$asset_directory/$chunk_path" >"$chunk_file"
       printf '\n' >>"$bundle_file"
       cat "$chunk_file" >>"$bundle_file"
     done
+    [ "$new_chunks" = 1 ] || break
+    round=$((round + 1))
+  done
   if ! grep -q "${expected_api_url#https://}" "$bundle_file"; then
     # The production Worker intentionally uses same-origin /api routes and
     # proxies them to the configured Fly API, so no backend hostname appears
