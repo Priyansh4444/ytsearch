@@ -42,22 +42,39 @@ describe("browser client runtime", () => {
     );
   });
 
-  it("requests semantic mode only in a VITE_SEARCH_MODE=semantic build", async () => {
-    vi.stubEnv("VITE_SEARCH_MODE", "semantic");
-    vi.resetModules();
-    try {
-      const { runSearchTranscripts: semanticSearch } = await import("./client-runtime");
-      const fetchMock = vi.fn().mockResolvedValue(Response.json(emptySearchResponse));
-      vi.stubGlobal("fetch", fetchMock);
-      await semanticSearch("", { query: "rust", youtuber: "", page: 1, sort: "relevance" });
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/search?q=rust&per_page=12&page=1&sort=relevance&mode=semantic",
-        expect.anything(),
-      );
-    } finally {
-      vi.unstubAllEnvs();
+  it.each([
+    ["semantic", "&mode=semantic"],
+    ["hybrid", "&mode=hybrid"],
+    ["fused", ""],
+  ])(
+    "requests the build's VITE_SEARCH_MODE=%s only when it is a known mode",
+    async (mode, suffix) => {
+      vi.stubEnv("VITE_SEARCH_MODE", mode);
       vi.resetModules();
-    }
+      try {
+        const { runSearchTranscripts: modeSearch } = await import("./client-runtime");
+        const fetchMock = vi.fn().mockResolvedValue(Response.json(emptySearchResponse));
+        vi.stubGlobal("fetch", fetchMock);
+        await modeSearch("", { query: "rust", youtuber: "", page: 1, sort: "relevance" });
+        expect(fetchMock).toHaveBeenCalledWith(
+          `/api/search?q=rust&per_page=12&page=1&sort=relevance${suffix}`,
+          expect.anything(),
+        );
+      } finally {
+        vi.unstubAllEnvs();
+        vi.resetModules();
+      }
+    },
+  );
+
+  it("accepts the hybrid response mode", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ ...emptySearchResponse, mode: "hybrid" })),
+    );
+    await expect(
+      runSearchTranscripts("", { query: "why rust?", youtuber: "", page: 1, sort: "relevance" }),
+    ).resolves.toMatchObject({ mode: "hybrid" });
   });
 
   it("accepts the opt-in semantic response mode", async () => {
