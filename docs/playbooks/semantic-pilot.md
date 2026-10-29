@@ -244,6 +244,47 @@ Traps found while building the site:
 - A snapshot that fails preflight writes nothing, but earlier snapshots stay
   imported; fix the input and rerun the same loop, which skips finished points.
 
+## Production rollout (state on 2026-10-29)
+
+Production search is lexical: `mode` defaults to lexical, `SEMANTIC_SEARCH_URL` is
+unset on `ytsearch-api-raw-production` and the Worker's frontend sends no mode.
+Everything for `mode=semantic|hybrid` is on master and inert. What ships to
+production, and what is still missing:
+
+- **Shipped:** the Raw token-drop fix ([search quality](search-quality.md)), as
+  reader image `raw-overlay-c266dfbd7e6e-2c02367017f3` built from
+  `release/common-terms-20261028` (the deployed `de2bb0d` plus that one commit,
+  so 30 unreleased commits on master stayed out of production). Promotion kept
+  the machine config, took 34 unhealthy seconds, and 49 sampled production
+  responses were byte-identical afterwards; typos went 48% to 80% right video
+  first and questions 0% to 10%.
+- **Backfill:** `scripts/run-semantic-backfill.sh` embeds the 32.8k videos of the
+  September archive (about 1.1M passages) in creator batches into one local
+  Qdrant collection. Measured pace is 17 minutes per 128-video snapshot, so
+  about 2.5 days on a 16-thread laptop with `SEMANTIC_INDEX_THREADS=8`; the first
+  batch was 10 of 35 snapshots after three hours. Run it as a systemd user
+  service: the same job detached with `setsid` died with its session. It is
+  resumable, and an interrupted snapshot re-imports only missing points.
+- **Why every creator:** 14,630 of 16,200 searches in 30 days had no creator
+  filter and 985 filtered to @t3dotgg, so semantic coverage of a few creators
+  would skew unfiltered rankings toward them.
+- **Not done, each needs an operator:**
+  1. Newer videos. The archive is the base corpus baked into the reader image;
+     production holds about 17% more chunks from publication mutations
+     (9.57M vs 8.14M). Exporting them needs the reader's admin API
+     (`/admin/channels/{id}/video-ids`, `/admin/videos/{id}`) with the current
+     `RAW_SEARCH_ADMIN_API_KEY`, or a job inside Fly beside the indexer; the key
+     in `.env.raw-admin.local` returns 401.
+  2. Hosting: a private Fly app running Qdrant and `youtube-semantic` (about
+     3.3 GB of vectors and payload; the experimental machine ran 35k points on
+     1 GB, so budget 2 GB and a 5 GB volume), reached from the API over `.internal`
+     with `SEMANTIC_SEARCH_URL`; register it in
+     `config/fly-production-resources.json` and `scripts/check-fly-cost-config.sh`.
+  3. Embedding new uploads as they are indexed. Until then hybrid finds them
+     lexically only.
+  4. Build the production frontend with `VITE_SEARCH_MODE=hybrid` last, after
+     measuring the hosted service with `scripts/semantic-eval.py`.
+
 ## Traps
 
 - `mode=semantic` is honored only for relevance on a meaningful query. Explicit
