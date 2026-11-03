@@ -64,27 +64,23 @@ nginx -g 'daemon off;' &
 nginx_pid=$!
 
 # Embedding runs on this box, beside serving, whenever a corpus is staged in
-# /data/backfill. Fly stops a machine with no open connection through its proxy, and
-# short requests between its checks did not count (it stopped for 3 hours), so a slow
-# download from our own public address stays open while it works. When it ends the
-# machine goes back to stopping when idle.
-# Its failure must not take search down, so it is not one of the waited-on services.
+# /data/backfill. Fly's autostop must be off meanwhile (see the semantic playbook):
+# traffic through its proxy does not reliably hold a machine up. When embedding ends
+# the machine stops itself, so a large machine does not stay up unattended. A failed
+# run leaves search serving; a restart resumes it.
 if [[ -f /data/backfill/batches.json && ! -f /data/backfill/finished ]]; then
   (
-    while :; do
-      curl -sS -o /dev/null --limit-rate 256 --max-time 600 \
-        "https://${FLY_APP_NAME:-ytsearch-semantic-experimental}.fly.dev/og-card.png" || sleep 5
-    done &
-    keepalive=$!
     if as_app env SEMANTIC_PRUNE_SNAPSHOTS=1 \
       SEMANTIC_INDEX_THREADS="${SEMANTIC_INDEX_THREADS:-6}" \
       SEMANTIC_SNAPSHOT_ARGS="--mutations /data/backfill/mutations.sqlite3 --rename @t3dotgg=@theo" \
       bash /opt/semantic/run-semantic-backfill.sh /data/backfill /data/backfill/chunks.jsonl.gz \
       >>/data/backfill/backfill.log 2>&1; then
-      touch /data/backfill/finished
+      touch /data/backfill/finished /tmp/backfill-just-finished
+      kill "$nginx_pid"
     fi
-    kill "$keepalive"
   ) </dev/null &
 fi
-wait -n "$qdrant" "$api_pid" "$nginx_pid"
+wait -n "$qdrant" "$api_pid" "$nginx_pid" || true
+# Exit 0 is the one exit Fly's on-failure policy does not restart.
+[[ -f /tmp/backfill-just-finished ]] && exit 0
 exit 1

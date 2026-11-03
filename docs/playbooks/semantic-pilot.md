@@ -182,11 +182,10 @@ for the first ~10 s, which made questions look broken.
 
 Backfills run on the machine, not a laptop. Its entrypoint starts
 `scripts/run-semantic-backfill.sh` beside serving whenever `/data/backfill/batches.json`
-exists and `/data/backfill/finished` does not, and resumes after a restart. It keeps the
-machine awake with a slow download through Fly's proxy while it works, because Fly stopped
-it for 3 hours despite a request every two minutes, and stops doing so when it ends, so
-the machine goes back to stopping when idle. Search stays up meanwhile; imports run at
-`nice 10`.
+exists and `/data/backfill/finished` does not, and resumes after a restart. Turn Fly's
+autostop off for the run: the proxy stopped the machine as idle despite a request every two
+minutes and despite a slow download, which it appears to buffer. When embedding ends the
+machine stops itself. Search stays up meanwhile; imports run at `nice 10`.
 
 The inputs need no admin key. Copy the reader's mutation database, which holds every
 video changed since the archive, and stage it with the archive and a batch list:
@@ -197,13 +196,14 @@ flyctl ssh sftp get -a ytsearch-raw-production --machine d89303da029328 \
   /data/mutable/mutations.sqlite3 mutations.sqlite3
 # Upload chunks.jsonl.gz, mutations.sqlite3 and batches.json ([{"name":"c00","creators":["@theo"]}])
 # to /data/backfill, one sftp put at a time, keeping the machine awake with HTTP.
-flyctl machine update "$MACHINE" -a $A --vm-size performance-8x --vm-memory 16384 --yes
+flyctl machine update "$MACHINE" -a $A --vm-size performance-8x --vm-memory 16384 --autostop=off --yes
 flyctl ssh console -a $A -C "tail -3 /data/backfill/backfill.log"
 ```
 
 Size the machine back down when `/data/backfill/finished` appears:
-`flyctl machine update "$MACHINE" -a $A --vm-size shared-cpu-2x --vm-memory 2048 --yes`.
-A deploy also resets it to the size in `fly.semantic-experimental.toml`. performance-8x
+`flyctl machine update "$MACHINE" -a $A --vm-size shared-cpu-2x --vm-memory 2048 --autostop=stop --yes`.
+Until then the next visitor wakes the large machine and it stays up. A deploy also resets
+size and autostop to `fly.semantic-experimental.toml`. performance-8x
 costs about $0.35 an hour while running, so a full pass is a one-off cost of tens of
 dollars, not a monthly one.
 
