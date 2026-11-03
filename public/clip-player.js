@@ -1,8 +1,8 @@
 // Makes YouTube's player behave like a clip on a shared moment. The timeline covers
-// only the window, the transcript follows along, and between plays a still replaces
-// the player, because YouTube's pause and end screens fill it with its own buttons.
-// The still hides the player rather than covering it: nothing sits on top of a
-// visible YouTube player. Without this script the iframe plays from the same start.
+// only the window, the transcript follows along, and between plays the player fades
+// out to a still behind it, because YouTube's pause and end screens fill it with its
+// own buttons. Nothing is ever drawn over a visible YouTube player. Without this
+// script the iframe plays from the same start.
 (() => {
   const byId = (id) => document.getElementById(id);
   const frame = byId("clip-video");
@@ -12,16 +12,23 @@
   const toggle = byId("clip-toggle");
   const mute = byId("clip-mute");
   const seek = byId("clip-seek");
+  const fill = byId("clip-fill");
   const clock = byId("clip-clock");
-  if (!frame || !stage || !poster || !controls || !toggle || !mute || !seek || !clock) return;
+  if (!frame || !stage || !poster || !controls || !toggle || !mute || !seek || !fill || !clock) {
+    return;
+  }
 
   const start = Number(frame.dataset.start);
   const end = Number(frame.dataset.end);
   const length = end - start;
   const END_MARGIN_SECONDS = 0.25;
-  const TICK_MS = 100;
+  const SOUND_FADE_SECONDS = 0.5;
+  const FADE_MS = 220;
   const AUTOPLAY_GRACE_MS = 4000;
   const PAUSE_SETTLE_MS = 300;
+  // Small drift eases out; anything larger is a real jump, which moves at once.
+  const DRIFT_EASE = 0.12;
+  const JUMP_SECONDS = 1;
   const list = byId("clip-captions");
   const lines = list ? [...list.querySelectorAll("li")] : [];
   const lineStarts = lines.map((line) => Number(line.dataset.start));
@@ -31,25 +38,31 @@
   );
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   let player;
-  let timer;
+  let frameRequest;
+  let lastFrameAt = 0;
+  let reported = -1;
+  let reportedAt = 0;
+  let shown = 0;
   let seeking = false;
   let wantsPlay = false;
   let settle;
   let currentLine = -1;
+  let shownClock = "";
+  let volume;
 
   const label = (seconds) => {
     const whole = Math.max(0, Math.round(seconds));
     return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
   };
   const setState = (state) => {
-    const playing = state === "playing";
     stage.dataset.state = state;
     toggle.dataset.state = state;
     poster.dataset.state = state;
-    poster.hidden = playing;
-    const name = playing ? "Pause" : state === "replay" ? "Replay clip" : "Play clip";
+    const active = state === "playing" || state === "starting";
+    const name = active ? "Pause" : state === "replay" ? "Replay clip" : "Play clip";
     toggle.setAttribute("aria-label", name);
     poster.setAttribute("aria-label", name);
+    poster.tabIndex = state === "playing" ? -1 : 0;
   };
   const showLine = (index) => {
     if (index === currentLine || !lines[index]) return;
@@ -69,43 +82,86 @@
     showLine(index);
   };
   const show = (position) => {
+    shown = position;
+    fill.style.transform = `scaleX(${Math.min(1, Math.max(0, position / length))})`;
     if (!seeking) seek.value = String(position);
-    seek.style.setProperty("--clip-progress", `${(position / length) * 100}%`);
-    clock.textContent = `${label(position)} / ${label(length)}`;
+    const text = `${label(position)} / ${label(length)}`;
+    if (text !== shownClock) {
+      clock.textContent = text;
+      shownClock = text;
+    }
   };
-  const stopTicking = () => {
-    clearInterval(timer);
-    timer = undefined;
+  // For a jump while nothing is animating the fill, such as a seek or a rewind.
+  const glideTo = (position) => {
+    if (!reduceMotion) {
+      fill.classList.add("is-gliding");
+      setTimeout(() => fill.classList.remove("is-gliding"), FADE_MS + 40);
+    }
+    show(position);
+  };
+  const stopFrames = () => {
+    cancelAnimationFrame(frameRequest);
+    frameRequest = undefined;
+  };
+  const restoreSound = () => {
+    if (volume !== undefined) player.setVolume(volume);
+    volume = undefined;
   };
   const finish = () => {
-    stopTicking();
+    stopFrames();
     wantsPlay = false;
     player.pauseVideo();
-    player.seekTo(start, true);
     setState("replay");
-    show(0);
+    glideTo(0);
     showLine(restingLine);
+    // Rewind only once the player has faded, so its jump back is never seen.
+    setTimeout(() => {
+      player.seekTo(start, true);
+      restoreSound();
+    }, FADE_MS);
   };
-  const tick = () => {
-    const now = player.getCurrentTime();
-    const position = now - start;
-    if (position >= length - END_MARGIN_SECONDS) {
+  // YouTube reports its position about four times a second, which steps visibly. Each
+  // frame runs the clock forward from the last report and eases out any drift from it.
+  const onFrame = (now) => {
+    frameRequest = requestAnimationFrame(onFrame);
+    const elapsed = (now - lastFrameAt) / 1000;
+    lastFrameAt = now;
+    const current = player.getCurrentTime() - start;
+    if (current !== reported) {
+      reported = current;
+      reportedAt = now;
+    }
+    const target = reported + (now - reportedAt) / 1000;
+    const drift = target - shown;
+    const position = Math.abs(drift) > JUMP_SECONDS ? target : shown + elapsed + drift * DRIFT_EASE;
+    if (reported >= length - END_MARGIN_SECONDS) {
       finish();
       return;
     }
+    const remaining = length - END_MARGIN_SECONDS - position;
+    if (remaining < SOUND_FADE_SECONDS) {
+      volume ??= player.getVolume();
+      player.setVolume(Math.round(volume * Math.max(0, remaining / SOUND_FADE_SECONDS)));
+    }
     show(Math.max(0, position));
-    showLineAt(now);
+    showLineAt(start + position);
+  };
+  const startFrames = () => {
+    lastFrameAt = performance.now();
+    reportedAt = lastFrameAt;
+    frameRequest ??= requestAnimationFrame(onFrame);
   };
   const play = () => {
     wantsPlay = true;
-    // Show the player first: browsers and YouTube may refuse to play a hidden one.
-    stage.dataset.state = "playing";
-    poster.hidden = true;
+    restoreSound();
+    setState("starting");
     player.playVideo();
   };
   const seekTo = (position) => {
     player.seekTo(start + position, true);
-    show(position);
+    reported = position;
+    reportedAt = performance.now();
+    glideTo(position);
     showLineAt(start + position);
   };
 
@@ -122,9 +178,11 @@
       const position = player.getCurrentTime();
       if (position < start - 1 || position >= end) player.seekTo(start, true);
       setState("playing");
-      timer ??= setInterval(tick, TICK_MS);
+      startFrames();
+    } else if (event.data === states.BUFFERING) {
+      stopFrames();
     } else if (event.data === states.PAUSED) {
-      stopTicking();
+      stopFrames();
       // Seeking pauses briefly, so wait to see whether this pause is the viewer's.
       settle = setTimeout(() => {
         // A finished clip is already showing its replay state.
@@ -144,7 +202,8 @@
     showLine(restingLine);
     controls.hidden = false;
     const togglePlay = () => {
-      if (player.getPlayerState() === window.YT.PlayerState.PLAYING) player.pauseVideo();
+      const state = stage.dataset.state;
+      if (state === "playing" || state === "starting") player.pauseVideo();
       else play();
     };
     toggle.addEventListener("click", togglePlay);
@@ -159,11 +218,11 @@
     seek.addEventListener("pointerdown", () => {
       seeking = true;
     });
+    seek.addEventListener("input", () => show(Number(seek.value)));
     seek.addEventListener("change", () => {
       seeking = false;
       seekTo(Number(seek.value));
     });
-    seek.addEventListener("input", () => show(Number(seek.value)));
     lines.forEach((line, index) => {
       line.querySelector("button")?.addEventListener("click", () => {
         seekTo(Math.max(0, lineStarts[index] / 1000 - start));
@@ -209,6 +268,7 @@
       url.searchParams.set(name, value);
     }
     frame.src = url.toString();
+    poster.hidden = false;
     setState("poster");
     player = new window.YT.Player(frame, { events: { onReady, onStateChange } });
   };

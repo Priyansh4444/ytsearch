@@ -61,18 +61,12 @@ describe("MomentSharePanel", () => {
     expect(copyToClipboard.mock.calls[0]?.[0]).toContain("/s/dQw4w9WgXcQ?t=752&end=782");
     expect(capture).toHaveBeenCalledWith("moment_share_copied", {
       rank: 1,
-      target: "page",
       window_seconds: 30,
     });
   });
 
-  test("copies the YouTube link, and composes an X post that links the clip", async () => {
+  test("composes an X post that quotes the moment and links the clip", () => {
     open();
-    fireEvent.click(screen.getByRole("button", { name: "Copy YouTube link" }));
-    await screen.findByRole("button", { name: "YouTube link copied" });
-    expect(copyToClipboard.mock.calls[0]?.[0]).toBe(
-      "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=752s",
-    );
     const post = new URL(screen.getByRole("link", { name: "Post on X" }).getAttribute("href")!);
     expect(post.searchParams.get("url")).toContain("/s/dQw4w9WgXcQ?t=752");
     expect(post.searchParams.get("text")).toBe("“the moment”");

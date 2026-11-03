@@ -299,17 +299,15 @@ describe("shared moments", () => {
     expect(attribute(open, "data-end")).toBe("90");
   });
 
-  test("names YouTube's player for embeds, with a picture every site can fall back to", () => {
+  test("declares our own player for X, with a picture every other site can show", () => {
     const html = renderSharePage(MOMENT, sharedVideoFromSearch(SEARCH_BODY, MOMENT), `${ORIGIN}/x`);
     const meta = (property: string) =>
       new RegExp(`(?:property|name)="${property}" content="([^"]*)"`).exec(html)?.[1];
-    expect(meta("og:video:url")).toBe("https://www.youtube.com/embed/dQw4w9WgXcQ?start=30");
-    expect(meta("og:video:type")).toBe("text/html");
-    expect(meta("og:image")).toBe("https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg");
     expect(meta("twitter:card")).toBe("player");
     expect(meta("twitter:player:height")).toBe("480");
     expect(html).toContain('"@type":"VideoObject"');
-    expect(html).toContain('"embedUrl":"https://www.youtube.com/embed/dQw4w9WgXcQ?start=30"');
+    expect(html).toContain('"embedUrl":"https://search.pronsh.dev/embed/dQw4w9WgXcQ?t=30');
+    expect(html).not.toContain("og:video");
     expect(html).toContain("youtube-nocookie.com/embed/dQw4w9WgXcQ");
   });
 
@@ -353,27 +351,30 @@ describe("shared moments", () => {
     );
   });
 
-  test("only an explicit card=youtube link sends Discord's crawler to YouTube", async () => {
+  test("Discord gets the picture card with the quote, and no player or redirect", async () => {
     stubApi(() => Response.json(SEARCH_BODY));
-    const crawl = async (userAgent: string, query: string) => {
-      const ctx = createExecutionContext();
-      const response = await worker.fetch(
-        new Request(`${ORIGIN}/s/dQw4w9WgXcQ?t=86&end=116&q=line${query}`, {
-          headers: { "User-Agent": userAgent, Accept: "text/html" },
-          redirect: "manual",
-        }),
-        testEnv(),
-        ctx,
-      );
-      await waitOnExecutionContext(ctx);
-      return response;
-    };
-    const discord = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)";
-    const sent = await crawl(discord, "&card=youtube");
-    expect(sent.status).toBe(302);
-    expect(sent.headers.get("Location")).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=86s");
-    expect((await crawl(discord, "")).status).toBe(200);
-    expect((await crawl("Twitterbot/1.0", "&card=youtube")).status).toBe(200);
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request(`${ORIGIN}/s/dQw4w9WgXcQ?t=30&end=60&q=line`, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)",
+          Accept: "text/html",
+        },
+        redirect: "manual",
+      }),
+      testEnv(),
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Vary")).toContain("User-Agent");
+    const html = await response.text();
+    expect(html).toContain('name="twitter:card" content="summary_large_image"');
+    expect(html).toContain('property="og:description" content="“first &lt;b&gt;line&lt;/b&gt;”"');
+    expect(html).toContain('property="og:image"');
+    expect(html).not.toContain("twitter:player");
+    expect(html).not.toContain("og:video");
+    expect(html).not.toContain("VideoObject");
   });
 
   test("the embed page may be framed by X and nobody else", async () => {

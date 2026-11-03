@@ -49,9 +49,9 @@ the first paint when the app starts.
   `https://cdn.syndication.twimg.com/tweet-result?id=POST_ID&lang=en&token=4`. Older sources say
   domains need approval, so check a new domain in X's composer.
 - **Discord:** its [docs](https://docs.discord.com/developers/link-previews/overview) accept only
-  a direct `.mp4`, `.webm` or `.mov` for `og:video`, and also read a `VideoObject`. YouTube links
-  play through its own handling. `?card=youtube` sends only Discord's crawler to the YouTube
-  timestamp, which loses this site's title and quote, to compare.
+  a direct `.mp4`, `.webm` or `.mov` for `og:video`. `Discordbot` therefore gets
+  `summary_large_image` with the title and quote. Sending it to YouTube played inline, but with
+  YouTube's own card, no quote and no stop at the end, which was judged worse.
 - A preview that stops at the end would need a hosted clip file on Discord, which re-hosts
   creators' video. Do not do that without their permission.
 - Previews are cached per URL. Change `t` to retest. A posted card's player loads live, so
@@ -59,8 +59,9 @@ the first paint when the app starts.
 - Captions come from `GET /api/videos/{id}/transcript?start_ms&end_ms`, not search: search
   merges hits within 20 seconds into one moment, which drops lines. The Worker needs an API
   with this route; without it, captions fall back to the search hits and their neighbours.
-- The clip player hides YouTube's player between plays and shows a still. YouTube's rules
-  forbid covering a visible player, so never draw over it while it is showing.
+- The clip player fades YouTube's player out between plays to show a still behind it. YouTube's
+  rules forbid drawing over a visible player, so keep the still underneath. The timeline
+  animates every frame from YouTube's position, which it only reports about four times a second.
 
 ## Facts
 

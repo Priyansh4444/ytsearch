@@ -175,42 +175,44 @@ function cardText(moment: SharedMoment, video: SharedVideo | undefined): CardTex
   };
 }
 
+/** What a link preview may do: play our player, as X does, or show a picture. */
+export type LinkCard = "player" | "picture";
+
 function cardTags(
   moment: SharedMoment,
   video: SharedVideo | undefined,
   canonicalUrl: string,
+  card: LinkCard,
 ): string {
   const { label, title, description, image } = cardText(moment, video);
   const cardTitle = escapeHtml(`${title} (${label})`);
   const safeDescription = escapeHtml(description);
   const safeImage = escapeHtml(image);
   const player = `${new URL(canonicalUrl).origin}${embeddedMomentPath(moment)}`;
-  const youtubePlayer = `https://www.youtube.com/embed/${moment.videoId}?start=${moment.startSeconds}`;
+  const shared = `<meta property="og:type" content="video.other" />
+    <meta property="og:site_name" content="ytsearch" />
+    <meta property="og:title" content="${cardTitle}" />
+    <meta property="og:description" content="${safeDescription}" />
+    <meta property="og:url" content="${escapeHtml(canonicalUrl)}" />
+    <meta property="og:image" content="${safeImage}" />
+    <meta name="twitter:title" content="${cardTitle}" />
+    <meta name="twitter:description" content="${safeDescription}" />
+    <meta name="twitter:image" content="${safeImage}" />`;
+  if (card === "picture") {
+    return `${shared}
+    <meta name="twitter:card" content="summary_large_image" />`;
+  }
   const videoObject = {
     "@context": "https://schema.org",
     "@type": "VideoObject",
     name: `${title} (${label})`,
     description,
     thumbnailUrl: image,
-    embedUrl: youtubePlayer,
+    embedUrl: player,
     ...(video?.publishedAt ? { uploadDate: video.publishedAt } : {}),
   };
-  return `<meta property="og:type" content="video.other" />
-    <meta property="og:site_name" content="ytsearch" />
-    <meta property="og:title" content="${cardTitle}" />
-    <meta property="og:description" content="${safeDescription}" />
-    <meta property="og:url" content="${escapeHtml(canonicalUrl)}" />
-    <meta property="og:image" content="${safeImage}" />
-    <meta property="og:video" content="${escapeHtml(youtubePlayer)}" />
-    <meta property="og:video:url" content="${escapeHtml(youtubePlayer)}" />
-    <meta property="og:video:secure_url" content="${escapeHtml(youtubePlayer)}" />
-    <meta property="og:video:type" content="text/html" />
-    <meta property="og:video:width" content="1280" />
-    <meta property="og:video:height" content="720" />
+  return `${shared}
     <meta name="twitter:card" content="player" />
-    <meta name="twitter:title" content="${cardTitle}" />
-    <meta name="twitter:description" content="${safeDescription}" />
-    <meta name="twitter:image" content="${safeImage}" />
     <meta name="twitter:player" content="${escapeHtml(player)}" />
     <meta name="twitter:player:width" content="${X_PLAYER_SIZE}" />
     <meta name="twitter:player:height" content="${X_PLAYER_SIZE}" />
@@ -246,6 +248,10 @@ function playerFrame(
 ): string {
   return `<div class="clip-video">
         <div id="clip-stage" class="clip-stage">
+          <button id="clip-poster" class="clip-poster" type="button" aria-label="Play clip" hidden>
+            <img src="${escapeHtml(image)}" alt="" />
+            <span class="clip-poster-glyph"><span class="icon-play">${PLAY_ICON}</span><span class="icon-replay">${REPLAY_ICON}</span></span>
+          </button>
           <iframe
             id="clip-video"
             class="player"
@@ -259,13 +265,12 @@ function playerFrame(
             referrerpolicy="strict-origin-when-cross-origin"
             allowfullscreen
           ></iframe>
-          <button id="clip-poster" class="clip-poster" type="button" aria-label="Play clip" hidden>
-            <img src="${escapeHtml(image)}" alt="" />
-            <span class="clip-poster-glyph"><span class="icon-play">${PLAY_ICON}</span><span class="icon-replay">${REPLAY_ICON}</span></span>
-          </button>
         </div>
         <div id="clip-controls" class="clip-controls" hidden>
-          <input id="clip-seek" class="clip-seek" type="range" min="0" step="0.1" value="0" aria-label="Position in this clip" />
+          <div class="clip-timeline">
+            <span id="clip-fill" class="clip-fill"></span>
+            <input id="clip-seek" class="clip-seek" type="range" min="0" step="0.05" value="0" aria-label="Position in this clip" />
+          </div>
           <div class="clip-row">
             <button id="clip-toggle" class="clip-icon" type="button" aria-label="Play clip"><span class="icon-play">${PLAY_ICON}</span><span class="icon-pause">${PAUSE_ICON}</span><span class="icon-replay">${REPLAY_ICON}</span></button>
             <button id="clip-mute" class="clip-icon" type="button" aria-label="Mute"><span class="icon-sound">${SOUND_ICON}</span><span class="icon-muted">${MUTED_ICON}</span></button>
@@ -292,7 +297,7 @@ export function renderEmbedPage(
     <meta name="robots" content="noindex" />
     <title>${escapeHtml(`${title} (${label}) · ytsearch`)}</title>
     <link rel="canonical" href="${escapeHtml(canonicalUrl)}" />
-    ${cardTags(moment, video, canonicalUrl)}
+    ${cardTags(moment, video, canonicalUrl, "player")}
     <link rel="stylesheet" href="/pages.css" />
   </head>
   <body class="clip-embed">
@@ -312,6 +317,7 @@ export function renderSharePage(
   moment: SharedMoment,
   video: SharedVideo | undefined,
   canonicalUrl: string,
+  card: LinkCard = "player",
 ): string {
   const { label, title, description, image } = cardText(moment, video);
   const pageTitle = `${title} (${label}) · ytsearch`;
@@ -325,12 +331,12 @@ export function renderSharePage(
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#ffc799" />
+    <meta name="theme-color" content="#050505" />
     <title>${escapeHtml(pageTitle)}</title>
     <meta name="description" content="${escapeHtml(description)}" />
     <link rel="canonical" href="${escapeHtml(canonicalUrl)}" />
     <link rel="icon" href="/favicon.png" type="image/png" />
-    ${cardTags(moment, video, canonicalUrl)}
+    ${cardTags(moment, video, canonicalUrl, card)}
     <link rel="stylesheet" href="/pages.css" />
   </head>
   <body class="clip-page">

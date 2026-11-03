@@ -67,11 +67,11 @@ export function prefersMarkdown(accept: string | null): boolean {
 }
 
 /**
- * `card=youtube` sends Discord's crawler to YouTube, whose links Discord plays itself,
- * at the cost of this site's title and quote. It is opt-in so the two can be compared.
+ * Discord only plays direct video files, so a player card gains nothing there and can
+ * lose the description. It gets the picture, title and quote instead.
  */
-export function wantsYouTubeUnfurl(userAgent: string | null, card: string | null): boolean {
-  return card === "youtube" && /\bDiscordbot\b/.test(userAgent ?? "");
+export function isDiscordCrawler(userAgent: string | null): boolean {
+  return /\bDiscordbot\b/.test(userAgent ?? "");
 }
 
 /** True when a client wants a page rather than data, for choosing a 404's format. */

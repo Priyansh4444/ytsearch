@@ -1,9 +1,9 @@
-import { sharedMomentPath, youtubeMomentUrl, type SharedMoment } from "../shared/share-link";
+import { sharedMomentPath, type SharedMoment } from "../shared/share-link";
 import {
   prefersHtml,
   prefersMarkdown,
   routePage,
-  wantsYouTubeUnfurl,
+  isDiscordCrawler,
   type PageRoute,
 } from "./page-route";
 import {
@@ -12,6 +12,7 @@ import {
   renderShareMarkdown,
   renderSharePage,
   sharedVideoFromSearch,
+  type LinkCard,
   type SharedVideo,
 } from "./share-page";
 
@@ -67,13 +68,13 @@ export async function pageResponse(
     case "app":
       return negotiated(await assetAt(url, "/", env), env);
     case "share":
-      if (wantsYouTubeUnfurl(request.headers.get("User-Agent"), url.searchParams.get("card"))) {
-        return new Response(null, {
-          status: 302,
-          headers: { Location: youtubeMomentUrl(route.moment), Vary: "User-Agent" },
-        });
-      }
-      return shareResponse(route.moment, markdown, env, fetchSearch);
+      return shareResponse(
+        route.moment,
+        markdown,
+        isDiscordCrawler(request.headers.get("User-Agent")) ? "picture" : "player",
+        env,
+        fetchSearch,
+      );
     case "embed":
       return embedResponse(route.moment, env, fetchSearch);
     case "redirect":
@@ -136,19 +137,20 @@ See the [API docs](${origin}/docs).
 async function shareResponse(
   moment: SharedMoment,
   markdown: boolean,
+  card: LinkCard,
   env: PageEnvironment,
   fetchSearch: (path: string, signal: AbortSignal) => Promise<Response>,
 ): Promise<Response> {
   const video = await lookUpSharedVideo(moment, fetchSearch);
   const canonical = `${publicOrigin(env)}${sharedMomentPath(moment)}`;
   if (markdown) return markdownResponse(renderShareMarkdown(moment, video), env);
-  return new Response(renderSharePage(moment, video, canonical), {
+  return new Response(renderSharePage(moment, video, canonical, card), {
     headers: {
       ...SECURITY_HEADERS,
       "Content-Security-Policy": SHARE_PAGE_CSP,
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "public, max-age=300",
-      Vary: "Accept",
+      Vary: "Accept, User-Agent",
       Link: AGENT_LINKS,
     },
   });

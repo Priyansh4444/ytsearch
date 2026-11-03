@@ -6,7 +6,6 @@ import {
   movedWindow,
   sharedMomentPath,
   xPostUrl,
-  youtubeMomentUrl,
   type SharedMoment,
 } from "../../shared/share-link";
 import type { SearchHit } from "../types";
@@ -18,7 +17,7 @@ const STEP_SECONDS = 5;
 const MIN_WINDOW_SECONDS = 5;
 
 type Bound = "start" | "end";
-type Copied = "none" | "page" | "youtube" | "failed";
+type Copied = "none" | "page" | "failed";
 
 export const MomentSharePanel: Component<{
   videoId: string;
@@ -45,22 +44,17 @@ export const MomentSharePanel: Component<{
     hybrid: props.hybrid,
   }));
   const url = createMemo(() => `${window.location.origin}${sharedMomentPath(moment())}`);
-  const youtube = createMemo(() => youtubeMomentUrl(moment()));
 
   const move = (bound: Bound, delta: number) => {
     setCopied("none");
     setShareWindow((current) => movedWindow(current, bound, delta, MIN_WINDOW_SECONDS));
   };
 
-  const copy = async (kind: "page" | "youtube") => {
+  const copy = async () => {
     try {
-      await copyToClipboard(kind === "page" ? url() : youtube());
-      setCopied(kind);
-      capture("moment_share_copied", {
-        ...props.analytics,
-        target: kind,
-        window_seconds: seconds(),
-      });
+      await copyToClipboard(url());
+      setCopied("page");
+      capture("moment_share_copied", { ...props.analytics, window_seconds: seconds() });
     } catch {
       setCopied("failed");
     }
@@ -86,11 +80,7 @@ export const MomentSharePanel: Component<{
         <span class="tabular-nums text-vesper-dim">{seconds()} seconds</span>
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => void copy("page")}
-          class="pressable moment-share-primary"
-        >
+        <button type="button" onClick={() => void copy()} class="pressable moment-share-primary">
           {copied() === "page" ? "Link copied" : "Copy link"}
         </button>
         <a
@@ -104,13 +94,6 @@ export const MomentSharePanel: Component<{
         >
           Post on X
         </a>
-        <button
-          type="button"
-          onClick={() => void copy("youtube")}
-          class="pressable moment-share-secondary"
-        >
-          {copied() === "youtube" ? "YouTube link copied" : "Copy YouTube link"}
-        </button>
         <a href={url()} target="_blank" rel="noreferrer" class="moment-share-preview">
           Preview
         </a>
