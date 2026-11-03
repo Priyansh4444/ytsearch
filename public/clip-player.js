@@ -76,6 +76,9 @@
       show(Number(seek.value));
     });
     seek.addEventListener("input", () => show(Number(seek.value)));
+    // In a post, X's own play button was the click. Browsers may still refuse this,
+    // and then the Play clip button remains.
+    if (frame.dataset.autoplay !== undefined) player.playVideo();
   };
 
   // YouTube's timeline would show the whole video, so its controls go only once this

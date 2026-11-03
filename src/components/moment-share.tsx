@@ -94,7 +94,7 @@ export const MomentSharePanel: Component<{
           {copied() === "page" ? "Link copied" : "Copy link"}
         </button>
         <a
-          href={xPostUrl(moment(), props.hit.text, url())}
+          href={xPostUrl(props.hit.text, url())}
           target="_blank"
           rel="noreferrer"
           class="pressable moment-share-secondary"
@@ -116,8 +116,7 @@ export const MomentSharePanel: Component<{
         </a>
       </div>
       <p class="text-xs leading-5 text-vesper-dim">
-        People who open the link get a clip player with these words quoted. Pasted in Discord or X,
-        it plays in YouTube's player from this point, without the stop at the end.
+        The link opens a clip that stops on its own, with these words quoted.
       </p>
       <Show when={copied() === "failed"}>
         <p class="break-all text-xs text-vesper-muted" role="alert">

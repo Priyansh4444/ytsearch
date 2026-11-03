@@ -41,15 +41,19 @@ the first paint when the app starts.
 
 ## Link previews
 
-- Discord's [docs](https://docs.discord.com/developers/link-previews/overview) accept only
-  a direct `.mp4`, `.webm` or `.mov` for `og:video`; YouTube links play through its own
-  handling. X plays a `twitter:player` only from approved domains.
-- So `/s/*` sends `Discordbot` and `Twitterbot` to the YouTube timestamp (`wantsYouTubeUnfurl`
-  in [page-route.ts](../../worker/page-route.ts)), and everyone else gets the clip page. The
-  preview is YouTube's card: it starts at the window but does not stop at its end and has
-  no quote. `?card=page` shows those crawlers this site's own card, to compare.
-- A preview that stops at the end and quotes the words would need a hosted clip file, which
-  re-hosts creators' video. Do not do that without their permission.
+- **X:** `/s/*` declares `twitter:card=player`, pointing `twitter:player` at `/embed/*`, sized
+  480 by 480. `/embed/*` allows framing by x.com and twitter.com through `frame-ancestors` and
+  shows the clip, title and quote. This copies [TweetCraft](https://tweetcraft.jai.vin/), whose
+  [October 2026 post](https://x.com/jaivin/status/2107558218629288035) X recorded as a
+  `player` card on a personal domain. Read a posted card back from
+  `https://cdn.syndication.twimg.com/tweet-result?id=POST_ID&lang=en&token=4`. Older sources say
+  domains need approval, so check a new domain in X's composer.
+- **Discord:** its [docs](https://docs.discord.com/developers/link-previews/overview) accept only
+  a direct `.mp4`, `.webm` or `.mov` for `og:video`, and also read a `VideoObject`. YouTube links
+  play through its own handling. `?card=youtube` sends only Discord's crawler to the YouTube
+  timestamp, which loses this site's title and quote, to compare.
+- A preview that stops at the end would need a hosted clip file on Discord, which re-hosts
+  creators' video. Do not do that without their permission.
 - Previews are cached per URL. Change `t` to retest.
 
 ## Facts

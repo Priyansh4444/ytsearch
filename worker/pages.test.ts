@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import worker from "./index";
 import { currentHandle, prefersMarkdown, routePage } from "./page-route";
 import { errorForAgents } from "./api-error";
-import { renderSharePage, sharedVideoFromSearch } from "./share-page";
+import { renderEmbedPage, renderSharePage, sharedVideoFromSearch } from "./share-page";
 
 const ORIGIN = "https://search.pronsh.dev";
 const ASSETS: Readonly<Partial<Record<string, { body: string; type: string }>>> = {
@@ -82,6 +82,8 @@ describe("routePage", () => {
     ["/llms.txt", "asset-or-creator"],
     ["/s/dQw4w9WgXcQ?t=5", "share"],
     ["/s/bad", "asset"],
+    ["/embed/dQw4w9WgXcQ?t=5", "embed"],
+    ["/embed/bad", "asset"],
     ["/theo/videos", "asset"],
     ["/.well-known/api-catalog", "asset"],
   ])("%s is %s", (path, kind) => {
@@ -304,8 +306,10 @@ describe("shared moments", () => {
     expect(meta("og:video:url")).toBe("https://www.youtube.com/embed/dQw4w9WgXcQ?start=30");
     expect(meta("og:video:type")).toBe("text/html");
     expect(meta("og:image")).toBe("https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg");
-    // A player card on a domain X has not approved would show no card at all.
-    expect(meta("twitter:card")).toBe("summary_large_image");
+    expect(meta("twitter:card")).toBe("player");
+    expect(meta("twitter:player:height")).toBe("480");
+    expect(html).toContain('"@type":"VideoObject"');
+    expect(html).toContain('"embedUrl":"https://www.youtube.com/embed/dQw4w9WgXcQ?start=30"');
     expect(html).toContain("youtube-nocookie.com/embed/dQw4w9WgXcQ");
   });
 
@@ -326,39 +330,33 @@ describe("shared moments", () => {
     expect(markdown).toContain("(at 0:30)");
   });
 
-  test.each([
-    "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)",
-    "Twitterbot/1.0",
-  ])("%s is sent to YouTube's player at the start of the window", async (userAgent) => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
+  test("X's crawler reads the player card with the title and quote, not a redirect", async () => {
+    stubApi(() => Response.json(SEARCH_BODY));
     const ctx = createExecutionContext();
     const response = await worker.fetch(
-      new Request(`${ORIGIN}/s/dQw4w9WgXcQ?t=86&end=116&q=line`, {
-        headers: { "User-Agent": userAgent },
+      new Request(`${ORIGIN}/s/dQw4w9WgXcQ?t=30&end=60&q=line`, {
+        headers: { "User-Agent": "Twitterbot/1.0", Accept: "text/html" },
         redirect: "manual",
       }),
       testEnv(),
       ctx,
     );
     await waitOnExecutionContext(ctx);
-    expect(response.status).toBe(302);
-    expect(response.headers.get("Location")).toBe(
-      "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=86s",
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain('name="twitter:card" content="player"');
+    expect(html).toContain('name="twitter:description" content="“first &lt;b&gt;line&lt;/b&gt;”"');
+    expect(html).toContain(
+      `name="twitter:player" content="${ORIGIN}/embed/dQw4w9WgXcQ?t=30&amp;end=60&amp;q=line"`,
     );
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  test("people, other crawlers and the comparison link get the clip page", async () => {
+  test("only an explicit card=youtube link sends Discord's crawler to YouTube", async () => {
     stubApi(() => Response.json(SEARCH_BODY));
-    for (const [userAgent, query] of [
-      ["Mozilla/5.0 (X11; Linux x86_64) Chrome/140", ""],
-      ["Slackbot-LinkExpanding 1.0", ""],
-      ["Twitterbot/1.0", "&card=page"],
-    ] as const) {
+    const crawl = async (userAgent: string, query: string) => {
       const ctx = createExecutionContext();
       const response = await worker.fetch(
-        new Request(`${ORIGIN}/s/dQw4w9WgXcQ?t=30&end=60&q=line${query}`, {
+        new Request(`${ORIGIN}/s/dQw4w9WgXcQ?t=86&end=116&q=line${query}`, {
           headers: { "User-Agent": userAgent, Accept: "text/html" },
           redirect: "manual",
         }),
@@ -366,8 +364,43 @@ describe("shared moments", () => {
         ctx,
       );
       await waitOnExecutionContext(ctx);
-      expect(response.status, userAgent).toBe(200);
-    }
+      return response;
+    };
+    const discord = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)";
+    const sent = await crawl(discord, "&card=youtube");
+    expect(sent.status).toBe(302);
+    expect(sent.headers.get("Location")).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=86s");
+    expect((await crawl(discord, "")).status).toBe(200);
+    expect((await crawl("Twitterbot/1.0", "&card=youtube")).status).toBe(200);
+  });
+
+  test("the embed page may be framed by X and nobody else", async () => {
+    stubApi(() => Response.json(SEARCH_BODY));
+    const response = await get("/embed/dQw4w9WgXcQ?t=30&end=60&q=line", "text/html");
+    expect(response.status).toBe(200);
+    const csp = response.headers.get("Content-Security-Policy");
+    expect(csp).toContain(
+      "frame-ancestors 'self' https://x.com https://*.x.com https://twitter.com https://*.twitter.com",
+    );
+    expect(csp).not.toContain("frame-ancestors 'none'");
+    expect(csp).toContain("script-src 'self' https://www.youtube.com");
+    expect(response.headers.get("X-Frame-Options")).toBeNull();
+    const page = await get("/s/dQw4w9WgXcQ?t=30&end=60&q=line", "text/html");
+    expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
+    expect(page.headers.get("X-Frame-Options")).toBe("DENY");
+  });
+
+  test("the embed shows the clip, its title and the real quote, escaped", () => {
+    const html = renderEmbedPage(
+      MOMENT,
+      sharedVideoFromSearch(SEARCH_BODY, MOMENT),
+      `${ORIGIN}/s/x`,
+    );
+    expect(html).toContain("data-autoplay");
+    expect(html).toContain('data-end="60"');
+    expect(html).toContain("<blockquote>first &lt;b&gt;line&lt;/b&gt;</blockquote>");
+    expect(html).not.toContain("<script>alert");
+    expect(html).toContain('name="twitter:player:width" content="480"');
   });
 
   test("a moment found by hybrid search looks its lines up the same way", async () => {

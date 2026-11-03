@@ -1,8 +1,10 @@
 import { describe, expect, test } from "vitest";
 import {
   MAX_SHARED_WINDOW_SECONDS,
+  embeddedMomentPath,
   formatClockTime,
   movedWindow,
+  parseEmbeddedMoment,
   parseSharedMoment,
   sharedMomentPath,
   xPostUrl,
@@ -94,23 +96,30 @@ describe("shared moment links", () => {
     );
   });
 
-  test("an X post quotes the moment and ends on the YouTube link so the video plays", () => {
+  test("an X post quotes the moment and links the page that carries its player card", () => {
+    const url = new URL(xPostUrl("  it  uses ray\nshooting ", "https://site.test/s/abc"));
+    expect(url.origin + url.pathname).toBe("https://x.com/intent/post");
+    expect(url.searchParams.get("text")).toBe("“it uses ray shooting”");
+    expect(url.searchParams.get("url")).toBe("https://site.test/s/abc");
+
+    const long = new URL(xPostUrl("word ".repeat(100), "https://site.test/s/abc"));
+    const text = long.searchParams.get("text")!;
+    expect(text.length).toBeLessThan(190);
+    expect(text).toContain("…”");
+  });
+
+  test("the embed path carries the same moment as the share link", () => {
     const moment = {
       videoId: "dQw4w9WgXcQ",
       startSeconds: 86,
       endSeconds: 116,
-      query: "x",
-      hybrid: false,
+      query: "ray shooting",
+      hybrid: true,
     };
-    const url = new URL(xPostUrl(moment, "  it  uses ray\nshooting ", "https://site.test/s/abc"));
-    expect(url.origin + url.pathname).toBe("https://x.com/intent/post");
-    expect(url.searchParams.get("text")).toBe("“it uses ray shooting”\n\nhttps://site.test/s/abc");
-    expect(url.searchParams.get("url")).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=86s");
-
-    const long = new URL(xPostUrl(moment, "word ".repeat(100), "https://site.test/s/abc"));
-    const text = long.searchParams.get("text")!;
-    expect(text.split("\n\n")[0]!.length).toBeLessThan(190);
-    expect(text).toContain("…”");
+    const url = new URL(embeddedMomentPath(moment), "https://site.test");
+    expect(url.pathname).toBe("/embed/dQw4w9WgXcQ");
+    expect(parseEmbeddedMoment(url.pathname, url.searchParams)).toEqual(moment);
+    expect(parseSharedMoment(url.pathname, url.searchParams)).toBeUndefined();
   });
 
   test("formats clock times the way YouTube shows them", () => {

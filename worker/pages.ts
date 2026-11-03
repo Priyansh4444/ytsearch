@@ -7,6 +7,7 @@ import {
   type PageRoute,
 } from "./page-route";
 import {
+  renderEmbedPage,
   renderShareMarkdown,
   renderSharePage,
   sharedVideoFromSearch,
@@ -38,6 +39,13 @@ const SHARE_PAGE_CSP = (SECURITY_HEADERS["Content-Security-Policy"] ?? "")
     "frame-src https://www.youtube-nocookie.com https://www.youtube.com",
   );
 
+// X loads the embed page in an iframe, so only it may be framed, and only by X.
+const { "X-Frame-Options": _noFrameOptions, ...EMBED_SECURITY_HEADERS } = SECURITY_HEADERS;
+const EMBED_PAGE_CSP = SHARE_PAGE_CSP.replace(
+  "frame-ancestors 'none'",
+  "frame-ancestors 'self' https://x.com https://*.x.com https://twitter.com https://*.twitter.com",
+);
+
 type PageEnvironment = {
   readonly ASSETS: Fetcher;
   readonly API_BASE_URL: string;
@@ -58,17 +66,15 @@ export async function pageResponse(
     case "app":
       return negotiated(await assetAt(url, "/", env), env);
     case "share":
-      // `card=page` shows a crawler this site's own card, to compare the two.
-      if (
-        wantsYouTubeUnfurl(request.headers.get("User-Agent")) &&
-        url.searchParams.get("card") !== "page"
-      ) {
+      if (wantsYouTubeUnfurl(request.headers.get("User-Agent"), url.searchParams.get("card"))) {
         return new Response(null, {
           status: 302,
-          headers: { Location: youtubeMomentUrl(route.moment), Vary: "Accept, User-Agent" },
+          headers: { Location: youtubeMomentUrl(route.moment), Vary: "User-Agent" },
         });
       }
       return shareResponse(route.moment, markdown, env, fetchSearch);
+    case "embed":
+      return embedResponse(route.moment, env, fetchSearch);
     case "redirect":
       return new Response(null, {
         status: 301,
@@ -141,8 +147,25 @@ async function shareResponse(
       "Content-Security-Policy": SHARE_PAGE_CSP,
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "public, max-age=300",
-      Vary: "Accept, User-Agent",
+      Vary: "Accept",
       Link: AGENT_LINKS,
+    },
+  });
+}
+
+async function embedResponse(
+  moment: SharedMoment,
+  env: PageEnvironment,
+  fetchSearch: (path: string, signal: AbortSignal) => Promise<Response>,
+): Promise<Response> {
+  const video = await lookUpSharedVideo(moment, fetchSearch);
+  const canonical = `${publicOrigin(env)}${sharedMomentPath(moment)}`;
+  return new Response(renderEmbedPage(moment, video, canonical), {
+    headers: {
+      ...EMBED_SECURITY_HEADERS,
+      "Content-Security-Policy": EMBED_PAGE_CSP,
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "public, max-age=300",
     },
   });
 }

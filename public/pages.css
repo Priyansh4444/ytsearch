@@ -270,3 +270,88 @@ iframe:focus-visible {
     min-width: 0;
   }
 }
+
+/* Inside an X post: 480 by 480 on desktop, narrower on phones. The clip keeps its
+   shape and the words take what is left, cut off cleanly rather than scrolling. */
+.clip-embed {
+  display: flex;
+  flex-direction: column;
+  height: 100svh;
+  margin: 0;
+  overflow: hidden;
+  background: #050505;
+}
+.clip-embed .player {
+  flex-shrink: 0;
+}
+.clip-embed .clip-controls {
+  flex-shrink: 0;
+  gap: 0.5rem;
+  padding: 0.25rem 0.625rem;
+}
+.clip-embed .clip-toggle {
+  min-width: 5.25rem;
+  min-height: 2.25rem;
+  padding-inline: 0.5rem;
+  font-size: 0.8125rem;
+}
+.clip-embed .clip-seek {
+  height: 2.25rem;
+}
+.clip-embed .clip-clock {
+  font-size: 0.75rem;
+}
+.embed-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-height: 0;
+  padding: 0.5rem 0.75rem 0.625rem;
+  overflow: hidden;
+  font-size: 0.875rem;
+  line-height: 1.35;
+}
+.embed-text h1 {
+  flex-shrink: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 0.9375rem;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.embed-meta {
+  flex-shrink: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #a0a0a0;
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.embed-meta span {
+  color: #ffc799;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.embed-text blockquote {
+  display: -webkit-box;
+  flex-shrink: 0;
+  margin: 0.125rem 0 auto;
+  overflow: hidden;
+  color: #ffffff;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+}
+.embed-text a {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+}
+@media (max-height: 400px) {
+  .embed-text blockquote {
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+  }
+}

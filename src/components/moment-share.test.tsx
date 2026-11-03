@@ -66,7 +66,7 @@ describe("MomentSharePanel", () => {
     });
   });
 
-  test("copies the YouTube link for X, and composes a post ending on it", async () => {
+  test("copies the YouTube link, and composes an X post that links the clip", async () => {
     open();
     fireEvent.click(screen.getByRole("button", { name: "Copy YouTube link" }));
     await screen.findByRole("button", { name: "YouTube link copied" });
@@ -74,8 +74,8 @@ describe("MomentSharePanel", () => {
       "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=752s",
     );
     const post = new URL(screen.getByRole("link", { name: "Post on X" }).getAttribute("href")!);
-    expect(post.searchParams.get("url")).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=752s");
-    expect(post.searchParams.get("text")).toContain("/s/dQw4w9WgXcQ?t=752");
+    expect(post.searchParams.get("url")).toContain("/s/dQw4w9WgXcQ?t=752");
+    expect(post.searchParams.get("text")).toBe("“the moment”");
   });
 
   test("shows the link to copy by hand when the clipboard is denied", async () => {

@@ -1,4 +1,5 @@
 import {
+  embeddedMomentPath,
   formatClockTime,
   youtubeEmbedUrl,
   youtubeMomentUrl,
@@ -10,6 +11,7 @@ export type SharedVideo = {
   readonly creatorName: string;
   readonly creatorHandle: string;
   readonly thumbnail: string | undefined;
+  readonly publishedAt: string | undefined;
   /** Real caption lines from the window, oldest first. Empty when none could be loaded. */
   readonly lines: readonly SharedLine[];
 };
@@ -60,6 +62,7 @@ export function sharedVideoFromSearch(
     creatorName: typeof video.youtuber_name === "string" ? video.youtuber_name : "",
     creatorHandle: typeof video.youtuber_handle === "string" ? video.youtuber_handle : "",
     thumbnail: typeof video.thumbnail === "string" ? video.thumbnail : undefined,
+    publishedAt: typeof video.published_at === "string" ? video.published_at : undefined,
     lines,
   };
 }
@@ -100,21 +103,136 @@ function creatorSearchUrl(
   return { href: `/?${params.toString()}`, label: `More from ${video.creatorHandle}` };
 }
 
+// What X asks for, as proven by a player card on a small personal domain
+// (tweetcraft.jai.vin): a player page it may frame, sized 480 by 480.
+const X_PLAYER_SIZE = 480;
+
+type CardText = {
+  readonly label: string;
+  readonly title: string;
+  readonly description: string;
+  readonly image: string;
+};
+
+function cardText(moment: SharedMoment, video: SharedVideo | undefined): CardText {
+  const label = windowLabel(moment);
+  const quote = video?.lines[0]?.text;
+  return {
+    label,
+    title: video?.title ?? "A shared YouTube moment",
+    description: quote
+      ? `“${preview(quote)}”`
+      : `Watch ${label} of this video, found with ytsearch.`,
+    image:
+      video?.thumbnail ??
+      `https://i.ytimg.com/vi/${encodeURIComponent(moment.videoId)}/hqdefault.jpg`,
+  };
+}
+
+function cardTags(
+  moment: SharedMoment,
+  video: SharedVideo | undefined,
+  canonicalUrl: string,
+): string {
+  const { label, title, description, image } = cardText(moment, video);
+  const cardTitle = escapeHtml(`${title} (${label})`);
+  const safeDescription = escapeHtml(description);
+  const safeImage = escapeHtml(image);
+  const player = `${new URL(canonicalUrl).origin}${embeddedMomentPath(moment)}`;
+  const youtubePlayer = `https://www.youtube.com/embed/${moment.videoId}?start=${moment.startSeconds}`;
+  const videoObject = {
+    "@context": "https://schema.org",
+    "@type": "VideoObject",
+    name: `${title} (${label})`,
+    description,
+    thumbnailUrl: image,
+    embedUrl: youtubePlayer,
+    ...(video?.publishedAt ? { uploadDate: video.publishedAt } : {}),
+  };
+  return `<meta property="og:type" content="video.other" />
+    <meta property="og:site_name" content="ytsearch" />
+    <meta property="og:title" content="${cardTitle}" />
+    <meta property="og:description" content="${safeDescription}" />
+    <meta property="og:url" content="${escapeHtml(canonicalUrl)}" />
+    <meta property="og:image" content="${safeImage}" />
+    <meta property="og:video" content="${escapeHtml(youtubePlayer)}" />
+    <meta property="og:video:url" content="${escapeHtml(youtubePlayer)}" />
+    <meta property="og:video:secure_url" content="${escapeHtml(youtubePlayer)}" />
+    <meta property="og:video:type" content="text/html" />
+    <meta property="og:video:width" content="1280" />
+    <meta property="og:video:height" content="720" />
+    <meta name="twitter:card" content="player" />
+    <meta name="twitter:title" content="${cardTitle}" />
+    <meta name="twitter:description" content="${safeDescription}" />
+    <meta name="twitter:image" content="${safeImage}" />
+    <meta name="twitter:player" content="${escapeHtml(player)}" />
+    <meta name="twitter:player:width" content="${X_PLAYER_SIZE}" />
+    <meta name="twitter:player:height" content="${X_PLAYER_SIZE}" />
+    <script type="application/ld+json">${JSON.stringify(videoObject).replaceAll("<", "\\u003c")}</script>`;
+}
+
+function playerFrame(moment: SharedMoment, title: string, autoplay: boolean): string {
+  return `<iframe
+        id="clip-video"
+        class="player"
+        src="${escapeHtml(youtubeEmbedUrl(moment))}"
+        title="${escapeHtml(`YouTube player for ${title}`)}"
+        data-video-id="${escapeHtml(moment.videoId)}"
+        data-start="${moment.startSeconds}"
+        data-end="${moment.endSeconds ?? moment.startSeconds + DEFAULT_CLIP_SECONDS}"
+        ${autoplay ? "data-autoplay" : ""}
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        referrerpolicy="strict-origin-when-cross-origin"
+        allowfullscreen
+      ></iframe>
+      <div id="clip-controls" class="clip-controls" hidden>
+        <button id="clip-toggle" type="button" class="clip-toggle">Play clip</button>
+        <input id="clip-seek" class="clip-seek" type="range" min="0" step="0.1" value="0" aria-label="Position in this clip" />
+        <output id="clip-clock" class="clip-clock" for="clip-seek"></output>
+      </div>`;
+}
+
+/** The compact player X shows inside a post: the clip, then what makes it worth sharing. */
+export function renderEmbedPage(
+  moment: SharedMoment,
+  video: SharedVideo | undefined,
+  canonicalUrl: string,
+): string {
+  const { label, title } = cardText(moment, video);
+  const line = video?.lines[0];
+  const creator = video?.creatorName ? `${escapeHtml(video.creatorName)} ` : "";
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>${escapeHtml(`${title} (${label}) · ytsearch`)}</title>
+    <link rel="canonical" href="${escapeHtml(canonicalUrl)}" />
+    ${cardTags(moment, video, canonicalUrl)}
+    <link rel="stylesheet" href="/pages.css" />
+  </head>
+  <body class="clip-embed">
+    ${playerFrame(moment, title, true)}
+    <div class="embed-text">
+      <h1>${escapeHtml(title)}</h1>
+      <p class="embed-meta">${creator}<span>${escapeHtml(label)}</span></p>
+      ${line ? `<blockquote>${escapeHtml(line.text)}</blockquote>` : ""}
+      <a href="${escapeHtml(canonicalUrl)}" target="_blank" rel="noreferrer">Open in ytsearch</a>
+    </div>
+    <script src="/clip-player.js" defer></script>
+  </body>
+</html>
+`;
+}
+
 export function renderSharePage(
   moment: SharedMoment,
   video: SharedVideo | undefined,
   canonicalUrl: string,
 ): string {
-  const label = windowLabel(moment);
-  const title = video?.title ?? "A shared YouTube moment";
-  const quote = video?.lines[0]?.text;
-  const description = quote
-    ? `“${preview(quote)}”`
-    : `Watch ${label} of this video, found with ytsearch.`;
+  const { label, title, description } = cardText(moment, video);
   const pageTitle = `${title} (${label}) · ytsearch`;
-  const image =
-    video?.thumbnail ??
-    `https://i.ytimg.com/vi/${encodeURIComponent(moment.videoId)}/hqdefault.jpg`;
   const creator = video?.creatorName
     ? `<p class="clip-creator">${escapeHtml(video.creatorName)} <span>${escapeHtml(video.creatorHandle)}</span></p>`
     : "";
@@ -131,10 +249,6 @@ export function renderSharePage(
   const result = resultUrl(moment);
   const moreFromCreator = creatorSearchUrl(moment, video);
   const openLabel = `Open on YouTube at ${formatClockTime(moment.startSeconds)}`;
-  // Declared exactly as YouTube's own pages declare it. X needs an approved domain for
-  // a player card, so this page declares the large image card it can always show; the
-  // crawlers that play video are sent to YouTube in pages.ts.
-  const playerEmbed = `https://www.youtube.com/embed/${moment.videoId}?start=${moment.startSeconds}`;
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -145,22 +259,7 @@ export function renderSharePage(
     <meta name="description" content="${escapeHtml(description)}" />
     <link rel="canonical" href="${escapeHtml(canonicalUrl)}" />
     <link rel="icon" href="/favicon.png" type="image/png" />
-    <meta property="og:type" content="video.other" />
-    <meta property="og:site_name" content="ytsearch" />
-    <meta property="og:title" content="${escapeHtml(`${title} (${label})`)}" />
-    <meta property="og:description" content="${escapeHtml(description)}" />
-    <meta property="og:url" content="${escapeHtml(canonicalUrl)}" />
-    <meta property="og:image" content="${escapeHtml(image)}" />
-    <meta property="og:video" content="${escapeHtml(playerEmbed)}" />
-    <meta property="og:video:url" content="${escapeHtml(playerEmbed)}" />
-    <meta property="og:video:secure_url" content="${escapeHtml(playerEmbed)}" />
-    <meta property="og:video:type" content="text/html" />
-    <meta property="og:video:width" content="1280" />
-    <meta property="og:video:height" content="720" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="${escapeHtml(`${title} (${label})`)}" />
-    <meta name="twitter:description" content="${escapeHtml(description)}" />
-    <meta name="twitter:image" content="${escapeHtml(image)}" />
+    ${cardTags(moment, video, canonicalUrl)}
     <link rel="stylesheet" href="/pages.css" />
   </head>
   <body class="clip-page">
@@ -169,23 +268,7 @@ export function renderSharePage(
         <a class="clip-brand" href="/">← ytsearch</a>
         <a href="/">Search every transcript</a>
       </header>
-      <iframe
-        id="clip-video"
-        class="player"
-        src="${escapeHtml(youtubeEmbedUrl(moment))}"
-        title="${escapeHtml(`YouTube player for ${title}`)}"
-        data-video-id="${escapeHtml(moment.videoId)}"
-        data-start="${moment.startSeconds}"
-        data-end="${moment.endSeconds ?? moment.startSeconds + DEFAULT_CLIP_SECONDS}"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-        referrerpolicy="strict-origin-when-cross-origin"
-        allowfullscreen
-      ></iframe>
-      <div id="clip-controls" class="clip-controls" hidden>
-        <button id="clip-toggle" type="button" class="clip-toggle">Play clip</button>
-        <input id="clip-seek" class="clip-seek" type="range" min="0" step="0.1" value="0" aria-label="Position in this clip" />
-        <output id="clip-clock" class="clip-clock" for="clip-seek"></output>
-      </div>
+      ${playerFrame(moment, title, false)}
       <div class="clip-body">
         <p class="clip-time">${escapeHtml(label)}</p>
         <h1>${escapeHtml(title)}</h1>

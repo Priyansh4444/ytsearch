@@ -1,4 +1,4 @@
-import { parseSharedMoment, type SharedMoment } from "../shared/share-link";
+import { parseEmbeddedMoment, parseSharedMoment, type SharedMoment } from "../shared/share-link";
 
 /** Creators who changed their YouTube handle: old links keep working. */
 const RENAMED_CREATORS: ReadonlyMap<string, string> = new Map([["@t3dotgg", "@theo"]]);
@@ -26,6 +26,7 @@ export type PageRoute =
   | { readonly kind: "static"; readonly html: string; readonly markdown: string }
   | { readonly kind: "app" }
   | { readonly kind: "share"; readonly moment: SharedMoment }
+  | { readonly kind: "embed"; readonly moment: SharedMoment }
   | { readonly kind: "redirect"; readonly location: string }
   | { readonly kind: "asset-or-creator"; readonly handle: string }
   | { readonly kind: "asset" };
@@ -40,6 +41,8 @@ export function routePage(url: URL): PageRoute {
   if (redirect) return { kind: "redirect", location: redirect };
   const moment = parseSharedMoment(pathname, url.searchParams);
   if (moment) return { kind: "share", moment };
+  const embedded = parseEmbeddedMoment(pathname, url.searchParams);
+  if (embedded) return { kind: "embed", moment: embedded };
   const creator = CREATOR_PATH.exec(pathname)?.[1];
   if (!creator) return { kind: "asset" };
   const renamed = RENAMED_CREATORS.get(`@${creator.toLowerCase()}`);
@@ -64,12 +67,11 @@ export function prefersMarkdown(accept: string | null): boolean {
 }
 
 /**
- * Discord and X only play video from players they trust, and YouTube's is one.
- * Sending just their link crawlers to YouTube, as a shortener would, lets a pasted
- * link play in place; people who click it still get the clip page.
+ * `card=youtube` sends Discord's crawler to YouTube, whose links Discord plays itself,
+ * at the cost of this site's title and quote. It is opt-in so the two can be compared.
  */
-export function wantsYouTubeUnfurl(userAgent: string | null): boolean {
-  return /\b(?:Discordbot|Twitterbot)\b/.test(userAgent ?? "");
+export function wantsYouTubeUnfurl(userAgent: string | null, card: string | null): boolean {
+  return card === "youtube" && /\bDiscordbot\b/.test(userAgent ?? "");
 }
 
 /** True when a client wants a page rather than data, for choosing a 404's format. */
