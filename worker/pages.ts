@@ -1,5 +1,6 @@
 import { sharedMomentPath, type SharedMoment } from "../shared/share-link";
 import {
+  discordCard,
   prefersHtml,
   prefersMarkdown,
   routePage,
@@ -71,7 +72,9 @@ export async function pageResponse(
       return shareResponse(
         route.moment,
         markdown,
-        isDiscordCrawler(request.headers.get("User-Agent")) ? "picture" : "player",
+        isDiscordCrawler(request.headers.get("User-Agent"))
+          ? discordCard(url.searchParams.get("discord"))
+          : "player",
         env,
         fetchSearch,
       );
