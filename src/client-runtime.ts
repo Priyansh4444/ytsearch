@@ -15,13 +15,6 @@ import type {
 
 const DEFAULT_PER_PAGE = 12;
 const RETRY_DELAY_MS = 250;
-// Experimental builds set VITE_SEARCH_MODE to semantic or hybrid. The API keeps
-// low-signal queries and date sorts lexical, and answers lexically if semantic
-// is down; the response's `mode` says which engine answered.
-const SEARCH_MODE = (["semantic", "hybrid"] as const).find(
-  (mode) => mode === import.meta.env.VITE_SEARCH_MODE,
-);
-
 export async function runSearchTranscripts(
   apiBaseUrl: string,
   request: SearchRequest,
@@ -34,7 +27,10 @@ export async function runSearchTranscripts(
     sort: request.sort,
   });
   if (request.youtuber) params.set("youtuber", request.youtuber);
-  if (SEARCH_MODE) params.set("mode", SEARCH_MODE);
+  // Lexical sends no mode, so its URL and edge-cache key stay the plain ones. The
+  // API keeps low-signal queries and date sorts lexical, and answers lexically if
+  // semantic is down; the response's `mode` says which engine answered.
+  if (request.mode === "hybrid") params.set("mode", "hybrid");
   const attempt = () =>
     requestWireJson(
       `${apiBaseUrl}/api/search?${params.toString()}`,
@@ -57,10 +53,11 @@ export function runSearchVideoMoments(
   apiBaseUrl: string,
   query: string,
   videoId: string,
+  mode: SearchResponse["mode"],
   signal?: AbortSignal,
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q: query, video_id: videoId, per_page: "100" });
-  if (SEARCH_MODE) params.set("mode", SEARCH_MODE);
+  if (mode !== "lexical") params.set("mode", mode);
   return requestWireJson(
     `${apiBaseUrl}/api/search?${params.toString()}`,
     "Could not load every matching moment",

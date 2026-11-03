@@ -1,0 +1,631 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ytsearch API",
+    "version": "1.0.0",
+    "summary": "Search the spoken words of YouTube videos.",
+    "description": "Public, read-only search over the captions of indexed YouTube creators. No authentication. Search allows about 120 requests a minute per IP address. Breaking changes get a new major version in the path; /api/v1 stays until its deprecation is announced in the API docs.",
+    "contact": {
+      "name": "ytsearch issues",
+      "url": "https://github.com/Priyansh4444/ytsearch/issues"
+    },
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "x-api-versioning": {
+      "strategy": "url-path",
+      "current": "v1"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://search.pronsh.dev"
+    }
+  ],
+  "externalDocs": {
+    "description": "API docs",
+    "url": "https://search.pronsh.dev/docs"
+  },
+  "paths": {
+    "/api/v1/search": {
+      "get": {
+        "operationId": "searchTranscripts",
+        "summary": "Find transcript moments",
+        "description": "Finds moments where the query was spoken, grouped by video and ranked best match first. Every moment links to its exact timestamp on YouTube.",
+        "tags": [
+          "search"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Words to find. Quote a phrase to match it exactly.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "example": "server actions"
+          },
+          {
+            "name": "youtuber",
+            "in": "query",
+            "description": "Only this creator's videos, as a handle.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "@theo"
+          },
+          {
+            "name": "video_id",
+            "in": "query",
+            "description": "Only this video, to list its moments.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Result order; the default is best match.",
+            "schema": {
+              "$ref": "#/components/schemas/Sort"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page of videos, starting at 1.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Videos per page.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "description": "Search engine to ask for. hybrid and semantic need a hosted semantic service; without one the API answers lexically and says so in the response.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "lexical",
+                "semantic",
+                "hybrid"
+              ],
+              "default": "lexical"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching videos and moments.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid; fix it before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests; wait before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service is temporarily unavailable; retry shortly.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/youtubers": {
+      "get": {
+        "operationId": "listCreators",
+        "summary": "List indexed creators",
+        "description": "Lists every indexed creator with its handle and indexed video and chunk counts. Use it to check whether a creator is covered.",
+        "tags": [
+          "catalog"
+        ],
+        "responses": {
+          "200": {
+            "description": "The creators in the index.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "channels"
+                  ],
+                  "properties": {
+                    "channels": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Creator"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service is temporarily unavailable; retry shortly.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/availability": {
+      "get": {
+        "operationId": "getAvailability",
+        "summary": "Check search availability",
+        "description": "Says whether search is serving right now.",
+        "tags": [
+          "status"
+        ],
+        "responses": {
+          "200": {
+            "description": "Current availability.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Availability"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Check API health",
+        "description": "Says whether the API can reach its search index.",
+        "tags": [
+          "status"
+        ],
+        "responses": {
+          "200": {
+            "description": "The API is healthy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service is temporarily unavailable; retry shortly.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "search",
+      "description": "Transcript search"
+    },
+    {
+      "name": "catalog",
+      "description": "Indexed creators"
+    },
+    {
+      "name": "status",
+      "description": "Service status"
+    }
+  ],
+  "components": {
+    "schemas": {
+      "Sort": {
+        "type": "string",
+        "enum": [
+          "relevance",
+          "relevance_engagement",
+          "views_desc",
+          "likes_desc",
+          "comments_desc",
+          "published_desc",
+          "published_asc"
+        ],
+        "default": "relevance"
+      },
+      "SearchResponse": {
+        "type": "object",
+        "required": [
+          "query",
+          "total_moments",
+          "total_videos",
+          "total_found",
+          "out_of",
+          "time_to_first_result_ms",
+          "page",
+          "per_page",
+          "sort",
+          "mode",
+          "has_next_page",
+          "videos"
+        ],
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "total_moments": {
+            "type": "integer"
+          },
+          "total_videos": {
+            "type": "integer"
+          },
+          "totals_approximate": {
+            "type": "boolean",
+            "description": "True when totals are estimates, as they are for semantic results."
+          },
+          "total_found": {
+            "type": "integer"
+          },
+          "out_of": {
+            "type": "integer"
+          },
+          "time_to_first_result_ms": {
+            "type": "integer"
+          },
+          "edge_cached": {
+            "type": "boolean",
+            "description": "Served from the edge cache, so the timing is not fresh."
+          },
+          "page": {
+            "type": "integer"
+          },
+          "per_page": {
+            "type": "integer"
+          },
+          "sort": {
+            "$ref": "#/components/schemas/Sort"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "lexical",
+              "semantic",
+              "hybrid"
+            ],
+            "description": "The engine that actually answered."
+          },
+          "has_next_page": {
+            "type": "boolean"
+          },
+          "videos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VideoResult"
+            }
+          }
+        }
+      },
+      "VideoResult": {
+        "type": "object",
+        "required": [
+          "video_id",
+          "title",
+          "youtuber_handle",
+          "youtuber_name",
+          "content_kind",
+          "match_count",
+          "youtube_url",
+          "embed_url",
+          "hits"
+        ],
+        "properties": {
+          "video_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "title_highlight": {
+            "type": "string"
+          },
+          "youtuber_handle": {
+            "type": "string"
+          },
+          "youtuber_name": {
+            "type": "string"
+          },
+          "thumbnail": {
+            "type": "string"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "view_count": {
+            "type": "integer"
+          },
+          "like_count": {
+            "type": "integer"
+          },
+          "comment_count": {
+            "type": "integer"
+          },
+          "content_kind": {
+            "type": "string",
+            "enum": [
+              "video",
+              "short",
+              "unknown"
+            ]
+          },
+          "match_count": {
+            "type": "integer",
+            "description": "How many moments in this video matched."
+          },
+          "youtube_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "embed_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "best_timestamp": {
+            "type": "string"
+          },
+          "hits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Moment"
+            }
+          }
+        }
+      },
+      "Moment": {
+        "type": "object",
+        "required": [
+          "id",
+          "video_id",
+          "title",
+          "text",
+          "match_kind",
+          "youtuber_handle",
+          "youtuber_name",
+          "content_kind",
+          "t_start_ms",
+          "youtube_url",
+          "embed_url"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable ID of this transcript chunk."
+          },
+          "video_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string",
+            "description": "The caption text of this moment."
+          },
+          "prev_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caption just before, for context."
+          },
+          "next_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caption just after, for context."
+          },
+          "text_highlight": {
+            "type": "string",
+            "description": "text with matched words wrapped in <mark>."
+          },
+          "title_highlight": {
+            "type": "string"
+          },
+          "match_kind": {
+            "type": "string",
+            "enum": [
+              "transcript",
+              "title"
+            ]
+          },
+          "youtuber_handle": {
+            "type": "string"
+          },
+          "youtuber_name": {
+            "type": "string"
+          },
+          "thumbnail": {
+            "type": "string"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "view_count": {
+            "type": "integer"
+          },
+          "like_count": {
+            "type": "integer"
+          },
+          "comment_count": {
+            "type": "integer"
+          },
+          "content_kind": {
+            "type": "string",
+            "enum": [
+              "video",
+              "short",
+              "unknown"
+            ]
+          },
+          "t_start_ms": {
+            "type": "integer",
+            "description": "Where the moment starts, in milliseconds."
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "The start time as shown to people, such as 12:34."
+          },
+          "youtube_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Opens the video at this moment."
+          },
+          "embed_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "Creator": {
+        "type": "object",
+        "required": [
+          "id",
+          "handle",
+          "name",
+          "channel_id",
+          "public_video_count",
+          "indexed_video_count",
+          "indexed_chunk_count"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "channel_id": {
+            "type": "string"
+          },
+          "uploads_playlist": {
+            "type": "string"
+          },
+          "public_video_count": {
+            "type": "integer"
+          },
+          "indexed_video_count": {
+            "type": "integer"
+          },
+          "indexed_chunk_count": {
+            "type": "integer"
+          },
+          "avatar_url": {
+            "type": "string"
+          }
+        }
+      },
+      "Availability": {
+        "type": "object",
+        "required": [
+          "status",
+          "search_enabled"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "scheduled_offline",
+              "prewarming",
+              "ready",
+              "starting",
+              "degraded"
+            ]
+          },
+          "search_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "What went wrong."
+          },
+          "code": {
+            "type": "string",
+            "description": "A stable machine-readable code."
+          },
+          "hint": {
+            "type": "string",
+            "description": "What to do about it."
+          }
+        }
+      }
+    }
+  }
+}

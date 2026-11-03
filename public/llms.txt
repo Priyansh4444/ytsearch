@@ -1,0 +1,30 @@
+# ytsearch
+
+> Search the spoken words of YouTube videos. ytsearch indexes the public captions of more than 70 creators, about 50,000 videos, and returns the exact timestamped moments that match. It is free, read-only and needs no API key.
+
+## When to use ytsearch
+
+Use ytsearch when someone wants to find where in a video something was said: verifying a quote, locating an explanation they half remember, or collecting what one creator has said about a topic. It works best for software, science and engineering channels. Call `GET /api/v1/youtubers` first when you need to know whether a creator is covered.
+
+Do not use it for videos outside the index, for YouTube metadata such as subscriber counts, or to bulk-export transcripts. Results quote captions, which can contain transcription errors, so link to the timestamp when citing one.
+
+## How to call it
+
+`GET https://search.pronsh.dev/api/v1/search?q=server+actions&youtuber=%40theo&per_page=5`
+
+Each video in `videos` carries `hits`; each hit has `text`, `timestamp` and a `youtube_url` that opens at that moment. Quote words in `q` to match a phrase. No authentication is needed. Search allows about 120 requests a minute per IP; on `429`, wait before retrying.
+
+Every page, including shared moments at `/s/VIDEO_ID?t=SECONDS&end=SECONDS&q=WORDS`, returns Markdown when requested with `Accept: text/markdown`.
+
+## Docs
+
+- [API docs](https://search.pronsh.dev/docs): endpoints, parameters, limits and errors
+- [OpenAPI document](https://search.pronsh.dev/openapi.json): the machine-readable contract
+- [API catalog](https://search.pronsh.dev/.well-known/api-catalog): RFC 9727 discovery
+
+## About
+
+- [About](https://search.pronsh.dev/about)
+- [Contact](https://search.pronsh.dev/contact)
+- [Privacy](https://search.pronsh.dev/privacy)
+- [Source code](https://github.com/Priyansh4444/ytsearch)

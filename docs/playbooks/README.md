@@ -14,6 +14,7 @@ last person, and the facts that are expensive to look up.
 | [dependency-updates.md](dependency-updates.md) | Updating JS or Rust dependencies, or a bundle budget fails |
 | [indexing-gaps.md](indexing-gaps.md) | Explaining creator video gaps and separating fetch failures from restricted or captionless videos |
 | [frontend-reactivity.md](frontend-reactivity.md) | The UI flashes, remounts, refetches or loses state; reproducing timer-driven bugs |
+| [agent-readiness.md](agent-readiness.md) | Keeping the site readable by agents, or the is-agentic score drops |
 | [load-testing.md](load-testing.md) | Stress-testing production search with simulated users |
 
 ## Format

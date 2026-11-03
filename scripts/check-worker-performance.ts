@@ -8,9 +8,11 @@ import { gzipSync } from "node:zlib";
 // Raised from 225_000/50_000 for Effect 4.0.0, which adds about 16 KB raw
 // over 4.0.0-rc.111. effect/Schema (two Fly response decoders in
 // worker/fly-machine.ts) is about 97 KB of the bundle.
+// Raised from 235_000/52_000 for the pages agents read: routing, Markdown
+// negotiation and shared moment rendering add about 17 KB raw.
 const budgets = {
-  workerRawBytes: 235_000,
-  workerGzipBytes: 52_000,
+  workerRawBytes: 255_000,
+  workerGzipBytes: 58_000,
 };
 const outdir = mkdtempSync(join(tmpdir(), "ytsearch-worker-performance-"));
 const execFileAsync = promisify(execFile);

@@ -190,6 +190,28 @@ YouTube API or stays failed. Set `CATALOG_SNAPSHOT_JSON_PATH`,
 `FAILURE_REPORT_JSON_PATH` and `DISCOVERY_MANIFEST_DIRECTORY` to check captured
 evidence offline.
 
+## Creator renames
+
+A channel's new handle gets a new creator ID, because IDs derive from the handle, so a
+rename leaves the old record and any videos still carrying the old handle. Update
+`scripts/indexed-channels.txt`, then move what remains; chunks are unchanged apart from
+the handle:
+
+```bash
+flyctl ssh sftp get -a ytsearch-raw-production --machine d89303da029328 \
+  /data/mutable/mutations.sqlite3 mutations.sqlite3
+scripts/rehome-raw-creator.py mutations.sqlite3 --from @old --to @new        # plan
+scripts/rehome-raw-creator.py mutations.sqlite3 --from @old --to @new --apply
+```
+
+`--apply` reads `RAW_SEARCH_API_URL` and `RAW_SEARCH_ADMIN_API_KEY` from the environment.
+Hold the deployed key in the process that runs it, for example read over
+`flyctl ssh console` into a variable beside a `flyctl proxy`; never print or save it. It
+checks each video's chunk count and removes the old creator only when nothing is filed
+under it. The next publication makes the change visible. Add the old handle to
+`RENAMED_CREATORS` in [page-route.ts](../worker/page-route.ts) so old links and searches
+keep working, and rename it in the search contract cases.
+
 ## Removal
 
 Acknowledge any active queue row and stop the writer first:

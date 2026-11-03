@@ -107,10 +107,11 @@ export function fetchSearchAvailability(signal?: AbortSignal): Promise<SearchAva
 export function searchVideoMoments(
   query: string,
   videoId: string,
+  mode: SearchResponse["mode"],
   signal?: AbortSignal,
 ): Promise<SearchResponse> {
   return loadClientRuntime().then(({ runSearchVideoMoments }) =>
-    runSearchVideoMoments(API_BASE_URL, query, videoId, signal),
+    runSearchVideoMoments(API_BASE_URL, query, videoId, mode, signal),
   );
 }
 

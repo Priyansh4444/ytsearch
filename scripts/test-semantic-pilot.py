@@ -143,9 +143,9 @@ def main():
             cards = search({"q": "collapsed star", "mode": "semantic", "youtuber": "@SPACE"})
             assert cards["mode"] == "semantic" and cards["videos"][0]["video_id"] == "astronomy"
             assert cards["videos"][0]["hits"][0]["text"] and cards["totals_approximate"]
-            low = search({"q": "I", "mode": "semantic", "youtuber": "@t3dotgg"})
+            low = search({"q": "I", "mode": "semantic", "youtuber": "@theo"})
             assert low["mode"] == "lexical" and low["sort"] == "published_desc"
-            assert search({"q": "fable on high", "youtuber": "@t3dotgg"})["mode"] == "lexical"
+            assert search({"q": "fable on high", "youtuber": "@theo"})["mode"] == "lexical"
             assert search({"q": "stars", "mode": "semantic", "sort": "published_asc"})["mode"] == "lexical"
             # Keep the original receipt while truncating at a valid line boundary.
             source.write_text("".join(json.dumps(row) + "\n" for row in rows[:-1]))

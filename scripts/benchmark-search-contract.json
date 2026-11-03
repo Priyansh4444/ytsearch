@@ -101,12 +101,12 @@
   "cases": {
     "react_global": {
       "top_video_id": "eYx_43BkRPE",
-      "top_handle": "@t3dotgg",
+      "top_handle": "@theo",
       "required_highlight_tokens": ["react"]
     },
     "fire_global": {
       "top_video_id": "0kCn2f6ngAs",
-      "top_handle": "@t3dotgg",
+      "top_handle": "@theo",
       "required_highlight_tokens": ["fire"]
     },
     "one_fire_global": {
@@ -121,12 +121,12 @@
     },
     "css_phrase_global": {
       "top_video_id": "7_jpgSfOI58",
-      "top_handle": "@t3dotgg",
+      "top_handle": "@theo",
       "required_highlight_tokens": ["css", "dead"]
     },
     "css_phrase_t3": {
       "top_video_id": "7_jpgSfOI58",
-      "top_handle": "@t3dotgg",
+      "top_handle": "@theo",
       "required_highlight_tokens": ["css", "dead"]
     },
     "blackhole_global": {

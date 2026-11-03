@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#101010" />
+    <meta name="description" content="Public read-only JSON API for searching YouTube transcripts: endpoints, parameters, limits and errors." />
+    <link rel="canonical" href="https://search.pronsh.dev/docs" />
+    <link rel="icon" href="/favicon.png" type="image/png" />
+    <link rel="alternate" type="text/markdown" href="/docs.md" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ytsearch" />
+    <meta property="og:title" content="API docs · ytsearch" />
+    <meta property="og:description" content="Public read-only JSON API for searching YouTube transcripts: endpoints, parameters, limits and errors." />
+    <meta property="og:url" content="https://search.pronsh.dev/docs" />
+    <meta property="og:image" content="https://search.pronsh.dev/og-card.png" />
+    <title>API docs · ytsearch</title>
+    <link rel="stylesheet" href="/pages.css" />
+  </head>
+  <body>
+    <main>
+      <nav><a href="/">← ytsearch</a><a href="/about">About</a><a href="/docs">API docs</a><a href="/contact">Contact</a><a href="/privacy">Privacy</a></nav>
+      <h1>ytsearch API docs</h1>
+      <p>
+        The ytsearch API is public and read-only. It needs no key: send an HTTP GET and read JSON.
+        The machine-readable contract is the <a href="/openapi.json">OpenAPI document</a>, and
+        <a href="/llms.txt">llms.txt</a> tells agents when to use it.
+      </p>
+      <h2>Quickstart</h2>
+      <pre><code>curl 'https://search.pronsh.dev/api/v1/search?q=server+actions&amp;youtuber=%40theo&amp;per_page=3'</code></pre>
+      <p>
+        Each video in <code>videos</code> has a <code>youtube_url</code> and <code>hits</code>; every
+        hit is a transcript moment with its text and a <code>youtube_url</code> that opens at that
+        timestamp.
+      </p>
+      <h2>Endpoints</h2>
+      <table>
+        <tr><th>Endpoint</th><th>Use</th></tr>
+        <tr><td><code>GET /api/v1/search</code></td><td>Find transcript moments, grouped by video.</td></tr>
+        <tr><td><code>GET /api/v1/youtubers</code></td><td>List indexed creators and their video counts.</td></tr>
+        <tr><td><code>GET /api/v1/availability</code></td><td>Check whether search is serving.</td></tr>
+        <tr><td><code>GET /api/v1/health</code></td><td>Check that the API can reach its index.</td></tr>
+      </table>
+      <h2>Search parameters</h2>
+      <table>
+        <tr><th>Name</th><th>Meaning</th></tr>
+        <tr><td><code>q</code></td><td>Required. Words to find; quote a phrase to match it exactly.</td></tr>
+        <tr><td><code>youtuber</code></td><td>Only this creator, such as <code>@theo</code>.</td></tr>
+        <tr><td><code>video_id</code></td><td>Only this video, to list its moments.</td></tr>
+        <tr><td><code>sort</code></td><td><code>relevance</code> (default), <code>relevance_engagement</code>, <code>views_desc</code>, <code>likes_desc</code>, <code>comments_desc</code>, <code>published_desc</code> or <code>published_asc</code>.</td></tr>
+        <tr><td><code>page</code>, <code>per_page</code></td><td>Paging; results are grouped by video.</td></tr>
+        <tr><td><code>mode</code></td><td><code>lexical</code> (default) or, where it is hosted, <code>hybrid</code> or <code>semantic</code>. The response's <code>mode</code> says which actually answered.</td></tr>
+      </table>
+      <h2>Authentication and limits</h2>
+      <p>
+        No authentication, API key or OAuth flow exists. Search allows about 120 requests a minute
+        per IP address; search responses state this in <code>RateLimit-Policy</code>, and beyond it you get <code>429</code> and should wait before retrying. Please
+        do not bulk-export the index.
+      </p>
+      <h2>Versioning</h2>
+      <p>
+        The path carries the major version. Additive changes, such as new response fields, stay in
+        <code>/api/v1</code>; a breaking change gets <code>/api/v2</code>, and <code>/api/v1</code>
+        keeps working until its deprecation is announced on this page.
+      </p>
+      <h2>Errors</h2>
+      <p>
+        Errors are JSON: <code>{"error": "what went wrong", "code": "stable_code", "hint": "what to do"}</code>.
+        <code>400</code> means fix the request, <code>404</code> means no such route,
+        <code>429</code> means slow down and <code>503</code> means retry shortly.
+      </p>
+      <h2>Sharing a moment</h2>
+      <p>
+        A link such as <code>/s/VIDEO_ID?t=754&amp;end=784&amp;q=server+actions</code> opens a page with that
+        window of the video and the matching transcript lines. Request it with
+        <code>Accept: text/markdown</code> to get the same page as Markdown; every page here does the
+        same.
+      </p>
+    </main>
+  </body>
+</html>

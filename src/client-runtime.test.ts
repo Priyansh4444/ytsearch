@@ -4,6 +4,7 @@ import {
   runDashboardData,
   runRequestIndex,
   runSearchTranscripts,
+  runSearchVideoMoments,
 } from "./client-runtime";
 
 const emptySearchResponse = {
@@ -43,29 +44,36 @@ describe("browser client runtime", () => {
   });
 
   it.each([
-    ["semantic", "&mode=semantic"],
+    ["lexical", ""],
     ["hybrid", "&mode=hybrid"],
-    ["fused", ""],
-  ])(
-    "requests the build's VITE_SEARCH_MODE=%s only when it is a known mode",
-    async (mode, suffix) => {
-      vi.stubEnv("VITE_SEARCH_MODE", mode);
-      vi.resetModules();
-      try {
-        const { runSearchTranscripts: modeSearch } = await import("./client-runtime");
-        const fetchMock = vi.fn().mockResolvedValue(Response.json(emptySearchResponse));
-        vi.stubGlobal("fetch", fetchMock);
-        await modeSearch("", { query: "rust", youtuber: "", page: 1, sort: "relevance" });
-        expect(fetchMock).toHaveBeenCalledWith(
-          `/api/search?q=rust&per_page=12&page=1&sort=relevance${suffix}`,
-          expect.anything(),
-        );
-      } finally {
-        vi.unstubAllEnvs();
-        vi.resetModules();
-      }
-    },
-  );
+  ] as const)("requests %s search with the URL its edge cache expects", async (mode, suffix) => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(emptySearchResponse));
+    vi.stubGlobal("fetch", fetchMock);
+    await runSearchTranscripts("", {
+      query: "rust",
+      youtuber: "",
+      page: 1,
+      sort: "relevance",
+      mode,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/search?q=rust&per_page=12&page=1&sort=relevance${suffix}`,
+      expect.anything(),
+    );
+  });
+
+  it("asks for a video's moments with the engine that found the video", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(Response.json(emptySearchResponse)));
+    vi.stubGlobal("fetch", fetchMock);
+    await runSearchVideoMoments("", "rust", "video-1", "hybrid");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/api/search?q=rust&video_id=video-1&per_page=100&mode=hybrid",
+    );
+    await runSearchVideoMoments("", "rust", "video-1", "lexical");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/search?q=rust&video_id=video-1&per_page=100");
+  });
 
   it("accepts the hybrid response mode", async () => {
     vi.stubGlobal(

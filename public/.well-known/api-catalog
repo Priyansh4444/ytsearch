@@ -1,0 +1,25 @@
+{
+  "linkset": [
+    {
+      "anchor": "https://search.pronsh.dev/api",
+      "service-desc": [
+        {
+          "href": "https://search.pronsh.dev/openapi.json",
+          "type": "application/openapi+json"
+        }
+      ],
+      "service-doc": [
+        {
+          "href": "https://search.pronsh.dev/docs",
+          "type": "text/html"
+        }
+      ],
+      "status": [
+        {
+          "href": "https://search.pronsh.dev/api/health",
+          "type": "application/json"
+        }
+      ]
+    }
+  ]
+}

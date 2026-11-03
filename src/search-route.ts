@@ -1,6 +1,7 @@
 import { evaluateSearchSchedule } from "../shared/service-schedule";
 import type { SearchAvailability, SearchRequest, SearchSort } from "./types";
 import { isAvailableSearchSort } from "./search-sorts";
+import { loadSearchModePreference, resolveSearchMode } from "./search-mode";
 import { creatorFromPath, normalizeHandle } from "./utils";
 
 export const provisionalAvailability = (now = new Date()): SearchAvailability => {
@@ -37,6 +38,7 @@ export const searchStateFromLocation = (): SearchRequest | undefined => {
     youtuber: normalizeHandle(params.get("youtuber") ?? creatorFromPath() ?? ""),
     page: Number.isFinite(page) && page > 0 ? Math.floor(page) : 1,
     sort: isAvailableSearchSort(sort) ? sort : "relevance",
+    mode: resolveSearchMode(params.get("mode")) ?? loadSearchModePreference(),
   };
 };
 
@@ -46,6 +48,7 @@ export const writeSearchUrl = (request: SearchRequest): void => {
   if (request.youtuber) params.set("youtuber", normalizeHandle(request.youtuber));
   if (request.sort !== "relevance") params.set("sort", request.sort);
   if (request.page > 1) params.set("page", String(request.page));
+  if (request.mode === "hybrid") params.set("mode", "hybrid");
   window.history.pushState({}, "", `/?${params.toString()}`);
 };
 

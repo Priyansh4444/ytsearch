@@ -1,4 +1,5 @@
 import { ApiDecodeError, ApiResponseError, ApiTransportError } from "./api-error";
+import { coalesceChannels } from "./channel-query";
 import type { IndexedChannel, IndexStatus, SearchAvailability } from "./types";
 
 type JsonRecord = Record<string, unknown>;
@@ -24,7 +25,7 @@ export async function fetchBootstrapChannels(
     `${apiBaseUrl}/api/youtubers`,
     "Could not load indexed channels",
     "Channel list returned an invalid response",
-    (input) => array(record(input).channels, decodeChannel),
+    (input) => coalesceChannels(array(record(input).channels, decodeChannel)),
     signal,
   );
 }

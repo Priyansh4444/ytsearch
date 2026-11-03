@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import json
 import pathlib
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,64 @@ class SnapshotExports(unittest.TestCase):
             timeout=10,
             check=False,
         )
+
+    def add_mutations(self, rows):
+        database = self.root / "mutations.sqlite3"
+        connection = sqlite3.connect(database)
+        connection.execute("CREATE TABLE video_mutations (video_id TEXT, chunks_json BLOB)")
+        connection.executemany("INSERT INTO video_mutations VALUES (?, ?)", rows)
+        connection.commit()
+        connection.close()
+        return database
+
+    def exported(self):
+        rows = []
+        for path in sorted(self.output.glob("snapshot-*.jsonl")):
+            rows += [json.loads(line) for line in path.read_text().splitlines()]
+        return rows
+
+    def test_mutations_replace_and_delete_archive_videos(self):
+        replacement = {
+            "id": "new", "video_id": "video000000", "title": "Replaced", "text": "Fresh words.",
+            "youtuber_handle": "@fixture", "youtuber_name": "Fixture", "t_start_ms": 0,
+            "t_end_ms": 1000,
+        }
+        added = {**replacement, "id": "added", "video_id": "videoadded", "title": "Added"}
+        other = {**replacement, "id": "other", "video_id": "video000002", "youtuber_handle": "@else"}
+        database = self.add_mutations([
+            ("video000000", json.dumps([replacement]).encode()),
+            ("video000001", None),
+            ("videoadded", json.dumps([added]).encode()),
+            ("video000002", json.dumps([other]).encode()),
+        ])
+        result = self.export("--mutations", str(database))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = {row["video_id"]: row for row in self.exported()}
+        self.assertEqual(rows["video000000"]["title"], "Replaced")
+        self.assertEqual(rows["videoadded"]["title"], "Added")
+        self.assertNotIn("video000001", rows)
+        # Moved to a creator that was not selected: the archive copy is stale, not kept.
+        self.assertNotIn("video000002", rows)
+        self.assertEqual(len(rows), 128)
+
+    def test_rename_files_old_chunks_under_the_new_handle_and_id(self):
+        result = self.export("--rename", "@fixture=@renamed", "--newest", "2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = self.exported()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({row["youtuber_handle"] for row in rows}, {"@renamed"})
+        self.assertEqual({row["youtuber_id"] for row in rows}, {"renamed"})
+        self.assertEqual({row["uploader_id"] for row in rows}, {"@renamed"})
+
+    def test_a_rename_selects_the_creator_by_either_handle(self):
+        self.output = self.root / "by-new-handle"
+        result = subprocess.run(
+            [sys.executable, "-I", str(EXPORTER), str(self.archive), str(self.output),
+             "--creator", "@renamed", "--rename", "@FIXTURE=@renamed", "--newest", "1"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.exported()), 1)
 
     def files(self):
         return {path.name: path.read_bytes() for path in self.output.iterdir()}

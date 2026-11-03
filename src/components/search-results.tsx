@@ -1,7 +1,7 @@
 import { For, Show, type Component } from "solid-js";
 import { searchResultCountLabel } from "../result-counts";
 import { searchSortOptions } from "../search-sorts";
-import type { SearchResponse, SearchSort, SearchVideoResult } from "../types";
+import type { SearchMode, SearchResponse, SearchSort, SearchVideoResult } from "../types";
 import { normalizeHandle } from "../utils";
 import { EmptyState } from "./states";
 import { PaginationControls } from "./pagination-controls";
@@ -12,6 +12,7 @@ export const SearchResults: Component<{
   youtuber: string;
   page: number;
   sort: SearchSort;
+  requestedMode: SearchMode;
   onPageChange: (page: number) => void;
   onSortChange: (sort: SearchSort) => void;
 }> = (props) => {
@@ -49,6 +50,11 @@ export const SearchResults: Component<{
               ? " · cached"
               : ` · ${props.response.time_to_first_result_ms} ms search`}
         </span>
+        <Show when={props.requestedMode !== "lexical" && props.response.mode === "lexical"}>
+          <span class="text-xs text-vesper-dim" data-testid="mode-fallback">
+            Showing keyword results: hybrid does not apply to this search or is unavailable.
+          </span>
+        </Show>
       </div>
 
       <Show
@@ -56,8 +62,18 @@ export const SearchResults: Component<{
         fallback={<EmptyState query={props.response.query} />}
       >
         <div class="flex flex-col gap-7">
-          <ResultSection title="Videos" videos={videosAndUnknown} query={props.response.query} />
-          <ResultSection title="Shorts" videos={shorts} query={props.response.query} />
+          <ResultSection
+            title="Videos"
+            videos={videosAndUnknown}
+            query={props.response.query}
+            mode={props.response.mode}
+          />
+          <ResultSection
+            title="Shorts"
+            videos={shorts}
+            query={props.response.query}
+            mode={props.response.mode}
+          />
         </div>
 
         <PaginationControls
@@ -74,6 +90,7 @@ const ResultSection: Component<{
   title: string;
   videos: SearchVideoResult[];
   query: string;
+  mode: SearchResponse["mode"];
 }> = (props) => (
   <Show when={props.videos.length > 0}>
     <section class="flex flex-col gap-3">
@@ -82,7 +99,9 @@ const ResultSection: Component<{
       </h2>
       <div class="grid gap-2">
         <For each={props.videos}>
-          {(video, index) => <VideoResult video={video} query={props.query} rank={index() + 1} />}
+          {(video, index) => (
+            <VideoResult video={video} query={props.query} mode={props.mode} rank={index() + 1} />
+          )}
         </For>
       </div>
     </section>

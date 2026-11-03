@@ -1,5 +1,8 @@
 import * as Effect from "effect/Effect";
 import { shouldWakeIndexer } from "./wake-policy";
+import { errorForAgents } from "./api-error";
+import { currentHandle } from "./page-route";
+import { pageResponse } from "./pages";
 import { upstreamApiBase } from "./upstream-route";
 import { requestOriginAllowed } from "./origin-policy";
 import { stampClientIp } from "./client-ip";
@@ -29,6 +32,9 @@ const QUEUE_INDEXER_ROLE = "queue-indexer";
 // Responses identical for every visitor, and how long each Cloudflare location
 // may reuse one. Any number of readers then costs the origin one request per
 // key and TTL instead of one per visitor. Browsers still get `no-store`.
+// The API's per-IP limit, for clients that pace themselves from response headers.
+const SEARCH_RATE_LIMIT_POLICY = '"search";q=120;w=60';
+
 const EDGE_CACHE_SECONDS: Readonly<Record<string, number>> = {
   "/api/search": 60,
   "/api/availability": 15,
@@ -57,10 +63,25 @@ function fetchEffect(
         headers: { "Cache-Control": "no-store" },
       });
     }
+    // /api/v1/* is the documented, versioned spelling of the same routes, so it
+    // shares their upstream routes and edge-cache entries.
+    if (url.pathname.startsWith("/api/v1/"))
+      url.pathname = url.pathname.replace("/api/v1/", "/api/");
     const isApiRequest = url.pathname === "/api" || url.pathname.startsWith("/api/");
 
     if (!isApiRequest) {
-      return yield* fromPromise(() => env.ASSETS.fetch(request));
+      return yield* fromPromise(() =>
+        pageResponse(request, url, env, (path, signal) => {
+          const lookup = new Request(new URL(path, env.API_BASE_URL), { signal });
+          stampClientIp(lookup, request, (env as Env & { API_PROXY_KEY?: string }).API_PROXY_KEY);
+          return fetch(lookup);
+        }),
+      );
+    }
+    // Old links and agents keep working after a creator renames their channel.
+    const creator = url.searchParams.get("youtuber");
+    if (creator && currentHandle(creator) !== creator) {
+      url.searchParams.set("youtuber", currentHandle(creator));
     }
     if (url.pathname === "/api/search" && scheduleEnforced(env)) {
       const schedule = evaluateSearchSchedule();
@@ -79,6 +100,8 @@ function fetchEffect(
       if (cached) return withBrowserNoStore(new Response(cached.body, cached));
     }
     const response = yield* apiResponseEffect(request, url, env);
+    if (url.pathname === "/api/search")
+      response.headers.set("RateLimit-Policy", SEARCH_RATE_LIMIT_POLICY);
     if (edgeKey && edgeSeconds && response.status === 200) {
       ctx.waitUntil(
         storeAtEdge(edgeKey, response.clone(), edgeSeconds, url.pathname === "/api/search"),
@@ -112,7 +135,7 @@ function apiResponseEffect(request: Request, url: URL, env: Env): Effect.Effect<
     if (shouldWakeIndexer(request.method, url.pathname, upstreamResponse.ok)) {
       yield* fromPromise(() => env.INDEX_WAKE_QUEUE.send({ reason: "index-request" }));
     }
-    const response = new Response(upstreamResponse.body, upstreamResponse);
+    const response = yield* fromPromise(() => errorForAgents(upstreamResponse));
     return dynamicSearch ? withBrowserNoStore(response) : response;
   });
 }

@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // A test site for features production does not offer yet: production's Worker and
+  // pages, an API with semantic search, no indexing and no schedule. Deployed by
+  // scripts/deploy-experimental.sh. Production resources stay in wrangler.jsonc alone.
+  "name": "ytsearch-search-experimental",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-07-29",
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./dist",
+    "not_found_handling": "none",
+    "run_worker_first": ["/*", "!/assets/*", "!/favicon.png", "!/og-card.png"],
+  },
+  "routes": [{ "pattern": "search.experimental.pronsh.dev", "custom_domain": true }],
+  "vars": {
+    "PUBLIC_APP_ORIGIN": "https://search.experimental.pronsh.dev",
+    "API_BASE_URL": "https://ytsearch-semantic-experimental.fly.dev",
+    "INDEX_QUEUE_API_BASE_URL": "https://ytsearch-semantic-experimental.fly.dev",
+    "RAW_SEARCH_HEALTH_URL": "https://ytsearch-raw-production.fly.dev/health",
+    "SEARCH_SCHEDULE_MODE": "always_on",
+  },
+  "observability": { "enabled": true },
+}
