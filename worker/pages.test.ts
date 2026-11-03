@@ -324,7 +324,9 @@ describe("shared moments", () => {
     const csp = page.headers.get("Content-Security-Policy");
     expect(csp).toContain("script-src 'self' https://www.youtube.com");
     expect(csp).toContain("frame-src https://www.youtube-nocookie.com https://www.youtube.com");
-    expect(await page.text()).toContain("second line");
+    const html = await page.text();
+    expect(html).toContain('data-start="40000"');
+    expect(html).toContain("second <mark>line</mark>");
     const markdown = await (await get(path, "text/markdown")).text();
     expect(markdown).toContain("> first <b>line</b>");
     expect(markdown).toContain("(at 0:30)");
@@ -398,7 +400,8 @@ describe("shared moments", () => {
     );
     expect(html).toContain("data-autoplay");
     expect(html).toContain('data-end="60"');
-    expect(html).toContain("<blockquote>first &lt;b&gt;line&lt;/b&gt;</blockquote>");
+    expect(html).toContain("first &lt;b&gt;<mark>line</mark>&lt;/b&gt;");
+    expect(html).toContain('id="clip-captions"');
     expect(html).not.toContain("<script>alert");
     expect(html).toContain('name="twitter:player:width" content="480"');
   });
@@ -411,7 +414,8 @@ describe("shared moments", () => {
     });
     await get("/s/dQw4w9WgXcQ?t=30&end=60&q=line&m=hybrid", "text/html");
     await get("/s/dQw4w9WgXcQ?t=30&end=60&q=line", "text/html");
-    expect(modes).toEqual(["hybrid", null]);
+    expect(modes.filter((mode) => mode === "hybrid")).toHaveLength(1);
+    expect(modes).toHaveLength(4);
   });
 
   test("a search failure still opens the video at its time, with no invented text", async () => {
@@ -421,13 +425,40 @@ describe("shared moments", () => {
     const html = await response.text();
     expect(html).toContain("A shared YouTube moment");
     expect(html).toContain("embed/dQw4w9WgXcQ?start=30");
-    expect(html).not.toContain("quote");
+    expect(html).not.toContain("clip-captions");
   });
 
-  test("a link with no query opens without searching", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    expect((await get("/s/dQw4w9WgXcQ?t=5", "text/html")).status).toBe(200);
-    expect(fetchMock).not.toHaveBeenCalled();
+  test("captions come from the window's transcript, with or without a query", async () => {
+    const paths: string[] = [];
+    stubApi((url) => {
+      paths.push(url.pathname + url.search);
+      return Response.json({
+        video_id: "dQw4w9WgXcQ",
+        title: "From the transcript",
+        youtuber_name: "Theo",
+        youtuber_handle: "@theo",
+        lines: [
+          { t_start_ms: 30_000, t_end_ms: 34_000, text: "every line" },
+          { t_start_ms: 34_000, t_end_ms: 38_000, text: "with no gaps" },
+        ],
+      });
+    });
+    const page = await get("/s/dQw4w9WgXcQ?t=30&end=60", "text/html");
+    expect(paths).toEqual(["/api/videos/dQw4w9WgXcQ/transcript?start_ms=30000&end_ms=60000"]);
+    const html = await page.text();
+    expect(html).toContain("From the transcript");
+    expect(html).toContain("every line");
+    expect(html).toContain('data-start="34000"');
+    expect(html).not.toContain("<mark>");
+  });
+
+  test("a failed transcript still leaves the search's own lines", async () => {
+    stubApi((url) =>
+      url.pathname.endsWith("/transcript")
+        ? new Response("down", { status: 503 })
+        : Response.json(SEARCH_BODY),
+    );
+    const html = await (await get("/s/dQw4w9WgXcQ?t=30&end=60&q=line", "text/html")).text();
+    expect(html).toContain("second <mark>line</mark>");
   });
 });

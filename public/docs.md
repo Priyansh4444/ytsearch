@@ -15,6 +15,7 @@ Each video in `videos` has a `youtube_url` and `hits`; every hit is a transcript
 | Endpoint | Use |
 | --- | --- |
 | `GET /api/v1/search` | Find transcript moments, grouped by video. |
+| `GET /api/v1/videos/{video_id}/transcript` | Read every caption line in a time window of a video. |
 | `GET /api/v1/youtubers` | List indexed creators and their video counts. |
 | `GET /api/v1/availability` | Check whether search is serving. |
 | `GET /api/v1/health` | Check that the API can reach its index. |

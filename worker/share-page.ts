@@ -1,3 +1,4 @@
+import { captionLines, markableTerms, type CaptionLine } from "./captions";
 import {
   embeddedMomentPath,
   formatClockTime,
@@ -6,14 +7,27 @@ import {
   type SharedMoment,
 } from "../shared/share-link";
 
+const PLAY_ICON =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>';
+const PAUSE_ICON =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/></svg>';
+const REPLAY_ICON =
+  '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5v5h5"/><path d="M4.6 10a8 8 0 1 1-.4 4.5"/></svg>';
+const SOUND_ICON =
+  '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10v4h3l5 4V6L7 10z" fill="currentColor"/><path d="M16 9a4 4 0 0 1 0 6"/></svg>';
+const MUTED_ICON =
+  '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10v4h3l5 4V6L7 10z" fill="currentColor"/><path d="m16 10 4 4M20 10l-4 4"/></svg>';
+
 export type SharedVideo = {
   readonly title: string;
   readonly creatorName: string;
   readonly creatorHandle: string;
   readonly thumbnail: string | undefined;
   readonly publishedAt: string | undefined;
-  /** Real caption lines from the window, oldest first. Empty when none could be loaded. */
+  /** The hits inside the window that matched the search, oldest first. */
   readonly lines: readonly SharedLine[];
+  /** Every transcript line known for the window, for reading along. */
+  readonly captions: readonly CaptionLine[];
 };
 
 export type SharedLine = {
@@ -27,21 +41,48 @@ const QUOTE_PREVIEW_CHARS = 180;
 // A link with no end still plays as a clip, for a minute from its start.
 const DEFAULT_CLIP_SECONDS = 60;
 
-/** Picks the caption lines inside the window from a video-scoped search response. */
-export function sharedVideoFromSearch(
-  body: unknown,
-  moment: SharedMoment,
-): SharedVideo | undefined {
+export function clipWindow(moment: SharedMoment): { startMs: number; endMs: number } {
+  return {
+    startMs: moment.startSeconds * 1000,
+    endMs: (moment.endSeconds ?? moment.startSeconds + DEFAULT_CLIP_SECONDS) * 1000,
+  };
+}
+
+const hitsOf = (video: Record<string, unknown> | undefined): Record<string, unknown>[] =>
+  Array.isArray(video?.hits) ? (video.hits as Record<string, unknown>[]) : [];
+
+/** Hit-shaped lines, with metadata, from `/api/videos/{id}/transcript`. */
+function transcriptOf(body: unknown, videoId: string): Record<string, unknown> | undefined {
+  const transcript = body as Record<string, unknown> | null | undefined;
+  if (transcript?.video_id !== videoId || typeof transcript.title !== "string") return undefined;
+  const lines = Array.isArray(transcript.lines) ? (transcript.lines as object[]) : [];
+  return { ...transcript, hits: lines.map((line) => ({ ...line, match_kind: "transcript" })) };
+}
+
+function videoIn(body: unknown, videoId: string): Record<string, unknown> | undefined {
   const videos = (body as { videos?: unknown } | null)?.videos;
   if (!Array.isArray(videos)) return undefined;
   const video = (videos as Record<string, unknown>[]).find(
-    (candidate) => candidate.video_id === moment.videoId,
+    (candidate) => candidate.video_id === videoId,
   );
-  if (!video || typeof video.title !== "string") return undefined;
-  const hits = Array.isArray(video.hits) ? (video.hits as Record<string, unknown>[]) : [];
-  const startMs = moment.startSeconds * 1000;
-  const endMs = (moment.endSeconds ?? moment.startSeconds + 60) * 1000;
-  const lines = hits
+  return video && typeof video.title === "string" ? video : undefined;
+}
+
+/**
+ * Builds the page's data from a search for the shared words and, optionally, the
+ * window's transcript. Only text that came back from the API is ever shown.
+ */
+export function sharedVideoFromSearch(
+  body: unknown,
+  moment: SharedMoment,
+  transcriptBody?: unknown,
+): SharedVideo | undefined {
+  const matched = videoIn(body, moment.videoId);
+  const transcript = transcriptOf(transcriptBody, moment.videoId);
+  const video = matched ?? transcript;
+  if (!video) return undefined;
+  const { startMs, endMs } = clipWindow(moment);
+  const lines = hitsOf(matched)
     .filter(
       (hit) =>
         hit.match_kind === "transcript" &&
@@ -58,12 +99,17 @@ export function sharedVideoFromSearch(
     }))
     .sort((left, right) => left.startMs - right.startMs);
   return {
-    title: video.title,
+    title: video.title as string,
     creatorName: typeof video.youtuber_name === "string" ? video.youtuber_name : "",
     creatorHandle: typeof video.youtuber_handle === "string" ? video.youtuber_handle : "",
     thumbnail: typeof video.thumbnail === "string" ? video.thumbnail : undefined,
     publishedAt: typeof video.published_at === "string" ? video.published_at : undefined,
     lines,
+    captions: captionLines(
+      [...hitsOf(matched), ...hitsOf(transcript)],
+      clipWindow(moment),
+      markableTerms(moment.query),
+    ),
   };
 }
 
@@ -116,7 +162,7 @@ type CardText = {
 
 function cardText(moment: SharedMoment, video: SharedVideo | undefined): CardText {
   const label = windowLabel(moment);
-  const quote = video?.lines[0]?.text;
+  const quote = video?.lines[0]?.text ?? video?.captions[0]?.text;
   return {
     label,
     title: video?.title ?? "A shared YouTube moment",
@@ -171,35 +217,72 @@ function cardTags(
     <script type="application/ld+json">${JSON.stringify(videoObject).replaceAll("<", "\\u003c")}</script>`;
 }
 
-function playerFrame(moment: SharedMoment, title: string, autoplay: boolean): string {
-  return `<iframe
-        id="clip-video"
-        class="player"
-        src="${escapeHtml(youtubeEmbedUrl(moment))}"
-        title="${escapeHtml(`YouTube player for ${title}`)}"
-        data-video-id="${escapeHtml(moment.videoId)}"
-        data-start="${moment.startSeconds}"
-        data-end="${moment.endSeconds ?? moment.startSeconds + DEFAULT_CLIP_SECONDS}"
-        ${autoplay ? "data-autoplay" : ""}
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-        referrerpolicy="strict-origin-when-cross-origin"
-        allowfullscreen
-      ></iframe>
-      <div id="clip-controls" class="clip-controls" hidden>
-        <button id="clip-toggle" type="button" class="clip-toggle">Play clip</button>
-        <input id="clip-seek" class="clip-seek" type="range" min="0" step="0.1" value="0" aria-label="Position in this clip" />
-        <output id="clip-clock" class="clip-clock" for="clip-seek"></output>
+function markedText(text: string, terms: ReadonlySet<string>): string {
+  return text
+    .split(/([\p{L}\p{N}]+)/u)
+    .map((part) =>
+      terms.has(part.toLowerCase()) ? `<mark>${escapeHtml(part)}</mark>` : escapeHtml(part),
+    )
+    .join("");
+}
+
+function captionList(moment: SharedMoment, video: SharedVideo | undefined): string {
+  const terms = markableTerms(moment.query);
+  const items = (video?.captions ?? [])
+    .map(
+      (line) =>
+        `<li data-start="${line.startMs}"${line.matched ? ' class="is-match"' : ""}><button type="button">${markedText(line.text, terms)}</button></li>`,
+    )
+    .join("");
+  return items ? `<ol id="clip-captions" class="captions">${items}</ol>` : "";
+}
+
+function playerFrame(
+  moment: SharedMoment,
+  title: string,
+  image: string,
+  autoplay: boolean,
+  link: { readonly href: string; readonly label: string },
+): string {
+  return `<div class="clip-video">
+        <div id="clip-stage" class="clip-stage">
+          <iframe
+            id="clip-video"
+            class="player"
+            src="${escapeHtml(youtubeEmbedUrl(moment))}"
+            title="${escapeHtml(`YouTube player for ${title}`)}"
+            data-video-id="${escapeHtml(moment.videoId)}"
+            data-start="${moment.startSeconds}"
+            data-end="${moment.endSeconds ?? moment.startSeconds + DEFAULT_CLIP_SECONDS}"
+            ${autoplay ? "data-autoplay" : ""}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerpolicy="strict-origin-when-cross-origin"
+            allowfullscreen
+          ></iframe>
+          <button id="clip-poster" class="clip-poster" type="button" aria-label="Play clip" hidden>
+            <img src="${escapeHtml(image)}" alt="" />
+            <span class="clip-poster-glyph"><span class="icon-play">${PLAY_ICON}</span><span class="icon-replay">${REPLAY_ICON}</span></span>
+          </button>
+        </div>
+        <div id="clip-controls" class="clip-controls" hidden>
+          <input id="clip-seek" class="clip-seek" type="range" min="0" step="0.1" value="0" aria-label="Position in this clip" />
+          <div class="clip-row">
+            <button id="clip-toggle" class="clip-icon" type="button" aria-label="Play clip"><span class="icon-play">${PLAY_ICON}</span><span class="icon-pause">${PAUSE_ICON}</span><span class="icon-replay">${REPLAY_ICON}</span></button>
+            <button id="clip-mute" class="clip-icon" type="button" aria-label="Mute"><span class="icon-sound">${SOUND_ICON}</span><span class="icon-muted">${MUTED_ICON}</span></button>
+            <output id="clip-clock" class="clip-clock" for="clip-seek"></output>
+            <a class="clip-row-link" href="${escapeHtml(link.href)}" target="_blank" rel="noreferrer">${escapeHtml(link.label)}</a>
+          </div>
+        </div>
       </div>`;
 }
 
-/** The compact player X shows inside a post: the clip, then what makes it worth sharing. */
+/** The compact player X shows inside a post: the clip, the words, and whose they are. */
 export function renderEmbedPage(
   moment: SharedMoment,
   video: SharedVideo | undefined,
   canonicalUrl: string,
 ): string {
-  const { label, title } = cardText(moment, video);
-  const line = video?.lines[0];
+  const { label, title, image } = cardText(moment, video);
   const creator = video?.creatorName ? `${escapeHtml(video.creatorName)} ` : "";
   return `<!doctype html>
 <html lang="en">
@@ -213,13 +296,12 @@ export function renderEmbedPage(
     <link rel="stylesheet" href="/pages.css" />
   </head>
   <body class="clip-embed">
-    ${playerFrame(moment, title, true)}
-    <div class="embed-text">
+    ${playerFrame(moment, title, image, true, { href: canonicalUrl, label: "Open in ytsearch" })}
+    ${captionList(moment, video)}
+    <footer class="embed-about">
       <h1>${escapeHtml(title)}</h1>
-      <p class="embed-meta">${creator}<span>${escapeHtml(label)}</span></p>
-      ${line ? `<blockquote>${escapeHtml(line.text)}</blockquote>` : ""}
-      <a href="${escapeHtml(canonicalUrl)}" target="_blank" rel="noreferrer">Open in ytsearch</a>
-    </div>
+      <p>${creator}<span>${escapeHtml(label)}</span></p>
+    </footer>
     <script src="/clip-player.js" defer></script>
   </body>
 </html>
@@ -231,24 +313,13 @@ export function renderSharePage(
   video: SharedVideo | undefined,
   canonicalUrl: string,
 ): string {
-  const { label, title, description } = cardText(moment, video);
+  const { label, title, description, image } = cardText(moment, video);
   const pageTitle = `${title} (${label}) · ytsearch`;
   const creator = video?.creatorName
     ? `<p class="clip-creator">${escapeHtml(video.creatorName)} <span>${escapeHtml(video.creatorHandle)}</span></p>`
     : "";
-  const quotes = (video?.lines ?? [])
-    .map(
-      (line) => `<figure class="quote">
-          ${line.before ? `<p class="context">${escapeHtml(line.before)}</p>` : ""}
-          <blockquote>${escapeHtml(line.text)}</blockquote>
-          ${line.after ? `<p class="context">${escapeHtml(line.after)}</p>` : ""}
-          <figcaption>Said at ${formatClockTime(line.startMs / 1000)}</figcaption>
-        </figure>`,
-    )
-    .join("\n        ");
   const result = resultUrl(moment);
   const moreFromCreator = creatorSearchUrl(moment, video);
-  const openLabel = `Open on YouTube at ${formatClockTime(moment.startSeconds)}`;
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -268,17 +339,18 @@ export function renderSharePage(
         <a class="clip-brand" href="/">← ytsearch</a>
         <a href="/">Search every transcript</a>
       </header>
-      ${playerFrame(moment, title, false)}
-      <div class="clip-body">
-        <p class="clip-time">${escapeHtml(label)}</p>
-        <h1>${escapeHtml(title)}</h1>
-        ${creator}
-        ${quotes}
-        <p class="actions">
-          <a class="action-primary" href="${escapeHtml(youtubeMomentUrl(moment))}">${escapeHtml(openLabel)}</a>
-          ${result ? `<a class="action-secondary" href="${escapeHtml(result)}">See this result in ytsearch</a>` : ""}
-          ${moreFromCreator ? `<a class="action-secondary" href="${escapeHtml(moreFromCreator.href)}">${escapeHtml(moreFromCreator.label)}</a>` : ""}
-        </p>
+      <div class="clip-layout">
+        ${playerFrame(moment, title, image, false, { href: youtubeMomentUrl(moment), label: "Open on YouTube" })}
+        <aside class="clip-about">
+          <h1>${escapeHtml(title)}</h1>
+          ${creator}
+          <p class="clip-time">${escapeHtml(label)}</p>
+          <nav class="clip-links" aria-label="More from this moment">
+            ${result ? `<a href="${escapeHtml(result)}">See this result in ytsearch</a>` : ""}
+            ${moreFromCreator ? `<a href="${escapeHtml(moreFromCreator.href)}">${escapeHtml(moreFromCreator.label)}</a>` : ""}
+          </nav>
+        </aside>
+        ${captionList(moment, video)}
       </div>
     </main>
     <script src="/clip-player.js" defer></script>

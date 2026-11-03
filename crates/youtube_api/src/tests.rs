@@ -681,3 +681,51 @@ fn queries_raw_rejects_are_bad_requests_not_gateway_errors() {
     });
     assert_eq!(failed.into_response().status(), StatusCode::BAD_GATEWAY);
 }
+
+fn transcript_hits() -> Vec<SearchHit> {
+    let document = |id: &str, start: u32, end: u32, text: &str| {
+        json!({"document": {
+            "id": id, "video_id": "video-1", "title": "Title", "text": text,
+            "youtuber_handle": "@creator", "youtuber_name": "Creator",
+            "t_start_ms": start, "t_end_ms": end,
+        }})
+    };
+    parse_hits(&json!({"hits": [
+        document("c3", 16_000, 24_000, "third"),
+        document("c1", 0, 8_000, "first"),
+        document("c4", 24_000, 32_000, "fourth"),
+        document("c2", 8_000, 16_000, "second"),
+    ]}))
+    .expect("transcript hits parse")
+}
+
+#[test]
+fn a_transcript_window_keeps_every_nearby_line_that_search_would_merge() {
+    assert_eq!(merge_nearby_transcript_hits(transcript_hits()).len(), 2);
+
+    let response = transcript_response(transcript_hits(), 8_000, 24_000).expect("video exists");
+
+    let texts: Vec<&str> = response
+        .lines
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect();
+    assert_eq!(texts, ["second", "third"]);
+    assert_eq!(response.title, "Title");
+    assert_eq!(response.youtuber_handle, "@creator");
+}
+
+#[test]
+fn a_transcript_window_includes_lines_that_only_overlap_it() {
+    let response = transcript_response(transcript_hits(), 7_999, 16_001).expect("video exists");
+
+    let starts: Vec<u32> = response.lines.iter().map(|line| line.t_start_ms).collect();
+    assert_eq!(starts, [0, 8_000, 16_000]);
+}
+
+#[test]
+fn a_transcript_of_an_unknown_video_is_absent_not_empty() {
+    assert!(transcript_response(Vec::new(), 0, 1_000).is_none());
+    let outside = transcript_response(transcript_hits(), 100_000, 110_000).expect("video exists");
+    assert!(outside.lines.is_empty());
+}

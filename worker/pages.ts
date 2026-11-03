@@ -7,6 +7,7 @@ import {
   type PageRoute,
 } from "./page-route";
 import {
+  clipWindow,
   renderEmbedPage,
   renderShareMarkdown,
   renderSharePage,
@@ -176,22 +177,31 @@ async function lookUpSharedVideo(
   moment: SharedMoment,
   fetchSearch: (path: string, signal: AbortSignal) => Promise<Response>,
 ): Promise<SharedVideo | undefined> {
-  if (!moment.query) return undefined;
-  const params = new URLSearchParams({
-    q: moment.query,
-    video_id: moment.videoId,
-    per_page: "100",
-  });
-  if (moment.hybrid) params.set("mode", "hybrid");
-  try {
-    const response = await fetchSearch(
-      `/api/search?${params.toString()}`,
-      AbortSignal.timeout(SHARE_LOOKUP_TIMEOUT_MS),
-    );
-    return response.ok ? sharedVideoFromSearch(await response.json(), moment) : undefined;
-  } catch {
-    return undefined;
-  }
+  const json = async (path: string): Promise<unknown> => {
+    try {
+      const response = await fetchSearch(path, AbortSignal.timeout(SHARE_LOOKUP_TIMEOUT_MS));
+      return response.ok ? await response.json() : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const matches = () => {
+    const params = new URLSearchParams({
+      q: moment.query ?? "",
+      video_id: moment.videoId,
+      per_page: "100",
+    });
+    if (moment.hybrid) params.set("mode", "hybrid");
+    return json(`/api/search?${params.toString()}`);
+  };
+  const window = clipWindow(moment);
+  const [matched, transcript] = await Promise.all([
+    moment.query ? matches() : undefined,
+    json(
+      `/api/videos/${moment.videoId}/transcript?start_ms=${window.startMs}&end_ms=${window.endMs}`,
+    ),
+  ]);
+  return sharedVideoFromSearch(matched, moment, transcript);
 }
 
 // A wrong 404 would hide a real creator page, so any doubt serves the app.

@@ -51,6 +51,8 @@ const MERGE_TRANSCRIPT_HIT_WINDOW_MS: u32 = 20_000;
 const VIDEO_SCOPE_PAGE_SIZE: u8 = 250;
 const VIDEO_SCOPE_MAX_PAGE_FETCHES: u32 = 100;
 const INITIAL_GROUP_LIMIT: u8 = 3;
+const MAX_TRANSCRIPT_WINDOW_MS: u32 = 10 * 60 * 1_000;
+const CACHE_TRANSCRIPT: &str = "public, max-age=300";
 const CACHE_YOUTUBERS: &str = "public, max-age=30, stale-while-revalidate=300";
 const CACHE_CHANNEL_IMAGE: &str = "public, max-age=86400, stale-while-revalidate=604800";
 const CACHE_NO_STORE: &str = "no-store";
@@ -98,6 +100,32 @@ struct SearchParams {
     per_page: Option<u8>,
     page: Option<u32>,
     sort: Option<SearchSort>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptParams {
+    start_ms: u32,
+    end_ms: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct TranscriptLine {
+    t_start_ms: u32,
+    t_end_ms: u32,
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TranscriptResponse {
+    video_id: String,
+    title: String,
+    youtuber_handle: String,
+    youtuber_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thumbnail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    published_at: Option<String>,
+    lines: Vec<TranscriptLine>,
 }
 
 #[derive(Debug, Serialize)]
@@ -401,6 +429,7 @@ async fn main() -> Result<(), ApiError> {
             get(channel_image_handler),
         )
         .route("/api/search", get(search_handler))
+        .route("/api/videos/{video_id}/transcript", get(transcript_handler))
         .route(
             "/api/index-requests",
             post(create_index_request)
@@ -558,6 +587,92 @@ async fn channel_image_handler(
         CACHE_CHANNEL_IMAGE,
         ([(header::CONTENT_TYPE, content_type)], bytes),
     ))
+}
+
+/// Every caption line overlapping a window of one video, for reading along with a
+/// clip. Search merges nearby hits into one moment, which would drop lines here.
+async fn transcript_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(video_id): Path<String>,
+    Query(params): Query<TranscriptParams>,
+) -> Result<Response, ApiError> {
+    rate_limit(
+        &state,
+        &headers,
+        "search",
+        state.search_rate_limit_per_minute,
+    )
+    .await?;
+    if video_id.is_empty()
+        || !video_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(ApiError::BadRequest("invalid video id".to_string()));
+    }
+    if params.end_ms <= params.start_ms
+        || params.end_ms - params.start_ms > MAX_TRANSCRIPT_WINDOW_MS
+    {
+        return Err(ApiError::BadRequest(format!(
+            "end_ms must follow start_ms by at most {MAX_TRANSCRIPT_WINDOW_MS} ms"
+        )));
+    }
+    let query = TextSearchQuery::new("*".to_string())
+        .query_by("text,title")
+        .highlight_fields("text,title")
+        .per_page(VIDEO_SCOPE_PAGE_SIZE)
+        .without_grouping()
+        .filter_by(format!("video_id:={video_id}"));
+    let mut hits = Vec::new();
+    for page in 1..=VIDEO_SCOPE_MAX_PAGE_FETCHES {
+        let raw = state.search.search(&query.clone().page(page)).await?;
+        let raw_hits = array_len(&raw, "hits");
+        hits.extend(parse_hits(&raw)?);
+        if raw_hits < usize::from(VIDEO_SCOPE_PAGE_SIZE) {
+            break;
+        }
+    }
+    let Some(response) = transcript_response(hits, params.start_ms, params.end_ms) else {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "video not found"})),
+        )
+            .into_response());
+    };
+    Ok(cache_response(CACHE_TRANSCRIPT, Json(response)))
+}
+
+fn transcript_response(
+    hits: Vec<SearchHit>,
+    start_ms: u32,
+    end_ms: u32,
+) -> Option<TranscriptResponse> {
+    let first = hits.first()?;
+    let mut response = TranscriptResponse {
+        video_id: first.video_id.clone(),
+        title: first.title.clone(),
+        youtuber_handle: first.youtuber_handle.clone(),
+        youtuber_name: first.youtuber_name.clone(),
+        thumbnail: first.thumbnail.clone(),
+        published_at: first.published_at.clone(),
+        lines: Vec::new(),
+    };
+    response.lines = hits
+        .into_iter()
+        .filter(|hit| {
+            hit.match_kind == MatchKind::Transcript
+                && hit.t_start_ms < end_ms
+                && hit.t_end_ms > start_ms
+        })
+        .map(|hit| TranscriptLine {
+            t_start_ms: hit.t_start_ms,
+            t_end_ms: hit.t_end_ms,
+            text: hit.text,
+        })
+        .collect();
+    response.lines.sort_by_key(|line| line.t_start_ms);
+    Some(response)
 }
 
 async fn search_handler(

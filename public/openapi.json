@@ -257,6 +257,92 @@
           }
         }
       }
+    },
+    "/api/v1/videos/{video_id}/transcript": {
+      "get": {
+        "operationId": "getTranscriptWindow",
+        "summary": "Read a video's captions in a time window",
+        "description": "Returns every caption line overlapping a window of at most ten minutes, in order, with the video's title and creator. Use it to read what was said around a moment.",
+        "tags": [
+          "search"
+        ],
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "required": true,
+            "description": "The YouTube video ID.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Ash4Q06ZcHU"
+          },
+          {
+            "name": "start_ms",
+            "in": "query",
+            "required": true,
+            "description": "Window start, in milliseconds from the start of the video.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "example": 85000
+          },
+          {
+            "name": "end_ms",
+            "in": "query",
+            "required": true,
+            "description": "Window end, at most ten minutes after start_ms.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "example": 115000
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The caption lines in the window.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranscriptWindow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid; fix it before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The video is not indexed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests; wait before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "tags": [
@@ -623,6 +709,59 @@
           "hint": {
             "type": "string",
             "description": "What to do about it."
+          }
+        }
+      },
+      "TranscriptWindow": {
+        "type": "object",
+        "required": [
+          "video_id",
+          "title",
+          "youtuber_handle",
+          "youtuber_name",
+          "lines"
+        ],
+        "properties": {
+          "video_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "youtuber_handle": {
+            "type": "string"
+          },
+          "youtuber_name": {
+            "type": "string"
+          },
+          "thumbnail": {
+            "type": "string"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "t_start_ms",
+                "t_end_ms",
+                "text"
+              ],
+              "properties": {
+                "t_start_ms": {
+                  "type": "integer"
+                },
+                "t_end_ms": {
+                  "type": "integer"
+                },
+                "text": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       }
