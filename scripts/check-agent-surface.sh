@@ -85,9 +85,13 @@ jq -e '
 status="$(fetch "$BASE/t3dotgg" -H 'Accept: text/html')"
 [[ "$status" == 301 && "$(header location)" == */theo ]] && pass "a renamed creator's old link redirects" \
   || fail "/t3dotgg answered $status $(header location)"
-status="$(fetch "$BASE/s/dQw4w9WgXcQ?t=30&end=60" -H 'Accept: text/html')"
+# An indexed video: a shared moment of a video the index does not have is a real 404.
+status="$(fetch "$BASE/s/Ash4Q06ZcHU?t=30&end=60" -H 'Accept: text/html')"
 [[ "$status" == 200 ]] && grep -q 'start=30' "$tmp/body" && pass "a shared moment opens at its time" \
   || fail "a shared moment answered $status"
+status="$(fetch "$BASE/s/zzzzzzzzzzz?t=30&end=60" -H 'Accept: text/html')"
+[[ "$status" == 404 ]] && pass "a shared moment of an unknown video answers 404" \
+  || fail "a shared moment of an unknown video answered $status"
 
 echo "failures=$failures"
 exit "$((failures > 0 ? 1 : 0))"
