@@ -175,8 +175,52 @@ function cardText(moment: SharedMoment, video: SharedVideo | undefined): CardTex
   };
 }
 
-/** What a link preview may do: play our player, as X does, or show a picture. */
-export type LinkCard = "player" | "picture";
+/**
+ * What a link preview may do: play our player, as X does, or show a picture. The two
+ * `youtube` forms ask Discord for YouTube's player, declared as YouTube's own pages do.
+ * Discord's video layout drops the description, so one also puts the quote in the
+ * site name, which it keeps.
+ */
+export type LinkCard = "player" | "picture" | "youtube" | "youtube-quote";
+
+// Discord trims a title past 70 bytes and a description past 350.
+const DISCORD_TITLE_BYTES = 70;
+const DISCORD_DESCRIPTION_BYTES = 350;
+const DISCORD_SITE_NAME_CHARS = 256;
+
+const encoder = new TextEncoder();
+const byteLength = (text: string): number => encoder.encode(text).length;
+
+/** Cuts text at a word boundary so that it, with its ellipsis, fits in the bytes given. */
+function fitBytes(text: string, bytes: number): string {
+  if (byteLength(text) <= bytes) return text;
+  // Dropping whole words only shortens it, whatever whitespace it holds, so this ends.
+  const words = text.trim().split(/\s+/);
+  while (words.length > 0 && byteLength(`${words.join(" ")}…`) > bytes) words.pop();
+  return `${words.join(" ")}…`;
+}
+
+/** The title and window; a long title gives way so the window always survives. */
+export function discordTitle(title: string, label: string): string {
+  const suffix = ` (${label})`;
+  return `${fitBytes(title, DISCORD_TITLE_BYTES - byteLength(suffix))}${suffix}`;
+}
+
+/** What was said, from the matching line on, as much as a limit of bytes allows. */
+export function discordQuote(video: SharedVideo | undefined, bytes: number): string | undefined {
+  const captions = video?.captions ?? [];
+  const from = Math.max(
+    0,
+    captions.findIndex((line) => line.matched),
+  );
+  const words =
+    captions
+      .slice(from)
+      .map((line) => line.text)
+      .join(" ") || video?.lines[0]?.text;
+  if (!words) return undefined;
+  return `“${fitBytes(words, bytes - byteLength("“”"))}”`;
+}
 
 function cardTags(
   moment: SharedMoment,
@@ -189,18 +233,41 @@ function cardTags(
   const safeDescription = escapeHtml(description);
   const safeImage = escapeHtml(image);
   const player = `${new URL(canonicalUrl).origin}${embeddedMomentPath(moment)}`;
+  const discord = card !== "player";
+  const quote = discord ? discordQuote(video, DISCORD_DESCRIPTION_BYTES) : undefined;
+  const shownTitle = discord ? escapeHtml(discordTitle(title, label)) : cardTitle;
+  const shownDescription = quote ? escapeHtml(quote) : safeDescription;
+  const siteName =
+    card === "youtube-quote"
+      ? (discordQuote(video, DISCORD_SITE_NAME_CHARS) ?? "ytsearch")
+      : "ytsearch";
   const shared = `<meta property="og:type" content="video.other" />
-    <meta property="og:site_name" content="ytsearch" />
-    <meta property="og:title" content="${cardTitle}" />
-    <meta property="og:description" content="${safeDescription}" />
+    <meta property="og:site_name" content="${escapeHtml(siteName)}" />
+    <meta property="og:title" content="${shownTitle}" />
+    <meta property="og:description" content="${shownDescription}" />
     <meta property="og:url" content="${escapeHtml(canonicalUrl)}" />
     <meta property="og:image" content="${safeImage}" />
-    <meta name="twitter:title" content="${cardTitle}" />
-    <meta name="twitter:description" content="${safeDescription}" />
+    <meta name="twitter:title" content="${shownTitle}" />
+    <meta name="twitter:description" content="${shownDescription}" />
     <meta name="twitter:image" content="${safeImage}" />`;
   if (card === "picture") {
     return `${shared}
     <meta name="twitter:card" content="summary_large_image" />`;
+  }
+  if (discord) {
+    const youtube = escapeHtml(
+      `https://www.youtube.com/embed/${moment.videoId}?start=${moment.startSeconds}`,
+    );
+    return `${shared}
+    <meta property="og:video:url" content="${youtube}" />
+    <meta property="og:video:secure_url" content="${youtube}" />
+    <meta property="og:video:type" content="text/html" />
+    <meta property="og:video:width" content="1280" />
+    <meta property="og:video:height" content="720" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:player" content="${youtube}" />
+    <meta name="twitter:player:width" content="1280" />
+    <meta name="twitter:player:height" content="720" />`;
   }
   const videoObject = {
     "@context": "https://schema.org",

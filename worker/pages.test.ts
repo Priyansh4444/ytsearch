@@ -3,7 +3,14 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import worker from "./index";
 import { currentHandle, prefersMarkdown, routePage } from "./page-route";
 import { errorForAgents } from "./api-error";
-import { renderEmbedPage, renderSharePage, sharedVideoFromSearch } from "./share-page";
+import {
+  discordQuote,
+  discordTitle,
+  renderEmbedPage,
+  renderSharePage,
+  sharedVideoFromSearch,
+  type SharedVideo,
+} from "./share-page";
 
 const ORIGIN = "https://search.pronsh.dev";
 const ASSETS: Readonly<Partial<Record<string, { body: string; type: string }>>> = {
@@ -370,11 +377,56 @@ describe("shared moments", () => {
     expect(response.headers.get("Vary")).toContain("User-Agent");
     const html = await response.text();
     expect(html).toContain('name="twitter:card" content="summary_large_image"');
-    expect(html).toContain('property="og:description" content="“first &lt;b&gt;line&lt;/b&gt;”"');
+    expect(html).toContain(
+      'property="og:description" content="“first &lt;b&gt;line&lt;/b&gt; lead in second line',
+    );
     expect(html).toContain('property="og:image"');
     expect(html).not.toContain("twitter:player");
     expect(html).not.toContain("og:video");
     expect(html).not.toContain("VideoObject");
+  });
+
+  test.each([
+    ["youtube", "ytsearch"],
+    ["youtube-quote", "“"],
+  ] as const)("discord=%s asks for YouTube's player and keeps the text", async (choice, site) => {
+    stubApi(() => Response.json(SEARCH_BODY));
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request(`${ORIGIN}/s/dQw4w9WgXcQ?t=30&end=60&q=line&discord=${choice}`, {
+        headers: { "User-Agent": "Discordbot/2.0", Accept: "text/html" },
+      }),
+      testEnv(),
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    const html = await response.text();
+    expect(html).toContain(
+      'property="og:video:url" content="https://www.youtube.com/embed/dQw4w9WgXcQ?start=30"',
+    );
+    expect(html).toContain('property="og:video:type" content="text/html"');
+    expect(html).toContain(`property="og:site_name" content="${site}`);
+    expect(html).toContain('property="og:description" content="“first &lt;b&gt;line&lt;/b&gt;');
+  });
+
+  test("a discord choice means nothing to X or people, and an unknown one is the picture", async () => {
+    stubApi(() => Response.json(SEARCH_BODY));
+    const crawl = async (userAgent: string, query: string) => {
+      const ctx = createExecutionContext();
+      const response = await worker.fetch(
+        new Request(`${ORIGIN}/s/dQw4w9WgXcQ?t=30&end=60&q=line${query}`, {
+          headers: { "User-Agent": userAgent, Accept: "text/html" },
+        }),
+        testEnv(),
+        ctx,
+      );
+      await waitOnExecutionContext(ctx);
+      return response.text();
+    };
+    expect(await crawl("Twitterbot/1.0", "&discord=youtube")).toContain(
+      'name="twitter:card" content="player"',
+    );
+    expect(await crawl("Discordbot/2.0", "&discord=nonsense")).not.toContain("og:video");
   });
 
   test("the embed page may be framed by X and nobody else", async () => {
@@ -461,5 +513,56 @@ describe("shared moments", () => {
     );
     const html = await (await get("/s/dQw4w9WgXcQ?t=30&end=60&q=line", "text/html")).text();
     expect(html).toContain("second <mark>line</mark>");
+  });
+});
+
+describe("Discord's text limits", () => {
+  const bytes = (text: string) => new TextEncoder().encode(text).length;
+  const line = (text: string, matched = false) => ({ startMs: 0, endMs: 1, text, matched });
+  const video = (captions: SharedVideo["captions"]): SharedVideo => ({
+    title: "t",
+    creatorName: "c",
+    creatorHandle: "@c",
+    thumbnail: undefined,
+    publishedAt: undefined,
+    lines: [],
+    captions,
+  });
+
+  test("a quote starts at the matching line and carries on through what follows", () => {
+    const quote = discordQuote(
+      video([line("said before"), line("the match", true), line("what follows")]),
+      350,
+    );
+    expect(quote).toBe("“the match what follows”");
+  });
+
+  test("a long quote fills the limit in bytes, cut at a word, with its marks closed", () => {
+    const quote = discordQuote(video([line("héllo wörld ".repeat(80), true)]), 350)!;
+    expect(bytes(quote)).toBeLessThanOrEqual(350);
+    expect(bytes(quote)).toBeGreaterThan(320);
+    expect(quote.endsWith("…”")).toBe(true);
+    expect(quote).not.toMatch(/\s…/);
+  });
+
+  test("a limit too small for any word still ends, and whitespace cannot stall it", () => {
+    expect(discordTitle("   ", "1:26 to 1:56")).toContain("(1:26 to 1:56)");
+    expect(discordQuote(video([line("x".repeat(500), true)]), 10)).toBe("“…”");
+    expect(discordQuote(video([line(`${"word ".repeat(200)}   `, true)]), 40)!.endsWith("…”")).toBe(
+      true,
+    );
+  });
+
+  test("with no matching line it starts at the first, and with no words it is absent", () => {
+    expect(discordQuote(video([line("first"), line("second")]), 350)).toBe("“first second”");
+    expect(discordQuote(video([]), 350)).toBeUndefined();
+    expect(discordQuote(undefined, 350)).toBeUndefined();
+  });
+
+  test("a long title gives way so the window always shows", () => {
+    const title = discordTitle("A very long video title ".repeat(6), "1:26 to 1:56");
+    expect(bytes(title)).toBeLessThanOrEqual(70);
+    expect(title.endsWith("… (1:26 to 1:56)")).toBe(true);
+    expect(discordTitle("Short", "0:01 to 0:30")).toBe("Short (0:01 to 0:30)");
   });
 });
