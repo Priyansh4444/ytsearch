@@ -176,17 +176,14 @@ function cardText(moment: SharedMoment, video: SharedVideo | undefined): CardTex
 }
 
 /**
- * What a link preview may do: play our player, as X does, or show a picture. The two
- * `youtube` forms ask Discord for YouTube's player, declared as YouTube's own pages do.
- * Discord's video layout drops the description, so one also puts the quote in the
- * site name, which it keeps.
+ * What a link preview may do: play our player, as X does, or ask for YouTube's, the
+ * only one Discord plays, declared as YouTube's own pages declare it.
  */
-export type LinkCard = "player" | "picture" | "youtube" | "youtube-quote";
+export type LinkCard = "player" | "discord";
 
 // Discord trims a title past 70 bytes and a description past 350.
 const DISCORD_TITLE_BYTES = 70;
 const DISCORD_DESCRIPTION_BYTES = 350;
-const DISCORD_SITE_NAME_CHARS = 256;
 
 const encoder = new TextEncoder();
 const byteLength = (text: string): number => encoder.encode(text).length;
@@ -233,16 +230,12 @@ function cardTags(
   const safeDescription = escapeHtml(description);
   const safeImage = escapeHtml(image);
   const player = `${new URL(canonicalUrl).origin}${embeddedMomentPath(moment)}`;
-  const discord = card !== "player";
+  const discord = card === "discord";
   const quote = discord ? discordQuote(video, DISCORD_DESCRIPTION_BYTES) : undefined;
   const shownTitle = discord ? escapeHtml(discordTitle(title, label)) : cardTitle;
   const shownDescription = quote ? escapeHtml(quote) : safeDescription;
-  const siteName =
-    card === "youtube-quote"
-      ? (discordQuote(video, DISCORD_SITE_NAME_CHARS) ?? "ytsearch")
-      : "ytsearch";
   const shared = `<meta property="og:type" content="video.other" />
-    <meta property="og:site_name" content="${escapeHtml(siteName)}" />
+    <meta property="og:site_name" content="ytsearch" />
     <meta property="og:title" content="${shownTitle}" />
     <meta property="og:description" content="${shownDescription}" />
     <meta property="og:url" content="${escapeHtml(canonicalUrl)}" />
@@ -250,10 +243,6 @@ function cardTags(
     <meta name="twitter:title" content="${shownTitle}" />
     <meta name="twitter:description" content="${shownDescription}" />
     <meta name="twitter:image" content="${safeImage}" />`;
-  if (card === "picture") {
-    return `${shared}
-    <meta name="twitter:card" content="summary_large_image" />`;
-  }
   if (discord) {
     const youtube = escapeHtml(
       `https://www.youtube.com/embed/${moment.videoId}?start=${moment.startSeconds}`,

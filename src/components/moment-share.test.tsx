@@ -56,8 +56,8 @@ describe("MomentSharePanel", () => {
 
   test("copies the current link and reports it without the search words", async () => {
     open();
-    fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
-    expect(await screen.findByRole("button", { name: "Link copied" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy clip link" }));
+    expect(await screen.findByRole("button", { name: "Clip link copied" })).toBeInTheDocument();
     expect(copyToClipboard.mock.calls[0]?.[0]).toContain("/s/dQw4w9WgXcQ?t=752&end=782");
     expect(capture).toHaveBeenCalledWith("moment_share_copied", {
       rank: 1,
@@ -75,7 +75,7 @@ describe("MomentSharePanel", () => {
   test("shows the link to copy by hand when the clipboard is denied", async () => {
     copyToClipboard.mockRejectedValueOnce(new Error("denied"));
     open();
-    fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy clip link" }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("/s/dQw4w9WgXcQ"));
   });
 });

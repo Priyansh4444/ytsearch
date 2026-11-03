@@ -1,6 +1,5 @@
 import { sharedMomentPath, type SharedMoment } from "../shared/share-link";
 import {
-  discordCard,
   prefersHtml,
   prefersMarkdown,
   routePage,
@@ -70,16 +69,16 @@ export async function pageResponse(
       return negotiated(await assetAt(url, "/", env), env);
     case "share":
       return shareResponse(
+        url,
+        request,
         route.moment,
         markdown,
-        isDiscordCrawler(request.headers.get("User-Agent"))
-          ? discordCard(url.searchParams.get("discord"))
-          : "player",
+        isDiscordCrawler(request.headers.get("User-Agent")) ? "discord" : "player",
         env,
         fetchSearch,
       );
     case "embed":
-      return embedResponse(route.moment, env, fetchSearch);
+      return embedResponse(url, request, route.moment, env, fetchSearch);
     case "redirect":
       return new Response(null, {
         status: 301,
@@ -138,6 +137,8 @@ See the [API docs](${origin}/docs).
 }
 
 async function shareResponse(
+  url: URL,
+  request: Request,
   moment: SharedMoment,
   markdown: boolean,
   card: LinkCard,
@@ -145,6 +146,7 @@ async function shareResponse(
   fetchSearch: (path: string, signal: AbortSignal) => Promise<Response>,
 ): Promise<Response> {
   const video = await lookUpSharedVideo(moment, fetchSearch);
+  if (video === "unknown") return notFound(url, request, env);
   const canonical = `${publicOrigin(env)}${sharedMomentPath(moment)}`;
   if (markdown) return markdownResponse(renderShareMarkdown(moment, video), env);
   return new Response(renderSharePage(moment, video, canonical, card), {
@@ -160,11 +162,14 @@ async function shareResponse(
 }
 
 async function embedResponse(
+  url: URL,
+  request: Request,
   moment: SharedMoment,
   env: PageEnvironment,
   fetchSearch: (path: string, signal: AbortSignal) => Promise<Response>,
 ): Promise<Response> {
   const video = await lookUpSharedVideo(moment, fetchSearch);
+  if (video === "unknown") return notFound(url, request, env);
   const canonical = `${publicOrigin(env)}${sharedMomentPath(moment)}`;
   return new Response(renderEmbedPage(moment, video, canonical), {
     headers: {
@@ -181,11 +186,17 @@ async function embedResponse(
 async function lookUpSharedVideo(
   moment: SharedMoment,
   fetchSearch: (path: string, signal: AbortSignal) => Promise<Response>,
-): Promise<SharedVideo | undefined> {
-  const json = async (path: string): Promise<unknown> => {
+): Promise<SharedVideo | "unknown" | undefined> {
+  const request = async (path: string): Promise<Response | undefined> => {
     try {
-      const response = await fetchSearch(path, AbortSignal.timeout(SHARE_LOOKUP_TIMEOUT_MS));
-      return response.ok ? await response.json() : undefined;
+      return await fetchSearch(path, AbortSignal.timeout(SHARE_LOOKUP_TIMEOUT_MS));
+    } catch {
+      return undefined;
+    }
+  };
+  const body = async (response: Response | undefined): Promise<unknown> => {
+    try {
+      return response?.ok ? await response.json() : undefined;
     } catch {
       return undefined;
     }
@@ -197,16 +208,18 @@ async function lookUpSharedVideo(
       per_page: "100",
     });
     if (moment.hybrid) params.set("mode", "hybrid");
-    return json(`/api/search?${params.toString()}`);
+    return request(`/api/search?${params.toString()}`);
   };
   const window = clipWindow(moment);
   const [matched, transcript] = await Promise.all([
     moment.query ? matches() : undefined,
-    json(
+    request(
       `/api/videos/${moment.videoId}/transcript?start_ms=${window.startMs}&end_ms=${window.endMs}`,
     ),
   ]);
-  return sharedVideoFromSearch(matched, moment, transcript);
+  // A failed lookup still opens the video; only the API saying it is not indexed is a 404.
+  if (transcript?.status === 404) return "unknown";
+  return sharedVideoFromSearch(await body(matched), moment, await body(transcript));
 }
 
 // A wrong 404 would hide a real creator page, so any doubt serves the app.
