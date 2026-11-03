@@ -119,8 +119,7 @@ describe("edge cache", () => {
 
 describe("scheduled search availability", () => {
   test("serves static assets without consulting Fly", async () => {
-    const assetResponse = new Response("app");
-    const assetFetch = vi.fn().mockResolvedValue(assetResponse);
+    const assetFetch = vi.fn().mockImplementation(() => Promise.resolve(new Response("app")));
     vi.stubGlobal("fetch", vi.fn());
 
     const response = await fetchWorker(
@@ -128,7 +127,7 @@ describe("scheduled search availability", () => {
       testEnv({ ASSETS: { fetch: assetFetch } }),
     );
 
-    expect(response).toBe(assetResponse);
+    expect(await response.text()).toBe("app");
     expect(assetFetch).toHaveBeenCalledOnce();
     expect(fetch).not.toHaveBeenCalled();
   });

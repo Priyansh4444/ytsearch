@@ -2,16 +2,28 @@ import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import type { Component } from "solid-js";
 import { searchVideoMoments } from "../api";
 import { capture } from "../analytics";
-import type { SearchHit, SearchVideoResult } from "../types";
+import type { SearchHit, SearchResponse, SearchVideoResult } from "../types";
+import { shareEnabled } from "../search-mode";
 import { resultAnchorId, searchResultPermalink } from "../search-route";
 import { copyToClipboard, formatDate } from "../utils";
 import { HighlightedText } from "./highlighted-text";
-import { ChevronDownIcon, LoaderCircleIcon, PlayIcon, ThumbsDownIcon, ThumbsUpIcon } from "./icons";
+import {
+  ChevronDownIcon,
+  LoaderCircleIcon,
+  PlayIcon,
+  ShareIcon,
+  ThumbsDownIcon,
+  ThumbsUpIcon,
+} from "./icons";
+import { MomentSharePanel } from "./moment-share";
 import { CopyLinkButton } from "./toolbar-actions";
 
-export const VideoResult: Component<{ video: SearchVideoResult; query: string; rank: number }> = (
-  props,
-) => {
+export const VideoResult: Component<{
+  video: SearchVideoResult;
+  query: string;
+  mode: SearchResponse["mode"];
+  rank: number;
+}> = (props) => {
   const [allHits, setAllHits] = createSignal(props.video.hits);
   const [showAllMoments, setShowAllMoments] = createSignal(false);
   const [momentsLoading, setMomentsLoading] = createSignal(false);
@@ -61,6 +73,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
       const response = await searchVideoMoments(
         props.query,
         props.video.video_id,
+        props.mode,
         getMomentsController().signal,
       );
       const completeVideo = response.videos.find(
@@ -209,6 +222,7 @@ export const VideoResult: Component<{ video: SearchVideoResult; query: string; r
                   hit={hit}
                   query={props.query}
                   video={props.video}
+                  mode={props.mode}
                   rank={props.rank}
                   selected={hit.id === selectedId()}
                   bounded={showAllMoments()}
@@ -289,6 +303,7 @@ const TranscriptExcerpt: Component<{
   hit: SearchHit;
   query: string;
   video: SearchVideoResult;
+  mode: SearchResponse["mode"];
   rank: number;
   selected?: boolean;
   // Only the expanded list is long enough for offscreen excerpts to justify
@@ -297,6 +312,17 @@ const TranscriptExcerpt: Component<{
   onSelect?: () => void;
 }> = (props) => {
   const [feedback, setFeedback] = createSignal<"useful" | "not_useful">();
+  const [sharing, setSharing] = createSignal(false);
+  const toggleSharing = () => {
+    const opening = !sharing();
+    setSharing(opening);
+    if (opening) {
+      capture("moment_share_opened", {
+        ...resultProperties(props),
+        moment_start_ms: props.hit.t_start_ms,
+      });
+    }
+  };
   const submitFeedback = (value: "useful" | "not_useful") => {
     setFeedback(value);
     capture("result_moment_feedback", {
@@ -351,6 +377,22 @@ const TranscriptExcerpt: Component<{
         </Show>
       </button>
       <div class="flex w-10 flex-col border-s border-vesper-border">
+        <Show when={shareEnabled()}>
+          <button
+            type="button"
+            onClick={toggleSharing}
+            aria-expanded={sharing() ? "true" : "false"}
+            aria-label="Share this moment"
+            title="Share this moment"
+            class={`pressable grid min-h-10 flex-1 place-items-center border-b border-vesper-border ${
+              sharing()
+                ? "bg-vesper-yellow/15 text-vesper-yellow"
+                : "text-vesper-muted hover:text-vesper-yellow"
+            }`}
+          >
+            <ShareIcon size={15} aria-hidden="true" />
+          </button>
+        </Show>
         <MomentFeedbackButton
           value="useful"
           selected={feedback() === "useful"}
@@ -362,6 +404,17 @@ const TranscriptExcerpt: Component<{
           onSelect={submitFeedback}
         />
       </div>
+      <Show when={sharing()}>
+        <div class="col-span-2 border-t border-vesper-border">
+          <MomentSharePanel
+            videoId={props.video.video_id}
+            hit={props.hit}
+            query={props.query}
+            hybrid={props.mode === "hybrid"}
+            analytics={resultProperties(props)}
+          />
+        </div>
+      </Show>
     </div>
   );
 };

@@ -18,7 +18,7 @@ use youtube_index_store::{
     RawIndexAdminClient, RawPublicationJob, RawPublicationStatus, VideoReplacement,
 };
 use youtube_ingest::{
-    Chunker, TranscriptSegment, TranscriptSource, VideoMetadataSource,
+    Chunker, TranscriptSegment, TranscriptSource, VideoMetadata, VideoMetadataSource,
     stable_youtuber_id as youtuber_id_from_handle,
 };
 use youtube_raw_search::{GenerationBuilder, MutationStore};
@@ -1031,6 +1031,7 @@ async fn index_youtuber_with_transcriber(
                 worker_total,
                 video.clone(),
                 youtuber_id.clone(),
+                youtuber.handle.clone(),
                 metadata_source.clone(),
                 caption_source.clone(),
                 transcribe_source.clone(),
@@ -1588,12 +1589,22 @@ impl IndexVideoOutcome {
     }
 }
 
+/// A video belongs to the creator being indexed. Per-video metadata can carry a
+/// handle from before a YouTube rename; keeping it would file the video under the
+/// old handle while its creator ID says otherwise, and handle filters would split
+/// the creator in two.
+fn file_under_indexed_creator(metadata: &mut VideoMetadata, youtuber_id: &str, handle: &str) {
+    metadata.youtuber.id = youtuber_id.to_string();
+    metadata.youtuber.handle = handle.to_string();
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn index_discovered_video(
     index: usize,
     total: usize,
     video: DiscoveredVideo,
     youtuber_id: String,
+    youtuber_handle: String,
     metadata_source: Arc<FallbackMetadataSource>,
     caption_source: YtDlpTranscriptSource,
     transcribe_source: Option<AudioTranscriptSource>,
@@ -1656,7 +1667,7 @@ async fn index_discovered_video(
         }
     };
     let metadata_ms = elapsed_ms(metadata_started);
-    metadata.youtuber.id = youtuber_id;
+    file_under_indexed_creator(&mut metadata, &youtuber_id, &youtuber_handle);
 
     let content_kind = content_kind_for_duration(metadata.duration_ms);
     if !content_kind_filter.includes(content_kind) {
@@ -2512,6 +2523,7 @@ fn print_validated_youtuber(youtuber: &ValidatedYoutuber) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use youtube_ingest::Youtuber;
 
     #[cfg(unix)]
     #[tokio::test]
@@ -3137,6 +3149,30 @@ printf '{"id":"UCfixture","channel_id":"UCfixture","channel":"Fixture","entries"
         );
         assert_eq!(stats.indexed_videos, 1);
         assert_eq!(stats.retryable_failures, 1);
+    }
+
+    #[test]
+    fn a_renamed_creators_stale_video_metadata_is_filed_under_the_current_handle() {
+        let mut metadata = VideoMetadata {
+            video_id: "video-1".to_string(),
+            title: "Title".to_string(),
+            youtuber: Youtuber {
+                id: "t3dotgg".to_string(),
+                handle: "@t3dotgg".to_string(),
+                name: "Theo".to_string(),
+                channel_id: "UCbRP3c757lWg9M-U7TyEkXA".to_string(),
+            },
+            duration_ms: None,
+            thumbnail: None,
+            published_at: None,
+            upload_date: None,
+        };
+
+        file_under_indexed_creator(&mut metadata, "theo", "@theo");
+
+        assert_eq!(metadata.youtuber.id, "theo");
+        assert_eq!(metadata.youtuber.handle, "@theo");
+        assert_eq!(metadata.youtuber.channel_id, "UCbRP3c757lWg9M-U7TyEkXA");
     }
 
     #[test]

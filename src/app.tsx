@@ -16,9 +16,10 @@ import { ErrorState, LoadingState, WelcomeState } from "./components/states";
 import { presentSearchError } from "./search-error";
 import { createSearchResource } from "./search-resource";
 import { BackButton, CopyLinkButton } from "./components/toolbar-actions";
-import type { IndexedChannel, RecentSearch, SearchRequest, SearchSort } from "./types";
+import type { IndexedChannel, RecentSearch, SearchMode, SearchRequest, SearchSort } from "./types";
 import { cacheChannels, loadCachedChannels } from "./channel-cache";
 import { clearRecentSearches, loadRecentSearches, saveRecentSearch } from "./recent-searches";
+import { loadSearchModePreference, saveSearchModePreference } from "./search-mode";
 import {
   provisionalAvailability,
   searchStateFromLocation,
@@ -83,6 +84,9 @@ const App: Component = () => {
   const [youtuber, setYoutuber] = createSignal(initialSearch?.youtuber ?? initialRouteHandle ?? "");
   const [page, setPage] = createSignal(initialSearch?.page ?? 1);
   const [sort, setSort] = createSignal<SearchSort>(initialSearch?.sort ?? "relevance");
+  const [searchMode, setSearchMode] = createSignal<SearchMode>(
+    initialSearch?.mode ?? loadSearchModePreference(),
+  );
   const [submitted, setSubmitted] = createSignal<SearchRequest | undefined>(initialSearch);
   const [pendingIndexHandle, setPendingIndexHandle] = createSignal<string>();
   const [indexRequestError, setIndexRequestError] = createSignal<string>();
@@ -164,6 +168,7 @@ const App: Component = () => {
       youtuber: request.youtuber,
       page: page(),
       sort: request.sort,
+      mode: request.mode,
     };
   });
   const indexDialogState = createMemo(() => {
@@ -184,6 +189,7 @@ const App: Component = () => {
       setYoutuber(searchState?.youtuber ?? nextHandle ?? "");
       setSort(searchState?.sort ?? "relevance");
       setPage(searchState?.page ?? 1);
+      setSearchMode(searchState?.mode ?? loadSearchModePreference());
       setSubmitted(searchState);
       setPendingIndexHandle(undefined);
       setIndexRequestError(undefined);
@@ -268,6 +274,7 @@ const App: Component = () => {
         youtuber: mentionedChannel()!.handle,
         page: nextPage,
         sort: sort(),
+        mode: searchMode(),
       };
       captureSearchSubmitted(request);
       setYoutuber(request.youtuber);
@@ -293,6 +300,7 @@ const App: Component = () => {
       youtuber: youtuber(),
       page: nextPage,
       sort: sort(),
+      mode: searchMode(),
     };
     setPendingIndexHandle(undefined);
     captureSearchSubmitted(request);
@@ -301,7 +309,8 @@ const App: Component = () => {
       current?.query === request.query &&
       current.youtuber === request.youtuber &&
       current.page === request.page &&
-      current.sort === request.sort
+      current.sort === request.sort &&
+      current.mode === request.mode
     ) {
       return;
     }
@@ -313,7 +322,7 @@ const App: Component = () => {
   };
 
   // Reruns the submitted search (not whatever is typed now) on another page or sort.
-  const resubmit = (nextPage: number, nextSort: SearchSort) => {
+  const resubmit = (nextPage: number, nextSort: SearchSort, nextMode = searchMode()) => {
     const current = submitted();
     if (!current) return;
     const request: SearchRequest = {
@@ -321,6 +330,7 @@ const App: Component = () => {
       youtuber: current.youtuber,
       page: nextPage,
       sort: nextSort,
+      mode: nextMode,
     };
     captureSearchSubmitted(request);
     setPage(nextPage);
@@ -331,6 +341,14 @@ const App: Component = () => {
   const changeSort = (nextSort: SearchSort) => {
     setSort(nextSort);
     resubmit(1, nextSort);
+  };
+
+  const changeSearchMode = (nextMode: SearchMode) => {
+    if (nextMode === searchMode()) return;
+    setSearchMode(nextMode);
+    saveSearchModePreference(nextMode);
+    capture("search_mode_changed", { mode: nextMode });
+    resubmit(1, submitted()?.sort ?? sort(), nextMode);
   };
 
   const goBack = () => {
@@ -389,7 +407,7 @@ const App: Component = () => {
     () => ({ request: submitted(), state: search() }),
     ({ request, state }) => {
       if (!request || state.status !== "success") return;
-      const key = `${request.query}\u0000${request.youtuber}\u0000${request.sort}\u0000${request.page}`;
+      const key = `${request.query}\u0000${request.youtuber}\u0000${request.sort}\u0000${request.page}\u0000${request.mode}`;
       if (key === lastTrackedResponse) return;
       lastTrackedResponse = key;
       captureSearchLoaded(request, state.response);
@@ -442,6 +460,7 @@ const App: Component = () => {
       youtuber: recent.youtuber,
       page: 1,
       sort: recent.sort,
+      mode: searchMode(),
     };
     captureSearchSubmitted(request);
     setSubmitted(request);
@@ -468,11 +487,13 @@ const App: Component = () => {
             hasSearchSurface() ? "flex flex-col gap-4" : "flex flex-1 flex-col justify-center gap-5"
           }`}
         >
-          <Show when={hasChannel()}>
+          <Show when={hasSearchSurface()}>
             <div class="flex items-center justify-between gap-3">
               <div class="flex min-w-0 items-center gap-3">
                 <BackButton onClick={goBack} />
-                <ChannelIdentity channel={selectedChannel()} handle={youtuber()} />
+                <Show when={hasChannel()}>
+                  <ChannelIdentity channel={selectedChannel()} handle={youtuber()} />
+                </Show>
               </div>
               <CopyLinkButton copied={copiedSearchLink()} onClick={handleCopySearchLink} />
             </div>
@@ -510,8 +531,16 @@ const App: Component = () => {
             onSubmit={submitFirstPage}
             channelSuggestions={channelSuggestions()}
             onChannelSelect={selectChannel}
+            searchMode={searchMode()}
+            onSearchModeChange={changeSearchMode}
           />
-          <Show when={!hasSearchSurface() || availability().status !== "ready"}>
+          {/* Always-on search that is ready has nothing to announce. */}
+          <Show
+            when={
+              availability().status !== "ready" ||
+              (!hasSearchSurface() && availability().schedule_policy !== "always_on")
+            }
+          >
             <AvailabilityNotice availability={availability()} />
           </Show>
           <Show when={!hasSearchSurface() && recentSearches().length > 0}>
@@ -562,6 +591,7 @@ const App: Component = () => {
                   youtuber={result.youtuber}
                   page={result.page}
                   sort={result.sort}
+                  requestedMode={result.mode}
                   onPageChange={goToPage}
                   onSortChange={changeSort}
                 />
@@ -618,6 +648,18 @@ const App: Component = () => {
           class="inline-flex min-h-11 items-center text-vesper-muted transition-colors hover:text-vesper-yellow"
         >
           Privacy
+        </a>
+        <a
+          href="/docs"
+          class="inline-flex min-h-11 items-center text-vesper-muted transition-colors hover:text-vesper-yellow"
+        >
+          API
+        </a>
+        <a
+          href="/about"
+          class="inline-flex min-h-11 items-center text-vesper-muted transition-colors hover:text-vesper-yellow"
+        >
+          About
         </a>
         <a
           href={supportUrl}

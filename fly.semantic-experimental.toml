@@ -9,6 +9,9 @@ primary_region = 'sjc'
 [env]
   RUST_LOG = 'youtube_api=info'
   LOG_FORMAT = 'json'
+  RAW_SEARCH_UPSTREAM_URL = 'http://ytsearch-raw-production.internal:8108'
+  RAW_SEARCH_COLLECTION = 'youtube_transcript_chunks'
+  YTSEARCH_ALLOWED_ORIGINS = 'https://search.experimental.pronsh.dev'
 
 [http_service]
   internal_port = 8080
@@ -20,10 +23,10 @@ primary_region = 'sjc'
 [mounts]
   source = 'semantic_experimental_data'
   destination = '/data'
-  initial_size = '1gb'
+  initial_size = '5gb'
 
 [[vm]]
-  memory = '1gb'
+  memory = '2gb'
   cpu_kind = 'shared'
   cpus = 2
 

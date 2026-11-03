@@ -95,5 +95,6 @@ function searchProperties(request: SearchRequest): Properties {
     filtered_to_channel: Boolean(request.youtuber),
     sort: request.sort,
     page: request.page,
+    mode: request.mode,
   };
 }

@@ -1,7 +1,7 @@
 # Experimental semantic and hybrid search site: one machine with the frontend
-# (nginx), youtube-api, youtube-semantic, Qdrant and a Raw reader over the same
-# videos (uploaded to the volume). It holds no production credentials; when the
-# local index is missing, nginx retries searches on the public production API.
+# (nginx), youtube-api, youtube-semantic and Qdrant. Keyword search uses the
+# production reader through its search-only key; search.experimental.pronsh.dev
+# fronts it with the same Worker as production.
 # See docs/playbooks/semantic-pilot.md ("Experimental Fly site").
 FROM rust:1-bookworm AS rust
 WORKDIR /app
@@ -24,13 +24,14 @@ COPY . .
 ENV VITE_API_BASE_URL= \
     VITE_INDEX_QUEUE_API_BASE_URL= \
     VITE_ENGAGEMENT_SORTS=true \
-    VITE_SEARCH_MODE=hybrid
+    VITE_HYBRID_TOGGLE=true \
+    VITE_MOMENT_SHARING=true
 RUN bun run build
 
 # trixie: the Qdrant release binary needs glibc 2.38+, bookworm ships 2.36.
 FROM debian:trixie-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl nginx \
+    && apt-get install -y --no-install-recommends ca-certificates curl nginx python3 \
     && rm -rf /var/lib/apt/lists/* /etc/nginx/sites-enabled \
     && useradd --create-home --uid 10001 semantic
 COPY --from=assets /opt/semantic /opt/semantic
@@ -40,11 +41,14 @@ COPY --from=frontend /app/dist /usr/share/nginx/html
 COPY config/qdrant-semantic.local.yaml /opt/semantic/qdrant.yaml
 COPY deploy/semantic-experimental/nginx.conf /etc/nginx/nginx.conf
 COPY deploy/semantic-experimental/entrypoint.sh /usr/local/bin/semantic-experimental
+COPY scripts/run-semantic-backfill.sh scripts/build-semantic-snapshots.py /opt/semantic/
 ENV SEMANTIC_MODEL_DIR=/opt/semantic/model \
     ORT_DYLIB_PATH=/opt/semantic/runtime/onnxruntime-linux-x64-1.31.0/lib/libonnxruntime.so.1.31.0 \
     SEMANTIC_QDRANT_URL=http://127.0.0.1:6333 \
     SEMANTIC_COLLECTION=ytsearch_semantic_pilot_experimental_128 \
     SEMANTIC_DIMENSIONS=128 \
-    SEMANTIC_BIND=127.0.0.1:8790
+    SEMANTIC_BIND=127.0.0.1:8790 \
+    SEMANTIC_BIN=/usr/local/bin/youtube-semantic \
+    SEMANTIC_SNAPSHOT_BUILDER=/opt/semantic/build-semantic-snapshots.py
 EXPOSE 8080
 CMD ["semantic-experimental"]
