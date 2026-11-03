@@ -66,17 +66,9 @@ export function prefersMarkdown(accept: string | null): boolean {
   return markdown > 0 && markdown >= html;
 }
 
-/**
- * Discord only plays direct video files, so a player card gains nothing there and can
- * lose the description. It gets the picture, title and quote instead.
- */
+/** Discord plays YouTube's player, not ours, so its crawler gets a card that names it. */
 export function isDiscordCrawler(userAgent: string | null): boolean {
   return /\bDiscordbot\b/.test(userAgent ?? "");
-}
-
-/** `discord=youtube` and `discord=youtube-quote` try YouTube's player on a pasted link. */
-export function discordCard(choice: string | null): "picture" | "youtube" | "youtube-quote" {
-  return choice === "youtube" || choice === "youtube-quote" ? choice : "picture";
 }
 
 /** True when a client wants a page rather than data, for choosing a 404's format. */

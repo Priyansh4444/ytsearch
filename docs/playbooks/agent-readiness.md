@@ -48,13 +48,11 @@ the first paint when the app starts.
   `player` card on a personal domain. Read a posted card back from
   `https://cdn.syndication.twimg.com/tweet-result?id=POST_ID&lang=en&token=4`. Older sources say
   domains need approval, so check a new domain in X's composer.
-- **Discord:** its [docs](https://docs.discord.com/developers/link-previews/overview) accept only
-  a direct `.mp4`, `.webm` or `.mov` for `og:video`. `Discordbot` therefore gets
-  `summary_large_image` with the title and up to 350 bytes of what was said. `discord=youtube`
-  and `discord=youtube-quote` on a share link declare YouTube's player the way YouTube's own
-  pages do, to learn whether Discord honors that off youtube.com; the second keeps the quote in
-  the site name, because Discord's video layout drops the description. Sending the crawler to
-  YouTube played inline, but with YouTube's own card and no quote, which was judged worse.
+- **Discord:** `Discordbot` gets the tags YouTube's own pages use for its player, with this
+  site's title and up to 350 bytes of what was said. Discord's
+  [docs](https://docs.discord.com/developers/link-previews/overview) only promise direct video
+  files, so check a real paste after changing these. Sending the crawler to YouTube instead
+  played, but with YouTube's own text, which was judged worse.
 - A preview that stops at the end would need a hosted clip file on Discord, which re-hosts
   creators' video. Do not do that without their permission.
 - Previews are cached per URL. Change `t` to retest. A posted card's player loads live, so

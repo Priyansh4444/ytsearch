@@ -319,8 +319,9 @@ describe("shared moments", () => {
   });
 
   test("the page opens from search data, as Markdown too", async () => {
+    const videoIds: (string | null)[] = [];
     stubApi((url) => {
-      expect(url.searchParams.get("video_id")).toBe("dQw4w9WgXcQ");
+      if (url.pathname === "/api/search") videoIds.push(url.searchParams.get("video_id"));
       return Response.json(SEARCH_BODY);
     });
     const path = "/s/dQw4w9WgXcQ?t=30&end=60&q=line";
@@ -335,6 +336,7 @@ describe("shared moments", () => {
     const markdown = await (await get(path, "text/markdown")).text();
     expect(markdown).toContain("> first <b>line</b>");
     expect(markdown).toContain("(at 0:30)");
+    expect(videoIds).toEqual(["dQw4w9WgXcQ", "dQw4w9WgXcQ"]);
   });
 
   test("X's crawler reads the player card with the title and quote, not a redirect", async () => {
@@ -358,11 +360,11 @@ describe("shared moments", () => {
     );
   });
 
-  test("Discord gets the picture card with the quote, and no player or redirect", async () => {
+  test("Discord gets YouTube's player with this site's title and quote", async () => {
     stubApi(() => Response.json(SEARCH_BODY));
     const ctx = createExecutionContext();
     const response = await worker.fetch(
-      new Request(`${ORIGIN}/s/dQw4w9WgXcQ?t=30&end=60&q=line`, {
+      new Request(`${ORIGIN}/s/dQw4w9WgXcQ?t=30&end=60&q=line&discord=youtube-quote`, {
         headers: {
           "User-Agent": "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)",
           Accept: "text/html",
@@ -376,57 +378,33 @@ describe("shared moments", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("Vary")).toContain("User-Agent");
     const html = await response.text();
-    expect(html).toContain('name="twitter:card" content="summary_large_image"');
+    expect(html).toContain(
+      'property="og:video:url" content="https://www.youtube.com/embed/dQw4w9WgXcQ?start=30"',
+    );
+    expect(html).toContain('property="og:video:type" content="text/html"');
+    expect(html).toContain('property="og:site_name" content="ytsearch"');
     expect(html).toContain(
       'property="og:description" content="“first &lt;b&gt;line&lt;/b&gt; lead in second line',
     );
     expect(html).toContain('property="og:image"');
-    expect(html).not.toContain("twitter:player");
-    expect(html).not.toContain("og:video");
+    expect(html).not.toContain('content="player"');
     expect(html).not.toContain("VideoObject");
   });
 
-  test.each([
-    ["youtube", "ytsearch"],
-    ["youtube-quote", "“"],
-  ] as const)("discord=%s asks for YouTube's player and keeps the text", async (choice, site) => {
+  test("X and people never see Discord's card", async () => {
     stubApi(() => Response.json(SEARCH_BODY));
     const ctx = createExecutionContext();
     const response = await worker.fetch(
-      new Request(`${ORIGIN}/s/dQw4w9WgXcQ?t=30&end=60&q=line&discord=${choice}`, {
-        headers: { "User-Agent": "Discordbot/2.0", Accept: "text/html" },
+      new Request(`${ORIGIN}/s/dQw4w9WgXcQ?t=30&end=60&q=line`, {
+        headers: { "User-Agent": "Twitterbot/1.0", Accept: "text/html" },
       }),
       testEnv(),
       ctx,
     );
     await waitOnExecutionContext(ctx);
     const html = await response.text();
-    expect(html).toContain(
-      'property="og:video:url" content="https://www.youtube.com/embed/dQw4w9WgXcQ?start=30"',
-    );
-    expect(html).toContain('property="og:video:type" content="text/html"');
-    expect(html).toContain(`property="og:site_name" content="${site}`);
-    expect(html).toContain('property="og:description" content="“first &lt;b&gt;line&lt;/b&gt;');
-  });
-
-  test("a discord choice means nothing to X or people, and an unknown one is the picture", async () => {
-    stubApi(() => Response.json(SEARCH_BODY));
-    const crawl = async (userAgent: string, query: string) => {
-      const ctx = createExecutionContext();
-      const response = await worker.fetch(
-        new Request(`${ORIGIN}/s/dQw4w9WgXcQ?t=30&end=60&q=line${query}`, {
-          headers: { "User-Agent": userAgent, Accept: "text/html" },
-        }),
-        testEnv(),
-        ctx,
-      );
-      await waitOnExecutionContext(ctx);
-      return response.text();
-    };
-    expect(await crawl("Twitterbot/1.0", "&discord=youtube")).toContain(
-      'name="twitter:card" content="player"',
-    );
-    expect(await crawl("Discordbot/2.0", "&discord=nonsense")).not.toContain("og:video");
+    expect(html).toContain('name="twitter:card" content="player"');
+    expect(html).not.toContain("og:video");
   });
 
   test("the embed page may be framed by X and nobody else", async () => {
@@ -469,6 +447,16 @@ describe("shared moments", () => {
     await get("/s/dQw4w9WgXcQ?t=30&end=60&q=line", "text/html");
     expect(modes.filter((mode) => mode === "hybrid")).toHaveLength(1);
     expect(modes).toHaveLength(4);
+  });
+
+  test("a video the index does not have is a real 404, on both pages", async () => {
+    stubApi((url) =>
+      url.pathname.endsWith("/transcript")
+        ? Response.json({ error: "video not found" }, { status: 404 })
+        : Response.json({ videos: [] }),
+    );
+    expect((await get("/s/dQw4w9WgXcQ?t=30&q=line", "text/html")).status).toBe(404);
+    expect((await get("/embed/dQw4w9WgXcQ?t=30&q=line", "text/html")).status).toBe(404);
   });
 
   test("a search failure still opens the video at its time, with no invented text", async () => {

@@ -81,7 +81,7 @@ export const MomentSharePanel: Component<{
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <button type="button" onClick={() => void copy()} class="pressable moment-share-primary">
-          {copied() === "page" ? "Link copied" : "Copy link"}
+          {copied() === "page" ? "Clip link copied" : "Copy clip link"}
         </button>
         <a
           href={xPostUrl(props.hit.text, url())}
