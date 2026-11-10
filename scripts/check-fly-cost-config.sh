@@ -33,5 +33,9 @@ require_line "$SCRIPT_DIR/reconcile-raw-queue-worker.sh" 'IDLE_GAP_FILL_INTERVAL
 require_line "$SCRIPT_DIR/reconcile-raw-queue-worker.sh" 'DAILY_UPDATE_INTERVAL_SECONDS: "259200"' "the full catalog sweep must run at most every three days"
 require_line "$SCRIPT_DIR/reconcile-raw-queue-worker.sh" 'IDLE_EXIT_AFTER_SECONDS: "60"' "an idle worker must stop after one minute"
 require_line "$ROOT/fly.raw-api.toml" "memory = '256mb'" "the API must use 256 MB (peak 72 MB, 2026-10-10)"
+require_line "$ROOT/fly.semantic-experimental.toml" "memory = '2gb'" "semantic search must stay at 2 GB (1.1 GB used, 2026-11-09), the most that can suspend"
+require_line "$ROOT/fly.semantic-experimental.toml" "cpu_kind = 'shared'" "semantic search must use shared CPUs"
+require_line "$ROOT/fly.semantic-experimental.toml" "auto_stop_machines = 'suspend'" "semantic search must suspend when idle"
+require_line "$ROOT/fly.semantic-experimental.toml" "min_machines_running = 0" "semantic search must not be kept running"
 
-echo "fly_cost_config=ok raw=shared4x/2.5GiB indexer=shared2x/2GiB/on-demand"
+echo "fly_cost_config=ok raw=shared4x/2.5GiB indexer=shared2x/2GiB/on-demand semantic=shared2x/2GiB/suspends"

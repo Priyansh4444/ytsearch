@@ -33,6 +33,10 @@ jq -n '{
     raw_publication_builder:{
       app:"builder-app",machine_id:"22222222222222",
       volume_id:"vol_2222222222222222",mount_path:"/var/lib/ytsearch"
+    },
+    semantic_service:{
+      app:"semantic-app",machine_id:"44444444444444",
+      volume_id:"vol_4444444444444444",mount_path:"/data"
     }
   }
 }' > "$valid_inventory"

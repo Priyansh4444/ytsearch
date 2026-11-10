@@ -31,6 +31,12 @@
       "machine_id": "33333333333333",
       "volume_id": "vol_2222222222222222",
       "mount_path": "/var/lib/ytsearch"
+    },
+    "semantic_service": {
+      "app": "ytsearch-semantic-experimental",
+      "machine_id": "44444444444444",
+      "volume_id": "vol_4444444444444444",
+      "mount_path": "/data"
     }
   }
 }

@@ -60,6 +60,22 @@ for _ in $(seq 180); do
   curl -fsS http://127.0.0.1:8790/ready >/dev/null 2>&1 && break
   sleep 0.5
 done
+# The production API reaches semantic search through nginx with a shared key; the
+# service itself only listens on loopback. Without a well-formed key the route does
+# not exist. The key never reaches a log: nginx logs no request headers.
+: >/run/semantic-service.conf
+chmod 600 /run/semantic-service.conf
+if [[ "${SEMANTIC_SEARCH_KEY:-}" =~ ^[A-Za-z0-9_-]{32,128}$ ]]; then
+  printf '%s\n' \
+    'location = /search {' \
+    '    limit_except POST { deny all; }' \
+    "    if (\$http_x_semantic_key != \"$SEMANTIC_SEARCH_KEY\") { return 403; }" \
+    '    client_max_body_size 16k;' \
+    '    proxy_pass http://127.0.0.1:8790;' \
+    '}' >/run/semantic-service.conf
+elif [[ -n "${SEMANTIC_SEARCH_KEY:-}" ]]; then
+  echo "SEMANTIC_SEARCH_KEY is malformed; the keyed semantic route stays off" >&2
+fi
 nginx -g 'daemon off;' &
 nginx_pid=$!
 

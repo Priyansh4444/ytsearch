@@ -156,9 +156,12 @@ async function storeAtEdge(
   seconds: number,
   markSearch: boolean,
 ): Promise<void> {
-  const body = markSearch
-    ? JSON.stringify({ ...(await response.json<Record<string, unknown>>()), edge_cached: true })
-    : response.body;
+  const search = markSearch ? await response.json<Record<string, unknown>>() : undefined;
+  // A hybrid search answered lexically is a fallback while semantic search wakes or
+  // is busy. Storing it would keep serving keyword results after hybrid is back.
+  const asked = new URL(key.url).searchParams.get("mode");
+  if (search && asked && asked !== "lexical" && search.mode !== asked) return;
+  const body = search ? JSON.stringify({ ...search, edge_cached: true }) : response.body;
   const stored = new Response(body, response);
   stored.headers.set("Cache-Control", `public, max-age=${seconds}`);
   stored.headers.delete("CDN-Cache-Control");

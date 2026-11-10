@@ -278,27 +278,31 @@ Traps found while building the site:
 - A snapshot that fails preflight writes nothing, but earlier snapshots stay
   imported; fix the input and rerun the same loop, which skips finished points.
 
-## Production rollout (state on 2026-11-02)
+## Production (state on 2026-11-09)
 
-Production search is lexical: `mode` defaults to lexical, `SEMANTIC_SEARCH_URL` is
-unset on `ytsearch-api-raw-production`, and the production frontend is built without
-`VITE_HYBRID_TOGGLE`. Everything for `mode=semantic|hybrid` is on master and inert.
+`search.pronsh.dev` offers a Keyword/Hybrid toggle; Keyword is the default. The
+production API (`SEMANTIC_SEARCH_URL` in `fly.raw-api.toml`) asks the semantic machine
+of `ytsearch-semantic-experimental` at `POST /search`, which nginx passes to
+`youtube-semantic` only with the `SEMANTIC_SEARCH_KEY` secret both apps hold. The
+service itself still listens on loopback only.
 
-- **Corpus:** `build-semantic-snapshots.py --mutations mutations.sqlite3 --rename
-  @t3dotgg=@theo` overlays the reader's mutations on the September archive, which covers
-  the roughly 17% of chunks newer than it (about 9.9M chunks and 49.8k videos on
-  2026-11-02). No admin key is involved: the database is copied over `flyctl ssh sftp`.
-- **Why every creator:** 14,630 of 16,200 searches in 30 days had no creator filter,
-  so semantic coverage of a few creators would skew unfiltered rankings toward them.
-- **Still to do, in order:**
-  1. Finish the backfill on the Fly box (above), then measure the site with
-     `scripts/semantic-eval.py`.
-  2. Embed new uploads as they are indexed. Until then a rerun of the backfill with a
-     fresh mutation database is the catch-up; repeated imports skip unchanged points.
-  3. Host it for production: reuse this app or a private one (budget 2 GB and 5 GB of
-     volume), reach it over `.internal` with `SEMANTIC_SEARCH_URL`, and register it in
-     `config/fly-production-resources.json` and `scripts/check-fly-cost-config.sh`.
-  4. Deploy the production frontend with `VITE_HYBRID_TOGGLE=true` last.
+- **Idle cost:** the machine suspends when idle and resumes in about a second, with the
+  model still loaded. Fly can discard a snapshot (host maintenance, any deploy or
+  machine update); the next search then pays a cold start of about 25 s.
+- **Bounded wait:** the API waits 6 s for semantic search, then answers lexically, and the
+  response's `mode` says so. The Worker does not edge-cache such a fallback, so hybrid
+  returns as soon as the machine is up.
+- **Ranking:** measured on the whole catalog in
+  [the evaluation](../experiments/semantic/ranking-eval-2026-10-17.md). Re-run it before
+  changing fusion, the rewrite or the default mode.
+- **Corpus:** embedded up to the 2026-11-02 mutation export. Newer videos are found by
+  hybrid's lexical half only. Catch up by re-staging the archive and a fresh
+  `mutations.sqlite3` as in "Embedding on the Fly box"; unchanged videos are skipped.
+- **Rotate the key** by importing a new `SEMANTIC_SEARCH_KEY` (32 to 128 characters of
+  `A-Za-z0-9_-`) on both apps, the semantic app first. Between the two, hybrid answers
+  lexically.
+- **Still to do:** embed new uploads as they are indexed, and automate the shrink after
+  a large embedding run (a visitor woke the stopped large machine on 2026-11-05).
 
 ## Traps
 
