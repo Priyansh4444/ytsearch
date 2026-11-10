@@ -39,7 +39,9 @@ catch large gains and regressions on new query sets, not to separate close
 engines. A run costs about one neuron per query, inside the free allocation.
 
 Lexical rankings come from the production API and are restricted to the semantic
-corpus (corpus-*.txt), so both engines compete over the same videos. Known-item
+corpus (corpus-*.txt), so both engines compete over the same videos. Once every
+video is embedded, `--whole-catalog` drops that restriction and `--creator ''`
+drops the creator filter, which is how most visitors search. Known-item
 queries name a target moment; a moment hit means one of the top video's first
 three hits overlaps the target window by +-30 s. Topic queries are graded 0/1/2
 per video in grades-*.tsv. Raw output holds transcript text: keep it out of git.
@@ -65,7 +67,7 @@ SETS = {
 QUERIES, TARGETS = SETS["dev"]
 CORPUS, GRADES = HERE / "corpus-2026-10-17.txt", HERE / "grades-2026-10-17.tsv"
 BASE = "http://127.0.0.1:18787/api/search"
-CREATOR, RRF_K, SLACK_MS, POOL_DEPTH = "@t3dotgg", 60, 30_000, 5
+CREATOR, RRF_K, SLACK_MS, POOL_DEPTH = "@theo", 60, 30_000, 5
 KNOWN_ITEM = ["quote", "paraphrase", "question", "typo", "vague"]
 ENGINES = ["lexical", "semantic", "rrf", "rrf_sem2", "gated", "lexical_rw", "gated_rw", "question_routed",
            "hybrid"]
@@ -121,7 +123,9 @@ def rewrite(query):
 
 
 def search(base, query, mode):
-    params = {"q": query, "youtuber": CREATOR, "per_page": 100, "sort": "relevance"}
+    params = {"q": query, "per_page": 100, "sort": "relevance"}
+    if CREATOR:
+        params["youtuber"] = CREATOR
     if mode:
         params["mode"] = mode
     url = base + "?" + urllib.parse.urlencode(params)
@@ -189,6 +193,17 @@ def gated(query, lexical, semantic):
     return fuse(lexical, semantic, 3, 1) if confident else fuse(lexical, semantic, 1, 3)
 
 
+class EveryVideo:
+    """The corpus when nothing is restricted: results compete with the whole catalog."""
+
+    def __contains__(self, _video_id):
+        return True
+
+
+def load_corpus():
+    return EveryVideo() if CORPUS is None else set(CORPUS.read_text().split())
+
+
 def rankings(row, corpus):
     lexical = [v for v in row["lexical"]["videos"] if v["video_id"] in corpus]
     semantic = [v for v in row["semantic"]["videos"] if v["video_id"] in corpus]
@@ -217,7 +232,7 @@ def moment_hit(video, target):
 
 def pooled(out):
     """(query, [(video_id, title, snippets)]) for each topic query: every engine's top 5."""
-    corpus = set(CORPUS.read_text().split())
+    corpus = load_corpus()
     for row in json.loads(out.read_text()):
         if row["category"] != "topic":
             continue
@@ -321,7 +336,7 @@ def dcg(grades):
 
 
 def score(out):
-    corpus = set(CORPUS.read_text().split())
+    corpus = load_corpus()
     targets = {t["tid"]: t for t in json.loads(TARGETS.read_text())}
     grades = read_grades(GRADES)
     rows = json.loads(out.read_text())
@@ -371,16 +386,22 @@ def score(out):
 
 
 def main():
-    global QUERIES, TARGETS, GRADES
+    global QUERIES, TARGETS, GRADES, CREATOR, CORPUS
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--set", choices=sorted(SETS), default="dev")
     parser.add_argument("--base", default=BASE)
     parser.add_argument("--delay", type=float, default=1.2)
+    parser.add_argument("--creator", default=CREATOR, help="creator filter; '' searches every creator")
+    parser.add_argument("--whole-catalog", action="store_true",
+                        help="score against every video returned, not only the 300-video dev corpus")
     parser.add_argument("--grades", type=pathlib.Path, default=GRADES, help="topic grades read by score")
     parser.add_argument("command", choices=["fetch", "pool", "score", "judge", "rewrite"])
     parser.add_argument("args", nargs="+")
     args = parser.parse_args()
     QUERIES, TARGETS = SETS[args.set]
+    CREATOR = args.creator
+    if args.whole_catalog:
+        CORPUS = None
     if args.command == "judge":
         if len(args.args) != 2:
             parser.error("judge needs OUT.json GRADES.tsv")

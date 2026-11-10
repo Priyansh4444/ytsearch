@@ -220,3 +220,45 @@ python3 scripts/semantic-eval.py score /tmp/semantic-eval.json
 ```
 
 The experimental site stops when idle; the first request wakes it.
+
+## Follow-up: the whole catalog (2026-11-09)
+
+Every video is now embedded (1,196,251 passages, 49.8k videos, 71 creators), so the
+same queries were rerun against the experimental site **with no creator filter**,
+which is how nine in ten visitors search, and scored against every video returned
+(`semantic-eval.py --creator '' fetch`, then `--whole-catalog score`). Lexical here
+is the production reader, which since 2026-10-29 keeps a question's rare words.
+
+MRR@10 ([dev scores](scores-whole-catalog-dev-2026-11-09.json), 136 known-item queries):
+
+| Use case | n | Lexical | Semantic | Hybrid as served |
+| --- | --: | --: | --: | --: |
+| Exact quote | 36 | **0.86** | 0.06 | 0.84 |
+| Paraphrase | 36 | 0.01 | 0.09 | **0.12** |
+| Question | 36 | 0.23 | 0.33 | **0.37** |
+| Typo | 12 | **0.22** | 0.03 | 0.18 |
+| Vague "the video where…" | 16 | 0.14 | **0.53** | 0.47 |
+| **Macro average** | | 0.29 | 0.21 | **0.39** |
+
+Recall@10 rises from 0.37 to 0.53. Hybrid latency was 72 ms p50 and 271 ms p95
+server-side on two shared vCPUs, and none of 152 hybrid requests fell back.
+
+- **Hybrid is the better engine for anything but exact words**, and it gives up
+  little there: quotes 0.84 against 0.86, typos 0.18 against 0.22 (n=12).
+- **Everything is harder with 166 times more distractors.** Semantic alone falls
+  from 0.52 to 0.21 and cannot serve as a mode by itself.
+- **The question rewrite no longer clearly helps.** Fusing the original query scored
+  0.386 on dev against 0.394 as served, and 0.45 against 0.37 on the
+  [held-out questions](scores-whole-catalog-heldout-2026-11-09.json) (n=30; 0.56
+  against 0.52 [filtered to @theo](scores-whole-catalog-heldout-theo-2026-11-09.json)).
+  The two sets disagree and the reader now drops filler words itself, so the
+  rewrite stays until a new query set says otherwise. Other weights for the
+  unconfident case (1:2, 1:1, 2:1) and plain RRF scored at or below the served gate.
+- **A weakness to fix next:** with semantic-led fusion (1:3, k=60) a video only
+  lexical found can never outrank any of semantic's 100. "what does the Kimi K2
+  license require?" has the right video first lexically and 56th in hybrid.
+- Paraphrases stay poor everywhere (0.12). Smaller passages or a reranker remain
+  the candidates from the recommendation above.
+
+Keyword stays the default: it is the better engine for exact quotes, which is what
+this site is for, and it does not depend on a second service.

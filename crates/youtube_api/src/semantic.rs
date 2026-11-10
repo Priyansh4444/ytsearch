@@ -20,6 +20,12 @@ impl Mode {
         }
     }
 }
+/// A search must answer while someone waits. Past this the API answers lexically; a
+/// sleeping semantic machine has still been woken for the next search.
+const SERVICE_TIMEOUT: Duration = Duration::from_secs(6);
+/// Proves to a semantic service on another machine that the caller is the API.
+const KEY_HEADER: &str = "x-semantic-key";
+
 #[derive(Clone)]
 pub(super) struct Client {
     http: reqwest::Client,
@@ -27,12 +33,13 @@ pub(super) struct Client {
 }
 impl Client {
     pub(super) fn from_env() -> Result<Option<Self>, ApiError> {
+        let key = env::var("SEMANTIC_SEARCH_KEY").ok();
         env::var("SEMANTIC_SEARCH_URL")
             .ok()
-            .map(|url| Self::new(&url))
+            .map(|url| Self::new(&url, non_empty(key.as_deref())))
             .transpose()
     }
-    fn new(url: &str) -> Result<Self, ApiError> {
+    fn new(url: &str, key: Option<&str>) -> Result<Self, ApiError> {
         let mut url = reqwest::Url::parse(url)
             .map_err(|_| ApiError::BadRequest("invalid SEMANTIC_SEARCH_URL".into()))?;
         if !matches!(url.scheme(), "http" | "https")
@@ -47,8 +54,16 @@ impl Client {
             ));
         }
         url.set_path("/search");
+        let mut headers = HeaderMap::new();
+        if let Some(key) = key {
+            let mut value = HeaderValue::from_str(key)
+                .map_err(|_| ApiError::BadRequest("invalid SEMANTIC_SEARCH_KEY".into()))?;
+            value.set_sensitive(true);
+            headers.insert(KEY_HEADER, value);
+        }
         let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(SERVICE_TIMEOUT)
+            .default_headers(headers)
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| ApiError::SemanticUnavailable)?;
@@ -170,7 +185,7 @@ mod tests {
         }
         assert_eq!(canonical_creator("@aiDotEngineer"), "@aidotengineer");
         assert_eq!(canonical_creator("aiDotEngineer"), "@aidotengineer");
-        assert!(Client::new("http://user:password@127.0.0.1:8790").is_err());
+        assert!(Client::new("http://user:password@127.0.0.1:8790", None).is_err());
         assert!(serde_json::from_value::<Mode>(json!("fused")).is_err());
         assert_eq!(
             serde_json::from_value::<Mode>(json!("hybrid")).unwrap(),
@@ -194,7 +209,10 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let busy_url = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, busy).await.unwrap() });
-        let error = Client::new(&busy_url).unwrap().hits("rust", &params).await;
+        let error = Client::new(&busy_url, None)
+            .unwrap()
+            .hits("rust", &params)
+            .await;
         assert!(matches!(error, Err(ApiError::SemanticUnavailable)));
         server.abort();
 
@@ -208,20 +226,74 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let malformed_url = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, malformed).await.unwrap() });
-        let error = Client::new(&malformed_url)
+        let error = Client::new(&malformed_url, None)
             .unwrap()
             .hits("rust", &params)
             .await;
         assert!(matches!(error, Err(ApiError::SemanticUnavailable)));
         server.abort();
 
-        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let closed_url = format!("http://{}", closed.local_addr().unwrap());
-        drop(closed);
-        let error = Client::new(&closed_url)
+        // A service that never answers costs the visitor a bounded wait.
+        let stalled = axum::Router::new().route(
+            "/search",
+            axum::routing::post(|| async {
+                tokio::time::sleep(SERVICE_TIMEOUT * 3).await;
+                Json(json!({"mode":"semantic", "hits":[]}))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let stalled_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, stalled).await.unwrap() });
+        let asked = Instant::now();
+        let error = Client::new(&stalled_url, None)
             .unwrap()
             .hits("rust", &params)
             .await;
         assert!(matches!(error, Err(ApiError::SemanticUnavailable)));
+        assert!(asked.elapsed() < SERVICE_TIMEOUT * 2);
+        server.abort();
+
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closed_url = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        let error = Client::new(&closed_url, None)
+            .unwrap()
+            .hits("rust", &params)
+            .await;
+        assert!(matches!(error, Err(ApiError::SemanticUnavailable)));
+    }
+
+    #[tokio::test]
+    async fn the_key_reaches_the_service_only_when_configured() {
+        let params: SearchParams = serde_json::from_value(json!({"q":"rust"})).unwrap();
+        let seen = Arc::new(Mutex::new(Vec::<Option<String>>::new()));
+        let record = Arc::clone(&seen);
+        let service = axum::Router::new().route(
+            "/search",
+            axum::routing::post(move |headers: HeaderMap| {
+                let record = Arc::clone(&record);
+                async move {
+                    record.lock().await.push(
+                        headers
+                            .get(KEY_HEADER)
+                            .and_then(|value| value.to_str().ok())
+                            .map(str::to_string),
+                    );
+                    Json(json!({"mode":"semantic", "hits":[]}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, service).await.unwrap() });
+
+        let with_key = Client::new(&url, Some("secret-key")).unwrap();
+        assert!(with_key.hits("rust", &params).await.unwrap().is_empty());
+        let without = Client::new(&url, None).unwrap();
+        assert!(without.hits("rust", &params).await.unwrap().is_empty());
+
+        assert_eq!(*seen.lock().await, [Some("secret-key".to_string()), None]);
+        assert!(Client::new(&url, Some("line\nbreak")).is_err());
+        server.abort();
     }
 }

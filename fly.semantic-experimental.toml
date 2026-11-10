@@ -1,5 +1,6 @@
-# Experimental semantic-search site; not part of production. Stops when idle.
-# See docs/playbooks/semantic-pilot.md ("Experimental Fly site").
+# Semantic search: the experimental site, and the semantic service the production
+# API calls for mode=hybrid. Suspends when idle and resumes in about a second.
+# See docs/playbooks/semantic-pilot.md.
 app = 'ytsearch-semantic-experimental'
 primary_region = 'sjc'
 
@@ -16,7 +17,9 @@ primary_region = 'sjc'
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = 'stop'
+  # Suspend keeps the loaded model in a memory snapshot. A plain stop costs the
+  # next search about 25 s of model loading. Suspend needs 2 GB of memory or less.
+  auto_stop_machines = 'suspend'
   auto_start_machines = true
   min_machines_running = 0
 

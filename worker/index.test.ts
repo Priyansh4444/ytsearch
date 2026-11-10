@@ -88,6 +88,28 @@ describe("edge cache", () => {
     expect(second.headers.get("Cache-Control")).toBe("no-store");
   });
 
+  test("a hybrid search answered lexically is not stored, so hybrid returns when it can", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T20:00:00Z"));
+    const answers = ["lexical", "hybrid", "hybrid"];
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => Response.json({ query: "rust", mode: answers.shift() }));
+    vi.stubGlobal("fetch", fetchMock);
+    const hybridRequest = () =>
+      new Request("https://search.pronsh.dev/api/search?q=rust&mode=hybrid");
+
+    const fallback = await fetchWorker(hybridRequest(), testEnv());
+    expect(await fallback.json()).toMatchObject({ mode: "lexical" });
+    const recovered = await fetchWorker(hybridRequest(), testEnv());
+    expect(await recovered.json()).toEqual({ query: "rust", mode: "hybrid" });
+    const cached = await fetchWorker(hybridRequest(), testEnv());
+    expect(await cached.json()).toMatchObject({ mode: "hybrid", edge_cached: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await caches.default.delete(hybridRequest());
+  });
+
   test("never caches a failed search", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-26T20:00:00Z"));

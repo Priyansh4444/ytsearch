@@ -12,7 +12,7 @@ Do not use it for videos outside the index, for YouTube metadata such as subscri
 
 `GET https://search.pronsh.dev/api/v1/search?q=server+actions&youtuber=%40theo&per_page=5`
 
-Each video in `videos` carries `hits`; each hit has `text`, `timestamp` and a `youtube_url` that opens at that moment. Quote words in `q` to match a phrase. No authentication is needed. Search allows about 120 requests a minute per IP; on `429`, wait before retrying.
+Each video in `videos` carries `hits`; each hit has `text`, `timestamp` and a `youtube_url` that opens at that moment. Quote words in `q` to match a phrase. For a question or a vague description, add `mode=hybrid` to also match by meaning; the response's `mode` says which engine answered. No authentication is needed. Search allows about 120 requests a minute per IP; on `429`, wait before retrying.
 
 Every page, including shared moments at `/s/VIDEO_ID?t=SECONDS&end=SECONDS&q=WORDS`, returns Markdown when requested with `Accept: text/markdown`.
 
