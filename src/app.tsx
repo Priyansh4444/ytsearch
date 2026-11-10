@@ -337,6 +337,13 @@ const App: Component = () => {
     setSubmitted(request);
     writeSearchUrl(request);
   };
+  // A fresh request object refetches without adding a history entry.
+  const retrySearch = () => {
+    const current = submitted();
+    if (!current) return;
+    capture("search_hybrid_retried");
+    setSubmitted({ ...current });
+  };
   const goToPage = (nextPage: number) => resubmit(nextPage, submitted()?.sort ?? sort());
   const changeSort = (nextSort: SearchSort) => {
     setSort(nextSort);
@@ -594,6 +601,7 @@ const App: Component = () => {
                   requestedMode={result.mode}
                   onPageChange={goToPage}
                   onSortChange={changeSort}
+                  onRetry={retrySearch}
                 />
               </Loading>
             )}

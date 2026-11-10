@@ -1,4 +1,4 @@
-import { render, screen } from "@solidjs/testing-library";
+import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { describe, expect, test, vi } from "vitest";
 import type { SearchHit, SearchResponse, SearchVideoResult } from "../types";
 import { SearchResults } from "./search-results";
@@ -140,5 +140,50 @@ describe("search timing", () => {
     ));
     expect(screen.getByText(/4 ms request · cached/)).toBeTruthy();
     expect(screen.queryByText(/5 ms search/)).toBeNull();
+  });
+});
+
+describe("hybrid fallback", () => {
+  const results = (
+    requestedMode: "lexical" | "hybrid",
+    answered: SearchResponse["mode"],
+    sort: "relevance" | "published_desc",
+    onRetry = vi.fn(),
+  ) =>
+    render(() => (
+      <SearchResults
+        response={{ ...response([video("a", "video")]), mode: answered }}
+        youtuber=""
+        page={1}
+        sort={sort}
+        requestedMode={requestedMode}
+        onPageChange={() => undefined}
+        onSortChange={() => undefined}
+        onRetry={onRetry}
+      />
+    ));
+
+  test("a hybrid search answered by keywords says so and offers another try", () => {
+    const onRetry = vi.fn();
+    results("hybrid", "lexical", "relevance", onRetry);
+    expect(screen.getByTestId("mode-fallback")).toHaveTextContent("these are keyword results");
+    fireEvent.click(screen.getByRole("button", { name: "Try hybrid again" }));
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  test("a sort hybrid cannot serve explains that, with nothing to retry", () => {
+    results("hybrid", "lexical", "published_desc");
+    expect(screen.getByTestId("mode-fallback")).toHaveTextContent(
+      "only works with the Relevant order",
+    );
+    expect(screen.queryByRole("button", { name: "Try hybrid again" })).toBeNull();
+  });
+
+  test.each([
+    ["hybrid", "hybrid"],
+    ["lexical", "lexical"],
+  ] as const)("no note when %s was asked and %s answered", (asked, answered) => {
+    results(asked, answered, "relevance");
+    expect(screen.queryByTestId("mode-fallback")).toBeNull();
   });
 });
