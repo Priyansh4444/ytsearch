@@ -30,6 +30,7 @@ exec sleep 30
 SH
 cat >"$work/bin/youtube-semantic" <<'SH'
 #!/bin/sh
+echo "semantic stderr reaches the log" >&2
 printf 'args=%s\nbind=%s\nqdrant=%s\nkey=%s\noom=%s\n' "$*" "$SEMANTIC_BIND" \
   "$SEMANTIC_QDRANT_URL" "$SEMANTIC_SEARCH_KEY" "$(cat /proc/self/oom_score_adj)" \
   >"$SIDECAR_LOG/semantic"
@@ -56,7 +57,7 @@ done
 reader_port="$(free_port)"
 qdrant_port="$(free_port)"
 run env SEMANTIC_SEARCH_KEY="$key" SEMANTIC_READER_PORT="$reader_port" \
-  SEMANTIC_QDRANT_PORT="$qdrant_port" "$SCRIPT_DIR/semantic-sidecar.sh" 2>/dev/null &
+  SEMANTIC_QDRANT_PORT="$qdrant_port" "$SCRIPT_DIR/semantic-sidecar.sh" 2>"$work/stderr" &
 pids+=("$!")
 sleep 2
 # Nothing starts while the reader is unhealthy.
@@ -72,5 +73,9 @@ grep -Fx 'bind=[::1]:8790' "$work/semantic" >/dev/null
 grep -Fx "qdrant=http://127.0.0.1:$qdrant_port" "$work/semantic" >/dev/null
 grep -Fx "key=$key" "$work/semantic" >/dev/null
 grep -Fx 'oom=1000' "$work/semantic" >/dev/null
+# Probing must not swallow the sidecar's or its children's diagnostics.
+grep -F 'reader healthy; starting semantic search' "$work/stderr" >/dev/null
+grep -Fx 'semantic stderr reaches the log' "$work/stderr" >/dev/null
+! grep -F 'Connection refused' "$work/stderr" >/dev/null
 
 printf 'semantic_sidecar=ok\n'

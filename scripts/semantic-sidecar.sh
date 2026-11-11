@@ -22,7 +22,9 @@ log() { printf 'semantic-sidecar: %s\n' "$*" >&2; }
 # no curl; bash's /dev/tcp is enough for loopback and 6PN probes.
 http_ok() {
   local host="$1" port="$2" path="$3" status
-  exec 3<>"/dev/tcp/$host/$port" 2>/dev/null || return 1
+  # Braces scope the redirection: on a bare `exec`, 2>/dev/null would silence
+  # this script's stderr, and every child's, for good.
+  { exec 3<>"/dev/tcp/$host/$port"; } 2>/dev/null || return 1
   printf 'GET %s HTTP/1.0\r\nHost: localhost\r\n\r\n' "$path" >&3
   read -r -t 5 _ status _ <&3
   exec 3>&- 3<&-
