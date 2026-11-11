@@ -64,6 +64,12 @@ Solid 2.0.0-rc.15 pins exactly 1.6.7. Drop the seroval overrides when Solid move
 1.6.11. `undici` reaches this repository only through jsdom and Miniflare, which are
 test and build tools.
 
+The same job's `cargo audit` then failed on five advisories. Patch updates cleared
+`ctutils`, `rustls-webpki`, `webpki-root-certs` and `zstd` (0.14.3); `libsqlite3-sys`
+needed `rusqlite` 0.41.1. `zstd` and SQLite are in the reader's tree, so parity was
+proven: `reader-ab.sh` showed 330 requests, 0 mismatches and a 0.99 cycle ratio. Deployed
+reader and indexer images keep the old versions until their next release.
+
 ## Registry audit (2026-10-15)
 
 Follow-up on 2026-10-16: refreshed
