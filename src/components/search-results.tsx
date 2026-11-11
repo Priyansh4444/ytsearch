@@ -15,6 +15,8 @@ export const SearchResults: Component<{
   requestedMode: SearchMode;
   onPageChange: (page: number) => void;
   onSortChange: (sort: SearchSort) => void;
+  /** Asks again for the same search, for when hybrid fell back to keyword results. */
+  onRetry: () => void;
 }> = (props) => {
   // Keyed remount: the parent `Show keyed` in app.tsx creates a fresh mount
   // per response/page, so one setup-only partition covers this render with no
@@ -52,7 +54,19 @@ export const SearchResults: Component<{
         </span>
         <Show when={props.requestedMode !== "lexical" && props.response.mode === "lexical"}>
           <span class="text-xs text-vesper-dim" data-testid="mode-fallback">
-            Showing keyword results: hybrid does not apply to this search or is unavailable.
+            <Show
+              when={props.sort === "relevance"}
+              fallback="Hybrid only works with the Relevant order, so these are keyword results."
+            >
+              Hybrid search is waking up or unavailable, so these are keyword results.{" "}
+              <button
+                type="button"
+                class="pressable text-vesper-yellow underline underline-offset-4 hover:text-vesper-orange"
+                onClick={props.onRetry}
+              >
+                Try hybrid again
+              </button>
+            </Show>
           </span>
         </Show>
       </div>

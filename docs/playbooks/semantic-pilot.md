@@ -287,11 +287,14 @@ of `ytsearch-semantic-experimental` at `POST /search`, which nginx passes to
 service itself still listens on loopback only.
 
 - **Idle cost:** the machine suspends when idle and resumes in about a second, with the
-  model still loaded. Fly can discard a snapshot (host maintenance, any deploy or
-  machine update); the next search then pays a cold start of about 25 s.
+  model still loaded (1.8 s measured after six idle minutes). Fly can discard a snapshot
+  (host maintenance, any deploy or machine update); the next search then pays a cold
+  start of about 25 s. That happened after 13 idle hours on 2026-11-10, so count the
+  cold starts in `flyctl machine status` before trusting suspend for long idle gaps;
+  keeping the machine running instead is `min_machines_running = 1`, about $11 a month.
 - **Bounded wait:** the API waits 6 s for semantic search, then answers lexically, and the
   response's `mode` says so. The Worker does not edge-cache such a fallback, so hybrid
-  returns as soon as the machine is up.
+  returns as soon as the machine is up, and the results offer "Try hybrid again".
 - **Ranking:** measured on the whole catalog in
   [the evaluation](../experiments/semantic/ranking-eval-2026-10-17.md). Re-run it before
   changing fusion, the rewrite or the default mode.
