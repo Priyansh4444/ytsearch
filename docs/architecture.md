@@ -40,12 +40,14 @@ generation.
 | `youtube_raw_search` | Inverted index, ranking, mutation WAL, publication, recovery, and reloadable reader |
 | `youtube_cli` | Validation, channel/video indexing, repair, deletion, and direct search |
 | `youtube_api` | Public search, channel directory, and durable approval queue |
-| `youtube_semantic` | Opt-in local Qdrant / EmbeddingGemma snapshot pilot binary; outside production ingestion |
+| `youtube_semantic` | EmbeddingGemma query embedding over Qdrant for `mode=hybrid`; runs beside the Raw reader, outside production ingestion |
 
 ## Credential boundary
 
 - Browsers receive no search, admin, queue, Fly, YouTube, or Axiom secret.
 - `youtube_api` uses only `RAW_SEARCH_API_KEY` for public reads.
+- `SEMANTIC_SEARCH_KEY` admits the API to `youtube-semantic` on the reader's
+  private address; the service checks it on every search.
 - Indexers use `RAW_SEARCH_ADMIN_API_KEY`; this key never reaches the browser or
   public API response.
 - `YTSEARCH_INDEX_QUEUE_TOKEN` protects queue review and acknowledgement.
