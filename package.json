@@ -52,7 +52,7 @@
     "solid-js": "2.0.0-rc.15"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.4.4",
+    "@cloudflare/vitest-plugin": "^1.7.0",
     "@playwright/test": "^1.64.1",
     "@solidjs/testing-library": "1.0.0-beta.3",
     "@solidjs/vite-plugin": "3.0.0-next.50",
@@ -69,11 +69,13 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
     "vitest": "^5.0.5",
-    "wrangler": "4.151.1"
+    "wrangler": "4.160.0"
   },
   "overrides": {
-    "miniflare": "5.20261012.1-beta",
+    "miniflare": "5.20261110.0-beta",
     "postcss": "^8.5.30",
+    "seroval": "1.6.12",
+    "seroval-plugins": "1.6.12",
     "sharp": "0.35.5"
   },
   "packageManager": "bun@1.4.3"

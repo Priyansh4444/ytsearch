@@ -53,6 +53,23 @@ Re-check these on every update; delete an entry once it no longer applies.
 | `rust:1.97` in the overlay Dockerfiles | They build on a fixed production base image | the base image is rebuilt |
 | Rust 1.97.1 for `scripts/check-rust-public-surface.sh` | `cargo-hawk` is built against that rustc (`HAWK_TOOLCHAIN` overrides) | hawk is rebuilt for a newer rustc |
 
+## Security audit (2026-11-10)
+
+The weekly `bun audit` had failed since 2026-10-26 on 22 advisories in `undici`, `zod`
+and `seroval`. Fixed by [Wrangler 4.160.0](https://registry.npmjs.org/wrangler/4.160.0)
+and [Cloudflare Vitest plugin 1.7.0](https://registry.npmjs.org/@cloudflare/vitest-plugin/1.7.0),
+which both select Miniflare `5.20261110.0-beta` (the override follows it; workerd is
+`1.20261110.1`), and by overriding `seroval` and `seroval-plugins` to 1.6.12, because
+Solid 2.0.0-rc.15 pins exactly 1.6.7. Drop the seroval overrides when Solid moves past
+1.6.11. `undici` reaches this repository only through jsdom and Miniflare, which are
+test and build tools.
+
+The same job's `cargo audit` then failed on five advisories. Patch updates cleared
+`ctutils`, `rustls-webpki`, `webpki-root-certs` and `zstd` (0.14.3); `libsqlite3-sys`
+needed `rusqlite` 0.41.1. `zstd` and SQLite are in the reader's tree, so parity was
+proven: `reader-ab.sh` showed 330 requests, 0 mismatches and a 0.99 cycle ratio. Deployed
+reader and indexer images keep the old versions until their next release.
+
 ## Registry audit (2026-10-15)
 
 Follow-up on 2026-10-16: refreshed
