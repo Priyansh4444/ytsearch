@@ -214,13 +214,40 @@ keep working, and rename it in the search contract cases.
 
 ## Removal
 
-Acknowledge any active queue row and stop the writer first:
+First take the creator out of the queue so nothing re-indexes it. Set its row to
+`rejected` (`PATCH /api/index-requests/{id}/status` with `{"status":"rejected"}` and
+the queue token) rather than deleting it, so the decision stays on record; a new
+request for the handle starts as `pending` and needs approval again. Check that the
+handle is not in the worker's daily list (`/tmp/daily-indexed-channels.txt` in the
+Machine config).
+
+Then remove it with the CLI, which deletes and publishes:
 
 ```bash
-scripts/index-queue-ack.sh REQUEST_ID
 cargo run --release -p youtube_cli -- remove-youtuber @handle \
   --backend raw --allow-destructive-remove
 ```
+
+Without a local build, do the same from inside the queue worker, which already holds
+the admin key: start it, read `RAW_SEARCH_API_URL` and `RAW_SEARCH_ADMIN_API_KEY` from
+the `cloud-index-queue` process environment (never print them), send
+`DELETE /admin/channels/<id>?publication_api_version=1&idempotency_key=<unique>&cascade=true`
+with the `x-raw-admin-key` header (the image has Python, not curl), and write
+`<epoch> urgent` to `/var/lib/ytsearch/raw-publication.pending`. The worker's next loop
+publishes it. `<id>` is the creator's `id` in `/api/youtubers` (the handle without
+`@`); `GET /admin/channels/<id>/stats` shows what will go. @maciekiklocki was removed
+this way on 2026-11-12.
+
+## Interrupted publication
+
+Never stop the queue worker during `ytsearch publish`: list its processes over
+`flyctl ssh console` immediately before the stop, not minutes earlier, because the
+loop can start a publication in between. A publication killed while reading its snapshot used to
+leave `mutations.sqlite3-shm`/`-wal` in `raw-generation-work/<job>/`, and every
+retry then failed with `unrecognized incomplete publication artifact` (16 hours
+without publication on 2026-11-12). Builds from this fix on treat those sidecars as
+their own; on an older image, remove the two sidecar files of that job (only those)
+and the next retry rebuilds.
 
 ## Verification
 
