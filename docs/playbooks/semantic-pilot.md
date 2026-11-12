@@ -326,7 +326,8 @@ anyway, so it costs nothing extra and never has to wake up:
   hybrid's lexical half only. Embed a catch-up on a temporary app ("Embedding on the
   Fly box"), never on the reader, and move the result over with a snapshot as above.
 - **Copies:** the reader volume (and its five daily Fly snapshots) and the stopped
-  reader canary's volume, restored 2026-11-11, which is the source for a restore.
+  reader canary's volume, restored 2026-11-11, which is the source for a restore
+  (that volume keeps one daily snapshot, not five, since it is itself the copy).
 - **Rotate the key** by importing a new hex `SEMANTIC_SEARCH_KEY` on both apps with
   `--stage`, then update the reader Machine and deploy the API. Between the two,
   hybrid answers lexically.
