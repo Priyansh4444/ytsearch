@@ -51,4 +51,31 @@ if PATH="$temporary_directory/bin:$PATH" \
   exit 1
 fi
 
+# The semantic key file is optional, even where the reader's files are required,
+# and a hex key reaches the sidecar unchanged through Fly's base64 decoding.
+semantic_key=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+printf '%s' "$semantic_key" | base64 -d > "$temporary_directory/semantic"
+cat > "$temporary_directory/bin/sidecar" <<EOF
+#!/bin/sh
+printf 'semantic=%s\n' "\${SEMANTIC_SEARCH_KEY:-}" > "$temporary_directory/sidecar-ran"
+EOF
+chmod +x "$temporary_directory/bin/sidecar"
+PATH="$temporary_directory/bin:$PATH" \
+RAW_SEARCH_REQUIRE_FILE_SECRETS=1 \
+RAW_SEARCH_API_KEY_FILE="$temporary_directory/search" \
+RAW_SEARCH_ADMIN_API_KEY_FILE="$temporary_directory/admin" \
+SEMANTIC_SEARCH_KEY_FILE="$temporary_directory/semantic" \
+SEMANTIC_SIDECAR="$temporary_directory/bin/sidecar" \
+  "$SCRIPT_DIR/raw-search-entrypoint.sh" > /dev/null
+for _ in $(seq 50); do [ -s "$temporary_directory/sidecar-ran" ] && break; sleep 0.1; done
+grep -Fx "semantic=$semantic_key" "$temporary_directory/sidecar-ran" >/dev/null
+PATH="$temporary_directory/bin:$PATH" \
+RAW_SEARCH_REQUIRE_FILE_SECRETS=1 \
+RAW_SEARCH_API_KEY_FILE="$temporary_directory/search" \
+RAW_SEARCH_ADMIN_API_KEY_FILE="$temporary_directory/admin" \
+SEMANTIC_SEARCH_KEY_FILE="$temporary_directory/missing-semantic" \
+SEMANTIC_SIDECAR="$temporary_directory/missing-sidecar" \
+  "$SCRIPT_DIR/raw-search-entrypoint.sh" > "$temporary_directory/no-semantic"
+grep -Fx 'command=youtube-raw-search serve-mutable' "$temporary_directory/no-semantic" >/dev/null
+
 printf 'raw_search_entrypoint=ok\n'

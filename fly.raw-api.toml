@@ -17,9 +17,10 @@ primary_region = 'sjc'
   YTSEARCH_ENGAGEMENT_SORTS = 'true'
   YTSEARCH_BACKEND_LABEL = 'raw'
   YTSEARCH_PRESERVE_BACKEND_RELEVANCE_ORDER = 'true'
-  # mode=hybrid asks this service, with the SEMANTIC_SEARCH_KEY secret; it suspends
-  # when idle. Without either, or when it is slow or down, the API answers lexically.
-  SEMANTIC_SEARCH_URL = 'https://ytsearch-semantic-experimental.fly.dev'
+  # mode=hybrid asks youtube-semantic beside the Raw reader over the private network,
+  # with the SEMANTIC_SEARCH_KEY secret. Without either, or when it is slow or down,
+  # the API answers lexically.
+  SEMANTIC_SEARCH_URL = 'http://ytsearch-raw-production.internal:8790'
   # YouTube upload notifications; inert until YTSEARCH_WEBSUB_SECRET is set.
   YTSEARCH_WEBSUB_CALLBACK_URL = 'https://search.pronsh.dev/api/websub/youtube'
   RUST_LOG = 'youtube_api=info,tower_http=info'

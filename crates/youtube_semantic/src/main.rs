@@ -5,7 +5,7 @@ mod store;
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -18,6 +18,7 @@ use std::{
     env,
     fs::File,
     io::{BufRead, BufReader, Read, Seek},
+    net::SocketAddr,
     path::Path,
     sync::Arc,
     time::Instant,
@@ -41,6 +42,8 @@ enum Error {
     Profile,
     #[error("semantic worker busy")]
     Busy,
+    #[error("semantic search key required")]
+    Forbidden,
 }
 type Result<T> = std::result::Result<T, Error>;
 impl IntoResponse for Error {
@@ -48,6 +51,7 @@ impl IntoResponse for Error {
         let status = match self {
             Self::Input(_) | Self::Json(_) => StatusCode::BAD_REQUEST,
             Self::Busy => StatusCode::TOO_MANY_REQUESTS,
+            Self::Forbidden => StatusCode::FORBIDDEN,
             _ => StatusCode::SERVICE_UNAVAILABLE,
         };
         (status, Json(json!({"error":self.to_string()}))).into_response()
@@ -166,6 +170,11 @@ async fn run() -> Result<()> {
         );
         Ok(())
     } else {
+        let bind = env::var("SEMANTIC_BIND").unwrap_or_else(|_| "127.0.0.1:8790".into());
+        let bind: SocketAddr = bind
+            .parse()
+            .map_err(|_| Error::Input("invalid semantic bind address"))?;
+        let access = Access::for_bind(bind, env::var("SEMANTIC_SEARCH_KEY").ok().as_deref())?;
         store.ready().await?;
         let inference = gemma.worker(profile);
         inference.embed(query_prompt("readiness")).await?;
@@ -173,14 +182,8 @@ async fn run() -> Result<()> {
             store,
             inference,
             admission: Arc::new(Semaphore::new(model::QUEUE_DEPTH)),
+            access,
         });
-        let bind = env::var("SEMANTIC_BIND").unwrap_or_else(|_| "127.0.0.1:8790".into());
-        let bind: std::net::SocketAddr = bind
-            .parse()
-            .map_err(|_| Error::Input("invalid semantic bind address"))?;
-        if !bind.ip().is_loopback() {
-            return Err(Error::Input("pilot service must bind loopback"));
-        }
         let listener = tokio::net::TcpListener::bind(bind).await?;
         axum::serve(listener, router(state))
             .with_graceful_shutdown(async {
@@ -330,6 +333,55 @@ struct Service {
     store: Store,
     inference: Inference,
     admission: Arc<Semaphore>,
+    access: Access,
+}
+
+/// Who may call `/search`. A loopback bind with no key trusts its own host. With
+/// a key, every search must present it, so the service can listen on Fly's
+/// private network beside the reader without a proxy in front of it.
+#[derive(Debug, PartialEq)]
+enum Access {
+    Loopback,
+    Keyed(String),
+}
+const KEY_HEADER: &str = "x-semantic-key";
+impl Access {
+    fn for_bind(bind: SocketAddr, key: Option<&str>) -> Result<Self> {
+        match key {
+            Some(key) if !key.is_empty() => {
+                let well_formed = (32..=128).contains(&key.len())
+                    && key
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+                if well_formed {
+                    Ok(Self::Keyed(key.to_owned()))
+                } else {
+                    Err(Error::Input(
+                        "SEMANTIC_SEARCH_KEY must be 32 to 128 of A-Z a-z 0-9 _ -",
+                    ))
+                }
+            }
+            _ if bind.ip().is_loopback() => Ok(Self::Loopback),
+            _ => Err(Error::Input(
+                "a non-loopback SEMANTIC_BIND requires SEMANTIC_SEARCH_KEY",
+            )),
+        }
+    }
+    fn admit(&self, headers: &HeaderMap) -> Result<()> {
+        let Self::Keyed(key) = self else {
+            return Ok(());
+        };
+        let presented = headers.get(KEY_HEADER).map(|v| v.as_bytes());
+        // Equal-length comparison that does not stop at the first differing byte.
+        let matches = presented.is_some_and(|p| {
+            p.len() == key.len()
+                && p.iter()
+                    .zip(key.bytes())
+                    .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                    == 0
+        });
+        matches.then_some(()).ok_or(Error::Forbidden)
+    }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -360,8 +412,10 @@ async fn ready(State(state): State<Arc<Service>>) -> Result<StatusCode> {
 }
 async fn search(
     State(state): State<Arc<Service>>,
+    headers: HeaderMap,
     input: std::result::Result<Json<SearchRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<Value>> {
+    state.access.admit(&headers)?;
     let Json(input) = input.map_err(|_| Error::Input("invalid semantic search request"))?;
     let _permit = state
         .admission
@@ -595,6 +649,74 @@ mod transport_tests {
             assert_eq!((state.writes, state.payload_writes), (3, 1));
             assert_eq!(state.points[&refreshed[0].id]["view_count"], 1_000_001);
         }
+        server.abort();
+    }
+
+    const KEY: &str = "k_0123456789abcdefghijklmnopqrstuv-";
+    fn addr(text: &str) -> SocketAddr {
+        text.parse().unwrap()
+    }
+    #[test]
+    fn only_a_well_formed_key_opens_a_non_loopback_bind() {
+        let private = addr("[fdaa::3]:8790");
+        assert!(Access::for_bind(private, None).is_err());
+        assert!(Access::for_bind(private, Some("")).is_err());
+        assert!(Access::for_bind(private, Some("short")).is_err());
+        assert!(Access::for_bind(private, Some(&format!("{KEY}\n"))).is_err());
+        assert!(Access::for_bind(private, Some(&"k".repeat(129))).is_err());
+        assert_eq!(
+            Access::for_bind(private, Some(KEY)).unwrap(),
+            Access::Keyed(KEY.into())
+        );
+        let loopback = addr("127.0.0.1:8790");
+        assert_eq!(Access::for_bind(loopback, None).unwrap(), Access::Loopback);
+        // A configured key is required on loopback too, never silently ignored.
+        assert_eq!(
+            Access::for_bind(loopback, Some(KEY)).unwrap(),
+            Access::Keyed(KEY.into())
+        );
+        assert!(Access::for_bind(loopback, Some("bad key")).is_err());
+    }
+    #[tokio::test]
+    async fn keyed_service_rejects_searches_without_the_exact_key() {
+        // Qdrant is a closed port, so an admitted search fails later with 503.
+        let store = Store::new(
+            "http://127.0.0.1:9",
+            "ytsearch_semantic_pilot_access".into(),
+            None,
+            Profile {
+                dimensions: EmbeddingDimensions::default(),
+            },
+        )
+        .unwrap();
+        let state = Arc::new(Service {
+            store,
+            inference: Inference::fake(),
+            admission: Arc::new(Semaphore::new(model::QUEUE_DEPTH)),
+            access: Access::Keyed(KEY.into()),
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/search", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router(state)).await.unwrap();
+        });
+        let client = reqwest::Client::new();
+        let body = json!({"q":"rust ownership","limit":5});
+        let status = |key: Option<String>| {
+            let mut request = client.post(&url).json(&body);
+            if let Some(key) = key {
+                request = request.header(KEY_HEADER, key);
+            }
+            async move { request.send().await.unwrap().status().as_u16() }
+        };
+        let mut wrong_last = KEY.to_owned();
+        wrong_last.pop();
+        wrong_last.push('x');
+        assert_eq!(status(None).await, 403);
+        assert_eq!(status(Some(wrong_last)).await, 403);
+        assert_eq!(status(Some(KEY[..KEY.len() - 1].into())).await, 403);
+        assert_eq!(status(Some(format!("{KEY}a"))).await, 403);
+        assert_eq!(status(Some(KEY.into())).await, 503);
         server.abort();
     }
 }

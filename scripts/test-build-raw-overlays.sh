@@ -29,8 +29,10 @@ grep -Fq 'ENTRYPOINT ["raw-search-entrypoint"]' "$search_dockerfile"
 grep -Fq '/usr/local/bin/youtube-raw-search --help >/dev/null' "$search_dockerfile"
 
 repository="$tmp/repository"
-mkdir -p "$repository/.cargo" "$repository/crates/stub/src" "$repository/target/release" "$tmp/bin"
+mkdir -p "$repository/.cargo" "$repository/crates/stub/src" "$repository/target/release" "$tmp/bin" \
+  "$repository/config"
 cp -R "$REPOSITORY_ROOT/scripts" "$repository/scripts"
+cp "$REPOSITORY_ROOT/config/qdrant-semantic.reader.yaml" "$repository/config/"
 cp "$REPOSITORY_ROOT"/Dockerfile.raw-{indexer,search}-overlay \
   "$REPOSITORY_ROOT"/fly.raw-{indexer,search}-overlay.toml "$repository/"
 printf '[build]\n' > "$repository/.cargo/config.toml"
@@ -104,8 +106,11 @@ check_build() {
     "./$entrypoint_source" | sort > "$tmp/expected-context"
   if [[ "$role" = indexer ]]; then
     printf '%s\n' ./scripts/build-whisper-cpp.sh >> "$tmp/expected-context"
-    sort -o "$tmp/expected-context" "$tmp/expected-context"
+  else
+    printf '%s\n' ./scripts/semantic-sidecar.sh ./scripts/prepare-semantic-assets.py \
+      ./config/qdrant-semantic.reader.yaml >> "$tmp/expected-context"
   fi
+  sort -o "$tmp/expected-context" "$tmp/expected-context"
   diff "$tmp/expected-context" "$tmp/fly-context"
   cmp "$repository/Dockerfile.$overlay" "$tmp/fly-context.dockerfile"
   cmp "$repository/fly.$overlay.toml" "$tmp/fly-context.fly-toml"
@@ -132,12 +137,13 @@ jq -e '.app == "ytsearch-indexer-raw-production"' "$tmp/default-app.json" >/dev/
 for path in crates/stub/src/lib.rs Dockerfile.raw-search-overlay \
   Dockerfile.raw-indexer-overlay scripts/raw-search-entrypoint.sh \
   scripts/cloud-index-queue-entrypoint.sh scripts/build-raw-overlay.sh \
-  scripts/build-whisper-cpp.sh \
+  scripts/build-whisper-cpp.sh scripts/semantic-sidecar.sh \
+  scripts/prepare-semantic-assets.py config/qdrant-semantic.reader.yaml \
   scripts/require-committed-rust-build-inputs.sh; do
   cp "$repository/$path" "$tmp/original"
   printf '\n# uncommitted\n' >> "$repository/$path"
   case "$path" in
-    *search*) roles=(reader) ;;
+    *search*|*semantic*) roles=(reader) ;;
     *indexer*|*cloud-index*) roles=(indexer) ;;
     *whisper*) roles=(indexer) ;;
     *) roles=(reader indexer) ;;

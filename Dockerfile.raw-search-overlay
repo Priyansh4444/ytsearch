@@ -7,7 +7,15 @@ WORKDIR /build
 COPY .cargo ./.cargo
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --locked --release -p youtube_raw_search
+RUN cargo build --locked --release -p youtube_raw_search -p youtube_semantic
+
+# Pinned, checksummed embedding model, ONNX Runtime and Qdrant for hybrid search.
+# The bookworm base has glibc 2.36, so Qdrant is its static musl build.
+FROM python:3.12-slim AS semantic-assets
+COPY scripts/prepare-semantic-assets.py /build/prepare-semantic-assets.py
+RUN python -I /build/prepare-semantic-assets.py --directory /opt/semantic --qdrant-libc musl \
+    && rm -rf /opt/semantic/.downloads \
+    && chmod -R a+rX /opt/semantic
 
 FROM ${BASE_IMAGE}
 ARG BASE_IMAGE
@@ -23,6 +31,17 @@ RUN install -d -m 0755 /usr/local/share/ytsearch-release \
 # a developer workstation's newer glibc can never leak into production.
 COPY --from=builder /build/target/release/youtube-raw-search /usr/local/bin/youtube-raw-search
 COPY raw-search-entrypoint /usr/local/bin/raw-search-entrypoint
-RUN chmod 0755 /usr/local/bin/raw-search-entrypoint \
-    && /usr/local/bin/youtube-raw-search --help >/dev/null
+COPY --from=builder /build/target/release/youtube-semantic /usr/local/bin/youtube-semantic
+COPY --from=semantic-assets /opt/semantic /opt/semantic
+COPY config/qdrant-semantic.reader.yaml /opt/semantic/qdrant.yaml
+COPY scripts/semantic-sidecar.sh /usr/local/bin/semantic-sidecar
+ENV SEMANTIC_MODEL_DIR=/opt/semantic/model \
+    ORT_DYLIB_PATH=/opt/semantic/runtime/onnxruntime-linux-x64-1.31.0/lib/libonnxruntime.so.1.31.0 \
+    SEMANTIC_COLLECTION=ytsearch_semantic_pilot_experimental_128 \
+    SEMANTIC_DIMENSIONS=128
+# Fail the build, not the Machine, when a native library is missing on this base.
+RUN chmod 0755 /usr/local/bin/raw-search-entrypoint /usr/local/bin/semantic-sidecar \
+    && /usr/local/bin/youtube-raw-search --help >/dev/null \
+    && /opt/semantic/qdrant/qdrant --version >/dev/null \
+    && ! ldd /usr/local/bin/youtube-semantic "$ORT_DYLIB_PATH" | grep -F 'not found'
 ENTRYPOINT ["raw-search-entrypoint"]

@@ -34,6 +34,10 @@ done
 
 source_commit="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
 extra_build_inputs=()
+if [[ "$kind" = raw-reader-overlay ]]; then
+  extra_build_inputs=(scripts/semantic-sidecar.sh scripts/prepare-semantic-assets.py
+    config/qdrant-semantic.reader.yaml)
+fi
 if [[ "$kind" = raw-indexer-overlay ]]; then
   extra_build_inputs=(scripts/build-whisper-cpp.sh)
 fi

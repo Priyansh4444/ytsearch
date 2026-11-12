@@ -278,34 +278,57 @@ Traps found while building the site:
 - A snapshot that fails preflight writes nothing, but earlier snapshots stay
   imported; fix the input and rerun the same loop, which skips finished points.
 
-## Production (state on 2026-11-09)
+## Production (state on 2026-11-11)
 
-`search.pronsh.dev` offers a Keyword/Hybrid toggle; Keyword is the default. The
-production API (`SEMANTIC_SEARCH_URL` in `fly.raw-api.toml`) asks the semantic machine
-of `ytsearch-semantic-experimental` at `POST /search`, which nginx passes to
-`youtube-semantic` only with the `SEMANTIC_SEARCH_KEY` secret both apps hold. The
-service itself still listens on loopback only.
+`search.pronsh.dev` offers a Keyword/Hybrid toggle; Keyword is the default. Hybrid
+search runs **on the production Raw reader** (`raw_reader` in
+[the inventory](../../config/fly-production-resources.json)), which runs all day
+anyway, so it costs nothing extra and never has to wake up:
 
-- **Idle cost:** the machine suspends when idle and resumes in about a second, with the
-  model still loaded (1.8 s measured after six idle minutes). Fly can discard a snapshot
-  (host maintenance, any deploy or machine update); the next search then pays a cold
-  start of about 25 s. That happened after 13 idle hours on 2026-11-10, so count the
-  cold starts in `flyctl machine status` before trusting suspend for long idle gaps;
-  keeping the machine running instead is `min_machines_running = 1`, about $11 a month.
-- **Bounded wait:** the API waits 6 s for semantic search, then answers lexically, and the
-  response's `mode` says so. The Worker does not edge-cache such a fallback, so hybrid
-  returns as soon as the machine is up, and the results offer "Try hybrid again".
+- `scripts/semantic-sidecar.sh` (started by the reader entrypoint) runs Qdrant on
+  loopback and `youtube-semantic` on the Machine's 6PN address, port 8790. The API
+  reaches it at `SEMANTIC_SEARCH_URL` in `fly.raw-api.toml`, the reader's
+  `.internal` name, with `SEMANTIC_SEARCH_KEY`. `youtube-semantic` refuses a
+  non-loopback bind without a well-formed key and checks the key on every search.
+- The reader always wins: the sidecar starts only after the reader is healthy, and
+  both semantic processes run at OOM score 1000 and nice 10. If memory runs short the
+  kernel kills Qdrant or the model, the API answers with keyword results, and the
+  sidecar restarts them a minute later.
+- **Memory is tight, so the sidecar keeps it warm.** The reader has 2.5 GB and a
+  512 MB swap partition. On 2026-11-11 the daily publication filled the page cache,
+  the kernel swapped out 330 MB of the idle semantic processes, and the next hybrid
+  searches took 3 to 6 s (warm: 40 to 300 ms) before falling back to keyword at the
+  API's 6 s cap. The sidecar now sends one search a minute straight to
+  `youtube-semantic` (`SEMANTIC_WARM_SECONDS`). If fallbacks still show in the API
+  log (`semantic search unavailable; answering hybrid lexically`) after a
+  publication, add 512 MB to the reader (about $2.50 a month) rather than moving
+  semantic search back to a machine that has to wake up.
+- The collection lives in `/data/mutable/semantic/qdrant` on the reader's volume
+  (2.2 GB). Without it, or without the key file `/run/secrets/semantic-search-key`
+  (Machine `files` entry for the `SEMANTIC_SEARCH_KEY` secret), the sidecar logs why
+  and the reader runs alone. Use a hex key (`openssl rand -hex 32`); it survives the
+  base64 round trip of Fly's file secrets unchanged.
+- **Restore or move the collection** with a Qdrant snapshot: create it on the source
+  (`POST /collections/<c>/snapshots`, keep the source awake meanwhile), serve the file
+  over 6PN, and on the reader start a temporary Qdrant as `rawsearch` and
+  `PUT /collections/<c>/snapshots/recover` with the URL and its SHA-256. The reader
+  image has no curl; bash's `/dev/tcp` is enough.
+- A reader canary must not join the API's pool: `.internal` resolves every started
+  Machine, so bind a canary's reader to `127.0.0.1:8108` while it is tested.
+- **Bounded wait:** the API waits 6 s for semantic search, then answers lexically, and
+  the response's `mode` says so. The Worker does not edge-cache such a fallback, and
+  the results offer "Try hybrid again".
 - **Ranking:** measured on the whole catalog in
   [the evaluation](../experiments/semantic/ranking-eval-2026-10-17.md). Re-run it before
   changing fusion, the rewrite or the default mode.
 - **Corpus:** embedded up to the 2026-11-02 mutation export. Newer videos are found by
-  hybrid's lexical half only. Catch up by re-staging the archive and a fresh
-  `mutations.sqlite3` as in "Embedding on the Fly box"; unchanged videos are skipped.
-- **Rotate the key** by importing a new `SEMANTIC_SEARCH_KEY` (32 to 128 characters of
-  `A-Za-z0-9_-`) on both apps, the semantic app first. Between the two, hybrid answers
-  lexically.
-- **Still to do:** embed new uploads as they are indexed, and automate the shrink after
-  a large embedding run (a visitor woke the stopped large machine on 2026-11-05).
+  hybrid's lexical half only. Embedding a catch-up batch still runs on
+  `ytsearch-semantic-experimental` ("Embedding on the Fly box"), never on the reader;
+  move the result over with a snapshot as above.
+- **Rotate the key** by importing a new hex `SEMANTIC_SEARCH_KEY` on both apps with
+  `--stage`, then update the reader Machine and deploy the API. Between the two,
+  hybrid answers lexically.
+- **Still to do:** embed new uploads as they are indexed.
 
 ## Traps
 

@@ -33,6 +33,7 @@ scripts/sync-wrangler-production-resources.sh --check
 scripts/test-sync-wrangler-production-resources.sh
 scripts/test-build-raw-overlays.sh
 scripts/test-raw-search-entrypoint.sh
+scripts/test-semantic-sidecar.sh
 scripts/test-stage-raw-reader-canary.sh
 scripts/test-require-committed-rust-build-inputs.sh
 scripts/test-cloud-index-queue-entrypoint.sh

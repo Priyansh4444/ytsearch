@@ -28,7 +28,12 @@ MODEL_FILES = {
 ONNX_VERSION = "1.31.0"
 ONNX_SHA256 = "cc5c72baf5ae5c8238a6841f0897227be2d02826b9cf98eaf02fdefaeeb03a57"
 QDRANT_VERSION = "1.19.2"
-QDRANT_SHA256 = "34a788a09a4cb278b5c6d2af96d9a6db30c8c7e88ae3550455f7a4d425bb8d4b"
+# The gnu build needs glibc 2.38+. The static musl build runs on older bases,
+# such as the bookworm Raw reader that hosts production semantic search.
+QDRANT_SHA256 = {
+    "gnu": "34a788a09a4cb278b5c6d2af96d9a6db30c8c7e88ae3550455f7a4d425bb8d4b",
+    "musl": "50b253243309ed0ae50a19f678f0d0adcc4f0b567b3bd2c5c0c7e02fa8404bb6",
+}
 
 
 def sha256(path):
@@ -76,6 +81,7 @@ def main():
         type=pathlib.Path,
         default=pathlib.Path(__file__).resolve().parents[1] / "data" / "semantic",
     )
+    parser.add_argument("--qdrant-libc", choices=sorted(QDRANT_SHA256), default="gnu")
     args = parser.parse_args()
     if platform.system() != "Linux" or platform.machine() != "x86_64":
         parser.error("the pinned native binaries support Linux x86_64; provide an appropriate ONNX Runtime/Qdrant build on other platforms")
@@ -90,11 +96,11 @@ def main():
         ONNX_SHA256,
     )
     unpack(onnx_archive, root / "runtime")
-    qdrant_archive = root / ".downloads" / "qdrant-x86_64-unknown-linux-gnu.tar.gz"
+    qdrant_archive = root / ".downloads" / ("qdrant-x86_64-unknown-linux-" + args.qdrant_libc + ".tar.gz")
     download(
         "https://github.com/qdrant/qdrant/releases/download/v" + QDRANT_VERSION + "/" + qdrant_archive.name,
         qdrant_archive,
-        QDRANT_SHA256,
+        QDRANT_SHA256[args.qdrant_libc],
     )
     unpack(qdrant_archive, root / "qdrant")
     manifest = {
@@ -103,6 +109,7 @@ def main():
         "model_files_sha256": MODEL_FILES,
         "onnxruntime_version": ONNX_VERSION,
         "qdrant_version": QDRANT_VERSION,
+        "qdrant_libc": args.qdrant_libc,
     }
     (root / "assets.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(json.dumps({
