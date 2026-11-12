@@ -302,7 +302,7 @@ anyway, so it costs nothing extra and never has to wake up:
   API's 6 s cap. The sidecar now sends one search a minute straight to
   `youtube-semantic` (`SEMANTIC_WARM_SECONDS`). If fallbacks still show in the API
   log (`semantic search unavailable; answering hybrid lexically`) after a
-  publication, add 512 MB to the reader (about $2.50 a month) rather than moving
+  publication, add 512 MB to the reader (about $3 a month at $6 per GB) rather than moving
   semantic search back to a machine that has to wake up.
 - The collection lives in `/data/mutable/semantic/qdrant` on the reader's volume
   (2.2 GB). Without it, or without the key file `/run/secrets/semantic-search-key`
