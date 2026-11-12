@@ -38,26 +38,22 @@ fly_production_inventory_validate() {
       "raw_publication_builder",
       "raw_queue_worker",
       "raw_reader",
-      "raw_reader_canary",
-      "semantic_service"
+      "raw_reader_canary"
     ] and
     (.resources.raw_api | resource) and
     (.resources.raw_reader | resource) and
     (.resources.raw_reader_canary | resource) and
     (.resources.raw_queue_worker | resource) and
     (.resources.raw_publication_builder | resource) and
-    (.resources.semantic_service | resource) and
     .resources.raw_api.mount_path == "/data" and
-    .resources.semantic_service.mount_path == "/data" and
     .resources.raw_reader.mount_path == "/data/mutable" and
     .resources.raw_reader_canary.mount_path == "/data/mutable" and
     .resources.raw_queue_worker.mount_path == "/var/lib/ytsearch" and
     .resources.raw_publication_builder.mount_path == "/var/lib/ytsearch" and
     .resources.raw_reader.app == .resources.raw_reader_canary.app and
     .resources.raw_queue_worker.app == .resources.raw_publication_builder.app and
-    ([.resources.raw_api.app, .resources.raw_reader.app, .resources.raw_queue_worker.app,
-        .resources.semantic_service.app] |
-      unique | length) == 4 and
+    ([.resources.raw_api.app, .resources.raw_reader.app, .resources.raw_queue_worker.app] |
+      unique | length) == 3 and
     ([.resources[] | .machine_id] | length) == ([.resources[] | .machine_id] | unique | length) and
     ([.resources[] | .volume_id] | length) == ([.resources[] | .volume_id] | unique | length)
   ' "$inventory_path" >/dev/null; then

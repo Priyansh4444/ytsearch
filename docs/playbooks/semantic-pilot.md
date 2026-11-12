@@ -160,25 +160,26 @@ lock until then, and a restart that races it panics with `Can't init WAL:
 WouldBlock`. Processes started from an agent session can die when the session
 restarts even with `setsid`; check the PID files and restart the stack.
 
-## Experimental site
+## Experimental site (retired 2026-11-12)
 
-https://search.experimental.pronsh.dev is a test site, not production. It is
-production's Worker and pages (`wrangler.experimental.jsonc`, deployed
-by `scripts/deploy-experimental.sh`, which turns on the hybrid toggle and moment
-sharing) in front of the Fly app `ytsearch-semantic-experimental`. That one machine
-runs nginx, `youtube-api`, `youtube-semantic` and Qdrant from
-[Dockerfile.semantic-experimental](../../Dockerfile.semantic-experimental).
-
-Keyword search goes to the production reader over Fly's private network, using its
-search-only key as this app's `RAW_SEARCH_API_KEY` secret, so both modes of the toggle
-search the same catalog. A local Raw index under `/data/raw-index` is the fallback when
-that key is absent. The site refuses writes, so it cannot queue index requests. It stops
-when idle: the first request afterwards waits for the model to load, about 24 s on two
-shared vCPUs, and then gets a full hybrid answer. nginx starts only once the semantic
-service is ready (at most 90 s), because starting it first answered silently lexically
-for the first ~10 s, which made questions look broken.
+https://search.experimental.pronsh.dev previewed the hybrid toggle and moment
+sharing. Both are on production now, so its Worker
+([experimental-redirect.ts](../../worker/experimental-redirect.ts), deployed by
+`scripts/deploy-experimental.sh`) redirects every path to search.pronsh.dev and old
+shared links keep working. The Fly app `ytsearch-semantic-experimental` was deleted
+to stop paying for its volume and snapshots; production's collection lives on the
+reader (see "Production").
 
 ### Embedding on the Fly box
+
+There is no standing embedding machine any more. For a catch-up, create a temporary
+app from [fly.semantic-experimental.toml](../../fly.semantic-experimental.toml) and
+[Dockerfile.semantic-experimental](../../Dockerfile.semantic-experimental) with a new
+volume (`flyctl apps create`, `flyctl volumes create semantic_experimental_data`,
+`flyctl deploy -c fly.semantic-experimental.toml`), seed its `/data/qdrant` from the
+reader's collection with a snapshot (see "Production"), embed, then move the result
+back the same way and delete the app. Unchanged videos are skipped, so a catch-up only
+embeds what is new.
 
 Backfills run on the machine, not a laptop. Its entrypoint starts
 `scripts/run-semantic-backfill.sh` beside serving whenever `/data/backfill/batches.json`
@@ -322,9 +323,10 @@ anyway, so it costs nothing extra and never has to wake up:
   [the evaluation](../experiments/semantic/ranking-eval-2026-10-17.md). Re-run it before
   changing fusion, the rewrite or the default mode.
 - **Corpus:** embedded up to the 2026-11-02 mutation export. Newer videos are found by
-  hybrid's lexical half only. Embedding a catch-up batch still runs on
-  `ytsearch-semantic-experimental` ("Embedding on the Fly box"), never on the reader;
-  move the result over with a snapshot as above.
+  hybrid's lexical half only. Embed a catch-up on a temporary app ("Embedding on the
+  Fly box"), never on the reader, and move the result over with a snapshot as above.
+- **Copies:** the reader volume (and its five daily Fly snapshots) and the stopped
+  reader canary's volume, restored 2026-11-11, which is the source for a restore.
 - **Rotate the key** by importing a new hex `SEMANTIC_SEARCH_KEY` on both apps with
   `--stage`, then update the reader Machine and deploy the API. Between the two,
   hybrid answers lexically.

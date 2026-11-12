@@ -38,4 +38,4 @@ require_line "$ROOT/fly.semantic-experimental.toml" "cpu_kind = 'shared'" "seman
 require_line "$ROOT/fly.semantic-experimental.toml" "auto_stop_machines = 'suspend'" "semantic search must suspend when idle"
 require_line "$ROOT/fly.semantic-experimental.toml" "min_machines_running = 0" "semantic search must not be kept running"
 
-echo "fly_cost_config=ok raw=shared4x/2.5GiB indexer=shared2x/2GiB/on-demand semantic=shared2x/2GiB/suspends"
+echo "fly_cost_config=ok raw=shared4x/2.5GiB indexer=shared2x/2GiB/on-demand semantic=on-reader (temporary embedding app: shared2x/2GiB/suspends)"
