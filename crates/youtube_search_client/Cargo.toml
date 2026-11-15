@@ -12,3 +12,6 @@ youtube_index_store = { path = "../youtube_index_store" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt"] }
+
+[lints]
+workspace = true

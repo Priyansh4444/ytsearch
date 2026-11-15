@@ -13,3 +13,6 @@ youtube_time = { path = "../youtube_time" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

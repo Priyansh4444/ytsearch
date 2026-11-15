@@ -31,3 +31,6 @@ youtube_ytdlp = { path = "../youtube_ytdlp" }
 [dev-dependencies]
 flate2 = "1"
 tempfile = "3"
+
+[lints]
+workspace = true

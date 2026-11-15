@@ -14,3 +14,6 @@ url = "2.5.8"
 [dev-dependencies]
 dotenvy = "0.15.7"
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread"] }
+
+[lints]
+workspace = true

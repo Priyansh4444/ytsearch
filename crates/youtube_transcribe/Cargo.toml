@@ -11,3 +11,6 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["fs", "process", "time"] }
 tracing = { workspace = true }
 youtube_ingest = { path = "../youtube_ingest" }
+
+[lints]
+workspace = true
