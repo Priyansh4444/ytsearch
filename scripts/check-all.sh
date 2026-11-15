@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
+python3 scripts/test-check-rust-lints.py
 bun run check:precommit
 # A signal trap that only cleans up lets the script resume after the signal.
 if grep -rnE '^[[:space:]]*trap [^-].* EXIT .*(INT|TERM)' scripts; then

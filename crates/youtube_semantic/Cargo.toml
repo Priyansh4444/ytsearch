@@ -23,3 +23,6 @@ uuid = { version = "1", features = ["v5"] }
 
 [dev-dependencies]
 youtube_ingest = { path = "../youtube_ingest" }
+
+[lints]
+workspace = true

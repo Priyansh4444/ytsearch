@@ -11,6 +11,7 @@ last person, and the facts that are expensive to look up.
 | [reader-performance.md](reader-performance.md) | Profiling or speeding up the Raw reader, or proving a reader change returns identical results |
 | [semantic-pilot.md](semantic-pilot.md) | Running the opt-in local Qdrant / EmbeddingGemma snapshot pilot |
 | [api-changes.md](api-changes.md) | Refactoring `youtube_api`, or proving an API change returns identical responses |
+| [rust-lints.md](rust-lints.md) | Enforcing Rust lints and reducing existing lint debt |
 | [dependency-updates.md](dependency-updates.md) | Updating JS or Rust dependencies, or a bundle budget fails |
 | [indexing-gaps.md](indexing-gaps.md) | Explaining creator video gaps and separating fetch failures from restricted or captionless videos |
 | [frontend-reactivity.md](frontend-reactivity.md) | The UI flashes, remounts, refetches or loses state; reproducing timer-driven bugs |
