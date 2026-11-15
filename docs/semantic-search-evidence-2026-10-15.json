@@ -1,0 +1,400 @@
+{
+  "date": "2026-10-15",
+  "repository_commit": "d0e69c4",
+  "scope": "Read-only Fly inventory/SSH/public GETs; local caption grouping; no inference or ANN benchmarks.",
+  "active_generation": {
+    "sequence": 10006,
+    "directory": "generations/00000000000000010006"
+  },
+  "manifest": {
+    "schema_version": 9,
+    "documents": 9405380,
+    "videos": 41475,
+    "channels": 69,
+    "terms": 323325,
+    "blocks": 146960,
+    "average_document_tokens": 20.103226,
+    "max_view_count": 306343693,
+    "max_like_count": 12406451,
+    "max_comment_count": 350218
+  },
+  "metrics": {
+    "backend": "raw-inverted-index",
+    "documents": 9405380,
+    "index_bytes": 2083270828,
+    "rss_bytes": 1179873280,
+    "cpu_ticks": 310259,
+    "searches": 22839,
+    "errors": 13,
+    "search_nanos": 6718694745927,
+    "queue_wait_nanos": 6374474100724,
+    "backend_nanos": 343634527520,
+    "cache_hits": 336,
+    "uptime_seconds": 641361
+  },
+  "machines": [
+    {
+      "app": "ytsearch-api-raw-production",
+      "id": "8e7204a7694d28",
+      "state": "started",
+      "region": "sjc",
+      "guest": {
+        "cpu_kind": "shared",
+        "cpus": 1,
+        "memory_mb": 256
+      },
+      "checks": [
+        {
+          "name": "health",
+          "status": "passing",
+          "output": "{\"ok\":true}",
+          "updated_at": "2026-10-13T10:22:27.815Z"
+        }
+      ],
+      "mounts": [
+        {
+          "encrypted": true,
+          "path": "/data",
+          "size_gb": 1,
+          "volume": "vol_40oxdw7jz2ne86p4",
+          "name": "raw_api_queue_data"
+        }
+      ]
+    },
+    {
+      "app": "ytsearch-raw-production",
+      "id": "e820611bde9518",
+      "state": "stopped",
+      "region": "sjc",
+      "guest": {
+        "cpu_kind": "shared",
+        "cpus": 4,
+        "memory_mb": 2560
+      },
+      "checks": [],
+      "mounts": [
+        {
+          "encrypted": true,
+          "path": "/data/mutable",
+          "size_gb": 10,
+          "volume": "vol_v3gp030o6012g2m4",
+          "name": "raw_canary_9816565"
+        }
+      ]
+    },
+    {
+      "app": "ytsearch-raw-production",
+      "id": "d89303da029328",
+      "state": "started",
+      "region": "sjc",
+      "guest": {
+        "cpu_kind": "shared",
+        "cpus": 4,
+        "memory_mb": 2560
+      },
+      "checks": [
+        {
+          "name": "health",
+          "status": "passing",
+          "output": "{\"backend\":\"raw-inverted-index\",\"documents\":9401934,\"ok\":true}",
+          "updated_at": "2026-10-14T12:01:00.924Z"
+        }
+      ],
+      "mounts": [
+        {
+          "encrypted": true,
+          "path": "/data/mutable",
+          "size_gb": 20,
+          "volume": "vol_v3g580llxq66yyw4",
+          "name": "raw_mutable_data"
+        }
+      ]
+    },
+    {
+      "app": "ytsearch-indexer-raw-production",
+      "id": "8e426df7e305e8",
+      "state": "stopped",
+      "region": "sjc",
+      "guest": {
+        "cpu_kind": "shared",
+        "cpus": 2,
+        "memory_mb": 2048
+      },
+      "checks": [],
+      "mounts": [
+        {
+          "encrypted": true,
+          "path": "/var/lib/ytsearch",
+          "size_gb": 10,
+          "volume": "vol_4m3p79pqxz2ngl1v",
+          "name": "ytsearch_indexer_data_raw"
+        }
+      ]
+    },
+    {
+      "app": "ytsearch-indexer-raw-production",
+      "id": "80e9345f6ee198",
+      "state": "stopped",
+      "region": "ord",
+      "guest": {
+        "cpu_kind": "shared",
+        "cpus": 2,
+        "memory_mb": 2048
+      },
+      "checks": [],
+      "mounts": [
+        {
+          "encrypted": true,
+          "path": "/var/lib/ytsearch",
+          "size_gb": 10,
+          "volume": "vol_458o0d05oe82ndj4",
+          "name": "ytsearch_indexer_data_raw"
+        }
+      ]
+    }
+  ],
+  "reader_ssh": "Thu Oct 15 11:50:01 UTC 2026\nx86_64\n4\nMemTotal:        2528200 kB\nMemAvailable:    1699608 kB\nSwapTotal:        524284 kB\nSwapFree:         424604 kB\nName:\tyoutube-raw-sea\nVmRSS:\t 1152220 kB\nRssAnon:\t  599656 kB\nRssFile:\t  552564 kB\nVmSwap:\t   91276 kB\nThreads:\t5\n/data/mutable/generations/00000000000000009947/manifest.json\n/data/mutable/generations/00000000000000010006/manifest.json\n/data/mutable/active-generation.json\ntotal 811M\n-rw-r--r-- 1 rawsearch rawsearch 811M Aug  9 01:33 youtube_transcript_chunks.jsonl.gz\n-rw-r--r-- 1 rawsearch rawsearch 7.3K Aug  9 01:01 youtube_youtubers.jsonl.gz\n",
+  "reader_cgroup_snapshot": {
+    "memory_current_bytes": 2393489408,
+    "memory_peak_source": "sampled_current",
+    "swap_current_bytes": 100024320,
+    "oom": 0,
+    "oom_kill": 0,
+    "disk_total_bytes": 20940668928,
+    "disk_used_bytes": 6540857344,
+    "disk_available_bytes": 13310132224
+  },
+  "caption_grouping_experiment": {
+    "available_cache_files": 608,
+    "sample_videos": 500,
+    "seed": 42,
+    "window_counts": {
+      "10": 323131,
+      "60": 39435,
+      "90": 25903
+    },
+    "window_mean_text_bytes": {
+      "10": 95.1,
+      "60": 786.1,
+      "90": 1197.3
+    },
+    "note": "Local cache sample, no overlap, matching current time-window grouping; bytes/4 is only a token estimate."
+  },
+  "queries": [
+    {
+      "case": "low-signal",
+      "query": "I",
+      "mode": "lexical",
+      "total_videos": 1113,
+      "total_moments": 1113,
+      "time_to_first_result_ms": 14,
+      "top_videos": [
+        {
+          "video_id": "NE006pkiAnk",
+          "title": "So I've been testing Gemini 4...",
+          "creator": "@t3dotgg",
+          "published_at": "2026-10-14T00:00:00Z",
+          "first_hit": {
+            "id": "NE006pkiAnk_0",
+            "t_start_ms": 0,
+            "text": "It finally happened. Gemini 4 argan is here. Before we get started, I got a quick question. How long do you think it has been since we got a normalsized"
+          }
+        },
+        {
+          "video_id": "DbWL6Zs2j_g",
+          "title": "Meta just caught up with Anthropic",
+          "creator": "@t3dotgg",
+          "published_at": "2026-10-13T00:00:00Z",
+          "first_hit": {
+            "id": "DbWL6Zs2j_g_0",
+            "t_start_ms": 80,
+            "text": "It finally happened. A lab that isn't named OpenAI or Anthropic shipped a model that is in the same tier as Fable"
+          }
+        },
+        {
+          "video_id": "vRS2leJLAI0",
+          "title": "I thought AI was gonna get cheaper?",
+          "creator": "@t3dotgg",
+          "published_at": "2026-10-12T00:00:00Z",
+          "first_hit": {
+            "id": "vRS2leJLAI0_0",
+            "t_start_ms": 160,
+            "text": "Intelligence too cheap to measure is AI's next frontier. According to Sam"
+          }
+        }
+      ]
+    },
+    {
+      "case": "stopword",
+      "query": "fable on high",
+      "mode": "lexical",
+      "total_videos": 16,
+      "total_moments": 31,
+      "time_to_first_result_ms": 86,
+      "top_videos": [
+        {
+          "video_id": "5LqC6qdVAwU",
+          "title": "You were lied to about Fable",
+          "creator": "@t3dotgg",
+          "published_at": "2026-07-04T00:00:00Z",
+          "first_hit": {
+            "id": "5LqC6qdVAwU_162",
+            "t_start_ms": 1138960,
+            "text": "some money now. I already said this one, using Fable on high effort is much, much more reasonable and pretty much everyone I know using the model has either made"
+          }
+        },
+        {
+          "video_id": "8GRmLR__OGQ",
+          "title": "A proper guide to Fable 5",
+          "creator": "@t3dotgg",
+          "published_at": "2026-07-06T00:00:00Z",
+          "first_hit": {
+            "id": "8GRmLR__OGQ_64",
+            "t_start_ms": 465800,
+            "text": "use Fable on higher than high reasoning efforts. The X high and max options are dangerous and ultra code causes it to"
+          }
+        },
+        {
+          "video_id": "P7bxbDSnZRM",
+          "title": "Fable Vs Astra Debate Is Over",
+          "creator": "@t3dotgg",
+          "published_at": "2026-09-11T00:00:00Z",
+          "first_hit": {
+            "id": "P7bxbDSnZRM_38",
+            "t_start_ms": 270880,
+            "text": "case previously was on high with Fable 5. It cost $34 and it got a 25%. Now 5.1"
+          }
+        }
+      ]
+    },
+    {
+      "case": "semantic",
+      "query": "why do developers make simple software complicated",
+      "mode": "lexical",
+      "total_videos": 6,
+      "total_moments": 6,
+      "time_to_first_result_ms": 497,
+      "top_videos": [
+        {
+          "video_id": "XjK5NIWXysA",
+          "title": "Why is OpenAI buying a VS Code fork???",
+          "creator": "@t3dotgg",
+          "published_at": "2025-05-08T00:00:00Z",
+          "first_hit": {
+            "id": "XjK5NIWXysA_305",
+            "t_start_ms": 1966799,
+            "text": "over. I think they could do this. Could go either way, but if their goal is to make developers like them more and make"
+          }
+        },
+        {
+          "video_id": "tLPEl7P2Bnc",
+          "title": "Adobe Gave Up (On Developers)",
+          "creator": "@t3dotgg",
+          "published_at": "2024-02-02T00:00:00Z",
+          "first_hit": {
+            "id": "tLPEl7P2Bnc_30",
+            "t_start_ms": 201400,
+            "text": "some of my content which I never thought I would do but that part makes sense and this is why today's news goes from crazy"
+          }
+        },
+        {
+          "video_id": "yaodD79Q4iE",
+          "title": "Why Don't We Have A Laravel For JavaScript?",
+          "creator": "@t3dotgg",
+          "published_at": "2024-05-26T00:00:00Z",
+          "first_hit": {
+            "id": "yaodD79Q4iE_92",
+            "t_start_ms": 665240,
+            "text": "Alternatives made by developers just like us that you can contribute to yourself adopt do whatever you want to and if you don't like what they're doing"
+          }
+        }
+      ]
+    },
+    {
+      "case": "semantic-global",
+      "query": "why do developers make simple software complicated",
+      "mode": "lexical",
+      "total_videos": 18,
+      "total_moments": 18,
+      "time_to_first_result_ms": 312,
+      "top_videos": [
+        {
+          "video_id": "quNLtK7hWYs",
+          "title": "Amy Dutton: How Next.js and Prisma make frontend developers full-stack",
+          "creator": "@VercelHQ",
+          "published_at": "2022-10-31T00:00:00Z",
+          "first_hit": {
+            "id": "quNLtK7hWYs_33",
+            "t_start_ms": 205739,
+            "text": "so why not start where most people start a to-do app I know to do apps get a lot of grief but it's a great way to learn"
+          }
+        },
+        {
+          "video_id": "kWFOeEB1qcI",
+          "title": "I Paid 5 Game Developers $1,000 to Make the Same Game.",
+          "creator": "@CodeBullet",
+          "published_at": "2026-01-10T00:00:00Z",
+          "first_hit": {
+            "id": "kWFOeEB1qcI_129",
+            "t_start_ms": 931120,
+            "text": "This is kind of fun. Wa, that's sick. Dodge roll. [ __ ] Why do they keep putting dodge roll on Q? That's the most"
+          }
+        },
+        {
+          "video_id": "H3HGILjnY04",
+          "title": "Why All Software Developers Need Github (iOS/Android/Web)",
+          "creator": "@fknight",
+          "published_at": "2017-09-29T00:00:00Z",
+          "first_hit": {
+            "id": "H3HGILjnY04_13",
+            "t_start_ms": 88530,
+            "text": "and that's really what it was I created two view controllers connected them via Segway it didn't really do anything except for show that I can make"
+          }
+        }
+      ]
+    },
+    {
+      "case": "concept",
+      "query": "avoiding unnecessary abstractions",
+      "mode": "lexical",
+      "total_videos": 3,
+      "total_moments": 4,
+      "time_to_first_result_ms": 178,
+      "top_videos": [
+        {
+          "video_id": "IS_urQASlAM",
+          "title": "TypeScript's Next Release Is Wild",
+          "creator": "@t3dotgg",
+          "published_at": "2024-07-31T00:00:00Z",
+          "first_hit": {
+            "id": "IS_urQASlAM_104",
+            "t_start_ms": 709200,
+            "text": "JavaScript without actually having to check our types yeah this allows for avoiding unnecessary type checks when performing semantic analysis necessary"
+          }
+        },
+        {
+          "video_id": "CvXsGWDozRw",
+          "title": "JavaScript is fast enough (don't rewrite your code)",
+          "creator": "@t3dotgg",
+          "published_at": "2025-04-21T00:00:00Z",
+          "first_hit": {
+            "id": "CvXsGWDozRw_41",
+            "t_start_ms": 287120,
+            "text": "make the JSO system better was doing things like avoiding unnecessary type conversions or creating functions inside of functions if you don't have to. And"
+          }
+        },
+        {
+          "video_id": "zf_ooHoBuP0",
+          "title": "I'm Gonna Try Zed Now (RIP VSCode)",
+          "creator": "@t3dotgg",
+          "published_at": "2024-02-13T00:00:00Z",
+          "first_hit": {
+            "id": "zf_ooHoBuP0_49",
+            "t_start_ms": 343080,
+            "text": "the window itself while avoiding an unnecessarily long blocking period Antonio built a binary on Theo's dining room table and air dropped it to him to"
+          }
+        }
+      ]
+    }
+  ]
+}
