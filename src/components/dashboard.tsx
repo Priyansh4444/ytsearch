@@ -1,5 +1,5 @@
-import { For, Show, createMemo, createSignal, isPending, onSettled } from "solid-js";
-import type { Component } from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import type { Accessor, Component } from "solid-js";
 import { dashboardData } from "../api";
 import {
   calculateDashboardMetrics,
@@ -8,36 +8,56 @@ import {
   visibleCreators,
 } from "../dashboard-metrics";
 import type { CreatorFilter, CreatorSort, CreatorView } from "../dashboard-metrics";
-import type { IndexedChannel, IndexStatus } from "../types";
+import type { DashboardData, IndexedChannel, IndexStatus } from "../types";
 import { routeForHandle } from "../utils";
+import { DashboardApprovals } from "./dashboard-approvals";
 import { ChannelAvatar } from "./channel-profile";
 
 const number = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
 const integer = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
-export const Dashboard: Component = () => {
-  const [refreshVersion, setRefreshVersion] = createSignal(0);
-  const [view, setView] = createSignal<CreatorView>({
-    query: "",
-    filter: "all",
-    sort: "difference",
-  });
-  const snapshot = createMemo(() => {
-    refreshVersion();
-    return dashboardData();
-  });
-  const snapshotPending = () => isPending(() => snapshot());
-  const refetch = () => setRefreshVersion((version) => version + 1);
-  const metrics = createMemo(() => calculateDashboardMetrics(snapshot().channels));
-  const channels = createMemo(() => visibleCreators(snapshot().channels, view()));
-  const catalogNumber = (value: number) =>
-    snapshot().channelsAvailable ? integer.format(value) : "—";
+type ReadyDashboard = {
+  kind: "ready";
+  snapshot: DashboardData;
+  refresh: { kind: "idle" } | { kind: "pending" } | { kind: "failed"; message: string };
+};
+type DashboardState = { kind: "loading" } | { kind: "failed"; message: string } | ReadyDashboard;
 
+export const Dashboard: Component = () => {
+  const [state, setState] = createSignal<DashboardState>({ kind: "loading" });
+  let generation = 0;
+  let controller: AbortController | undefined;
+  const refetch = async () => {
+    const version = ++generation;
+    controller?.abort();
+    controller = new AbortController();
+    setState((current) =>
+      current.kind === "ready" ? { ...current, refresh: { kind: "pending" } } : { kind: "loading" },
+    );
+    try {
+      const snapshot = await dashboardData(controller.signal);
+      if (version === generation) setState({ kind: "ready", snapshot, refresh: { kind: "idle" } });
+    } catch (cause) {
+      if (version !== generation) return;
+      const message =
+        cause instanceof Error && cause.message ? cause.message : "Could not load dashboard";
+      setState((current) =>
+        current.kind === "ready"
+          ? { ...current, refresh: { kind: "failed", message } }
+          : { kind: "failed", message },
+      );
+    }
+  };
+  onCleanup(() => {
+    generation += 1;
+    controller?.abort();
+  });
   onSettled(() => {
     const previousTitle = document.title;
     document.title = "Dashboard · YouTube Search";
+    void refetch();
     const refreshVisiblePage = () => {
-      if (!document.hidden) refetch();
+      if (!document.hidden) void refetch();
     };
     const interval = window.setInterval(refreshVisiblePage, 60_000);
     document.addEventListener("visibilitychange", refreshVisiblePage);
@@ -47,6 +67,58 @@ export const Dashboard: Component = () => {
       document.removeEventListener("visibilitychange", refreshVisiblePage);
     };
   });
+  const ready = () => {
+    const current = state();
+    return current.kind === "ready" ? current : undefined;
+  };
+  const initialFailure = () => {
+    const current = state();
+    return current.kind === "failed" ? current.message : undefined;
+  };
+  return (
+    <Show
+      when={ready()}
+      fallback={
+        <main class="grid min-h-svh place-items-center bg-vesper-bg text-sm text-vesper-muted">
+          <Show when={initialFailure()} fallback={<p>Loading dashboard…</p>}>
+            {(message) => (
+              <div>
+                <p role="alert">{message()}</p>
+                <button type="button" onClick={() => void refetch()}>
+                  Retry dashboard
+                </button>
+              </div>
+            )}
+          </Show>
+        </main>
+      }
+    >
+      {(current) => <DashboardContent state={current} refetch={() => void refetch()} />}
+    </Show>
+  );
+};
+
+const DashboardContent: Component<{ state: Accessor<ReadyDashboard>; refetch: () => void }> = (
+  props,
+) => {
+  const snapshot = () => props.state().snapshot;
+  const snapshotPending = () => props.state().refresh.kind === "pending";
+  const refetch = () => props.refetch();
+  const errors = createMemo(() => {
+    const current = props.state();
+    return current.refresh.kind === "failed"
+      ? [...current.snapshot.errors, current.refresh.message]
+      : current.snapshot.errors;
+  });
+  const [view, setView] = createSignal<CreatorView>({
+    query: "",
+    filter: "all",
+    sort: "difference",
+  });
+  const metrics = createMemo(() => calculateDashboardMetrics(snapshot().channels));
+  const channels = createMemo(() => visibleCreators(snapshot().channels, view()));
+  const catalogNumber = (value: number) =>
+    snapshot().channelsAvailable ? integer.format(value) : "—";
 
   return (
     <main class="min-h-svh bg-vesper-bg text-vesper-text">
@@ -141,14 +213,16 @@ export const Dashboard: Component = () => {
           </div>
         </section>
 
-        <Show when={snapshot().errors.length}>
+        <Show when={errors().length}>
           <section class="mb-5 border border-vesper-red/40 bg-vesper-red/5 p-4" role="alert">
             <p class="text-sm font-medium text-vesper-red">Some metrics are unavailable</p>
-            <For each={snapshot().errors}>
+            <For each={errors()}>
               {(error) => <p class="mt-1 break-words text-xs text-vesper-muted">{error}</p>}
             </For>
           </section>
         </Show>
+
+        <DashboardApprovals channels={snapshot().channels} />
 
         <section
           aria-label="Service status"

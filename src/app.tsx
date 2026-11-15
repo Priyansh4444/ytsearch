@@ -1,6 +1,6 @@
 import { Show, Loading, createEffect, createMemo, createSignal, lazy, onCleanup } from "solid-js";
 import type { Component } from "solid-js";
-import { indexStatus, indexedChannels, prepareSearchRuntime, requestIndex } from "./api";
+import { indexedChannels, prepareSearchRuntime, requestIndex } from "./api";
 import { capture, captureSearchLoaded, captureSearchSubmitted } from "./analytics";
 import { useAppLifecycle } from "./app-lifecycle";
 import { AvailabilityNotice } from "./components/availability-notice";
@@ -221,19 +221,6 @@ const App: Component = () => {
       setPage(1);
       window.history.pushState({}, "", routeForHandle(normalized));
     });
-    void indexStatus(normalized)
-      .then((status) => {
-        if (
-          ["pending", "queued", "running", "failed", "rejected"].includes(status.status) &&
-          status.request_id
-        ) {
-          setQueuedIndexRequest({
-            handle: normalized,
-            requestId: status.request_id,
-          });
-        }
-      })
-      .catch(() => undefined);
   };
 
   const confirmIndexRequest = async () => {

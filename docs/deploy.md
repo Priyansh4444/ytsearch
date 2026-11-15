@@ -13,6 +13,12 @@ The checked-in configuration is the target configuration.
 
 ## Prerequisites
 
+Use the existing project environment before refreshing credentials. Scripts source
+`scripts/load-env.sh` without printing values. If the local `flyctl` login has
+expired, an already provisioned organization token under `FLYIO_TOKEN` can be
+passed in the operator process as `FLY_API_TOKEN`; verify app access before a
+release. An expired interactive login does not by itself require a new token.
+
 ```bash
 flyctl auth login
 flyctl auth whoami
@@ -135,6 +141,9 @@ bun run check:precommit
 scripts/cloudflare-worker-deploy.sh
 ```
 
+The frontend release script checks the bundle and Worker budgets after building
+with the production feature flags, before uploading anything.
+
 Production uses `always_on`: a five-minute reconciler restarts a stopped
 reader, and availability promises 24/7 service. `observe` only reports health;
 `enforce` is the optional Pacific-window policy.
@@ -171,9 +180,13 @@ rolling back a publication restores that generation.
 
 - `RAW_SEARCH_API_KEY`: Raw engine and Rust API only.
 - `RAW_SEARCH_ADMIN_API_KEY`: Raw engine and trusted indexers only.
-- `YTSEARCH_INDEX_QUEUE_TOKEN`: Rust API, indexer, and operator tools only.
+- `YTSEARCH_INDEX_QUEUE_TOKEN`: Rust API, indexer, and trusted operator tools only. The dashboard Worker stores it as `DASHBOARD_QUEUE_TOKEN`; it is never sent to the browser.
 - `FLY_API_TOKEN`: operator/CI environment only; required by direct Machines
   API scripts and never derived through deprecated `flyctl auth token`.
 - `FLYIO_TOKEN`: Cloudflare Worker only; use the scoped multi-app token above.
 - `YOUTUBE_API_KEY` and cookie files: indexer only.
 - Axiom ingest and query keys remain separate.
+
+Dashboard approvals: open `/dashboard`, enter your separate approval password in **Approval passkey**, and select **Unlock approvals**. Approve pending creators with one click. The token stays in page memory only; **Lock approvals** or leaving the page clears it.
+
+Dashboard approval secrets: set Worker `DASHBOARD_APPROVAL_PASSKEY` to the operator password and `DASHBOARD_QUEUE_TOKEN` to the existing `YTSEARCH_INDEX_QUEUE_TOKEN`. The password grants only listing requests and approving them through `/api/dashboard/index-requests`; the Worker injects the queue credential server-side. Missing secrets disable dashboard approvals. Never put either secret in `VITE_*` variables.

@@ -17,6 +17,9 @@ export VITE_HYBRID_TOGGLE="true"
 export CLOUDFLARE_API_TOKEN
 
 bun run frontend:check
+# Check the actual release build, including production feature flags.
+bun run perf:bundle
+bun run perf:worker
 # No --keep-vars: wrangler.jsonc is the complete set of plain vars, so a deploy
 # also removes variables that are no longer configured. Secrets are unaffected.
 bunx wrangler deploy

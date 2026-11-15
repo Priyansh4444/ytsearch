@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import { dashboardApprovalRequest } from "./dashboard-approval";
 import { shouldWakeIndexer } from "./wake-policy";
 import { errorForAgents } from "./api-error";
 import { currentHandle } from "./page-route";
@@ -22,6 +23,11 @@ import {
   searchAvailabilityEffect,
   rawSearchHealthyEffect,
 } from "./search-availability";
+
+type WorkerEnvironment = Env & {
+  DASHBOARD_APPROVAL_PASSKEY?: string;
+  DASHBOARD_QUEUE_TOKEN?: string;
+};
 
 type WakeMessage = {
   reason: "index-request" | "scheduled-repair" | "availability-open";
@@ -47,11 +53,11 @@ export default {
   queue: (batch, env): Promise<void> => Effect.runPromise(queueEffect(batch, env)),
   scheduled: (controller, env): Promise<void> =>
     Effect.runPromise(scheduledEffect(controller, env)),
-} satisfies ExportedHandler<Env, WakeMessage>;
+} satisfies ExportedHandler<WorkerEnvironment, WakeMessage>;
 
 function fetchEffect(
   request: Request,
-  env: Env,
+  env: WorkerEnvironment,
   ctx: ExecutionContext,
 ): Effect.Effect<Response, Error> {
   return Effect.gen(function* () {
@@ -91,6 +97,15 @@ function fetchEffect(
         );
         return scheduledOfflineResponse();
       }
+    }
+
+    if (url.pathname === "/api/dashboard" || url.pathname.startsWith("/api/dashboard/")) {
+      const mapped = yield* fromPromise(() =>
+        dashboardApprovalRequest(new Request(url, request), env),
+      );
+      if (mapped instanceof Response) return mapped;
+      const response = yield* apiResponseEffect(mapped, new URL(mapped.url), env);
+      return withBrowserNoStore(response);
     }
 
     const edgeSeconds = request.method === "GET" ? EDGE_CACHE_SECONDS[url.pathname] : undefined;

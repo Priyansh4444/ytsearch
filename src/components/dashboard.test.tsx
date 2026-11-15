@@ -1,3 +1,4 @@
+import { Loading } from "solid-js";
 import { fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { DashboardData } from "../types";
@@ -81,6 +82,70 @@ describe("Dashboard", () => {
     expect(dashboardData).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("link", { name: /Alpha/ })).toHaveAttribute("href", "/alpha");
   });
+  test("a failed initial load can be retried", async () => {
+    dashboardData
+      .mockRejectedValueOnce(new Error("Dashboard module unavailable"))
+      .mockResolvedValueOnce(snapshot);
+    render(() => <Dashboard />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Dashboard module unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "Retry dashboard" }));
+    expect(await screen.findByRole("heading", { name: "System dashboard" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(dashboardData).toHaveBeenCalledTimes(2);
+  });
+
+  test("a rejected refresh retains the loaded catalog and view controls", async () => {
+    dashboardData
+      .mockResolvedValueOnce(snapshot)
+      .mockRejectedValueOnce(new Error("Refresh unavailable"));
+    render(() => <Dashboard />);
+    const search = await screen.findByRole("searchbox");
+    fireEvent.input(search, { target: { value: "Beta" } });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh metrics" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Refresh unavailable");
+    expect(screen.getByRole("searchbox")).toBe(search);
+    expect(search).toHaveValue("Beta");
+    expect(screen.getByRole("button", { name: "Refresh metrics" })).not.toBeDisabled();
+    expect(screen.getByRole("link", { name: /Beta/ })).toBeInTheDocument();
+  });
+
+  test("an older refresh cannot enable the button while the latest refresh is pending", async () => {
+    let finishOlder: (value: DashboardData) => void = () => undefined;
+    let finishLatest: (value: DashboardData) => void = () => undefined;
+    const older = new Promise<DashboardData>((resolve) => {
+      finishOlder = resolve;
+    });
+    const latest = new Promise<DashboardData>((resolve) => {
+      finishLatest = resolve;
+    });
+    dashboardData
+      .mockResolvedValueOnce(snapshot)
+      .mockReturnValueOnce(older)
+      .mockReturnValueOnce(latest);
+    render(() => (
+      <Loading fallback={<p>Loading dashboard…</p>}>
+        <Dashboard />
+      </Loading>
+    ));
+    const refresh = await screen.findByRole("button", { name: "Refresh metrics" });
+    await waitFor(() => expect(refresh).not.toBeDisabled());
+    fireEvent.click(refresh);
+    await waitFor(() => expect(dashboardData).toHaveBeenCalledTimes(2));
+    fireEvent(document, new Event("visibilitychange"));
+    await waitFor(() => expect(dashboardData).toHaveBeenCalledTimes(3));
+
+    finishOlder(snapshot);
+    await older;
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(refresh).toBeDisabled();
+    expect(refresh).toHaveTextContent("Refreshing…");
+
+    finishLatest(snapshot);
+    await latest;
+    await waitFor(() => expect(refresh).not.toBeDisabled());
+    expect(refresh).toHaveTextContent("Refresh metrics");
+  });
+
   test("searches and filters creators, sorts the table, and reports no matches", async () => {
     dashboardData.mockResolvedValue({
       ...snapshot,
@@ -133,7 +198,8 @@ describe("Dashboard", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Refresh metrics" }));
     await waitFor(() => expect(dashboardData).toHaveBeenCalledTimes(2));
-    expect(screen.getByRole("searchbox")).toHaveValue("Beta");
+    expect(screen.getByRole("searchbox")).toBe(search);
+    expect(search).toHaveValue("Beta");
     expect(screen.getByRole("combobox", { name: "Sort creators" })).toHaveValue("videos");
     expect(screen.queryByRole("link", { name: /Alpha/ })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Beta/ })).toBeInTheDocument();

@@ -40,6 +40,116 @@ describe("index request approval wake gate", () => {
   });
 });
 
+describe("dashboard approval password", () => {
+  const secrets = {
+    DASHBOARD_APPROVAL_PASSKEY: "dashboard-test-password",
+    DASHBOARD_QUEUE_TOKEN: "canonical-queue-token",
+  };
+  const dashboardRequest = (
+    path = "/api/dashboard/index-requests",
+    method = "GET",
+    password = secrets.DASHBOARD_APPROVAL_PASSKEY,
+  ) =>
+    new Request(`https://search.pronsh.dev${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${password}`, "x-index-queue-token": "untrusted-token" },
+    });
+
+  test("maps authenticated listing to queue service using only the server credential", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ requests: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await fetchWorker(
+      dashboardRequest(),
+      testEnv({ ...secrets, INDEX_QUEUE_API_BASE_URL: "https://queue.example.test" }),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    const upstream = fetchMock.mock.calls[0]?.[0] as Request;
+    expect(upstream.url).toBe("https://queue.example.test/api/index-requests?limit=1000");
+    expect(upstream.headers.get("Authorization")).toBe("Bearer canonical-queue-token");
+    expect(upstream.headers.has("x-index-queue-token")).toBe(false);
+    expect([...upstream.headers.values()].join(" ")).not.toContain(
+      secrets.DASHBOARD_APPROVAL_PASSKEY,
+    );
+  });
+
+  test("versioned dashboard listing uses the same authenticated queue route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ requests: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await fetchWorker(
+      dashboardRequest("/api/v1/dashboard/index-requests"),
+      testEnv({ ...secrets, INDEX_QUEUE_API_BASE_URL: "https://queue.example.test" }),
+    );
+    expect(response.status).toBe(200);
+    const upstream = fetchMock.mock.calls[0]?.[0] as Request;
+    expect(upstream.url).toBe("https://queue.example.test/api/index-requests?limit=1000");
+    expect(upstream.headers.get("Authorization")).toBe("Bearer canonical-queue-token");
+  });
+
+  test("invalid credentials never reach upstream", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const response = await fetchWorker(
+      dashboardRequest(undefined, "GET", "wrong"),
+      testEnv(secrets),
+    );
+    expect(response.status).toBe(401);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  test("fails closed when either server secret is absent", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    for (const configured of [
+      {},
+      { DASHBOARD_APPROVAL_PASSKEY: secrets.DASHBOARD_APPROVAL_PASSKEY },
+      { DASHBOARD_QUEUE_TOKEN: secrets.DASHBOARD_QUEUE_TOKEN },
+    ]) {
+      expect((await fetchWorker(dashboardRequest(), testEnv(configured))).status).toBe(503);
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  test("rejects all mutations beyond approval and wrong methods", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    for (const [path, method, status] of [
+      ["/api/dashboard/index-requests", "POST", 405],
+      ["/api/dashboard/index-requests/id/approve", "DELETE", 405],
+      ["/api/dashboard/index-requests/id/reject", "POST", 404],
+      ["/api/dashboard/index-requests/id/status", "PATCH", 404],
+      ["/api/dashboard/index-requests/id", "DELETE", 404],
+      ["/api/dashboard/index-activity", "POST", 404],
+    ] as const) {
+      expect((await fetchWorker(dashboardRequest(path, method), testEnv(secrets))).status).toBe(
+        status,
+      );
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  test("maps approval and wakes the indexer only after upstream success", async () => {
+    const send = vi.fn().mockResolvedValue(undefined);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ request: { status: "queued" } }))
+      .mockResolvedValueOnce(Response.json({ error: "failed" }, { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const env = testEnv({ ...secrets, INDEX_WAKE_QUEUE: { send } });
+    const first = await fetchWorker(
+      dashboardRequest("/api/dashboard/index-requests/request-1/approve", "POST"),
+      env,
+    );
+    const second = await fetchWorker(
+      dashboardRequest("/api/dashboard/index-requests/request-2/approve", "POST"),
+      env,
+    );
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(500);
+    expect((fetchMock.mock.calls[0]?.[0] as Request | undefined)?.url).toContain(
+      "/api/index-requests/request-1/approve",
+    );
+    expect(send).toHaveBeenCalledExactlyOnceWith({ reason: "index-request" });
+  });
+});
+
 describe("scheduled repair wake", () => {
   test("puts a durable wake on the queue with schedule context in logs", async () => {
     const send = vi.fn().mockResolvedValue(undefined);

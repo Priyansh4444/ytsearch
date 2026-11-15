@@ -24,6 +24,57 @@ describe("frontend API client", () => {
     vi.restoreAllMocks();
   });
 
+  test("authenticates queue listing and encodes approval IDs", async () => {
+    const request = {
+      id: "request/1",
+      handle: "@new",
+      requested_at: 1,
+      source_backend: "raw",
+      status: "pending",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ requests: [request] }))
+      .mockResolvedValueOnce(Response.json({ request: { ...request, status: "queued" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { listIndexRequests, approveIndexRequest } = await import("./dashboard-api");
+    expect(await listIndexRequests("test-passkey")).toEqual([request]);
+    expect(await approveIndexRequest(request.id, "test-passkey")).toMatchObject({
+      status: "queued",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("/api/dashboard/index-requests?limit=1000"),
+      expect.objectContaining({
+        headers: { Authorization: "Bearer test-passkey" },
+        cache: "no-store",
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/api/dashboard/index-requests/request%2F1/approve"),
+      expect.objectContaining({
+        method: "POST",
+        headers: { Authorization: "Bearer test-passkey" },
+      }),
+    );
+  });
+
+  test("rejects malformed queue records and unauthorized approval responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(Response.json({ requests: [{ id: "bad" }] }))
+        .mockResolvedValueOnce(Response.json({ error: "Unauthorized" }, { status: 401 })),
+    );
+    const { listIndexRequests, approveIndexRequest } = await import("./dashboard-api");
+    await expect(listIndexRequests("test-passkey")).rejects.toMatchObject({
+      name: "ApiDecodeError",
+    });
+    await expect(approveIndexRequest("id", "test-passkey")).rejects.toMatchObject({ status: 401 });
+  });
+
   test("encodes the complete search contract", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify(emptySearch("rust & wasm")), {

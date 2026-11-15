@@ -64,3 +64,13 @@ video restarting is the usual symptom), or loses state for no visible reason.
   responsiveness assertion. Always release a routed chunk in `finally` and
   settle its navigation promise so a failed assertion cannot leave a pending
   `goto` behind.
+
+- **Pending introspection can dominate a small lazy view.** The dashboard's only
+  `isPending` call pulled Solid's pending-tracking runtime into the bundle. Track
+  the dashboard fetch as an explicit loading/ready/failed operation instead;
+  keep loaded content behind a non-keyed boundary and ignore stale responses.
+  This reduced total gzipped JavaScript from 57,120 to 52,336 bytes; the build
+  with all production feature flags on measured 52,342 bytes, with no budget or
+  feature changes (2026-11-15). Re-run `bun run perf:bundle` on the production
+  build when changing reactive primitives; do not assume a small import has a
+  small bundle cost.

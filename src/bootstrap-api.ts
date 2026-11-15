@@ -1,6 +1,6 @@
 import { ApiDecodeError, ApiResponseError, ApiTransportError } from "./api-error";
 import { coalesceChannels } from "./channel-query";
-import type { IndexedChannel, IndexStatus, SearchAvailability } from "./types";
+import type { IndexedChannel, IndexStatus, IndexQueueRequest, SearchAvailability } from "./types";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -171,4 +171,20 @@ function literal<const T extends string>(input: unknown, values: readonly T[]): 
     throw new TypeError("Expected a known literal");
   }
   return input as T;
+}
+
+export function decodeIndexQueueRequest(input: unknown): IndexQueueRequest {
+  const value = record(input);
+  return {
+    id: string(value.id),
+    handle: string(value.handle),
+    note: optionalString(value.note),
+    requested_at: number(value.requested_at),
+    source_backend: string(value.source_backend),
+    status: literal(value.status, ["pending", "queued", "running", "failed", "rejected", "idle"]),
+  };
+}
+
+export function decodeIndexQueueList(input: unknown): IndexQueueRequest[] {
+  return array(record(input).requests, decodeIndexQueueRequest);
 }

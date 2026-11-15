@@ -159,6 +159,19 @@ describe("App", () => {
     });
   });
 
+  test("opening an indexed creator does not show its stale approval status", async () => {
+    mocks.indexStatus.mockResolvedValue({
+      status: "pending",
+      handle: "@example",
+      request_id: "stale-request",
+    });
+    render(() => <App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Search Example" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/example"));
+    expect(mocks.indexStatus).not.toHaveBeenCalledWith("@example");
+    expect(screen.queryByText("Awaiting approval")).not.toBeInTheDocument();
+  });
+
   test("submits a transcript search and renders timestamped results", async () => {
     render(() => <App />);
 

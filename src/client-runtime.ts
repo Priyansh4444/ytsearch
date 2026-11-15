@@ -1,3 +1,4 @@
+import { decodeIndexQueueRequest } from "./bootstrap-api";
 import { ApiResponseError, ApiTransportError, type ApiError } from "./api-error";
 import {
   fetchBootstrapChannels,
@@ -218,15 +219,7 @@ function decodeSearchHit(input: unknown): SearchHit {
 }
 
 function decodeIndexQueueResponse(input: unknown): IndexQueueRequest {
-  const value = record(record(input).request);
-  return {
-    id: string(value.id),
-    handle: string(value.handle),
-    note: optionalString(value.note),
-    requested_at: number(value.requested_at),
-    source_backend: string(value.source_backend),
-    status: literal(value.status, ["pending", "queued", "running", "failed", "rejected", "idle"]),
-  };
+  return decodeIndexQueueRequest(record(input).request);
 }
 
 function isRetryableSearchError(error: unknown): error is ApiError {
