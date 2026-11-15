@@ -77,6 +77,12 @@ time: with both readers pinned to the P-cores, an A/A run agrees within about
 
 ## Facts
 
+Measured 2026-10-17: `DocumentTable::document` retained two checked helper calls
+despite the fixed 24-byte record. One complete range check plus direct LE fields
+removed them without unsafe code. Five full-reader trials matched all 330
+responses and used 2.31% fewer instructions at the median. See the
+[assembly and measurement record](../performance/document-decoding-2026-10-17.md).
+
 Measured 2026-10-01 to 2026-10-03:
 
 - Production reader (`ytsearch-raw-production`): AMD EPYC, 4 vCPUs, x86-64-v3

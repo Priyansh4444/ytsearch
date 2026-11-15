@@ -35,9 +35,21 @@ if ((${#missing_packages[@]})); then
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing_packages[@]}"
 fi
 
-step "Installing Bun 1.4.0"
-if [[ "$(bun --version 2>/dev/null || true)" != "1.4.0" ]]; then
-  curl -fsSL https://bun.sh/install | bash -s -- bun-v1.4.0
+bun_version="$(python3 - <<'PY'
+import json
+import re
+
+with open("package.json") as package_file:
+    package_manager = json.load(package_file)["packageManager"]
+version = re.fullmatch(r"bun@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)", package_manager)
+if version is None:
+    raise SystemExit("package.json must pin an exact Bun version in packageManager")
+print(version.group(1))
+PY
+)"
+step "Installing Bun $bun_version"
+if [[ "$(bun --version 2>/dev/null || true)" != "$bun_version" ]]; then
+  curl -fsSL https://bun.sh/install | bash -s -- "bun-v$bun_version"
 fi
 
 step "Installing the stable Rust toolchain"

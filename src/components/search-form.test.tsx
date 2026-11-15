@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import type { IndexedChannel } from "../types";
 import { SearchForm } from "./search-form";
 
@@ -127,5 +127,39 @@ describe("SearchForm", () => {
     const button = screen.getByRole("button", { name: "Searching…" });
     expect(button).toBeDisabled();
     expect(button).toHaveAttribute("aria-busy", "true");
+  });
+});
+
+describe("search mode toggle", () => {
+  const form = (onSearchModeChange = vi.fn()) =>
+    render(() => (
+      <SearchForm
+        query="solid js"
+        searchAvailable={true}
+        home={false}
+        mode="search"
+        onQueryInput={() => undefined}
+        onSubmit={() => undefined}
+        channelSuggestions={[]}
+        onChannelSelect={() => undefined}
+        searchMode="lexical"
+        onSearchModeChange={onSearchModeChange}
+      />
+    ));
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  test("production builds show no toggle", () => {
+    form();
+    expect(screen.queryByRole("radiogroup", { name: "Search mode" })).not.toBeInTheDocument();
+  });
+
+  test("an enabled build offers both modes and reports a change", () => {
+    vi.stubEnv("VITE_HYBRID_TOGGLE", "true");
+    const onChange = vi.fn();
+    form(onChange);
+    expect(screen.getByRole("radio", { name: "Keyword" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("radio", { name: "Hybrid" }));
+    expect(onChange).toHaveBeenCalledWith("hybrid");
   });
 });

@@ -17,6 +17,8 @@ pub(super) enum FailureCategory {
     RateLimited,
     Scheduled,
     NoCaptions,
+    NoSpeech,
+    Transcription,
     Private,
     Unavailable,
     Timeout,
@@ -33,6 +35,8 @@ impl FailureCategory {
             Self::RateLimited => "rate_limited",
             Self::Scheduled => "scheduled",
             Self::NoCaptions => "no_captions",
+            Self::NoSpeech => "no_speech",
+            Self::Transcription => "transcription",
             Self::Private => "private",
             Self::Unavailable => "unavailable",
             Self::Timeout => "timeout",
@@ -46,7 +50,7 @@ impl FailureCategory {
     pub(super) const fn retryable(self) -> bool {
         !matches!(
             self,
-            Self::NoCaptions | Self::Private | Self::Unavailable | Self::Chunking
+            Self::NoCaptions | Self::NoSpeech | Self::Private | Self::Unavailable | Self::Chunking
         )
     }
 
@@ -161,6 +165,54 @@ impl FailureLedger {
         }
     }
 
+    /// Recover transcript-only failures when a usable cache or ASR capability
+    /// arrives. Other failures retain their access/import/provider cooldowns.
+    pub(super) fn decision_for(
+        &self,
+        video_id: &str,
+        fallback_ready: bool,
+        cached_transcript: bool,
+    ) -> FailureDecision {
+        let mut decision = self.decision(video_id);
+        let recoverable = match decision.category {
+            Some(FailureCategory::NoCaptions) => fallback_ready || cached_transcript,
+            Some(
+                FailureCategory::Scheduled
+                | FailureCategory::Transcription
+                | FailureCategory::NoSpeech,
+            ) => cached_transcript,
+            _ => false,
+        };
+        if recoverable {
+            decision.deferred = false;
+        }
+        decision
+    }
+
+    pub(super) fn record_transcription_failure(
+        &self,
+        video_id: &str,
+        creator_id: &str,
+        audio_reason: &str,
+        diagnostic: &str,
+        budget_deferred: bool,
+    ) -> FailureCategory {
+        let category = if budget_deferred {
+            FailureCategory::Transcription
+        } else {
+            match classify(FailureStage::Transcript, audio_reason) {
+                category @ (FailureCategory::BotChallenge
+                | FailureCategory::RateLimited
+                | FailureCategory::Private
+                | FailureCategory::Unavailable
+                | FailureCategory::NoSpeech
+                | FailureCategory::Scheduled) => category,
+                _ => FailureCategory::Transcription,
+            }
+        };
+        self.persist_classified(video_id, creator_id, category, diagnostic, !budget_deferred)
+    }
+
     pub(super) fn record(
         &self,
         video_id: &str,
@@ -169,14 +221,48 @@ impl FailureLedger {
         reason: &str,
     ) -> FailureCategory {
         let category = classify(stage, reason);
+        self.record_classified(video_id, creator_id, category, reason)
+    }
+
+    pub(super) fn record_transcript_failure(
+        &self,
+        video_id: &str,
+        creator_id: &str,
+        reason: &str,
+        published_at: Option<&str>,
+    ) -> FailureCategory {
+        let category = transcript_category(reason, published_at, unix_seconds(SystemTime::now()));
+        self.record_classified(video_id, creator_id, category, reason)
+    }
+
+    fn record_classified(
+        &self,
+        video_id: &str,
+        creator_id: &str,
+        category: FailureCategory,
+        reason: &str,
+    ) -> FailureCategory {
+        self.persist_classified(video_id, creator_id, category, reason, true)
+    }
+
+    fn persist_classified(
+        &self,
+        video_id: &str,
+        creator_id: &str,
+        category: FailureCategory,
+        reason: &str,
+        attempted: bool,
+    ) -> FailureCategory {
         let path = failure_path(&self.directory, video_id);
         let persist = || -> std::io::Result<()> {
             let _lock = FailureMutationLock::acquire(&self.directory, video_id)?;
             let previous = read_record(&path)?;
             let now = unix_seconds(SystemTime::now());
-            let attempts = previous
-                .as_ref()
-                .map_or(1, |record| record.attempts.saturating_add(1));
+            // Budget exhaustion is a scheduling outcome, not a failed provider
+            // attempt. Preserve prior attempt history while adding a cooldown.
+            let attempts = previous.as_ref().map_or(u32::from(attempted), |record| {
+                record.attempts.saturating_add(u32::from(attempted))
+            });
             let retryable = category.retryable();
             let persisted_creator_id = previous
                 .as_ref()
@@ -365,8 +451,15 @@ impl FailureMutationLock {
     }
 }
 
+pub(super) fn allows_audio_fallback(reason: &str) -> bool {
+    classify(FailureStage::Transcript, reason) == FailureCategory::NoCaptions
+}
+
 fn classify(stage: FailureStage, reason: &str) -> FailureCategory {
     let reason = reason.to_ascii_lowercase();
+    if reason.contains("audio transcription produced no usable speech") {
+        return FailureCategory::NoSpeech;
+    }
     if reason.contains("premieres in")
         || reason.contains("premiere will begin")
         || reason.contains("upcoming live event")
@@ -390,14 +483,12 @@ fn classify(stage: FailureStage, reason: &str) -> FailureCategory {
     {
         return FailureCategory::RateLimited;
     }
-    if reason.contains("no english subtitles")
-        || reason.contains("no usable captions")
-        || reason.contains("no usable transcript")
-        || reason.contains("captions are unavailable")
+    if reason.contains("private video")
+        || reason.contains("this video is private")
+        || reason.contains("members-only content")
+        || reason.contains("available to this channel's members")
+        || reason.contains("requires payment to watch")
     {
-        return FailureCategory::NoCaptions;
-    }
-    if reason.contains("private video") || reason.contains("this video is private") {
         return FailureCategory::Private;
     }
     if reason.contains("video unavailable")
@@ -405,6 +496,13 @@ fn classify(stage: FailureStage, reason: &str) -> FailureCategory {
         || reason.contains("deleted video")
     {
         return FailureCategory::Unavailable;
+    }
+    if reason.contains("no english subtitles")
+        || reason.contains("no usable captions")
+        || reason.contains("no usable transcript")
+        || reason.contains("captions are unavailable")
+    {
+        return FailureCategory::NoCaptions;
     }
     match stage {
         FailureStage::Timeout => FailureCategory::Timeout,
@@ -415,12 +513,27 @@ fn classify(stage: FailureStage, reason: &str) -> FailureCategory {
     }
 }
 
+fn transcript_category(reason: &str, published_at: Option<&str>, now: u64) -> FailureCategory {
+    let category = classify(FailureStage::Transcript, reason);
+    let age = published_at
+        .and_then(youtube_time::parse_rfc3339_timestamp)
+        .and_then(|published| u64::try_from(published).ok())
+        .and_then(|published| now.checked_sub(published));
+    // Automatic captions can arrive after the upload notification. Preserve
+    // bounded retries for known recent uploads without reopening old failures.
+    if category == FailureCategory::NoCaptions && age.is_some_and(|age| age < 7 * 86_400) {
+        FailureCategory::Scheduled
+    } else {
+        category
+    }
+}
+
 fn retry_delay(category: FailureCategory, attempts: u32, default: Duration) -> Duration {
     let (base, maximum) = match category {
         FailureCategory::Import => (Duration::from_secs(60), Duration::from_secs(3_600)),
         FailureCategory::Timeout => (Duration::from_secs(900), Duration::from_secs(21_600)),
         FailureCategory::Scheduled => (Duration::from_secs(3_600), Duration::from_secs(43_200)),
-        FailureCategory::Metadata | FailureCategory::Unknown => (
+        FailureCategory::Metadata | FailureCategory::Unknown | FailureCategory::Transcription => (
             default.max(Duration::from_secs(900)),
             Duration::from_secs(86_400),
         ),
@@ -430,6 +543,7 @@ fn retry_delay(category: FailureCategory, attempts: u32, default: Duration) -> D
         ),
         FailureCategory::RateLimited => (Duration::from_secs(3_600), Duration::from_secs(86_400)),
         FailureCategory::NoCaptions
+        | FailureCategory::NoSpeech
         | FailureCategory::Private
         | FailureCategory::Unavailable
         | FailureCategory::Chunking => return Duration::ZERO,
@@ -603,6 +717,140 @@ mod tests {
     }
 
     #[test]
+    fn audio_fallback_requires_a_genuine_caption_availability_failure() {
+        assert!(allows_audio_fallback(
+            "yt-dlp found no English subtitles or automatic captions"
+        ));
+        assert!(allows_audio_fallback("no usable captions"));
+        assert_eq!(
+            classify(
+                FailureStage::Transcript,
+                "audio transcription produced no usable speech"
+            ),
+            FailureCategory::NoSpeech
+        );
+        assert!(!FailureCategory::NoSpeech.retryable());
+        for reason in [
+            "private video",
+            "members-only content",
+            "available to this channel's members",
+            "requires payment to watch",
+            "video unavailable",
+            "deleted video",
+            "has been removed",
+            "Sign in to confirm you're not a bot",
+            "HTTP 429",
+            "too many requests",
+            "premieres in 2 days",
+            "we're processing this video",
+            "network timeout",
+            "no usable captions: members-only content",
+            "no English subtitles: HTTP 429",
+        ] {
+            assert!(
+                !allows_audio_fallback(reason),
+                "unexpected fallback for {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn captionless_recovery_requires_a_ready_capability_and_keeps_other_cooldowns() {
+        let ledger = test_ledger("recovery-capabilities");
+        ledger.record(
+            "captionless",
+            "creator",
+            FailureStage::Transcript,
+            "no usable captions",
+        );
+        assert!(ledger.decision_for("captionless", false, false).deferred);
+        assert!(!ledger.decision_for("captionless", true, false).deferred);
+        assert!(!ledger.decision_for("captionless", false, true).deferred);
+        // Reopening does not erase the failure before durable import succeeds.
+        assert_eq!(ledger.report().unwrap().total_records, 1);
+        for (id, stage, reason) in [
+            ("private", FailureStage::Transcript, "private video"),
+            ("blocked", FailureStage::Transcript, "HTTP 429"),
+            ("import", FailureStage::Import, "Raw import failed"),
+        ] {
+            ledger.record(id, "creator", stage, reason);
+            assert!(
+                ledger.decision_for(id, true, true).deferred,
+                "lost cooldown for {id}"
+            );
+        }
+        fs::remove_dir_all(ledger.directory).unwrap();
+    }
+
+    #[test]
+    fn transcription_budget_deferrals_do_not_increment_attempts() {
+        let ledger = test_ledger("transcription-budget");
+        ledger.record(
+            "old-gap",
+            "creator",
+            FailureStage::Transcript,
+            "no usable captions",
+        );
+        let old_path = failure_path(&ledger.directory, "old-gap");
+        let before = read_record(&old_path).unwrap().unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                ledger.record_transcription_failure(
+                    "old-gap",
+                    "creator",
+                    "budget exhausted",
+                    "ASR budget exhausted; original caption failure: no usable captions",
+                    true
+                ),
+                FailureCategory::Transcription
+            );
+        }
+        let paused = read_record(&old_path).unwrap().unwrap();
+        assert_eq!(paused.attempts, before.attempts);
+        assert_eq!(paused.first_failed_at_unix, before.first_failed_at_unix);
+        assert!(paused.next_retry_at_unix.is_some());
+        assert!(ledger.decision_for("old-gap", true, false).deferred);
+        assert!(!ledger.decision_for("old-gap", false, true).deferred);
+        ledger.record_transcription_failure(
+            "new-gap",
+            "creator",
+            "budget exhausted",
+            "budget exhausted",
+            true,
+        );
+        assert_eq!(
+            read_record(&failure_path(&ledger.directory, "new-gap"))
+                .unwrap()
+                .unwrap()
+                .attempts,
+            0
+        );
+        ledger.record_transcription_failure(
+            "old-gap",
+            "creator",
+            "whisper failed",
+            "whisper failed; original caption failure: no usable captions",
+            false,
+        );
+        let failed = read_record(&old_path).unwrap().unwrap();
+        assert_eq!(failed.attempts, before.attempts + 1);
+        assert_eq!(failed.category, FailureCategory::Transcription);
+        assert!(failed.retryable);
+        // Audio-side blocking remains visible even though the caption cause is NoCaptions.
+        assert_eq!(
+            ledger.record_transcription_failure(
+                "blocked-audio",
+                "creator",
+                "HTTP 429",
+                "HTTP 429; original caption failure: no usable captions",
+                false
+            ),
+            FailureCategory::RateLimited
+        );
+        fs::remove_dir_all(ledger.directory).unwrap();
+    }
+
+    #[test]
     fn classifies_operational_and_terminal_failures() {
         assert_eq!(
             classify(
@@ -640,6 +888,91 @@ mod tests {
             classify(FailureStage::Import, "connection reset"),
             FailureCategory::Import
         );
+    }
+
+    #[test]
+    fn recent_captionless_uploads_retry_without_reopening_old_or_unknown_uploads() {
+        let now = youtube_time::parse_rfc3339_timestamp("2026-10-15T12:00:00Z").unwrap() as u64;
+        let reason = "yt-dlp found no English subtitles or automatic captions";
+        for published in ["2026-10-15T12:00:00Z", "2026-10-09T12:00:00Z"] {
+            assert_eq!(
+                transcript_category(reason, Some(published), now),
+                FailureCategory::Scheduled
+            );
+        }
+        for published in [
+            None,
+            Some("invalid"),
+            Some("2026-10-08T12:00:00Z"),
+            Some("2026-10-16T12:00:00Z"),
+        ] {
+            assert_eq!(
+                transcript_category(reason, published, now),
+                FailureCategory::NoCaptions
+            );
+        }
+        assert_eq!(
+            transcript_category(
+                "Join this channel to get access to members-only content",
+                Some("2026-10-15T00:00:00Z"),
+                now
+            ),
+            FailureCategory::Private
+        );
+        assert_eq!(
+            transcript_category(
+                "Sign in to confirm you're not a bot",
+                Some("2026-10-15T00:00:00Z"),
+                now
+            ),
+            FailureCategory::BotChallenge
+        );
+
+        let ledger = test_ledger("recent-captionless");
+        // Unknown dates retain the terminal policy and do not restart the
+        // existing captionless corpus on deployment.
+        let published = "invalid";
+        assert_eq!(
+            ledger.record_transcript_failure("old", "creator", reason, Some(published)),
+            FailureCategory::NoCaptions
+        );
+        assert!(
+            !read_record(&failure_path(&ledger.directory, "old"))
+                .unwrap()
+                .unwrap()
+                .retryable
+        );
+        let _ = fs::remove_dir_all(&ledger.directory);
+    }
+
+    #[test]
+    fn members_only_and_paid_videos_are_terminal_access_restrictions() {
+        for reason in [
+            "This video is available to this channel's members on level: Healthy Gamer (or any higher level).",
+            "Join this channel to get access to members-only content like this video",
+            "This video requires payment to watch",
+        ] {
+            assert_eq!(
+                classify(FailureStage::Transcript, reason),
+                FailureCategory::Private
+            );
+        }
+        let ledger = test_ledger("legacy-members-only");
+        ledger.record(
+            "members-video",
+            "creator",
+            FailureStage::Transcript,
+            "unknown failure",
+        );
+        let path = failure_path(&ledger.directory, "members-video");
+        let mut record = read_record(&path).unwrap().unwrap();
+        record.reason = "Join this channel to get access to members-only content".to_string();
+        write_record_atomic(&path, &record).unwrap();
+        let report = ledger.report().unwrap();
+        assert_eq!(report.totals.terminal, 1);
+        assert_eq!(report.totals.retryable, 0);
+        assert_eq!(report.records[0].category, FailureCategory::Private);
+        let _ = fs::remove_dir_all(&ledger.directory);
     }
 
     #[test]

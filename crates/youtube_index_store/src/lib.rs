@@ -63,7 +63,8 @@ pub const RAW_PUBLICATION_API_VERSION: u16 = 1;
 
 /// Timeout the publisher client applies to every non-transfer admin request
 /// except activation.
-pub const ADMIN_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+#[cfg(feature = "http-client")]
+pub(crate) const ADMIN_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Timeout for the activation request. The reader opens the generation, warms
 /// it for up to its warm budget (20 s) and swaps it in; production took about

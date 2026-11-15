@@ -1,3 +1,4 @@
+import { coalesceChannels } from "./channel-query";
 import type { IndexedChannel } from "./types";
 
 export const CHANNEL_CACHE_KEY = "ytsearch.indexed-channels.v2";
@@ -28,7 +29,7 @@ export function loadCachedChannels(
     ) {
       return undefined;
     }
-    return parsed.channels;
+    return coalesceChannels(parsed.channels);
   } catch {
     return undefined;
   }

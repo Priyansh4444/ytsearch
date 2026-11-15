@@ -12,3 +12,8 @@ reason = "search reader and publication builder"
 package = "youtube_cli"
 bin = "ytsearch"
 reason = "operator CLI used for indexing, repair, validation, and benchmarks"
+
+[[production]]
+package = "youtube_semantic"
+bin = "youtube-semantic"
+reason = "opt-in local semantic pilot service and snapshot importer"

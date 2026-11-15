@@ -179,6 +179,7 @@ describe("App", () => {
         youtuber: "",
         page: 1,
         sort: "relevance",
+        mode: "lexical",
       },
       expect.any(AbortSignal),
     );

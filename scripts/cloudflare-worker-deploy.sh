@@ -12,6 +12,8 @@ fi
 export VITE_API_BASE_URL=""
 export VITE_INDEX_QUEUE_API_BASE_URL=""
 export VITE_ENGAGEMENT_SORTS="true"
+export VITE_MOMENT_SHARING="true"
+export VITE_HYBRID_TOGGLE="true"
 export CLOUDFLARE_API_TOKEN
 
 bun run frontend:check

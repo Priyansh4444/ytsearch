@@ -1,5 +1,22 @@
 import type { IndexedChannel } from "./types";
 
+/**
+ * One circle per YouTube channel. A creator's rename leaves two records with the
+ * same channel ID until the old one is published away; the one holding more videos
+ * is the current one. Records without a channel ID cannot be matched and stay.
+ */
+export function coalesceChannels(channels: readonly IndexedChannel[]): IndexedChannel[] {
+  const kept = new Map<string, IndexedChannel>();
+  for (const channel of channels) {
+    const key = channel.channel_id || channel.id;
+    const existing = kept.get(key);
+    if (!existing || channel.indexed_video_count > existing.indexed_video_count) {
+      kept.set(key, channel);
+    }
+  }
+  return [...kept.values()];
+}
+
 /** Precomputed lowercase keys for one channel list. Built once per list
  * change; the per-keystroke scans below reuse it with zero allocs per channel
  * (the previous shape ran three O(C) scans per keystroke, each allocating a

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#101010" />
+    <meta name="description" content="What ytsearch is, what it indexes, how its search works and who runs it." />
+    <link rel="canonical" href="https://search.pronsh.dev/about" />
+    <link rel="icon" href="/favicon.png" type="image/png" />
+    <link rel="alternate" type="text/markdown" href="/about.md" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ytsearch" />
+    <meta property="og:title" content="About · ytsearch" />
+    <meta property="og:description" content="What ytsearch is, what it indexes, how its search works and who runs it." />
+    <meta property="og:url" content="https://search.pronsh.dev/about" />
+    <meta property="og:image" content="https://search.pronsh.dev/og-card.png" />
+    <title>About · ytsearch</title>
+    <link rel="stylesheet" href="/pages.css" />
+  </head>
+  <body>
+    <main>
+      <nav><a href="/">← ytsearch</a><a href="/about">About</a><a href="/docs">API docs</a><a href="/contact">Contact</a><a href="/privacy">Privacy</a></nav>
+      <h1>About ytsearch</h1>
+      <p>
+        ytsearch finds the moment a creator said something. It searches the public captions of
+        indexed YouTube channels and links straight to the timestamp, so you can check a quote,
+        rediscover a half-remembered explanation, or see everything a channel has said about a
+        topic without scrubbing through hours of video.
+      </p>
+      <h2>What it covers</h2>
+      <p>
+        The index holds about 50,000 videos and nearly 10 million transcript chunks from more than
+        70 creators, mostly about software, science and engineering. New uploads are added
+        automatically, and anyone can request another creator from the search box by typing its
+        handle.
+      </p>
+      <h2>How search works</h2>
+      <p>
+        Keyword search is a purpose-built Rust index with typo tolerance, phrase matching and
+        ranking that keeps rare words ahead of common ones. An experimental hybrid mode adds
+        EmbeddingGemma vectors in Qdrant so that questions and vague descriptions can match by
+        meaning, not just by shared words.
+      </p>
+      <h2>Who runs it</h2>
+      <p>
+        ytsearch is an independent, open-source project by Priyansh (pronsh). It is free to use,
+        has no accounts or advertising, and is not affiliated with YouTube or Google. The
+        <a href="https://github.com/Priyansh4444/ytsearch">source code</a> is MIT licensed, and
+        <a href="https://ko-fi.com/pronsh">donations</a> help pay for hosting.
+      </p>
+      <p>Developers and AI agents can use the same search through the <a href="/docs">public API</a>.</p>
+    </main>
+  </body>
+</html>

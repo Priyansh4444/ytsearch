@@ -1,7 +1,9 @@
 mod axiom;
 mod channel_images;
+mod hybrid;
 mod index_queue;
 mod rate_limit;
+mod semantic;
 mod websub;
 
 use axiom::AxiomLogger;
@@ -49,6 +51,8 @@ const MERGE_TRANSCRIPT_HIT_WINDOW_MS: u32 = 20_000;
 const VIDEO_SCOPE_PAGE_SIZE: u8 = 250;
 const VIDEO_SCOPE_MAX_PAGE_FETCHES: u32 = 100;
 const INITIAL_GROUP_LIMIT: u8 = 3;
+const MAX_TRANSCRIPT_WINDOW_MS: u32 = 10 * 60 * 1_000;
+const CACHE_TRANSCRIPT: &str = "public, max-age=300";
 const CACHE_YOUTUBERS: &str = "public, max-age=30, stale-while-revalidate=300";
 const CACHE_CHANNEL_IMAGE: &str = "public, max-age=86400, stale-while-revalidate=604800";
 const CACHE_NO_STORE: &str = "no-store";
@@ -65,6 +69,7 @@ const PROXY_KEY_HEADER: &str = "x-ytsearch-proxy-key";
 #[derive(Clone)]
 struct AppState {
     search: SearchClient,
+    semantic: Option<semantic::Client>,
     backend_label: String,
     engagement_sorts_enabled: bool,
     relevance_ordering: RelevanceOrdering,
@@ -88,11 +93,39 @@ enum RelevanceOrdering {
 #[derive(Debug, Deserialize)]
 struct SearchParams {
     q: String,
+    #[serde(default)]
+    mode: semantic::Mode,
     youtuber: Option<String>,
     video_id: Option<String>,
     per_page: Option<u8>,
     page: Option<u32>,
     sort: Option<SearchSort>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptParams {
+    start_ms: u32,
+    end_ms: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct TranscriptLine {
+    t_start_ms: u32,
+    t_end_ms: u32,
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TranscriptResponse {
+    video_id: String,
+    title: String,
+    youtuber_handle: String,
+    youtuber_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thumbnail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    published_at: Option<String>,
+    lines: Vec<TranscriptLine>,
 }
 
 #[derive(Debug, Serialize)]
@@ -312,6 +345,8 @@ enum ApiError {
     ChannelImage(String),
     #[error("search backend failed: {0}")]
     SearchBackend(#[from] SearchError),
+    #[error("semantic search is disabled or unavailable")]
+    SemanticUnavailable,
     #[error("search response had an unexpected shape")]
     UnexpectedSearchShape,
     #[error("server failed: {0}")]
@@ -337,6 +372,7 @@ async fn main() -> Result<(), ApiError> {
         .unwrap_or((None, None));
     let state = Arc::new(AppState {
         search: search_client,
+        semantic: semantic::Client::from_env()?,
         backend_label: env::var("YTSEARCH_BACKEND_LABEL").unwrap_or_else(|_| "raw".to_string()),
         engagement_sorts_enabled: env_bool("YTSEARCH_ENGAGEMENT_SORTS", false),
         relevance_ordering: if env_bool("YTSEARCH_PRESERVE_BACKEND_RELEVANCE_ORDER", false) {
@@ -393,6 +429,7 @@ async fn main() -> Result<(), ApiError> {
             get(channel_image_handler),
         )
         .route("/api/search", get(search_handler))
+        .route("/api/videos/{video_id}/transcript", get(transcript_handler))
         .route(
             "/api/index-requests",
             post(create_index_request)
@@ -552,6 +589,92 @@ async fn channel_image_handler(
     ))
 }
 
+/// Every caption line overlapping a window of one video, for reading along with a
+/// clip. Search merges nearby hits into one moment, which would drop lines here.
+async fn transcript_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(video_id): Path<String>,
+    Query(params): Query<TranscriptParams>,
+) -> Result<Response, ApiError> {
+    rate_limit(
+        &state,
+        &headers,
+        "search",
+        state.search_rate_limit_per_minute,
+    )
+    .await?;
+    if video_id.is_empty()
+        || !video_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(ApiError::BadRequest("invalid video id".to_string()));
+    }
+    if params.end_ms <= params.start_ms
+        || params.end_ms - params.start_ms > MAX_TRANSCRIPT_WINDOW_MS
+    {
+        return Err(ApiError::BadRequest(format!(
+            "end_ms must follow start_ms by at most {MAX_TRANSCRIPT_WINDOW_MS} ms"
+        )));
+    }
+    let query = TextSearchQuery::new("*".to_string())
+        .query_by("text,title")
+        .highlight_fields("text,title")
+        .per_page(VIDEO_SCOPE_PAGE_SIZE)
+        .without_grouping()
+        .filter_by(format!("video_id:={video_id}"));
+    let mut hits = Vec::new();
+    for page in 1..=VIDEO_SCOPE_MAX_PAGE_FETCHES {
+        let raw = state.search.search(&query.clone().page(page)).await?;
+        let raw_hits = array_len(&raw, "hits");
+        hits.extend(parse_hits(&raw)?);
+        if raw_hits < usize::from(VIDEO_SCOPE_PAGE_SIZE) {
+            break;
+        }
+    }
+    let Some(response) = transcript_response(hits, params.start_ms, params.end_ms) else {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "video not found"})),
+        )
+            .into_response());
+    };
+    Ok(cache_response(CACHE_TRANSCRIPT, Json(response)))
+}
+
+fn transcript_response(
+    hits: Vec<SearchHit>,
+    start_ms: u32,
+    end_ms: u32,
+) -> Option<TranscriptResponse> {
+    let first = hits.first()?;
+    let mut response = TranscriptResponse {
+        video_id: first.video_id.clone(),
+        title: first.title.clone(),
+        youtuber_handle: first.youtuber_handle.clone(),
+        youtuber_name: first.youtuber_name.clone(),
+        thumbnail: first.thumbnail.clone(),
+        published_at: first.published_at.clone(),
+        lines: Vec::new(),
+    };
+    response.lines = hits
+        .into_iter()
+        .filter(|hit| {
+            hit.match_kind == MatchKind::Transcript
+                && hit.t_start_ms < end_ms
+                && hit.t_end_ms > start_ms
+        })
+        .map(|hit| TranscriptLine {
+            t_start_ms: hit.t_start_ms,
+            t_end_ms: hit.t_end_ms,
+            text: hit.text,
+        })
+        .collect();
+    response.lines.sort_by_key(|line| line.t_start_ms);
+    Some(response)
+}
+
 async fn search_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -578,6 +701,29 @@ async fn search_handler(
     let low_signal_query = is_low_signal_query(query);
     if sort == SearchSort::Relevance && low_signal_query {
         sort = SearchSort::PublishedDesc;
+    }
+    // Semantic and hybrid modes are opt-in improvements, never hard dependencies:
+    // when the service is absent, busy or down, answer lexically. `mode` in the
+    // response says which ran.
+    let video_id = validated_video_id(&params)?;
+    match params.mode.route(sort, low_signal_query) {
+        semantic::Mode::Lexical => {}
+        semantic::Mode::Semantic => {
+            match semantic::response(&state, &params, query, per_page, page).await {
+                Err(ApiError::SemanticUnavailable) => {
+                    tracing::warn!("semantic search unavailable; answering lexically");
+                }
+                answer => return answer,
+            }
+        }
+        semantic::Mode::Hybrid => {
+            return match video_id {
+                Some(video_id) => {
+                    hybrid::video_response(&state, &params, query, video_id, per_page, page).await
+                }
+                None => hybrid::response(&state, &params, query, per_page, page).await,
+            };
+        }
     }
     let search_started = Instant::now();
     // A video-scoped request loads every matching moment of one video. Any
@@ -633,13 +779,7 @@ async fn search_handler(
     if let Some(youtuber) = non_empty(params.youtuber.as_deref()) {
         search_query = search_query.youtuber_handle(normalize_handle(youtuber));
     }
-    if let Some(video_id) = non_empty(params.video_id.as_deref()) {
-        if !video_id
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-        {
-            return Err(ApiError::BadRequest("invalid video id".to_string()));
-        }
+    if let Some(video_id) = video_id {
         search_query = search_query.filter_by(format!("video_id:={video_id}"));
     }
 
@@ -1537,14 +1677,8 @@ impl SearchHit {
         };
         let (timestamp, youtube_url, embed_url) = match match_kind {
             MatchKind::Transcript => {
-                let seconds = t_start_ms / 1000;
-                (
-                    Some(format_timestamp(t_start_ms)),
-                    format!("https://www.youtube.com/watch?v={video_id}&t={seconds}s"),
-                    format!(
-                        "https://www.youtube-nocookie.com/embed/{video_id}?start={seconds}&rel=0"
-                    ),
-                )
+                let (timestamp, youtube_url, embed_url) = moment_links(&video_id, t_start_ms);
+                (Some(timestamp), youtube_url, embed_url)
             }
             MatchKind::Title => (
                 None,
@@ -1579,6 +1713,30 @@ impl SearchHit {
             group_match_count,
         })
     }
+}
+
+/// The requested video, checked before it reaches a backend filter.
+fn validated_video_id(params: &SearchParams) -> Result<Option<&str>, ApiError> {
+    match non_empty(params.video_id.as_deref()) {
+        Some(video_id)
+            if !video_id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            }) =>
+        {
+            Err(ApiError::BadRequest("invalid video id".to_string()))
+        }
+        video_id => Ok(video_id),
+    }
+}
+
+/// Timestamp, watch URL and embed URL of a transcript moment.
+fn moment_links(video_id: &str, t_start_ms: u32) -> (String, String, String) {
+    let seconds = t_start_ms / 1000;
+    (
+        format_timestamp(t_start_ms),
+        format!("https://www.youtube.com/watch?v={video_id}&t={seconds}s"),
+        format!("https://www.youtube-nocookie.com/embed/{video_id}?start={seconds}&rel=0"),
+    )
 }
 
 fn highlight_for_field(hit: &Value, field: &str) -> Option<String> {
@@ -1900,7 +2058,7 @@ impl IntoResponse for ApiError {
             Self::EmptyQuery | Self::InvalidHandle | Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
-            Self::QueueFull => StatusCode::SERVICE_UNAVAILABLE,
+            Self::QueueFull | Self::SemanticUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::MissingEnv(_)
             | Self::InvalidBindAddress(_)
             | Self::Queue(_)

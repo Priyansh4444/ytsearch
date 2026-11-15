@@ -4,7 +4,9 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "$test_dir"' EXIT
-mkdir -p "$test_dir/api" "$test_dir/data"
+mkdir -p "$test_dir/api" "$test_dir/data" "$test_dir/tmp"
+TMPDIR="$test_dir/tmp"
+export TMPDIR
 
 CLOUD_INDEX_QUEUE_LIBRARY_ONLY=1
 INDEX_QUEUE_API_BASE_URL="file://$test_dir"
@@ -87,6 +89,12 @@ pull_idle_gap_handle() {
 remember_idle_gap_handle() { :; }
 set_index_activity() { :; }
 log_queue_event() { :; }
+pull_queue_tsv() {
+  case "${FAKE_WAITING_QUEUE:-empty}" in
+    waiting) printf 'request\t@queued\tworker\traw\n' ;;
+    failure) return 1 ;;
+  esac
+}
 index_youtuber_for_backends() {
   printf '%s\n' "$*" >> "$index_log"
 }
@@ -132,12 +140,49 @@ grep -F "index-youtubers $DAILY_UPDATE_LIST_FILE --backend raw --mode update" \
   "$catalog_command_log" >/dev/null
 grep -F -- '--jobs 3 --channel-jobs 1' "$catalog_command_log" >/dev/null
 grep -F -- '--defer-publish' "$catalog_command_log" >/dev/null
+TRANSCRIBE_MISSING=1
+WHISPER_MODEL="$test_dir/model with spaces.bin"
+: > "$catalog_command_log"
+index_catalog_backend raw raw 1
+index_one_backend raw raw 1 @alpha
+[ "$(grep -c -- '--transcribe-missing --transcription-backend whisper-cpp' "$catalog_command_log")" -eq 2 ]
+[ "$(grep -c -- '--transcription-budget-seconds 480' "$catalog_command_log")" -eq 2 ]
+TRANSCRIBE_MISSING=0
 index_list_backend() {
   echo "daily refresh must use one catalog-scoped index-youtubers process" >&2
   return 1
 }
+catalog_input="$test_dir/catalog-input"
+catalog_path_log="$test_dir/catalog-path"
+cat > "$DAILY_UPDATE_LIST_FILE" <<'LIST'
+# Approved creators retain their spelling and labels.
+@alpha | Alpha
+@Cursor_AI | Cursor label
+@ardens. | Ardens label
+LIST
+cp "$DAILY_UPDATE_LIST_FILE" "$test_dir/canonical-original"
+cat > "$test_dir/api/youtubers" <<'JSON'
+{"channels":[
+  {"handle":"@complete","public_video_count":10,"indexed_video_count":10},
+  {"handle":"@alpha","public_video_count":9,"indexed_video_count":3},
+  {"handle":"@cursor-ai","public_video_count":4,"indexed_video_count":4},
+  {"handle":"@ardens","public_video_count":2,"indexed_video_count":2},
+  {"handle":"@complete","public_video_count":10,"indexed_video_count":10}
+],"pending_requests":[{"handle":"@unapproved"}]}
+JSON
+cp "$test_dir/api/youtubers" "$test_dir/approved-directory"
 index_catalog_backend() {
   printf 'daily-catalog %s\n' "$*" >> "$index_log"
+  cat "$DAILY_UPDATE_LIST_FILE" > "$catalog_input"
+  printf '%s\n' "$DAILY_UPDATE_LIST_FILE" > "$catalog_path_log"
+}
+assert_no_daily_catalog_files() {
+  for catalog_file in "$TMPDIR"/ytsearch-daily-catalog.*; do
+    if [ -e "$catalog_file" ]; then
+      echo "daily catalog temporary file leaked: $catalog_file" >&2
+      exit 1
+    fi
+  done
 }
 if index_daily_update_for_backends; then
   echo "an unwritable publication marker must fail the daily update" >&2
@@ -167,6 +212,55 @@ fi
   exit 1
 }
 
+# The canonical source stays read-only. Approved creators with zero count
+# difference still join the same full catalog process, unlike gap repair.
+cmp "$DAILY_UPDATE_LIST_FILE" "$test_dir/canonical-original"
+[ "$(cat "$catalog_path_log")" != "$DAILY_UPDATE_LIST_FILE" ]
+[ ! -e "$(cat "$catalog_path_log")" ]
+[ "$(grep -c '^@' "$catalog_input")" -eq 4 ]
+grep -Fx '# Approved creators retain their spelling and labels.' "$catalog_input" >/dev/null
+grep -Fx '@Cursor_AI | Cursor label' "$catalog_input" >/dev/null
+grep -Fx '@ardens. | Ardens label' "$catalog_input" >/dev/null
+grep -Fx '@complete' "$catalog_input" >/dev/null
+if grep -Eq '^@(cursor-ai|ardens|unapproved)$' "$catalog_input"; then
+  echo "daily catalog must deduplicate stable creator aliases and exclude pending requests" >&2
+  exit 1
+fi
+assert_no_daily_catalog_files
+
+# A malformed or unavailable directory fails before any indexing, publication,
+# publication marker, or completion timestamp can be written.
+remember_daily_update_completion 1234
+for malformed_directory in \
+  '[]' '{}' '{"channels":{}}' '{"channels":[null]}' \
+  '{"channels":[{"handle":null}]}' '{"channels":[{"handle":42}]}' \
+  '{"channels":[{"handle":""}]}' '{"channels":[{"handle":"@bad|entry"}]}' \
+  '{"channels":[{"handle":"@good"},{"handle":"@bad\nentry"}]}' 'invalid json'; do
+  printf '%s\n' "$malformed_directory" > "$test_dir/api/youtubers"
+  : > "$index_log"
+  : > "$publication_log"
+  rm -f "$RAW_PENDING_PUBLICATION_FILE"
+  if index_daily_update_for_backends > /dev/null 2>&1; then
+    echo "a malformed approved directory must fail the daily sweep: $malformed_directory" >&2
+    exit 1
+  fi
+  [ ! -s "$index_log" ] && [ ! -s "$publication_log" ]
+  [ ! -e "$RAW_PENDING_PUBLICATION_FILE" ]
+  [ "$(cat "$DAILY_UPDATE_STATE_FILE")" = 1234 ]
+  cmp "$DAILY_UPDATE_LIST_FILE" "$test_dir/canonical-original"
+  assert_no_daily_catalog_files
+done
+rm "$test_dir/api/youtubers"
+if index_daily_update_for_backends > /dev/null 2>&1; then
+  echo "an unavailable approved directory must fail the daily sweep" >&2
+  exit 1
+fi
+[ ! -s "$index_log" ] && [ ! -s "$publication_log" ]
+[ ! -e "$RAW_PENDING_PUBLICATION_FILE" ]
+[ "$(cat "$DAILY_UPDATE_STATE_FILE")" = 1234 ]
+assert_no_daily_catalog_files
+cp "$test_dir/approved-directory" "$test_dir/api/youtubers"
+
 # A failed or blocked pass leaves a routine marker and does not rebuild the
 # generation again while the last publication is recent.
 ROUTINE_PUBLICATION_INTERVAL_SECONDS=21600
@@ -183,6 +277,7 @@ for catalog_exit in 1 69; do
     echo "a failed daily pass (exit $catalog_exit) must not publish before the routine interval" >&2
     exit 1
   }
+  assert_no_daily_catalog_files
   grep -q ' routine$' "$RAW_PENDING_PUBLICATION_FILE" || {
     echo "a failed daily pass must leave a routine publication marker" >&2
     exit 1
@@ -252,6 +347,19 @@ process_idle_gap_batch 4
   echo "one gap batch must build exactly one generation" >&2
   exit 1
 }
+
+# A queued request or an unreadable queue yields before another creator.
+for queue_state in waiting failure; do
+  FAKE_WAITING_QUEUE="$queue_state"
+  printf '%s\n' @alpha @bravo > "$gap_handles"
+  : > "$index_log"
+  : > "$publication_log"
+  process_idle_gap_batch 4
+  [ "$IDLE_GAP_BATCH_PASSES" -eq 1 ]
+  [ "$(wc -l < "$index_log" | tr -d ' ')" -eq 1 ]
+  [ "$(sed -n '1p' "$gap_handles")" = @bravo ]
+done
+FAKE_WAITING_QUEUE=empty
 
 printf '%s\n' @publication-failure > "$gap_handles"
 : > "$index_log"

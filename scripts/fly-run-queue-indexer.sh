@@ -18,7 +18,8 @@ APP_NAME="${INDEXER_APP_NAME:-ytsearch-indexer-raw-production}"
 FLY_REGION="${FLY_REGION:-sjc}"
 QUEUE_TARGET_BACKEND="${QUEUE_TARGET_BACKEND:-}"
 ON_DEMAND="${ON_DEMAND:-0}"
-VOLUME_SIZE_GB="${INDEXER_VOLUME_SIZE_GB:-10}"
+# Leave eight GB for publication alongside portable transcripts and bounded ASR work.
+VOLUME_SIZE_GB="${INDEXER_VOLUME_SIZE_GB:-12}"
 DAILY_UPDATE_LIST_SOURCE="${DAILY_UPDATE_LIST_SOURCE:-scripts/indexed-channels.txt}"
 INDEXER_DATA_DIRECTORY="${INDEXER_DATA_DIRECTORY:-/var/lib/ytsearch}"
 
@@ -185,6 +186,11 @@ exec flyctl machine run \
   --env "QUEUE_LOOP=${QUEUE_LOOP:-$QUEUE_DAEMON}" \
   --env "QUEUE_POLL_INTERVAL_SECONDS=${QUEUE_POLL_INTERVAL_SECONDS:-30}" \
   --env "TRANSCRIPT_CACHE_DIR=$INDEXER_DATA_DIRECTORY/transcript-cache" \
+  --env "TRANSCRIBE_MISSING=${TRANSCRIBE_MISSING:-1}" \
+  --env "WHISPER_BINARY=${WHISPER_BINARY:-/usr/local/bin/whisper-cli}" \
+  --env "WHISPER_MODEL=${WHISPER_MODEL:-/usr/local/share/ytsearch-asr/ggml-base.en.bin}" \
+  --env "WHISPER_THREADS=${WHISPER_THREADS:-2}" \
+  --env "TRANSCRIPTION_BUDGET_SECONDS=${TRANSCRIPTION_BUDGET_SECONDS:-480}" \
   --env "QUEUE_RETRY_STATE_FILE=${QUEUE_RETRY_STATE_FILE:-$INDEXER_DATA_DIRECTORY/queue-retries.tsv}" \
   --env "QUEUE_ACK_RETRY_SECONDS=${QUEUE_ACK_RETRY_SECONDS:-300}" \
   --env "IDLE_EXIT_AFTER_SECONDS=$idle_exit_after_seconds" \

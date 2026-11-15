@@ -1,9 +1,14 @@
 import { For, Show, createMemo, createSignal, isPending, onSettled } from "solid-js";
 import type { Component } from "solid-js";
-import type { JSX } from "@solidjs/web";
 import { dashboardData } from "../api";
-import { calculateDashboardMetrics, channelCoverage } from "../dashboard-metrics";
-import type { IndexedChannel } from "../types";
+import {
+  calculateDashboardMetrics,
+  channelCountDifference,
+  publicVideoCount,
+  visibleCreators,
+} from "../dashboard-metrics";
+import type { CreatorFilter, CreatorSort, CreatorView } from "../dashboard-metrics";
+import type { IndexedChannel, IndexStatus } from "../types";
 import { routeForHandle } from "../utils";
 import { ChannelAvatar } from "./channel-profile";
 
@@ -12,6 +17,11 @@ const integer = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
 export const Dashboard: Component = () => {
   const [refreshVersion, setRefreshVersion] = createSignal(0);
+  const [view, setView] = createSignal<CreatorView>({
+    query: "",
+    filter: "all",
+    sort: "difference",
+  });
   const snapshot = createMemo(() => {
     refreshVersion();
     return dashboardData();
@@ -19,13 +29,9 @@ export const Dashboard: Component = () => {
   const snapshotPending = () => isPending(() => snapshot());
   const refetch = () => setRefreshVersion((version) => version + 1);
   const metrics = createMemo(() => calculateDashboardMetrics(snapshot().channels));
-  const channels = createMemo(() =>
-    [...snapshot().channels].sort(
-      (left, right) =>
-        right.indexed_chunk_count - left.indexed_chunk_count ||
-        right.indexed_video_count - left.indexed_video_count,
-    ),
-  );
+  const channels = createMemo(() => visibleCreators(snapshot().channels, view()));
+  const catalogNumber = (value: number) =>
+    snapshot().channelsAvailable ? integer.format(value) : "—";
 
   onSettled(() => {
     const previousTitle = document.title;
@@ -44,290 +50,374 @@ export const Dashboard: Component = () => {
 
   return (
     <main class="min-h-svh bg-vesper-bg text-vesper-text">
-      <div class="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-5 sm:px-6 sm:py-8 lg:px-8">
-        <header class="flex flex-col gap-4 border-b border-white/10 pb-6 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <a
-              href="/"
-              class="text-xs font-semibold uppercase tracking-[0.16em] text-vesper-yellow hover:text-white"
+      <div class="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
+        <header class="flex flex-wrap items-center justify-between gap-4 border-b border-vesper-border py-5">
+          <a href="/" class="text-sm font-medium text-vesper-muted hover:text-vesper-yellow">
+            ← Back to search
+          </a>
+          <div class="flex items-center gap-3">
+            <span class="hidden text-xs text-vesper-dim sm:inline">
+              Public catalog / live snapshot
+            </span>
+            <button
+              type="button"
+              class="pressable min-h-11 border border-vesper-control bg-vesper-panel px-4 py-2 text-xs font-medium hover:border-vesper-yellow disabled:cursor-wait disabled:opacity-60"
+              disabled={snapshotPending()}
+              onClick={refetch}
             >
-              ← Search
-            </a>
-            <h1 class="mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-              System dashboard
-            </h1>
-            <p class="mt-2 max-w-2xl text-sm leading-6 text-vesper-muted">
-              Live public catalog, indexing coverage, queue activity, metadata completeness, and
-              endpoint health. Refreshes every minute.
-            </p>
+              {snapshotPending() ? "Refreshing…" : "Refresh metrics"}
+            </button>
           </div>
-          <button
-            type="button"
-            class="pressable min-h-11 border border-vesper-control bg-vesper-panel px-4 py-2 text-sm font-medium text-white hover:border-vesper-yellow disabled:cursor-wait disabled:opacity-60"
-            disabled={snapshotPending()}
-            onClick={refetch}
-          >
-            {snapshotPending() ? "Refreshing…" : "Refresh metrics"}
-          </button>
         </header>
 
+        <section class="py-8 sm:py-12" aria-labelledby="dashboard-heading">
+          <div class="flex flex-wrap items-baseline justify-between gap-3">
+            <h1
+              id="dashboard-heading"
+              class="text-xs font-semibold uppercase tracking-[0.2em] text-vesper-yellow"
+            >
+              System dashboard
+            </h1>
+            <p class="text-xs text-vesper-dim">
+              Updates every minute · {new Date(snapshot().fetchedAt).toLocaleTimeString()}
+            </p>
+          </div>
+          <div class="mt-7 grid gap-8 lg:grid-cols-[1.2fr_1fr] lg:gap-16">
+            <div>
+              <p class="text-sm text-vesper-muted">Indexed videos</p>
+              <p class="mt-1 break-words text-6xl font-medium tracking-[-0.06em] tabular-nums sm:text-8xl">
+                {catalogNumber(metrics().indexedVideos)}
+              </p>
+              <p class="mt-4 max-w-md text-sm leading-6 text-vesper-muted">
+                A searchable archive of conversations, ideas, and the exact moment they happened.
+              </p>
+              <dl class="mt-6 flex flex-wrap gap-x-8 gap-y-4">
+                <div>
+                  <dt class="text-xs text-vesper-dim">Creators</dt>
+                  <dd class="mt-1 text-xl tabular-nums">{catalogNumber(metrics().channelCount)}</dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-vesper-dim">Transcript moments</dt>
+                  <dd class="mt-1 text-xl tabular-nums">{catalogNumber(metrics().moments)}</dd>
+                </div>
+              </dl>
+            </div>
+            <div class="border-l-2 border-vesper-yellow/60 bg-vesper-panel p-5 sm:p-6">
+              <h2 class="text-sm font-medium">Understanding the count difference</h2>
+              <dl class="mt-5 grid grid-cols-2 gap-4">
+                <div>
+                  <dt class="text-xs text-vesper-dim">Public videos reported</dt>
+                  <dd class="mt-1 text-2xl tabular-nums">
+                    {snapshot().channelsAvailable && metrics().knownPublicChannels > 0
+                      ? integer.format(metrics().publicVideos)
+                      : "Unknown"}
+                  </dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-vesper-dim">Count difference</dt>
+                  <dd class="mt-1 text-2xl tabular-nums text-vesper-yellow">
+                    {snapshot().channelsAvailable
+                      ? differenceLabel(metrics().countDifference)
+                      : "Unknown"}
+                  </dd>
+                </div>
+              </dl>
+              <p class="mt-4 text-xs leading-5 text-vesper-muted">
+                Public minus {catalogNumber(metrics().comparableIndexedVideos)} indexed videos,
+                across {catalogNumber(metrics().knownPublicChannels)} creators with reported totals.
+                A count difference does not identify missing or transcribable videos.
+              </p>
+              <p class="mt-2 text-xs leading-5 text-vesper-dim">
+                Caption availability, private or deleted uploads, Shorts, and different snapshot
+                dates can affect comparisons. These counts alone do not tell us which applies.
+              </p>
+              <Show when={metrics().unknownPublicChannels > 0}>
+                <p class="mt-3 text-xs text-vesper-yellow">
+                  Public totals unknown for {integer.format(metrics().unknownPublicChannels)}{" "}
+                  creators; excluded from this comparison.
+                </p>
+              </Show>
+            </div>
+          </div>
+        </section>
+
         <Show when={snapshot().errors.length}>
-          <section class="border border-vesper-red/40 bg-vesper-red/5 p-4" role="alert">
-            <p class="font-medium text-vesper-red">Some metrics are unavailable</p>
+          <section class="mb-5 border border-vesper-red/40 bg-vesper-red/5 p-4" role="alert">
+            <p class="text-sm font-medium text-vesper-red">Some metrics are unavailable</p>
             <For each={snapshot().errors}>
-              {(error) => <p class="mt-1 break-words text-sm text-vesper-muted">{error}</p>}
+              {(error) => <p class="mt-1 break-words text-xs text-vesper-muted">{error}</p>}
             </For>
           </section>
         </Show>
 
-        <section aria-labelledby="overview-heading">
-          <SectionHeading id="overview-heading" title="Overview" detail="Current indexed corpus" />
-          <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <MetricCard label="Creators" value={integer.format(metrics().channelCount)} />
-            <MetricCard label="Indexed videos" value={integer.format(metrics().indexedVideos)} />
-            <MetricCard label="Transcript moments" value={integer.format(metrics().moments)} />
-            <MetricCard
-              label="Catalog coverage"
-              value={`${number.format(metrics().coveragePercent)}%`}
-              detail={`${integer.format(metrics().remainingVideos)} videos remaining`}
-            />
-          </div>
-        </section>
-
-        <section aria-labelledby="operations-heading">
-          <SectionHeading id="operations-heading" title="Operations" detail="Live service checks" />
-          <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <MetricCard
-              label="API"
-              value={snapshot().apiHealthy ? "Operational" : "Unavailable"}
-              tone={snapshot().apiHealthy ? "green" : "red"}
-              detail={latency(snapshot().latencyMs.health)}
-            />
-            <MetricCard
-              label="Catalog API"
-              value={snapshot().channelsAvailable ? "Online" : "Unavailable"}
-              tone={snapshot().channelsAvailable ? "green" : "red"}
-              detail={latency(snapshot().latencyMs.channels)}
-            />
-            <MetricCard
-              label="Indexer"
-              value={indexerLabel(snapshot().indexStatus?.status, metrics().remainingVideos)}
-              tone={indexerTone(snapshot().indexStatus?.status, metrics().remainingVideos)}
-              detail={indexerDetail(
-                snapshot().indexStatus?.status,
-                snapshot().indexStatus?.handle,
-                metrics().remainingVideos,
-                snapshot().latencyMs.indexStatus,
-              )}
-            />
-            <MetricCard
-              label="Last refreshed"
-              value={new Date(snapshot().fetchedAt).toLocaleTimeString()}
-              detail={navigator.onLine ? "Browser online" : "Browser offline"}
-            />
-          </div>
-        </section>
-
-        <section aria-labelledby="catalog-heading">
-          <SectionHeading
-            id="catalog-heading"
-            title="Catalog diagnostics"
-            detail="Derived totals"
+        <section
+          aria-label="Service status"
+          class="grid gap-px overflow-hidden border border-vesper-border bg-vesper-border sm:grid-cols-3"
+        >
+          <ServiceStatus
+            label="Search API"
+            value={snapshot().apiHealthy ? "Operational" : "Unavailable"}
+            healthy={snapshot().apiHealthy}
+            detail={latency(snapshot().latencyMs.health)}
           />
-          <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            <SmallMetric label="Public videos reported" value={metrics().publicVideos} />
-            <SmallMetric label="Fully indexed creators" value={metrics().completeChannels} />
-            <SmallMetric label="Partially indexed creators" value={metrics().partialChannels} />
-            <SmallMetric label="Profiles with avatars" value={metrics().avatarCount} />
-            <SmallMetric label="Profiles with upload playlists" value={metrics().playlistCount} />
-            <SmallMetric
-              label="Average videos / creator"
-              value={metrics().averageVideosPerChannel}
-            />
-            <SmallMetric label="Average moments / video" value={metrics().averageMomentsPerVideo} />
-            <SmallMetric
-              label="Average moments / creator"
-              value={metrics().averageMomentsPerChannel}
-            />
-          </div>
-          <div class="mt-3 grid gap-3 lg:grid-cols-2">
-            <Distribution
-              label="Indexed videos per creator"
-              values={metrics().indexedVideoDistribution}
-            />
-            <Distribution label="Moments per creator" values={metrics().momentDistribution} />
-          </div>
+          <ServiceStatus
+            label="Catalog API"
+            value={snapshot().channelsAvailable ? "Online" : "Unavailable"}
+            healthy={snapshot().channelsAvailable}
+            detail={latency(snapshot().latencyMs.channels)}
+          />
+          <ServiceStatus
+            label="Indexer"
+            value={indexerLabel(snapshot().indexStatus)}
+            healthy={indexerHealthy(snapshot().indexStatus)}
+            detail={snapshot().indexStatus?.handle || latency(snapshot().latencyMs.indexStatus)}
+          />
         </section>
 
-        <section aria-labelledby="creators-heading">
-          <SectionHeading
-            id="creators-heading"
-            title="Creators"
-            detail={`${integer.format(channels().length)} searchable profiles`}
-          />
+        <section aria-labelledby="creators-heading" class="py-8 sm:py-10">
+          <div class="flex flex-wrap items-baseline justify-between gap-3">
+            <h2 id="creators-heading" class="text-xl font-medium tracking-tight">
+              Creator directory
+            </h2>
+            <p class="text-xs text-vesper-dim" role="status">
+              {snapshot().channelsAvailable
+                ? `${integer.format(channels().length)} of ${integer.format(metrics().channelCount)} creators`
+                : "Catalog unavailable"}
+            </p>
+          </div>
+          <div class="mt-5 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+            <label class="min-w-0">
+              <span class="sr-only">Find a creator</span>
+              <input
+                type="search"
+                placeholder="Find a creator or @handle…"
+                value={view().query}
+                onInput={(event) =>
+                  setView((previous) => ({ ...previous, query: event.currentTarget.value }))
+                }
+                class="min-h-11 w-full min-w-0 border border-vesper-control bg-vesper-panel px-3 text-sm placeholder:text-vesper-dim"
+              />
+            </label>
+            <label class="flex min-w-0 items-center gap-2 text-xs text-vesper-muted">
+              <span>Show</span>
+              <select
+                aria-label="Filter creators"
+                value={view().filter}
+                onChange={(event) =>
+                  setView((previous) => ({
+                    ...previous,
+                    filter: event.currentTarget.value as CreatorFilter,
+                  }))
+                }
+                class="min-h-11 min-w-0 flex-1 border border-vesper-control bg-vesper-panel px-3 text-sm"
+              >
+                <option value="all">All creators</option>
+                <option value="difference">Count differences</option>
+                <option value="unknown">Unknown public totals</option>
+              </select>
+            </label>
+            <label class="flex min-w-0 items-center gap-2 text-xs text-vesper-muted">
+              <span>Sort</span>
+              <select
+                aria-label="Sort creators"
+                value={view().sort}
+                onChange={(event) =>
+                  setView((previous) => ({
+                    ...previous,
+                    sort: event.currentTarget.value as CreatorSort,
+                  }))
+                }
+                class="min-h-11 min-w-0 flex-1 border border-vesper-control bg-vesper-panel px-3 text-sm"
+              >
+                <option value="difference">Count difference</option>
+                <option value="videos">Indexed videos</option>
+                <option value="moments">Transcript moments</option>
+                <option value="name">Name A–Z</option>
+              </select>
+            </label>
+          </div>
           <Show
-            when={!snapshotPending() || channels().length > 0}
-            fallback={<div class="border border-vesper-border bg-vesper-panel p-5">Loading…</div>}
+            when={snapshot().channelsAvailable}
+            fallback={
+              <p class="mt-4 border border-vesper-border p-6 text-sm text-vesper-muted">
+                Creator data is unavailable. Refresh to try again.
+              </p>
+            }
           >
-            <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              <For each={channels()}>{(channel) => <ChannelMetricCard channel={channel} />}</For>
-            </div>
+            <Show
+              when={channels().length > 0}
+              fallback={
+                <p class="mt-4 border border-vesper-border p-6 text-sm text-vesper-muted">
+                  {view().query || view().filter !== "all"
+                    ? "No creators match these filters."
+                    : "No creators in the public catalog yet."}
+                </p>
+              }
+            >
+              <table class="mt-4 w-full border-collapse text-sm" aria-label="Creator catalog">
+                <thead class="hidden border-y border-vesper-border text-left text-[11px] uppercase tracking-wider text-vesper-dim md:table-header-group">
+                  <tr>
+                    <th scope="col" class="py-3 font-medium">
+                      Creator
+                    </th>
+                    <th scope="col" class="px-3 py-3 text-right font-medium">
+                      Indexed / public
+                    </th>
+                    <th scope="col" class="px-3 py-3 text-right font-medium">
+                      Difference
+                    </th>
+                    <th scope="col" class="py-3 text-right font-medium">
+                      Moments
+                    </th>
+                  </tr>
+                </thead>
+                <tbody class="block md:table-row-group">
+                  <For each={channels()}>{(channel) => <CreatorRow channel={channel} />}</For>
+                </tbody>
+              </table>
+            </Show>
           </Show>
+          <p class="mt-4 text-xs leading-5 text-vesper-dim">
+            Difference = reported public videos − indexed videos. Negative values mean the index has
+            more videos than the reported public total; equal counts do not establish complete
+            coverage.
+          </p>
         </section>
 
-        <footer class="border-t border-white/10 py-5 text-xs leading-5 text-vesper-dim">
-          Counts come from the public search API. Latencies are browser-observed fetch times, not
-          backend-only timings. Private Axiom events, Fly machine internals, tokens, and user-level
-          search data are intentionally not exposed on this public page.
+        <details class="border-y border-vesper-border py-4">
+          <summary class="cursor-pointer text-sm text-vesper-muted hover:text-white">
+            Catalog diagnostics{" "}
+            <span class="ml-2 text-xs text-vesper-dim">Metadata & averages</span>
+          </summary>
+          <dl class="mt-5 grid gap-x-8 gap-y-4 pb-2 sm:grid-cols-2 lg:grid-cols-4">
+            <Diagnostic
+              label="Profiles with avatars"
+              value={catalogNumber(metrics().avatarCount)}
+            />
+            <Diagnostic
+              label="Upload playlists known"
+              value={catalogNumber(metrics().playlistCount)}
+            />
+            <Diagnostic
+              label="Average videos / creator"
+              value={
+                snapshot().channelsAvailable
+                  ? number.format(metrics().averageVideosPerChannel)
+                  : "Unknown"
+              }
+            />
+            <Diagnostic
+              label="Average moments / video"
+              value={
+                snapshot().channelsAvailable
+                  ? number.format(metrics().averageMomentsPerVideo)
+                  : "Unknown"
+              }
+            />
+          </dl>
+        </details>
+        <footer class="py-6 text-xs leading-5 text-vesper-dim">
+          Public search API snapshots. Latencies are browser-observed fetch times. Queue status
+          describes reported activity, not catalog completeness.
         </footer>
       </div>
     </main>
   );
 };
 
-const SectionHeading: Component<{ id: string; title: string; detail: string }> = (props) => (
-  <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-    <h2 id={props.id} class="text-sm font-semibold uppercase tracking-[0.14em] text-white">
-      {props.title}
-    </h2>
-    <p class="text-xs text-vesper-dim">{props.detail}</p>
-  </div>
-);
-
-const MetricCard: Component<{
+const ServiceStatus: Component<{
   label: string;
   value: string;
-  detail?: string;
-  tone?: "green" | "yellow" | "red";
+  healthy: boolean | undefined;
+  detail: string;
 }> = (props) => (
-  <div class="min-w-0 border border-vesper-border bg-vesper-panel p-4 sm:p-5">
-    <p class="text-xs uppercase tracking-[0.12em] text-vesper-dim">{props.label}</p>
-    <p
-      class={`mt-2 break-words text-xl font-semibold tabular-nums sm:text-2xl ${
-        props.tone === "green"
-          ? "text-vesper-green"
-          : props.tone === "red"
-            ? "text-vesper-red"
-            : props.tone === "yellow"
-              ? "text-vesper-yellow"
-              : "text-white"
-      }`}
-    >
-      {props.value}
+  <div class="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 bg-vesper-panel px-4 py-3">
+    <div class="flex items-center gap-2 text-xs">
+      <span
+        aria-hidden="true"
+        class={`size-1.5 rounded-full ${props.healthy === true ? "bg-vesper-green" : props.healthy === false ? "bg-vesper-red" : "bg-vesper-dim"}`}
+      />
+      <span class="text-vesper-muted">{props.label}</span>
+      <span>{props.value}</span>
+    </div>
+    <p class="w-full truncate pl-3.5 text-[11px] text-vesper-dim" title={props.detail}>
+      {props.detail}
     </p>
-    <Show when={props.detail}>
-      <p class="mt-1 truncate text-xs text-vesper-muted" title={props.detail}>
-        {props.detail}
-      </p>
-    </Show>
   </div>
 );
 
-const SmallMetric: Component<{ label: string; value: number }> = (props) => (
-  <div class="flex items-center justify-between gap-4 border border-vesper-border bg-vesper-panel px-4 py-3">
-    <span class="text-sm text-vesper-muted">{props.label}</span>
-    <span class="shrink-0 font-mono text-sm text-white">{number.format(props.value)}</span>
-  </div>
-);
-
-const Distribution: Component<{
-  label: string;
-  values: { min: number; median: number; max: number };
-}> = (props) => (
-  <div class="border border-vesper-border bg-vesper-panel p-4">
-    <p class="text-sm text-vesper-muted">{props.label}</p>
-    <dl class="mt-3 grid grid-cols-3 gap-2 text-center">
-      <DistributionValue label="Minimum" value={props.values.min} />
-      <DistributionValue label="Median" value={props.values.median} />
-      <DistributionValue label="Maximum" value={props.values.max} />
-    </dl>
-  </div>
-);
-
-const DistributionValue: Component<{ label: string; value: number }> = (props) => (
-  <div>
-    <dt class="text-xs uppercase tracking-[0.1em] text-vesper-dim">{props.label}</dt>
-    <dd class="mt-1 font-mono text-sm text-white">{number.format(props.value)}</dd>
-  </div>
-);
-
-const ChannelMetricCard: Component<{ channel: IndexedChannel }> = (props) => {
-  const coverage = () => channelCoverage(props.channel);
-  const remaining = () =>
-    Math.max(0, props.channel.public_video_count - props.channel.indexed_video_count);
-  const momentsPerVideo = () =>
-    props.channel.indexed_video_count > 0
-      ? props.channel.indexed_chunk_count / props.channel.indexed_video_count
-      : 0;
-  return (
-    <a
-      href={routeForHandle(props.channel.handle)}
-      class="pressable group min-w-0 border border-vesper-control bg-vesper-panel p-4 hover:border-vesper-yellow"
-    >
-      <div class="flex min-w-0 items-center gap-3">
+const CreatorRow: Component<{ channel: IndexedChannel }> = (props) => (
+  <tr class="grid grid-cols-2 gap-x-4 gap-y-4 border-b border-vesper-border py-5 md:table-row md:hover:bg-vesper-panel">
+    <th scope="row" class="col-span-2 min-w-0 text-left font-normal md:max-w-64 md:py-4">
+      <a
+        href={routeForHandle(props.channel.handle)}
+        class="group flex min-h-11 min-w-0 items-center gap-3"
+      >
         <ChannelAvatar channel={props.channel} size="compact" />
-        <div class="min-w-0 flex-1">
-          <p class="truncate font-medium text-white group-hover:text-vesper-yellow">
+        <span class="min-w-0">
+          <span class="block truncate font-medium group-hover:text-vesper-yellow">
             {props.channel.name}
-          </p>
-          <p class="truncate text-xs text-vesper-muted">{props.channel.handle}</p>
-        </div>
-        <span class="font-mono text-xs text-vesper-green">{number.format(coverage())}%</span>
-      </div>
-      <div class="mt-4 h-1 overflow-hidden bg-white/10" aria-hidden="true">
-        <div class="h-full bg-vesper-green" style={{ width: `${coverage()}%` }} />
-      </div>
-      <dl class="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
-        <ChannelValue
-          label="Indexed / public"
-          value={`${integer.format(props.channel.indexed_video_count)} / ${integer.format(props.channel.public_video_count)}`}
-        />
-        <ChannelValue label="Remaining" value={integer.format(remaining())} />
-        <ChannelValue label="Moments" value={integer.format(props.channel.indexed_chunk_count)} />
-        <ChannelValue label="Moments / video" value={number.format(momentsPerVideo())} />
-      </dl>
-    </a>
-  );
-};
+          </span>
+          <span class="block truncate text-xs text-vesper-dim">{props.channel.handle}</span>
+        </span>
+        <span
+          aria-hidden="true"
+          class="ml-auto pr-2 text-vesper-dim group-hover:text-vesper-yellow md:hidden"
+        >
+          ↗
+        </span>
+      </a>
+    </th>
+    <td class="min-w-0 md:px-3 md:py-4 md:text-right">
+      <span class="mb-1 block text-[11px] text-vesper-dim md:hidden">Indexed / public</span>
+      <span class="font-mono text-xs">
+        {integer.format(props.channel.indexed_video_count)} /{" "}
+        {publicVideoCount(props.channel) === null
+          ? "Unknown"
+          : integer.format(props.channel.public_video_count)}
+      </span>
+    </td>
+    <td class="min-w-0 md:px-3 md:py-4 md:text-right">
+      <span class="mb-1 block text-[11px] text-vesper-dim md:hidden">Count difference</span>
+      <span
+        class={`font-mono text-xs ${channelCountDifference(props.channel) ? "text-vesper-yellow" : "text-vesper-muted"}`}
+      >
+        {differenceLabel(channelCountDifference(props.channel))}
+      </span>
+    </td>
+    <td class="col-span-2 flex items-center justify-between md:table-cell md:py-4 md:text-right">
+      <span class="text-[11px] text-vesper-dim md:hidden">Transcript moments</span>
+      <span class="font-mono text-xs text-vesper-muted">
+        {integer.format(props.channel.indexed_chunk_count)}
+      </span>
+    </td>
+  </tr>
+);
 
-const ChannelValue: Component<{ label: string; value: JSX.Element }> = (props) => (
-  <div class="min-w-0">
-    <dt class="truncate text-vesper-dim">{props.label}</dt>
-    <dd class="mt-0.5 truncate font-mono text-white">{props.value}</dd>
+const Diagnostic: Component<{ label: string; value: string }> = (props) => (
+  <div>
+    <dt class="text-xs text-vesper-dim">{props.label}</dt>
+    <dd class="mt-1 font-mono text-sm">{props.value}</dd>
   </div>
 );
+
+function differenceLabel(value: number | null): string {
+  if (value === null) return "Unknown";
+  return `${value > 0 ? "+" : ""}${integer.format(value)}`;
+}
 
 function latency(value?: number): string {
   return value === undefined ? "No response" : `${integer.format(value)} ms browser latency`;
 }
 
-function indexerLabel(status: string | undefined, remainingVideos: number): string {
-  if (status === "idle") return remainingVideos > 0 ? "Scheduled repair" : "Caught up";
+function indexerLabel(status: IndexStatus | undefined): string {
   if (!status) return "Unknown";
-  return status.replace(/^./, (character) => character.toUpperCase());
+  return status.status.replace(/^./, (character) => character.toUpperCase());
 }
 
-function indexerTone(
-  status: string | undefined,
-  remainingVideos: number,
-): "green" | "yellow" | "red" | undefined {
-  if (status === "idle") return remainingVideos > 0 ? "yellow" : "green";
-  if (status === "running") return "green";
-  if (status === "queued") return "yellow";
-  if (status === "failed" || status === "rejected") return "red";
+function indexerHealthy(status: IndexStatus | undefined): boolean | undefined {
+  if (!status) return undefined;
+  if (status.status === "failed" || status.status === "rejected") return false;
+  if (status.status === "running") return true;
   return undefined;
-}
-
-function indexerDetail(
-  status: string | undefined,
-  handle: string | undefined,
-  remainingVideos: number,
-  latencyMs: number | undefined,
-): string {
-  if (status === "running" && handle) return handle;
-  if (status === "idle" && remainingVideos > 0) {
-    return `${integer.format(remainingVideos)} count gap · 6h repair + daily refresh`;
-  }
-  if (status === "idle") return "No public/indexed count gap";
-  return latency(latencyMs);
 }

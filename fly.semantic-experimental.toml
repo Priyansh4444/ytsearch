@@ -1,0 +1,44 @@
+# Semantic search: the experimental site, and the semantic service the production
+# API calls for mode=hybrid. Suspends when idle and resumes in about a second.
+# See docs/playbooks/semantic-pilot.md.
+app = 'ytsearch-semantic-experimental'
+primary_region = 'sjc'
+
+[build]
+  dockerfile = 'Dockerfile.semantic-experimental'
+
+[env]
+  RUST_LOG = 'youtube_api=info'
+  LOG_FORMAT = 'json'
+  RAW_SEARCH_UPSTREAM_URL = 'http://ytsearch-raw-production.internal:8108'
+  RAW_SEARCH_COLLECTION = 'youtube_transcript_chunks'
+  YTSEARCH_ALLOWED_ORIGINS = 'https://search.experimental.pronsh.dev'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Suspend keeps the loaded model in a memory snapshot. A plain stop costs the
+  # next search about 25 s of model loading. Suspend needs 2 GB of memory or less.
+  auto_stop_machines = 'suspend'
+  auto_start_machines = true
+  min_machines_running = 0
+
+[mounts]
+  source = 'semantic_experimental_data'
+  destination = '/data'
+  initial_size = '5gb'
+
+[[vm]]
+  memory = '2gb'
+  cpu_kind = 'shared'
+  cpus = 2
+
+[checks]
+  [checks.health]
+    port = 8080
+    type = 'http'
+    interval = '30s'
+    timeout = '2s'
+    grace_period = '30s'
+    method = 'get'
+    path = '/healthz'

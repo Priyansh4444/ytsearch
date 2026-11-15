@@ -166,6 +166,47 @@ fn token_drop_engine() -> (TempDir, RawSearchEngine) {
     (root, engine)
 }
 
+/// A corpus large enough that "why" and "he" are common words (the floor for
+/// that is 1,000 documents), with a few chunks that say something specific.
+fn common_word_engine() -> (TempDir, RawSearchEngine) {
+    let root = TempDir::new().expect("temp dir");
+    let chunks_path = root.path().join("chunks.jsonl");
+    let channels_path = root.path().join("channels.jsonl");
+    let index_path = root.path().join("index");
+    let mut chunks = File::create(&chunks_path).expect("chunks");
+    let mut write = |video: &str, text: &str| {
+        let document = json!({
+            "id": format!("{video}-1"), "video_id": video, "title": "Fixture", "text": text,
+            "youtuber_handle": "@one", "youtuber_name": "One"
+        });
+        writeln!(chunks, "{document}").expect("write chunk");
+    };
+    for index in 0..1_200 {
+        write(&format!("filler-{index}"), "why does he think so");
+    }
+    for index in 0..6 {
+        write(&format!("ball-{index}"), "why he dropped the ball");
+    }
+    write("prisma", "we moved off prisma last year");
+    // alpha and beta share a chunk; gamma is the rarest word and lives alone.
+    write("alpha-beta", "alpha beta together");
+    write("alpha-solo", "alpha on its own");
+    for index in 0..4 {
+        write(&format!("beta-{index}"), "beta on its own");
+    }
+    write("gamma", "gamma on its own");
+    File::create(&channels_path).expect("channels");
+    build_index(&chunks_path, &channels_path, &index_path).expect("build raw index");
+    let engine = RawSearchEngine::open(&index_path).expect("open raw index");
+    (root, engine)
+}
+
+fn first_video(response: &Value) -> &str {
+    response["grouped_hits"][0]["group_key"][0]
+        .as_str()
+        .expect("a first video")
+}
+
 fn streaming_edge_engine() -> (TempDir, RawSearchEngine) {
     let root = TempDir::new().expect("temp dir");
     let chunks_path = root.path().join("chunks.jsonl");
@@ -2160,6 +2201,68 @@ fn fuzzy_later_token_does_not_stop_five_token_drop_progression() {
     let response = engine.search(&query).expect("search");
 
     assert_eq!(response["found"], 3);
+}
+
+#[test]
+fn a_question_falls_back_to_its_rare_topic_not_its_filler() {
+    let (_root, engine) = common_word_engine();
+    // No chunk says all four words. Dropping from the right would keep "why he
+    // dropped" and answer with six chunks about a ball.
+    let response = engine
+        .search(&grouped_query("why he dropped prisma"))
+        .expect("question search");
+
+    assert_eq!(first_video(&response), "prisma");
+}
+
+#[test]
+fn a_query_of_uncommon_words_still_keeps_its_leading_terms() {
+    let (_root, engine) = common_word_engine();
+    // No term is common, so the leading pair is kept: "alpha beta" shares a
+    // chunk. Keeping the rarest term would answer with the lone "gamma" chunk.
+    let response = engine
+        .search(&grouped_query("alpha beta gamma"))
+        .expect("keyword search");
+
+    assert_eq!(first_video(&response), "alpha-beta");
+}
+
+#[test]
+fn a_word_in_many_titles_but_few_transcripts_is_not_filler() {
+    let (_root, engine) = common_word_engine();
+    // Every chunk's title says "fixture", yet no transcript does. Filler is
+    // what people say, so the leading pair is still kept; counting title
+    // matches would call this a question and answer with the lone "gamma".
+    let response = engine
+        .search(&grouped_query("alpha beta gamma fixture"))
+        .expect("keyword search");
+
+    assert_eq!(first_video(&response), "alpha-beta");
+}
+
+#[test]
+fn an_unknown_word_is_dropped_before_any_known_one() {
+    let (_root, engine) = common_word_engine();
+    // "qzxv" is in no transcript. Keeping it as the rarest term would make
+    // every smaller query fail its conjunction and answer with nothing.
+    let response = engine
+        .search(&grouped_query("why he dropped prisma qzxv"))
+        .expect("typo search");
+
+    assert!(response["found"].as_u64().expect("found") >= 1);
+    assert_eq!(first_video(&response), "prisma");
+}
+
+#[test]
+fn common_word_detection_ignores_small_indexes() {
+    let (_root, engine) = token_drop_engine();
+    // Every word of a ten-chunk index is 10% of it; none of them is filler, so
+    // the leading pair is kept as before.
+    let order = engine
+        .terms_retention_order(&["alpha".to_string(), "beta".to_string(), "gamma".to_string()])
+        .expect("order");
+
+    assert_eq!(order, vec![0, 1, 2]);
 }
 
 #[test]

@@ -7,7 +7,8 @@ import { gzipSync } from "node:zlib";
 const budgets = {
   initialJavaScriptGzipBytes: 36_000,
   totalJavaScriptGzipBytes: 56_000,
-  cssGzipBytes: 8_000,
+  // Raised from 8_000 for the search mode toggle and the moment share panel.
+  cssGzipBytes: 8_500,
 };
 
 const html = readFileSync("dist/index.html", "utf8");

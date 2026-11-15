@@ -25,7 +25,7 @@ use tokio::{
     time::{Duration, Instant, sleep, timeout},
 };
 use youtube_ingest::{
-    DurationMs, IngestError, TimestampMs, TranscriptSegment, TranscriptSource, VideoMetadata,
+    IngestError, TimestampMs, TranscriptSegment, TranscriptSource, VideoMetadata,
     VideoMetadataSource, Youtuber, stable_youtuber_id,
 };
 
@@ -81,7 +81,7 @@ impl YtDlpTranscriptSource {
         self
     }
 
-    fn cached_transcript(
+    pub fn cached_transcript(
         &self,
         video_id: &str,
     ) -> youtube_ingest::Result<Option<Vec<TranscriptSegment>>> {
@@ -95,8 +95,12 @@ impl YtDlpTranscriptSource {
         let body = fs::read_to_string(&path).map_err(|error| {
             transcript_error(video_id, format!("transcript cache read failed: {error}"))
         })?;
-        match serde_json::from_str(&body) {
-            Ok(transcript) => Ok(Some(transcript)),
+        match serde_json::from_str::<Vec<TranscriptSegment>>(&body) {
+            Ok(transcript) if valid_transcript(&transcript) => Ok(Some(transcript)),
+            Ok(_) => {
+                tracing::warn!(video_id, "ignoring invalid transcript cache entry");
+                Ok(None)
+            }
             // A torn or empty entry (e.g. a crash before the rename reached
             // disk) is a miss: refetching overwrites it instead of failing
             // this video on every run.
@@ -107,11 +111,17 @@ impl YtDlpTranscriptSource {
         }
     }
 
-    fn write_cached_transcript(
+    pub fn write_cached_transcript(
         &self,
         video_id: &str,
         transcript: &[TranscriptSegment],
     ) -> youtube_ingest::Result<()> {
+        if !valid_transcript(transcript) {
+            return Err(transcript_error(
+                video_id,
+                "invalid transcript cache segments",
+            ));
+        }
         let Some(cache_dir) = &self.cache_dir else {
             return Ok(());
         };
@@ -138,9 +148,97 @@ impl YtDlpTranscriptSource {
         fs::write(&tmp_path, body).map_err(|error| {
             transcript_error(video_id, format!("transcript cache write failed: {error}"))
         })?;
-        fs::rename(&tmp_path, &path).map_err(|error| {
-            transcript_error(video_id, format!("transcript cache rename failed: {error}"))
-        })?;
+        if let Err(error) = fs::rename(&tmp_path, &path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(transcript_error(
+                video_id,
+                format!("transcript cache rename failed: {error}"),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Download mono 16kHz PCM using the same session configuration as captions.
+    /// Only a successful complete download replaces `destination`.
+    pub async fn download_audio(
+        &self,
+        video_id: &str,
+        destination: &Path,
+        deadline: Duration,
+        max_bytes: u64,
+    ) -> youtube_ingest::Result<()> {
+        let parent = destination
+            .parent()
+            .ok_or_else(|| transcript_error(video_id, "audio destination has no parent"))?;
+        fs::create_dir_all(parent)
+            .map_err(|error| transcript_error(video_id, error.to_string()))?;
+        let staging = parent.join(format!(
+            ".download-{}-{}",
+            std::process::id(),
+            CAPTION_FALLBACK_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&staging).map_err(|error| transcript_error(video_id, error.to_string()))?;
+        // A guard cleans staging on process errors, deadlines and cancellation.
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(staging.clone());
+        let mut command = self.ytdlp_command();
+        command
+            .args([
+                "--no-warnings",
+                "--no-playlist",
+                "--match-filter",
+                "duration <= 43200",
+                "--extract-audio",
+                "--audio-format",
+                "wav",
+                "--postprocessor-args",
+                "ffmpeg:-ac 1 -ar 16000",
+                "--retries",
+                "2",
+                "--fragment-retries",
+                "2",
+                "--socket-timeout",
+                "30",
+                "--max-filesize",
+            ])
+            .arg(max_bytes.to_string())
+            .arg("-o")
+            .arg(staging.join("audio.%(ext)s"))
+            .arg(video_url(video_id))
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let output = timeout(deadline, command.output())
+            .await
+            .map_err(|_| transcript_error(video_id, "yt-dlp audio download timed out"))?
+            .map_err(|error| transcript_error(video_id, error.to_string()))?;
+        if !output.status.success() {
+            return Err(transcript_error(
+                video_id,
+                format!(
+                    "yt-dlp audio download failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            ));
+        }
+        let audio = staging.join("audio.wav");
+        let size = fs::metadata(&audio)
+            .map_err(|error| {
+                transcript_error(video_id, format!("yt-dlp audio output missing: {error}"))
+            })?
+            .len();
+        if size <= 44 || size > max_bytes {
+            return Err(transcript_error(
+                video_id,
+                "downloaded audio exceeds supported size or is empty",
+            ));
+        }
+        fs::rename(audio, destination)
+            .map_err(|error| transcript_error(video_id, error.to_string()))?;
         Ok(())
     }
 
@@ -209,7 +307,16 @@ impl YtDlpTranscriptSource {
             .await
     }
 
-    /// `tab` is `videos` or `streams`.
+    pub async fn channel_shorts_feed(
+        &self,
+        handle: &str,
+        max_videos: Option<usize>,
+    ) -> youtube_ingest::Result<YtDlpChannelFeed> {
+        self.channel_feed_for_tab(handle, "shorts", max_videos)
+            .await
+    }
+
+    /// `tab` is `videos`, `streams`, or `shorts`.
     async fn channel_feed_for_tab(
         &self,
         handle: &str,
@@ -634,6 +741,12 @@ impl TranscriptSource for YtDlpTranscriptSource {
             }
             None => self.video_json(video_id).await?,
         };
+        if video.get("live_status").and_then(Value::as_str) == Some("is_upcoming") {
+            return Err(transcript_error(
+                video_id,
+                "upcoming live event; captions are not ready",
+            ));
+        }
         let track = select_caption_track(&video).ok_or_else(|| {
             transcript_error(
                 video_id,
@@ -659,6 +772,16 @@ impl TranscriptSource for YtDlpTranscriptSource {
         self.write_cached_transcript(video_id, &transcript)?;
         Ok(transcript)
     }
+}
+
+fn valid_transcript(segments: &[TranscriptSegment]) -> bool {
+    !segments.is_empty()
+        && segments
+            .iter()
+            .all(|segment| segment.start_ms < segment.end_ms && has_text(&segment.text))
+        && segments
+            .windows(2)
+            .all(|pair| pair[0].start_ms <= pair[1].start_ms)
 }
 
 fn transcript_cache_path(cache_dir: &Path, video_id: &str) -> PathBuf {
@@ -693,9 +816,9 @@ struct Json3Transcript {
 #[derive(Debug, Deserialize)]
 struct Json3Event {
     #[serde(rename = "tStartMs")]
-    start_ms: Option<TimestampMs>,
+    start_ms: Option<i64>,
     #[serde(rename = "dDurationMs")]
-    duration_ms: Option<DurationMs>,
+    duration_ms: Option<i64>,
     #[serde(default)]
     segs: Vec<Json3Segment>,
 }
@@ -786,7 +909,15 @@ fn parse_json3_transcript(
         let Some(duration_ms) = event.duration_ms else {
             continue;
         };
-        let Some(end_ms) = start_ms.checked_add(duration_ms) else {
+        let Some(end_ms) = start_ms
+            .checked_add(duration_ms)
+            .and_then(|end_ms| TimestampMs::try_from(end_ms).ok())
+        else {
+            continue;
+        };
+        // YouTube can position the opening caption slightly before the video.
+        // Clip that start at zero while preserving the original end time.
+        let Ok(start_ms) = TimestampMs::try_from(start_ms.max(0)) else {
             continue;
         };
 
@@ -1043,6 +1174,97 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn audio_download_inherits_session_and_commits_only_complete_files() {
+        use std::os::unix::fs::PermissionsExt;
+        const CHILD: &str = "YTSEARCH_AUDIO_SESSION_TEST_CHILD";
+        if env::var_os(CHILD).is_none() {
+            // Isolate environment settings from the other concurrently running tests.
+            let result = std::process::Command::new(env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::audio_download_inherits_session_and_commits_only_complete_files",
+                ])
+                .env(CHILD, "1")
+                .env(YT_DLP_COOKIES_FILE_ENV, "/fixture/session cookies.txt")
+                .env(YT_DLP_EXTRACTOR_ARGS_ENV, "youtube:player_client=web")
+                .env(YT_DLP_USER_AGENT_ENV, "fixture session agent")
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stdout)
+            );
+            return;
+        }
+        let fixture =
+            env::temp_dir().join(format!("ytsearch-audio-session-{}", std::process::id()));
+        fs::create_dir_all(&fixture).unwrap();
+        let binary = fixture.join("yt-dlp");
+        fs::write(
+            &binary,
+            r#"#!/bin/sh
+set -eu
+cookies= extractor= agent= output= url=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --cookies) cookies="$2"; shift 2 ;;
+    --extractor-args) extractor="$2"; shift 2 ;;
+    --user-agent) agent="$2"; shift 2 ;;
+    -o) output="$2"; shift 2 ;;
+    *) url="$1"; shift ;;
+  esac
+done
+[ "$cookies" = '/fixture/session cookies.txt' ]
+[ "$extractor" = 'youtube:player_client=web' ]
+[ "$agent" = 'fixture session agent' ]
+case "$url" in
+  *slow) exec sleep 10 ;;
+esac
+head -c 64 /dev/zero > "${output%.*}.wav"
+case "$url" in
+  *fail) exit 1 ;;
+esac
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+        let source = YtDlpTranscriptSource::with_binary(binary.to_string_lossy());
+        let audio = fixture.join("audio.wav");
+        source
+            .download_audio("good", &audio, Duration::from_secs(2), 100)
+            .await
+            .unwrap();
+        assert_eq!(fs::metadata(&audio).unwrap().len(), 64);
+        fs::write(&audio, "keep existing complete audio").unwrap();
+        assert!(
+            source
+                .download_audio("fail", &audio, Duration::from_secs(2), 100)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            fs::read_to_string(&audio).unwrap(),
+            "keep existing complete audio"
+        );
+        assert!(
+            source
+                .download_audio("slow", &audio, Duration::from_millis(40), 100)
+                .await
+                .is_err()
+        );
+        assert!(fs::read_dir(&fixture).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".download-")
+        }));
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn bounded_ytdlp_fallback_reads_the_requested_caption_file() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -1123,6 +1345,21 @@ printf '%s' '{"events":[{"tStartMs":1000,"dDurationMs":2000,"segs":[{"utf8":"fal
         assert_eq!(segments[0].start_ms, 1_000);
         assert_eq!(segments[0].end_ms, 3_000);
         assert_eq!(segments[0].text, "hello world");
+    }
+
+    #[test]
+    fn negative_json3_timestamps_do_not_discard_the_whole_transcript() {
+        let body = r#"{"events":[
+            {"tStartMs":-10,"dDurationMs":1010,"segs":[{"utf8":"opening words"}]},
+            {"tStartMs":1000,"dDurationMs":-10,"segs":[{"utf8":"invalid duration"}]},
+            {"tStartMs":2000,"dDurationMs":1000,"segs":[{"utf8":"later words"}]}
+        ]}"#;
+
+        let segments = parse_json3_transcript("negative-offset", body).unwrap();
+        assert_eq!(segments.len(), 2);
+        assert_eq!((segments[0].start_ms, segments[0].end_ms), (0, 1000));
+        assert_eq!(segments[0].text, "opening words");
+        assert_eq!((segments[1].start_ms, segments[1].end_ms), (2000, 3000));
     }
 
     #[test]

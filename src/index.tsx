@@ -13,6 +13,11 @@ if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
   );
 }
 
+// index.html carries readable content for crawlers and slow networks. render()
+// appends, so the app clears it here; the app is one screen with its own footer.
+root?.replaceChildren();
+document.getElementById("static-about")?.remove();
+
 if (window.location.pathname === "/dashboard") {
   const Dashboard = lazy(() =>
     import("./components/dashboard").then(({ Dashboard: component }) => ({

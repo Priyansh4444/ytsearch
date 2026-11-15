@@ -1,0 +1,484 @@
+:root {
+  color-scheme: dark;
+  background: #050505;
+  color: #f2f2f2;
+  font: 16px/1.6 system-ui, sans-serif;
+}
+main {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+}
+h1 {
+  margin-bottom: 0;
+}
+h2 {
+  margin-top: 2rem;
+  font-size: 1.1rem;
+}
+a {
+  color: #ffc799;
+}
+.updated {
+  color: #a0a0a0;
+  font-size: 0.9rem;
+}
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+pre {
+  overflow-x: auto;
+  padding: 0.75rem 1rem;
+  background: #111111;
+  border: 1px solid #252525;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+}
+th,
+td {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid #252525;
+  text-align: left;
+  vertical-align: top;
+}
+a:focus-visible,
+iframe:focus-visible {
+  outline: 2px solid #ffc799;
+  outline-offset: 3px;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin-top: 1.25rem;
+}
+
+/* A shared moment. The words someone said are the loudest thing on the page; the
+   controls stay out of their way, and YouTube's player only shows while it plays. */
+.clip-stage {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: #000000;
+}
+/* The still sits behind the player, which fades in once it is really playing. */
+.player {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.clip-stage[data-state="poster"] .player,
+.clip-stage[data-state="starting"] .player,
+.clip-stage[data-state="replay"] .player {
+  opacity: 0;
+  pointer-events: none;
+}
+.clip-stage[data-state="starting"] .clip-poster-glyph {
+  opacity: 0.45;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .player {
+    transition: opacity 220ms ease-out;
+  }
+  .clip-poster-glyph {
+    transition:
+      opacity 160ms ease-out,
+      color 160ms ease-out;
+  }
+}
+.clip-poster {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: #000000;
+  cursor: pointer;
+}
+.clip-poster[hidden] {
+  display: none;
+}
+.clip-poster img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.clip-poster-glyph {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  display: grid;
+  place-items: center;
+  width: 3.25rem;
+  height: 3.25rem;
+  border-radius: 50%;
+  background: rgb(5 5 5 / 70%);
+  color: #ffffff;
+  transform: translate(-50%, -50%);
+}
+.clip-poster-glyph svg {
+  width: 1.625rem;
+  height: 1.625rem;
+}
+.clip-poster:hover .clip-poster-glyph {
+  color: #ffc799;
+}
+.clip-poster:focus-visible {
+  outline: 2px solid #ffc799;
+  outline-offset: -2px;
+}
+.icon-pause,
+.icon-replay,
+.icon-muted {
+  display: none;
+}
+.icon-play,
+.icon-sound {
+  display: contents;
+}
+[data-state="playing"] .icon-play,
+[data-state="starting"] .icon-play {
+  display: none;
+}
+[data-state="playing"] .icon-pause,
+[data-state="starting"] .icon-pause {
+  display: contents;
+}
+[data-state="replay"] .icon-play {
+  display: none;
+}
+[data-state="replay"] .icon-replay {
+  display: contents;
+}
+[data-muted="true"] .icon-sound {
+  display: none;
+}
+[data-muted="true"] .icon-muted {
+  display: contents;
+}
+.clip-controls {
+  display: block;
+}
+.clip-controls[hidden] {
+  display: none;
+}
+/* A hairline flush with the video. The fill moves with a transform every frame, and
+   the range on top gives the taller hit area, the thumb and keyboard control. */
+.clip-timeline {
+  position: relative;
+  height: 1rem;
+}
+.clip-timeline::before,
+.clip-fill {
+  position: absolute;
+  inset: 0.40625rem 0 auto;
+  height: 0.1875rem;
+  content: "";
+}
+.clip-timeline::before {
+  background: #2e2e2e;
+}
+.clip-fill {
+  background: #ffc799;
+  transform: scaleX(0);
+  transform-origin: left;
+  will-change: transform;
+}
+.clip-fill.is-gliding {
+  transition: transform 240ms ease-out;
+}
+.clip-seek {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+}
+.clip-seek:focus {
+  outline: none;
+}
+.clip-seek::-webkit-slider-runnable-track {
+  height: 1rem;
+  background: transparent;
+}
+.clip-seek::-moz-range-track {
+  background: transparent;
+}
+.clip-seek::-webkit-slider-thumb {
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-top: 0.125rem;
+  border-radius: 50%;
+  background: #ffc799;
+  opacity: 0;
+  appearance: none;
+}
+.clip-seek::-moz-range-thumb {
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 0;
+  border-radius: 50%;
+  background: #ffc799;
+  opacity: 0;
+}
+.clip-seek:hover::-webkit-slider-thumb,
+.clip-seek:active::-webkit-slider-thumb,
+.clip-seek:focus-visible::-webkit-slider-thumb {
+  opacity: 1;
+}
+.clip-seek:hover::-moz-range-thumb,
+.clip-seek:active::-moz-range-thumb,
+.clip-seek:focus-visible::-moz-range-thumb {
+  opacity: 1;
+}
+.clip-seek:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgb(255 199 153 / 45%);
+}
+.clip-seek:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px rgb(255 199 153 / 45%);
+}
+.clip-row {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+  min-height: 2.25rem;
+  font-size: 0.8125rem;
+}
+.clip-icon {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #d0d0d0;
+  cursor: pointer;
+}
+.clip-icon:hover {
+  color: #ffffff;
+}
+.clip-icon:focus-visible,
+.captions button:focus-visible {
+  outline: 2px solid #ffc799;
+  outline-offset: -2px;
+}
+.clip-icon svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+.clip-clock {
+  margin-inline-start: 0.375rem;
+  color: #8a8a8a;
+  font-variant-numeric: tabular-nums;
+}
+.clip-row-link {
+  margin-inline-start: auto;
+  padding-inline: 0.75rem;
+  color: #8a8a8a;
+  text-decoration: none;
+}
+.clip-row-link:hover {
+  color: #ffc799;
+}
+
+.captions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.captions button {
+  display: block;
+  width: 100%;
+  padding: 0.125rem 0;
+  border: 0;
+  background: transparent;
+  color: #6f6f6f;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.captions button:hover {
+  color: #c8c8c8;
+}
+.captions .is-now button {
+  color: #ffffff;
+}
+.captions mark {
+  background: transparent;
+  color: #ffc799;
+}
+.captions li:not(.is-now) mark {
+  color: #a98a72;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .captions button {
+    transition: color 220ms ease-out;
+  }
+}
+
+.clip-page main {
+  max-width: 76rem;
+  padding: 0 1.25rem 4rem;
+}
+.clip-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 0.875rem;
+  font-size: 0.875rem;
+}
+.clip-bar a {
+  color: #8a8a8a;
+  text-decoration: none;
+}
+.clip-bar a:hover {
+  color: #ffc799;
+}
+.clip-bar .clip-brand {
+  color: #ffffff;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.clip-layout {
+  display: grid;
+  grid-template-areas:
+    "video"
+    "about"
+    "words";
+  gap: 1.25rem;
+}
+.clip-video {
+  grid-area: video;
+  min-width: 0;
+}
+.clip-about {
+  grid-area: about;
+}
+.clip-page .captions {
+  grid-area: words;
+  max-width: 44rem;
+  font-size: clamp(1.1875rem, 2.6vw, 1.5rem);
+  letter-spacing: -0.012em;
+  line-height: 1.4;
+}
+.clip-page h1 {
+  margin: 0;
+  font-size: 1.25rem;
+  letter-spacing: -0.012em;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+.clip-creator {
+  margin: 0.5rem 0 0;
+  color: #f2f2f2;
+  font-size: 0.9375rem;
+}
+.clip-creator span {
+  margin-inline-start: 0.25rem;
+  color: #7d7d7d;
+}
+.clip-time {
+  margin: 0.125rem 0 0;
+  color: #ffc799;
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+.clip-links {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 1rem 0 0;
+  font-size: 0.875rem;
+}
+@media (min-width: 60rem) {
+  .clip-layout {
+    grid-template-columns: minmax(0, 1fr) 17rem;
+    grid-template-areas:
+      "video about"
+      "words about";
+    column-gap: 2rem;
+  }
+}
+
+/* Inside an X post: 480 by 480 on desktop, narrower on phones. The clip keeps its
+   shape, the words take what is left, and the current line stays in view. */
+.clip-embed {
+  display: flex;
+  flex-direction: column;
+  height: 100svh;
+  margin: 0;
+  overflow: hidden;
+  background: #050505;
+}
+.clip-embed .clip-video {
+  flex-shrink: 0;
+}
+.clip-embed .clip-row {
+  padding-inline-end: 0;
+}
+.clip-embed .captions {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  padding-inline: 0.75rem;
+  overflow: hidden;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+.embed-about {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.375rem 0.75rem 0.5rem;
+  border-top: 1px solid #1c1c1c;
+  font-size: 0.75rem;
+}
+.embed-about h1 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: inherit;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.embed-about p {
+  flex-shrink: 0;
+  margin: 0;
+  color: #8a8a8a;
+}
+.embed-about span {
+  color: #ffc799;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 26rem) {
+  .embed-about p {
+    max-width: 55%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}

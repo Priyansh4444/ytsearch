@@ -18,8 +18,8 @@
     <link rel="preconnect" href="https://i.ytimg.com" />
 
     <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="YouTube Search" />
-    <meta property="og:title" content="YouTube Search" />
+    <meta property="og:site_name" content="ytsearch" />
+    <meta property="og:title" content="ytsearch: search inside YouTube transcripts" />
     <meta
       property="og:description"
       content="Search inside YouTube transcripts and jump straight to the moment that matters."
@@ -28,20 +28,110 @@
     <meta property="og:image" content="https://search.pronsh.dev/og-card.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="YouTube Search" />
+    <meta property="og:image:alt" content="ytsearch" />
 
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="YouTube Search" />
+    <meta name="twitter:title" content="ytsearch: search inside YouTube transcripts" />
     <meta
       name="twitter:description"
       content="Search inside YouTube transcripts and jump straight to the moment that matters."
     />
     <meta name="twitter:image" content="https://search.pronsh.dev/og-card.png" />
-    <title>YouTube Search</title>
+    <title>ytsearch: search inside YouTube transcripts</title>
+    <meta name="is-agentic-site-type" content="app" />
+    <link rel="alternate" type="text/markdown" href="/index.md" />
+    <link rel="service-desc" type="application/openapi+json" href="/openapi.json" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "name": "ytsearch",
+            "url": "https://search.pronsh.dev/",
+            "description": "Search inside YouTube transcripts and jump straight to the moment that matters.",
+            "potentialAction": {
+              "@type": "SearchAction",
+              "target": {
+                "@type": "EntryPoint",
+                "urlTemplate": "https://search.pronsh.dev/?q={search_term_string}"
+              },
+              "query-input": "required name=search_term_string"
+            }
+          },
+          {
+            "@type": "SoftwareApplication",
+            "name": "ytsearch",
+            "url": "https://search.pronsh.dev/",
+            "applicationCategory": "SearchApplication",
+            "operatingSystem": "Web",
+            "description": "Free transcript search across more than 70 YouTube creators, with timestamped results and a public JSON API.",
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+            "isAccessibleForFree": true,
+            "license": "https://opensource.org/license/mit",
+            "sameAs": ["https://github.com/Priyansh4444/ytsearch"],
+            "publisher": {
+              "@type": "Organization",
+              "name": "ytsearch",
+              "url": "https://search.pronsh.dev/about",
+              "contactPoint": {
+                "@type": "ContactPoint",
+                "contactType": "customer support",
+                "url": "https://github.com/Priyansh4444/ytsearch/issues"
+              }
+            }
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
-    <noscript>You need to enable JavaScript to run this app.</noscript>
-    <div id="root"></div>
+    <noscript>
+      <p class="px-4 py-3 text-center text-sm text-vesper-muted">
+        The search box needs JavaScript. The <a href="/docs">API</a> and every page below work
+        without it.
+      </p>
+    </noscript>
+    <!-- First paint and the page for anything that does not run JavaScript. The app
+         replaces it and removes the section below, in src/index.tsx, when it starts;
+         its footer links to the same pages. -->
+    <div id="root">
+      <main
+        class="flex min-h-svh flex-col items-center justify-center gap-2 bg-vesper-bg px-4 text-center"
+      >
+        <h1 class="text-3xl font-semibold tracking-tight text-white">ytsearch</h1>
+        <p class="text-sm text-vesper-muted">
+          Find the moment a creator said it, across every indexed video.
+        </p>
+      </main>
+    </div>
+    <section
+      id="static-about"
+      class="mx-auto flex max-w-3xl flex-col gap-3 px-4 pb-12 text-sm leading-6 text-vesper-muted sm:px-6"
+    >
+      <h2 class="text-base font-semibold text-white">Search what YouTube creators actually said</h2>
+      <p>
+        ytsearch searches the public captions of more than 70 YouTube creators, about 50,000 videos
+        in all, and takes you to the exact moment a phrase was spoken. Use it to check a quote, find
+        an explanation you half remember, or see everything a channel has said about a topic. Start
+        with <span class="text-vesper-yellow">@</span> to pick a creator, or request one that is
+        missing.
+      </p>
+      <p>
+        It is free, has no accounts, and runs on an open-source Rust search index. Developers and AI
+        agents can call the same search through a public JSON API that needs no key.
+      </p>
+      <nav aria-label="More about ytsearch" class="flex flex-wrap gap-x-5 gap-y-1">
+        <a class="hover:text-vesper-yellow" href="/about">About ytsearch</a>
+        <a class="hover:text-vesper-yellow" href="/docs">API docs</a>
+        <a class="hover:text-vesper-yellow" href="/openapi.json">OpenAPI</a>
+        <a class="hover:text-vesper-yellow" href="/llms.txt">llms.txt</a>
+        <a class="hover:text-vesper-yellow" href="/contact">Contact</a>
+        <a class="hover:text-vesper-yellow" href="https://github.com/Priyansh4444/ytsearch"
+          >Source code</a
+        >
+      </nav>
+    </section>
 
     <script src="/src/index.tsx" type="module"></script>
   </body>

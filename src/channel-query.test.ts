@@ -1,5 +1,6 @@
-import { expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import {
+  coalesceChannels,
   buildChannelKeyIndex,
   channelMentionQuery,
   channelSuggestionsByKeys,
@@ -67,4 +68,38 @@ test("an explicit exact match wins without consulting the suggestion scan", () =
   // `@ben` matches two channels, so the scan alone would be ambiguous; the
   // caller's exact lookup is what disambiguates it.
   expect(resolveChannelMentionByKeys(index, channels[1], "@ben")?.handle).toBe("@benjicken");
+});
+
+describe("coalesceChannels", () => {
+  const record = (handle: string, channel_id: string, indexed_video_count: number) =>
+    ({
+      id: handle.slice(1),
+      handle,
+      name: handle,
+      channel_id,
+      public_video_count: indexed_video_count,
+      indexed_video_count,
+      indexed_chunk_count: 0,
+    }) as const;
+
+  test("shows a renamed creator once, as the record holding more videos, in either order", () => {
+    const oldHandle = record("@t3dotgg", "UCbRP3c757lWg9M-U7TyEkXA", 1186);
+    const current = record("@theo", "UCbRP3c757lWg9M-U7TyEkXA", 1190);
+    expect(coalesceChannels([oldHandle, current]).map((channel) => channel.handle)).toEqual([
+      "@theo",
+    ]);
+    expect(coalesceChannels([current, oldHandle]).map((channel) => channel.handle)).toEqual([
+      "@theo",
+    ]);
+  });
+
+  test("keeps different channels, their order, and records with no channel ID", () => {
+    const channels = [record("@b", "UC2", 5), record("@a", "UC1", 9), record("@c", "", 1)];
+    expect(coalesceChannels([...channels, record("@d", "", 1)]).map((c) => c.handle)).toEqual([
+      "@b",
+      "@a",
+      "@c",
+      "@d",
+    ]);
+  });
 });

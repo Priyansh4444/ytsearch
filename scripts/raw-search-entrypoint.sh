@@ -36,5 +36,18 @@ load_fly_secret_file RAW_SEARCH_API_KEY \
 load_fly_secret_file RAW_SEARCH_ADMIN_API_KEY \
   "${RAW_SEARCH_ADMIN_API_KEY_FILE:-/run/secrets/raw-search-admin-api-key}"
 
+# Optional on every Machine: canaries without the file run the reader alone.
+# A hex key survives the base64 round trip above unchanged.
+semantic_key_file="${SEMANTIC_SEARCH_KEY_FILE:-/run/secrets/semantic-search-key}"
+if [ -f "$semantic_key_file" ]; then
+  load_fly_secret_file SEMANTIC_SEARCH_KEY "$semantic_key_file"
+fi
+
 chown rawsearch:rawsearch /data/mutable
+# Hybrid search runs beside the reader when its collection is on this volume
+# (see scripts/semantic-sidecar.sh); the reader never waits for it.
+semantic_sidecar="${SEMANTIC_SIDECAR:-/usr/local/bin/semantic-sidecar}"
+if [ -x "$semantic_sidecar" ]; then
+  "$semantic_sidecar" </dev/null &
+fi
 exec gosu rawsearch youtube-raw-search serve-mutable

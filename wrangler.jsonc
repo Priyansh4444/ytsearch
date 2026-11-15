@@ -6,8 +6,10 @@
   "assets": {
     "binding": "ASSETS",
     "directory": "./dist",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"],
+    // Pages need the Worker for Markdown negotiation and real 404s. Hashed bundles
+    // and images skip it, so they are still served from the nearest edge.
+    "not_found_handling": "none",
+    "run_worker_first": ["/*", "!/assets/*", "!/favicon.png", "!/og-card.png"],
   },
   "routes": [{ "pattern": "search.pronsh.dev", "custom_domain": true }],
   // Run the fetch handler next to the API in Fly sjc: every /api/* request is

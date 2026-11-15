@@ -187,6 +187,12 @@ pub(super) struct IndexRunArgs {
     pub(super) defer_publish: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub(super) enum TranscriptionBackendArg {
+    Voxtype,
+    WhisperCpp,
+}
+
 #[derive(Clone, Debug, Args)]
 pub(super) struct TranscriptOptions {
     #[arg(
@@ -197,9 +203,19 @@ pub(super) struct TranscriptOptions {
     pub(super) chunk_seconds: u32,
     #[arg(
         long,
-        help = "When captions are missing, extract audio with yt-dlp and transcribe locally with voxtype"
+        help = "When captions are missing, extract audio and use the configured local transcription backend"
     )]
     pub(super) transcribe_missing: bool,
+    #[arg(long, value_enum, default_value_t = TranscriptionBackendArg::Voxtype)]
+    pub(super) transcription_backend: TranscriptionBackendArg,
+    #[arg(long, default_value = "whisper-cli")]
+    pub(super) whisper_binary: PathBuf,
+    #[arg(long, required_if_eq("transcription_backend", "whisper-cpp"))]
+    pub(super) whisper_model: Option<PathBuf>,
+    #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u16).range(1..))]
+    pub(super) whisper_threads: u16,
+    #[arg(long, default_value_t = 480, value_parser = clap::value_parser!(u64).range(1..), help = "Aggregate active transcription seconds shared across every creator in this invocation")]
+    pub(super) transcription_budget_seconds: u64,
     #[arg(long, default_value = "data/transcription-cache")]
     pub(super) transcription_cache_dir: PathBuf,
     #[arg(long, default_value = "data/transcript-cache")]

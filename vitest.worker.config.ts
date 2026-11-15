@@ -1,4 +1,4 @@
-import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
+import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -9,6 +9,8 @@ export default defineConfig({
     }),
   ],
   test: {
+    // workerd cannot read Vitest 5's host filesystem cache paths.
+    fsModuleCache: false,
     include: ["worker/**/*.test.ts"],
     clearMocks: true,
     restoreMocks: true,

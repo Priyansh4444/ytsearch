@@ -1,0 +1,25 @@
+[package]
+name = "youtube_semantic"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "youtube-semantic"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "load-dynamic", "api-24"] }
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+tempfile = "3"
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "net", "sync", "time", "signal"] }
+uuid = { version = "1", features = ["v5"] }
+
+[dev-dependencies]
+youtube_ingest = { path = "../youtube_ingest" }

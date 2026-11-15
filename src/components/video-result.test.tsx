@@ -44,7 +44,7 @@ const video: SearchVideoResult = {
 
 describe("VideoResult", () => {
   test("defers the YouTube player until the poster is activated", async () => {
-    render(() => <VideoResult video={video} query="moment" rank={1} />);
+    render(() => <VideoResult video={video} query="moment" mode="lexical" rank={1} />);
 
     expect(screen.queryByTitle("YouTube player for Test video")).not.toBeInTheDocument();
     expect(document.querySelector("img")).toHaveAttribute(
@@ -60,21 +60,26 @@ describe("VideoResult", () => {
 
   test("loads and reveals every transcript moment", async () => {
     searchVideoMoments.mockResolvedValue({ videos: [video] });
-    render(() => <VideoResult video={video} query="moment" rank={1} />);
+    render(() => <VideoResult video={video} query="moment" mode="lexical" rank={1} />);
 
     expect(screen.getAllByRole("button", { name: /Moment \d/ })).toHaveLength(3);
     fireEvent.click(screen.getByRole("button", { name: "Show all moments" }));
     await waitFor(() =>
       expect(screen.getAllByRole("button", { name: /Moment \d/ })).toHaveLength(7),
     );
-    expect(searchVideoMoments).toHaveBeenCalledWith("moment", "video-1", expect.any(AbortSignal));
+    expect(searchVideoMoments).toHaveBeenCalledWith(
+      "moment",
+      "video-1",
+      "lexical",
+      expect.any(AbortSignal),
+    );
     expect(screen.queryByRole("button", { name: "Show all moments" })).not.toBeInTheDocument();
   });
 
   test("does not offer to load moments when every match is already visible", () => {
     const completeVideo = { ...video, match_count: 3, hits: hits.slice(0, 3) };
 
-    render(() => <VideoResult video={completeVideo} query="moment" rank={1} />);
+    render(() => <VideoResult video={completeVideo} query="moment" mode="lexical" rank={1} />);
 
     expect(screen.queryByRole("button", { name: "Show all moments" })).not.toBeInTheDocument();
   });
@@ -82,7 +87,7 @@ describe("VideoResult", () => {
   test("offers to load moments when the backend count exceeds returned snippets", () => {
     const partialVideo = { ...video, match_count: 4, hits: hits.slice(0, 2) };
 
-    render(() => <VideoResult video={partialVideo} query="moment" rank={1} />);
+    render(() => <VideoResult video={partialVideo} query="moment" mode="lexical" rank={1} />);
 
     expect(screen.getByRole("button", { name: "Show all moments" })).toBeInTheDocument();
   });
@@ -90,7 +95,7 @@ describe("VideoResult", () => {
   test("offers to load moments when nearby snippets collapse below the backend count", () => {
     const coalescedVideo = { ...video, match_count: 3, hits: hits.slice(0, 1) };
 
-    render(() => <VideoResult video={coalescedVideo} query="moment" rank={1} />);
+    render(() => <VideoResult video={coalescedVideo} query="moment" mode="lexical" rank={1} />);
 
     expect(screen.getByRole("button", { name: "Show all moments" })).toBeInTheDocument();
   });
@@ -125,20 +130,20 @@ describe("VideoResult", () => {
 
   test("summarises engagement counts in a stable order", () => {
     const engaged = { ...video, view_count: 1200, like_count: 10, comment_count: 3 };
-    render(() => <VideoResult video={engaged} query="moment" rank={1} />);
+    render(() => <VideoResult video={engaged} query="moment" mode="lexical" rank={1} />);
 
     expect(screen.getByText("1.2K views · 10 likes · 3 comments")).toBeInTheDocument();
   });
 
   test("omits the engagement line when every count is absent or zero", () => {
     const quiet = { ...video, view_count: 0, like_count: undefined, comment_count: 0 };
-    render(() => <VideoResult video={quiet} query="moment" rank={1} />);
+    render(() => <VideoResult video={quiet} query="moment" mode="lexical" rank={1} />);
 
     expect(screen.queryByText(/views|likes|comments/)).not.toBeInTheDocument();
   });
 
   test("records feedback against the selected moment", () => {
-    render(() => <VideoResult video={video} query="moment" rank={2} />);
+    render(() => <VideoResult video={video} query="moment" mode="lexical" rank={2} />);
 
     fireEvent.click(screen.getAllByRole("button", { name: "Mark moment useful" })[0]);
     expect(capture).toHaveBeenCalledWith(
@@ -148,7 +153,7 @@ describe("VideoResult", () => {
   });
 
   test("selects the clicked moment and points the player at it", async () => {
-    render(() => <VideoResult video={video} query="moment" rank={1} />);
+    render(() => <VideoResult video={video} query="moment" mode="lexical" rank={1} />);
 
     fireEvent.click(screen.getByRole("button", { name: /Moment 3/ }));
 
@@ -171,7 +176,7 @@ describe("VideoResult", () => {
         { ...video, hits: hits.slice(3).map((entry) => ({ ...entry, id: `other-${entry.id}` })) },
       ],
     });
-    render(() => <VideoResult video={video} query="moment" rank={1} />);
+    render(() => <VideoResult video={video} query="moment" mode="lexical" rank={1} />);
 
     fireEvent.click(screen.getByRole("button", { name: /Moment 2/ }));
     fireEvent.click(screen.getByRole("button", { name: "Show all moments" }));
@@ -254,12 +259,14 @@ describe("VideoResult", () => {
     searchVideoMoments.mockReset();
     let signal: AbortSignal | undefined;
     searchVideoMoments.mockImplementation(
-      (_query: string, _videoId: string, passed: AbortSignal) => {
+      (_query: string, _videoId: string, _mode: string, passed: AbortSignal) => {
         signal = passed;
         return new Promise(() => undefined);
       },
     );
-    const { unmount } = render(() => <VideoResult video={video} query="moment" rank={1} />);
+    const { unmount } = render(() => (
+      <VideoResult video={video} query="moment" mode="lexical" rank={1} />
+    ));
 
     fireEvent.click(screen.getByRole("button", { name: "Show all moments" }));
     await waitFor(() => expect(signal).toBeDefined());
@@ -273,7 +280,9 @@ describe("VideoResult", () => {
 
   test("unmounts a row that never expanded without side effects", () => {
     searchVideoMoments.mockReset();
-    const { unmount } = render(() => <VideoResult video={video} query="moment" rank={1} />);
+    const { unmount } = render(() => (
+      <VideoResult video={video} query="moment" mode="lexical" rank={1} />
+    ));
 
     expect(() => unmount()).not.toThrow();
     expect(searchVideoMoments).not.toHaveBeenCalled();
@@ -281,7 +290,7 @@ describe("VideoResult", () => {
 
   test("copies a permalink that points at the current search result", async () => {
     window.history.replaceState({}, "", "/?q=moment&page=2");
-    render(() => <VideoResult video={video} query="moment" rank={1} />);
+    render(() => <VideoResult video={video} query="moment" mode="lexical" rank={1} />);
 
     expect(document.getElementById("video-video-1")).toBeInstanceOf(HTMLElement);
     fireEvent.click(screen.getByRole("button", { name: "Copy result link" }));
@@ -300,7 +309,7 @@ describe("VideoResult", () => {
   test("still writes the result permalink when clipboard access is denied", async () => {
     runCopyToClipboard.mockRejectedValueOnce(new Error("Clipboard copy was rejected"));
     window.history.replaceState({}, "", "/?q=moment");
-    render(() => <VideoResult video={video} query="moment" rank={1} />);
+    render(() => <VideoResult video={video} query="moment" mode="lexical" rank={1} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Copy result link" }));
     await waitFor(() => expect(window.location.hash).toBe("#video-video-1"));

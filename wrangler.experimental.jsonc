@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // search.experimental.pronsh.dev previewed hybrid search and moment sharing before
+  // production offered them. It now redirects every path to search.pronsh.dev, so old
+  // shared links keep working. Deployed by scripts/deploy-experimental.sh. Production
+  // resources stay in wrangler.jsonc alone.
+  "name": "ytsearch-search-experimental",
+  "main": "worker/experimental-redirect.ts",
+  "compatibility_date": "2026-07-29",
+  "routes": [{ "pattern": "search.experimental.pronsh.dev", "custom_domain": true }],
+  "observability": { "enabled": true },
+}

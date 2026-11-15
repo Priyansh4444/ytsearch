@@ -1,7 +1,45 @@
 import { For, Show, createEffect, createMemo, createSignal, flush } from "solid-js";
 import type { Component } from "solid-js";
-import type { IndexedChannel } from "../types";
+import type { IndexedChannel, SearchMode } from "../types";
+import { hybridToggleEnabled } from "../search-mode";
 import { ChannelAvatar, indexedCountLabel } from "./channel-profile";
+
+const SEARCH_MODE_LABELS: ReadonlyArray<{ mode: SearchMode; label: string; help: string }> = [
+  { mode: "lexical", label: "Keyword", help: "Match the exact words you type" },
+  {
+    mode: "hybrid",
+    label: "Hybrid",
+    help: "Also match by meaning, for questions and vague topics",
+  },
+];
+
+// Text tabs, not a filled control: Search stays the one solid thing in this form.
+const SearchModeToggle: Component<{
+  mode: SearchMode;
+  onChange: (mode: SearchMode) => void;
+}> = (props) => (
+  <div
+    role="radiogroup"
+    aria-label="Search mode"
+    class="flex shrink-0 items-center gap-4 text-sm"
+    data-testid="search-mode"
+  >
+    <For each={SEARCH_MODE_LABELS}>
+      {(option) => (
+        <button
+          type="button"
+          role="radio"
+          aria-checked={props.mode === option.mode ? "true" : "false"}
+          title={option.help}
+          class={`search-mode-option ${props.mode === option.mode ? "is-active" : ""}`}
+          onClick={() => props.onChange(option.mode)}
+        >
+          {option.label}
+        </button>
+      )}
+    </For>
+  </div>
+);
 
 export const SearchForm: Component<{
   query: string;
@@ -14,6 +52,8 @@ export const SearchForm: Component<{
   onSubmit: () => void;
   channelSuggestions: IndexedChannel[];
   onChannelSelect: (handle: string) => void;
+  searchMode: SearchMode;
+  onSearchModeChange: (mode: SearchMode) => void;
 }> = (props) => {
   const [activeSuggestion, setActiveSuggestion] = createSignal(-1);
   const [suggestionsDismissed, setSuggestionsDismissed] = createSignal(false);
@@ -158,27 +198,36 @@ export const SearchForm: Component<{
           </div>
         </Show>
       </div>
-      <p
-        id="search-help"
-        class={`mt-2 text-center text-xs text-vesper-dim sm:text-left ${
-          props.home || props.mode !== "search" || props.selectedChannelName ? "" : "sr-only"
-        }`}
-      >
-        <Show
-          when={!props.selectedChannelName}
-          fallback={`Searching only ${props.selectedChannelName}. Go back to search every channel.`}
+      <div class="mt-2 flex flex-wrap items-center justify-between gap-x-6 gap-y-1">
+        <p
+          id="search-help"
+          class={`min-w-0 flex-1 basis-64 text-center text-xs text-vesper-dim sm:text-left ${
+            props.home || props.mode !== "search" || props.selectedChannelName ? "" : "sr-only"
+          }`}
         >
           <Show
-            when={props.mode !== "request"}
-            fallback={
-              <>No indexed creator matches this handle. Press Enter to request indexing approval.</>
-            }
+            when={!props.selectedChannelName}
+            fallback={`Searching only ${props.selectedChannelName}. Go back to search every channel.`}
           >
-            Search every transcript, or start with <span class="text-vesper-yellow">@</span> to pick
-            a creator.
+            <Show
+              when={props.mode !== "request"}
+              fallback={
+                <>
+                  No indexed creator matches this handle. Press Enter to request indexing approval.
+                </>
+              }
+            >
+              Search every transcript, or start with <span class="text-vesper-yellow">@</span> to
+              pick a creator.
+            </Show>
           </Show>
+        </p>
+        <Show when={hybridToggleEnabled() && props.mode === "search"}>
+          <div class="mx-auto sm:me-0 sm:ms-auto">
+            <SearchModeToggle mode={props.searchMode} onChange={props.onSearchModeChange} />
+          </div>
         </Show>
-      </p>
+      </div>
     </form>
   );
 };

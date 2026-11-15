@@ -77,12 +77,19 @@ describe("search result permalinks", () => {
 
   test("keeps search state in the query string and drops result hashes on a new search", () => {
     window.history.replaceState({}, "", "/?q=old#video-video-1");
-    writeSearchUrl({ query: "rust", youtuber: "@example", page: 1, sort: "relevance" });
+    writeSearchUrl({
+      query: "rust",
+      youtuber: "@example",
+      page: 1,
+      sort: "relevance",
+      mode: "lexical",
+    });
     expect(searchStateFromLocation()).toEqual({
       query: "rust",
       youtuber: "@example",
       page: 1,
       sort: "relevance",
+      mode: "lexical",
     });
     expect(window.location.hash).toBe("");
   });

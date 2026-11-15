@@ -3,7 +3,14 @@ WORKDIR /app
 COPY . .
 RUN cargo build --locked --release -p youtube_api -p youtube_cli
 
-FROM denoland/deno:bin-2.8.1 AS deno
+FROM denoland/deno:bin-2.9.7 AS deno
+
+FROM debian:bookworm-slim AS asr-builder
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential cmake git curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY scripts/build-whisper-cpp.sh /tmp/build-whisper-cpp.sh
+RUN /bin/sh /tmp/build-whisper-cpp.sh
 
 FROM debian:bookworm-slim
 RUN apt-get update \
@@ -11,6 +18,9 @@ RUN apt-get update \
     && python3 -m pip install --no-cache-dir --break-system-packages --upgrade 'yt-dlp[default]' \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=deno /deno /usr/local/bin/deno
+COPY --from=asr-builder /opt/ytsearch-asr /opt/ytsearch-asr
+RUN ln -s /opt/ytsearch-asr/bin/whisper-cli /usr/local/bin/whisper-cli \
+    && ln -s /opt/ytsearch-asr/share /usr/local/share/ytsearch-asr
 COPY --from=builder /app/target/release/youtube-api /usr/local/bin/youtube-api
 COPY --from=builder /app/target/release/ytsearch /usr/local/bin/ytsearch
 COPY scripts/cloud-index-queue-entrypoint.sh /usr/local/bin/cloud-index-queue

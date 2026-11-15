@@ -123,9 +123,13 @@ six (`DAILY_UPDATE_FAILURE_RETRY_SECONDS`,
 `DAILY_UPDATE_STATE_FILE` on the volume. Before that, every hourly wake saw
 the last success as overdue and reran the full sweep and rebuild.
 
-The daily refresh runs one `ytsearch index-youtubers` over the whole embedded
-list: one catalog-run ID, creators in sequence, one publication at the end. One
-process per creator cannot satisfy the catalog reconciliation check.
+The daily refresh merges the embedded creator list with the public indexed
+directory, including creators whose reported counts currently match. It keeps
+canonical aliases and labels, deduplicates stable creator IDs, and rejects an
+unreadable or malformed directory before indexing. One `ytsearch index-youtubers`
+owns the resulting temporary list: one catalog-run ID, creators in sequence, one
+publication at the end. One process per creator cannot satisfy the catalog
+reconciliation check. The temporary list is removed after success or failure.
 
 ## Upload notifications
 
@@ -146,7 +150,11 @@ the three-day catalog pass remain the backstop for missed pushes.
 Caption fetches are paced process-wide and retry timeouts, connection errors,
 429 and 5xx with bounded backoff. If the direct caption URL keeps failing,
 `yt-dlp` downloads the English subtitles through the same limits; when neither
-has an English track the video is recorded as `no_captions`.
+has an English track the video is recorded as `no_captions`. For a known upload
+published within the last seven days, missing captions are instead `scheduled`
+so the normal cooldown gives automatic captions time to arrive. Existing old
+captionless records keep their terminal policy; members-only and paid videos
+are `private` access restrictions.
 
 Exhausted videos get a versioned, atomically written record under
 `<transcript-cache>/.failures`, classified as bot challenge, throttling,
@@ -182,15 +190,64 @@ YouTube API or stays failed. Set `CATALOG_SNAPSHOT_JSON_PATH`,
 `FAILURE_REPORT_JSON_PATH` and `DISCOVERY_MANIFEST_DIRECTORY` to check captured
 evidence offline.
 
-## Removal
+## Creator renames
 
-Acknowledge any active queue row and stop the writer first:
+A channel's new handle gets a new creator ID, because IDs derive from the handle, so a
+rename leaves the old record and any videos still carrying the old handle. Update
+`scripts/indexed-channels.txt`, then move what remains; chunks are unchanged apart from
+the handle:
 
 ```bash
-scripts/index-queue-ack.sh REQUEST_ID
+flyctl ssh sftp get -a ytsearch-raw-production --machine d89303da029328 \
+  /data/mutable/mutations.sqlite3 mutations.sqlite3
+scripts/rehome-raw-creator.py mutations.sqlite3 --from @old --to @new        # plan
+scripts/rehome-raw-creator.py mutations.sqlite3 --from @old --to @new --apply
+```
+
+`--apply` reads `RAW_SEARCH_API_URL` and `RAW_SEARCH_ADMIN_API_KEY` from the environment.
+Hold the deployed key in the process that runs it, for example read over
+`flyctl ssh console` into a variable beside a `flyctl proxy`; never print or save it. It
+checks each video's chunk count and removes the old creator only when nothing is filed
+under it. The next publication makes the change visible. Add the old handle to
+`RENAMED_CREATORS` in [page-route.ts](../worker/page-route.ts) so old links and searches
+keep working, and rename it in the search contract cases.
+
+## Removal
+
+First take the creator out of the queue so nothing re-indexes it. Set its row to
+`rejected` (`PATCH /api/index-requests/{id}/status` with `{"status":"rejected"}` and
+the queue token) rather than deleting it, so the decision stays on record; a new
+request for the handle starts as `pending` and needs approval again. Check that the
+handle is not in the worker's daily list (`/tmp/daily-indexed-channels.txt` in the
+Machine config).
+
+Then remove it with the CLI, which deletes and publishes:
+
+```bash
 cargo run --release -p youtube_cli -- remove-youtuber @handle \
   --backend raw --allow-destructive-remove
 ```
+
+Without a local build, do the same from inside the queue worker, which already holds
+the admin key: start it, read `RAW_SEARCH_API_URL` and `RAW_SEARCH_ADMIN_API_KEY` from
+the `cloud-index-queue` process environment (never print them), send
+`DELETE /admin/channels/<id>?publication_api_version=1&idempotency_key=<unique>&cascade=true`
+with the `x-raw-admin-key` header (the image has Python, not curl), and write
+`<epoch> urgent` to `/var/lib/ytsearch/raw-publication.pending`. The worker's next loop
+publishes it. `<id>` is the creator's `id` in `/api/youtubers` (the handle without
+`@`); `GET /admin/channels/<id>/stats` shows what will go. @maciekiklocki was removed
+this way on 2026-11-12.
+
+## Interrupted publication
+
+Never stop the queue worker during `ytsearch publish`: list its processes over
+`flyctl ssh console` immediately before the stop, not minutes earlier, because the
+loop can start a publication in between. A publication killed while reading its snapshot used to
+leave `mutations.sqlite3-shm`/`-wal` in `raw-generation-work/<job>/`, and every
+retry then failed with `unrecognized incomplete publication artifact` (16 hours
+without publication on 2026-11-12). Builds from this fix on treat those sidecars as
+their own; on an older image, remove the two sidecar files of that job (only those)
+and the next retry rebuilds.
 
 ## Verification
 
@@ -210,3 +267,19 @@ counts, durable and published sequences, document/video/channel totals,
 publication duration, peak RSS, disk high-water mark, search errors, and the
 relevance matrix's totals and first results. Deployment order is in
 [Deployment](deploy.md); recovery in [Disaster recovery](disaster-recovery.md).
+
+## Audio fallback
+
+Cloud queue, daily catalog and idle repair can recover public English speech
+without caption tracks using the pinned whisper.cpp/base.en runtime in the indexer
+image. Enable with `TRANSCRIBE_MISSING=1`; keep `JOBS=1 CHANNEL_JOBS=1`.
+The shared `TRANSCRIPTION_BUDGET_SECONDS` (default 480) bounds each CLI invocation,
+not each video. Incomplete work checkpoints and resumes on later passes; it does
+not become a successful empty transcript or clear the failure record. Read
+[the indexing gaps playbook](playbooks/indexing-gaps.md) for cache and retry rules.
+
+For local CLI use, `--transcribe-missing` retains Voxtype as its default backend.
+Cloud-compatible explicit flags are `--transcription-backend whisper-cpp`,
+`--whisper-binary`, `--whisper-model`, `--whisper-threads` and
+`--transcription-budget-seconds`. Final cache files are portable between local
+and cloud runs and can be consumed without inference enabled.

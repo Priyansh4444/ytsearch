@@ -115,11 +115,13 @@ The Machine needs `QUEUE_TARGET_BACKEND=raw`, restart policy `no` and a
 persistent transcript cache; a Cloudflare Queue message wakes it, and the API's
 JSONL queue stays authoritative.
 
-Daily indexing: with `DAILY_UPDATE_ENABLED=1`, the first wake more than 24 hours
-after `/var/lib/ytsearch/daily-update.last-completed` runs `index-youtubers`
-over the creator list and publishes once. The worker stops after five idle
-minutes, so the Worker's hourly cron (`17 * * * *`) repair wake is what resumes
-the daily check. Before claiming it works, verify the cron, the worker config, a
+Catalog indexing: with `DAILY_UPDATE_ENABLED=1`, production's first wake more
+than three days (`DAILY_UPDATE_INTERVAL_SECONDS=259200`) after
+`/var/lib/ytsearch/daily-update.last-completed` runs `index-youtubers` over the
+canonical list plus approved live creators and publishes once. Daily gap repair
+and upload notifications cover the interval. The worker stops after 60 idle
+seconds, so the Worker's hourly cron (`17 * * * *`) repair wake resumes the
+schedule check. Before claiming it works, verify the cron, the worker config, a
 `daily_update_completed` log and the timestamp file.
 
 ## 4. Cloudflare Worker

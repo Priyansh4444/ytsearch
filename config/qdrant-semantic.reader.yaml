@@ -1,0 +1,20 @@
+# Qdrant beside the production Raw reader (scripts/semantic-sidecar.sh). Loopback
+# only; youtube-semantic is the one client. One search thread and no optimizer
+# work, so it never competes with the reader for more than one core.
+storage:
+  storage_path: /data/mutable/semantic/qdrant/storage
+  snapshots_path: /data/mutable/semantic/qdrant/snapshots
+  performance:
+    max_search_threads: 1
+    optimizer_cpu_budget: 1
+  optimizers:
+    default_segment_number: 1
+    max_optimization_threads: 1
+  hnsw_index:
+    max_indexing_threads: 1
+service:
+  host: 127.0.0.1
+  http_port: 6333
+  grpc_port: 6334
+  max_workers: 1
+telemetry_disabled: true

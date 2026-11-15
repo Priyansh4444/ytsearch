@@ -24,6 +24,16 @@ const Icon: Component<IconProps & { children: JSX.Element }> = (props) => (
 );
 
 // Path data comes from Lucide's ISC-licensed icon set.
+export const ShareIcon: Component<IconProps> = (props) => (
+  <Icon {...props}>
+    <circle cx="18" cy="5" r="3" />
+    <circle cx="6" cy="12" r="3" />
+    <circle cx="18" cy="19" r="3" />
+    <path d="m8.59 13.51 6.83 3.98" />
+    <path d="m15.41 6.51-6.82 3.98" />
+  </Icon>
+);
+
 export const CheckIcon: Component<IconProps> = (props) => (
   <Icon {...props}>
     <path d="M20 6 9 17l-5-5" />

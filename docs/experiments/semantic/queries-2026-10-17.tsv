@@ -1,0 +1,153 @@
+# category	target	query
+quote	T00	code training data by themselves
+paraphrase	T00	a model that picks its own programming training examples beats benchmarks
+question	T00	can an LLM curate its own code training data?
+quote	T01	I was interviewing at Railway in 2022
+paraphrase	T01	Theo almost joined that hosting startup as an early hire
+question	T01	why did Railway build on Google Cloud?
+quote	T02	it didn't put it in the URL
+paraphrase	T02	the model's UI for hiding old conversations looked bad and you couldn't tell the state
+question	T02	how long did the planning step take for the archived threads feature?
+quote	T03	you want to log when a user goes to a page
+paraphrase	T03	an effect that records a page view also reads the shopping cart count
+question	T03	how do I log a visit without rerunning the effect when the cart changes?
+quote	T04	you're just looking at an empty page
+paraphrase	T04	waterfall where each request blocks the next before anything shows up
+question	T04	why does client side data fetching show a blank screen first?
+quote	T05	utilizing your unused bandwidth
+paraphrase	T05	browser add-on secretly scrapes sites through people's computers
+question	T05	how does the Mellow extension use my internet connection?
+quote	T06	35 or so of us total
+paraphrase	T06	important open source maintainer barely gets any donations
+question	T06	how many people sponsor Egoist?
+quote	T07	they made their own language
+paraphrase	T07	Facebook kept its old backend codebase and built new tooling instead of rewriting it
+question	T07	what did Meta do when PHP didn't scale?
+quote	T08	Codex picks Statsig and Claude Code picks Posthog
+paraphrase	T08	which analytics and experimentation tools do the AI agents recommend
+question	T08	what does Claude Code recommend for feature flags?
+quote	T09	the agent can do that part and then do the implementation
+paraphrase	T09	AI writes the code and does the first review while the human approves the final result
+question	T09	how does coding with agents change the developer's role?
+quote	T10	kindly worded middle finger to the policy makers
+paraphrase	T10	chip maker pushes back on politicians who want to ban Chinese open models
+question	T10	what did NVIDIA say about distillation and open weight models?
+quote	T11	cost about $168 of raw token utilization
+paraphrase	T11	a single request spawned many sub agents and burned a huge amount of money
+question	T11	how much did one Claude multi agent prompt cost?
+quote	T12	the worst way to use Anthropic models
+paraphrase	T12	the company tried to block third party coding tools to force people onto its own CLI
+question	T12	why did Anthropic try to ban OpenCode?
+quote	T13	planning, implementation, and code review begin to compress
+paraphrase	T13	project management tool says AI removes process overhead so devs can focus on taste
+question	T13	how will agents change issue tracking software?
+quote	T14	Sonnet's still the best coding model
+paraphrase	T14	Theo prefers OpenAI's newest model over Claude for programming because it is more deliberate
+question	T14	is GPT-5 better than Sonnet for coding?
+quote	T15	never just. It's never just that simple
+paraphrase	T15	favorite essay about how no problem is as easy as it sounds
+question	T15	what's the blog post about never saying just?
+quote	T16	providers running on places with cheaper electricity
+paraphrase	T16	many hosts compete to serve the same open model for less money
+question	T16	why is inference cheaper on OpenRouter?
+quote	T17	save 30 to 40% of the cost
+paraphrase	T17	Microsoft moved CI onto its own cloud and it got slower and pricier
+question	T17	why are GitHub Actions so slow?
+quote	T18	rewrite of our sampling code to fix the precision issues
+paraphrase	T18	a bug in token selection made the most likely word vanish
+question	T18	what bug made Claude worse in August?
+quote	T19	they make gigantic chips
+paraphrase	T19	wafer scale hardware startup is very fast at running models
+question	T19	why are Cerebras chips so large?
+quote	T20	bind a double command hotkey
+paraphrase	T20	small quality of life features in OpenAI's coding app like a shortcut to send what's on screen
+question	T20	what keyboard shortcut does Codex add for context?
+quote	T21	huge context windows would be the future
+paraphrase	T21	models now explore the repository with tools instead of needing everything stuffed into the prompt
+question	T21	do coding agents still need giant context windows?
+quote	T22	fake UPS We Just Missed You label
+paraphrase	T22	the model refused a harmless joke request because it thought it broke the rules
+question	T22	why does the model refuse innocent requests?
+quote	T23	a 4hour walk with Boris
+paraphrase	T23	long conversation about the JavaScript runtime team joining an AI lab
+question	T23	how did the Bun acquisition by Anthropic happen?
+quote	T24	did not merge a single PR for three
+paraphrase	T24	a coworker blocked progress for months and Theo was miserable at his job
+question	T24	why was Theo miserable on his old team?
+quote	T25	AI is rarely advanced by eureka moments
+paraphrase	T25	skeptics say choosing research problems still needs human judgment
+question	T25	can Claude drive AI research on its own?
+quote	T26	hundreds of hours every second
+paraphrase	T26	the video site built custom chips to transcode uploads efficiently
+question	T26	why did YouTube build its own video encoding hardware?
+quote	T27	the march to AGI will be halted
+paraphrase	T27	if models stop improving the huge spending becomes a one time loss
+question	T27	what happens to OpenAI if AI progress stalls?
+quote	T28	iPhones have to cost more money
+paraphrase	T28	if the search company cannot pay for default placement phones get pricier and Firefox suffers
+question	T28	what happens if Google can't pay Apple for search?
+quote	T29	hourly user retention features
+paraphrase	T29	they trained a model on feedback reports to find which servers made answers worse
+question	T29	how did OpenAI find out older hardware hurt Codex quality?
+quote	T30	nowhere near as bad as the React to Shell exploit
+paraphrase	T30	follow up security issues in server components are less severe than the earlier remote code execution
+question	T30	should I update for the new React server components vulnerability?
+quote	T31	Samsung only owns the hardware
+paraphrase	T31	phone makers have no incentive to keep devices working after the sale
+question	T31	why do Android phones get worse over time?
+quote	T32	feeling dumb is actually good
+paraphrase	T32	learning a skateboard trick taught him that struggling means growth
+question	T32	is it good to feel stupid when learning?
+quote	T33	directly in violation of OpenAI's brand guidelines
+paraphrase	T33	the partnership announcement used the outdated logo with the wrong font
+question	T33	what was wrong with the Microsoft OpenAI logo image?
+quote	T34	you could try out my try catch wrapper
+paraphrase	T34	handling errors from a flaky third party service and when a simple helper is enough
+question	T34	when is a try catch wrapper good enough for error handling?
+quote	T35	they will instead do vertical slices
+paraphrase	T35	companies organize teams per product surface while sharing research and infrastructure
+question	T35	how does OpenAI structure its product teams?
+typo	T05	utilising your unused bandwith
+typo	T07	meta made there own languag for php
+typo	T10	middle finger to the policy makrs
+typo	T17	githb actions save 30 to 40% of the cots
+typo	T18	samplng code precison issues
+typo	T19	cerebrus gigantic chipps
+typo	T23	bun aquired by anthropic walk with boris
+typo	T26	youtube encodr chips hundreds of hours
+typo	T28	iphones cost more if gogle cant pay apple
+typo	T29	olderhardware codex quaility retention
+typo	T31	samsung only ownes the hardwear
+typo	T33	openai brand guidlines logo serifs
+vague	T04	video defending server components with diagrams of loading waterfalls
+vague	T05	chrome extensions turning users into a scraping network
+vague	T06	the bundler tool now has a paid tier
+vague	T13	issue trackers are outdated now that agents exist
+vague	T15	rant about the note taking app
+vague	T16	complaining about running llms on your own computer
+vague	T17	theo angry about microsoft charging for ci minutes
+vague	T19	inference moving off nvidia to custom chips
+vague	T21	how the claude coding cli works under the hood
+vague	T23	the javascript runtime got acquired by the claude company
+vague	T24	theo telling the story of his own startup
+vague	T27	is openai losing money
+vague	T28	antitrust case could kill the browser
+vague	T31	court forces google to allow other app stores
+vague	T32	research that says using ai hurts learning for programmers
+vague	T33	microsoft and sam altman's company ending their partnership
+topic	-	react server components performance
+topic	-	is tailwind worth it
+topic	-	AI coding agents productivity
+topic	-	LLM API pricing
+topic	-	open source funding
+topic	-	vercel vs self hosting
+topic	-	typescript compiler performance
+topic	-	anthropic rate limits and usage caps
+topic	-	security vulnerabilities in AI generated code
+topic	-	local models vs cloud models
+topic	-	GPU shortage and AI chips
+topic	-	developer job market and AI
+topic	-	browser competition
+topic	-	benchmarks are misleading
+topic	-	startup advice
+topic	-	choosing a backend programming language

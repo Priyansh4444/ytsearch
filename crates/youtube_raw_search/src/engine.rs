@@ -67,6 +67,11 @@ const METADATA_PREFIX_BYTES: usize = HEADER_BYTES + 8;
 const TYPO_RESULT_THRESHOLD: usize = 5;
 const DROP_RESULT_THRESHOLD: usize = 1;
 const MAX_TOKEN_DROP_CANDIDATES: usize = 20;
+/// A term in at least 1 in this many documents is a common word, but never one
+/// in fewer than `COMMON_TERM_MIN_DOCUMENTS`: in a small index every word is
+/// "common" by share, which says nothing about filler.
+const COMMON_TERM_DOCUMENT_SHARE: u32 = 100;
+const COMMON_TERM_MIN_DOCUMENTS: u32 = 1_000;
 const MAX_FUZZY_TERMS_PER_DISTANCE: usize = 4;
 const MIN_ONE_TYPO_BYTES: usize = 4;
 const MIN_TWO_TYPO_BYTES: usize = 7;
@@ -733,19 +738,24 @@ impl RawSearchEngine {
             FullQueryResolution::TokenDrop => {}
         }
 
-        // Drop tokens right to left. Prefer the longest
-        // retained prefix, then try retained suffixes where prefix search remains
+        // Drop tokens in retention order, keeping the rest in query order:
+        // "why he dropped prisma" falls back to "prisma", never to "why he
+        // dropped". Then try retained suffixes, where prefix search remains
         // useful. Bound both ladders so adversarial long queries cannot multiply
         // fuzzy work without limit.
+        let retention_order = self.terms_retention_order(&terms)?;
         for retained in (1..terms.len()).rev().take(MAX_TOKEN_DROP_CANDIDATES) {
+            let mut kept = retention_order[..retained].to_vec();
+            kept.sort_unstable();
+            let kept: Vec<String> = kept.into_iter().map(|index| terms[index].clone()).collect();
             if let Some((matches, highlights)) = self.best_conjunctive_candidate(
                 params,
-                &terms[..retained],
+                &kept,
                 fields,
                 false,
                 CandidateSearch {
                     constraints,
-                    sequence: &terms[..retained],
+                    sequence: &kept,
                     initial: None,
                     skip_exact: false,
                 },
@@ -1377,14 +1387,58 @@ impl RawSearchEngine {
         manifest.documents.checked_div(manifest.videos).unwrap_or(0)
     }
 
-    fn matches_for_entry(&self, entry: TermEntry, fields: QueryFields) -> Result<Vec<DocMatch>> {
-        let effective_title_documents = entry
-            .title_frequency
-            .saturating_mul(self.average_documents_per_video());
-        let effective_frequency = entry
+    /// Documents a term is worth matching in: text documents plus the title
+    /// frequency spread over a video's documents, capped at the corpus size.
+    fn effective_frequency(&self, entry: TermEntry) -> u32 {
+        entry
             .text_frequency
-            .saturating_add(effective_title_documents)
-            .min(self.inner.manifest.documents);
+            .saturating_add(
+                entry
+                    .title_frequency
+                    .saturating_mul(self.average_documents_per_video()),
+            )
+            .min(self.inner.manifest.documents)
+    }
+
+    /// The order in which a failed query keeps terms: the first `n` positions
+    /// are the `n` terms to retain.
+    ///
+    /// A query with a common word ("why", "does", "think") is a question, and
+    /// its topic word is often last, so it keeps the rarest terms and drops the
+    /// most common first; dropping from the right would discard the topic and
+    /// keep the filler. A term the lexicon does not know (a typo, or a word no
+    /// transcript says) is dropped before any other: no exact match can contain
+    /// it, so keeping it would stop every smaller query from being an exact
+    /// conjunction. Ties keep query order.
+    ///
+    /// A query of only uncommon words keeps its leading terms. Its words rarely
+    /// share one chunk, and the rarest ones least, so keeping the rarest would
+    /// stop at one incidental word.
+    fn terms_retention_order(&self, terms: &[String]) -> Result<Vec<usize>> {
+        let mut frequencies = Vec::with_capacity(terms.len());
+        let mut has_common_term = false;
+        // Common words are common in what people say; a word in many titles is
+        // not filler, so only transcript frequency decides.
+        let common_floor = (self.inner.manifest.documents / COMMON_TERM_DOCUMENT_SHARE)
+            .max(COMMON_TERM_MIN_DOCUMENTS);
+        for term in terms {
+            frequencies.push(match self.inner.lexicon.lookup(term)? {
+                Some(entry) => {
+                    has_common_term |= entry.text_frequency >= common_floor;
+                    self.effective_frequency(entry)
+                }
+                None => u32::MAX,
+            });
+        }
+        let mut order: Vec<usize> = (0..terms.len()).collect();
+        if has_common_term {
+            order.sort_by_key(|&index| (frequencies[index], index));
+        }
+        Ok(order)
+    }
+
+    fn matches_for_entry(&self, entry: TermEntry, fields: QueryFields) -> Result<Vec<DocMatch>> {
+        let effective_frequency = self.effective_frequency(entry);
         let idf =
             inverse_document_frequency(self.inner.manifest.documents, effective_frequency.max(1));
         let text = if fields.text {

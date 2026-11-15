@@ -58,9 +58,14 @@ pub(super) fn prepare_workspace(
             let name = entry.file_name();
             let allowed = match name.to_str() {
                 Some("generation") => entry.file_type()?.is_dir(),
+                // A build killed while reading its snapshot leaves SQLite's
+                // sidecars; on 2026-11-12 they blocked publication for 16 hours.
                 Some(
                     "build-inputs.json"
                     | "mutations.sqlite3"
+                    | "mutations.sqlite3-wal"
+                    | "mutations.sqlite3-shm"
+                    | "mutations.sqlite3-journal"
                     | "mutations.download"
                     | "verified-build.next",
                 ) => entry.file_type()?.is_file(),
@@ -441,6 +446,38 @@ mod tests {
                 .join("generation/manifest.json")
                 .exists()
         );
+    }
+
+    #[test]
+    fn build_killed_while_reading_its_snapshot_can_retry() {
+        let (fixture_root, job, _) = fixture();
+        let root = fixture_root.path().join("killed");
+        prepare_workspace(&root, &job).unwrap();
+        // The state a killed build left in production: the snapshot, a partial
+        // generation, and SQLite's sidecars from the open read.
+        fs::copy(
+            fixture_root.path().join("mutations.sqlite3"),
+            root.join("mutations.sqlite3"),
+        )
+        .unwrap();
+        fs::write(root.join("mutations.sqlite3-shm"), vec![0; 32_768]).unwrap();
+        fs::write(root.join("mutations.sqlite3-wal"), b"").unwrap();
+        fs::create_dir(root.join("generation")).unwrap();
+        fs::write(root.join("generation/partial"), b"partial build").unwrap();
+        assert!(matches!(
+            prepare_workspace(&root, &job).unwrap(),
+            Workspace::Build
+        ));
+        let mut left: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["build-inputs.json"]);
+        // Anything else is still preserved for a person to inspect.
+        fs::write(root.join("notes.txt"), b"keep").unwrap();
+        assert!(prepare_workspace(&root, &job).is_err());
+        assert!(root.join("notes.txt").exists());
     }
 
     #[test]

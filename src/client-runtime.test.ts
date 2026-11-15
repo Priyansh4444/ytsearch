@@ -4,6 +4,7 @@ import {
   runDashboardData,
   runRequestIndex,
   runSearchTranscripts,
+  runSearchVideoMoments,
 } from "./client-runtime";
 
 const emptySearchResponse = {
@@ -40,6 +41,62 @@ describe("browser client runtime", () => {
       "https://api.example.com/api/search?q=rust&per_page=12&page=1&sort=relevance",
       expect.objectContaining({ cache: "no-store" }),
     );
+  });
+
+  it.each([
+    ["lexical", ""],
+    ["hybrid", "&mode=hybrid"],
+  ] as const)("requests %s search with the URL its edge cache expects", async (mode, suffix) => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(emptySearchResponse));
+    vi.stubGlobal("fetch", fetchMock);
+    await runSearchTranscripts("", {
+      query: "rust",
+      youtuber: "",
+      page: 1,
+      sort: "relevance",
+      mode,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/search?q=rust&per_page=12&page=1&sort=relevance${suffix}`,
+      expect.anything(),
+    );
+  });
+
+  it("asks for a video's moments with the engine that found the video", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(Response.json(emptySearchResponse)));
+    vi.stubGlobal("fetch", fetchMock);
+    await runSearchVideoMoments("", "rust", "video-1", "hybrid");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/api/search?q=rust&video_id=video-1&per_page=100&mode=hybrid",
+    );
+    await runSearchVideoMoments("", "rust", "video-1", "lexical");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/search?q=rust&video_id=video-1&per_page=100");
+  });
+
+  it("accepts the hybrid response mode", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ ...emptySearchResponse, mode: "hybrid" })),
+    );
+    await expect(
+      runSearchTranscripts("", { query: "why rust?", youtuber: "", page: 1, sort: "relevance" }),
+    ).resolves.toMatchObject({ mode: "hybrid" });
+  });
+
+  it("accepts the opt-in semantic response mode", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          Response.json({ ...emptySearchResponse, mode: "semantic", totals_approximate: true }),
+        ),
+    );
+    await expect(
+      runSearchTranscripts("", { query: "rust", youtuber: "", page: 1, sort: "relevance" }),
+    ).resolves.toMatchObject({ mode: "semantic", totals_approximate: true });
   });
 
   it("accepts responses from API images that still send the duplicate top-level hits", async () => {

@@ -64,16 +64,20 @@ export type SearchResponse = {
   page: number;
   per_page: number;
   sort: SearchSort;
-  mode: "lexical";
+  mode: "lexical" | "semantic" | "hybrid";
   has_next_page: boolean;
   videos: SearchVideoResult[];
 };
+
+/** What a visitor can ask for. The response's `mode` says what actually answered. */
+export type SearchMode = "lexical" | "hybrid";
 
 export type SearchRequest = {
   query: string;
   youtuber: string;
   page: number;
   sort: SearchSort;
+  mode: SearchMode;
 };
 
 export type SearchAvailabilityStatus =
@@ -98,7 +102,7 @@ export type SearchAvailability = {
   next_transition_at: string;
 };
 
-export type RecentSearch = Omit<SearchRequest, "page"> & {
+export type RecentSearch = Omit<SearchRequest, "page" | "mode"> & {
   searchedAt: string;
 };
 

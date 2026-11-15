@@ -1,0 +1,212 @@
+[
+ {
+  "tid": "H00",
+  "video_id": "NeJ6wq2szVs",
+  "title": "Ripple: a new framework that takes the best of everything",
+  "t_start_ms": 666079,
+  "t_end_ms": 709360
+ },
+ {
+  "tid": "H01",
+  "video_id": "eTZygkJLmqs",
+  "title": "Anthropic and OpenAI are terrified of Kimi",
+  "t_start_ms": 1394320,
+  "t_end_ms": 1436800
+ },
+ {
+  "tid": "H02",
+  "video_id": "4AyM_3SK31w",
+  "title": "I think I'm addicted to Opus 4.5...",
+  "t_start_ms": 640320,
+  "t_end_ms": 684640
+ },
+ {
+  "tid": "H03",
+  "video_id": "tgNZpXglc6k",
+  "title": "CSS has gone too far (deep dive on Minecraft in 100% CSS)",
+  "t_start_ms": 912320,
+  "t_end_ms": 951839
+ },
+ {
+  "tid": "H04",
+  "video_id": "ypO0q_8zhWw",
+  "title": "Why is OpenAI so much more efficient?",
+  "t_start_ms": 1239200,
+  "t_end_ms": 1280880
+ },
+ {
+  "tid": "H05",
+  "video_id": "Ct0y7FN7yLA",
+  "title": "Was I wrong about Cloudflare?",
+  "t_start_ms": 1147440,
+  "t_end_ms": 1185200
+ },
+ {
+  "tid": "H06",
+  "video_id": "QwShVo0zfuk",
+  "title": "Everything needs to change",
+  "t_start_ms": 323160,
+  "t_end_ms": 361800
+ },
+ {
+  "tid": "H07",
+  "video_id": "3sTu8sSLVfg",
+  "title": "Mythos is here, it\u2019s time to start tokenmaxxing",
+  "t_start_ms": 440800,
+  "t_end_ms": 478920
+ },
+ {
+  "tid": "H08",
+  "video_id": "X1Gfv7P-XRw",
+  "title": "Cloudflare takes on Next.js",
+  "t_start_ms": 791040,
+  "t_end_ms": 834639
+ },
+ {
+  "tid": "H09",
+  "video_id": "EUE8N6mqtGg",
+  "title": "So I stopped using Ghostty...",
+  "t_start_ms": 1052200,
+  "t_end_ms": 1093960
+ },
+ {
+  "tid": "H10",
+  "video_id": "YqDb0feu7iA",
+  "title": "BREAKING: Anthropic announces massive investment (50% of OpenAI???)",
+  "t_start_ms": 261440,
+  "t_end_ms": 302800
+ },
+ {
+  "tid": "H11",
+  "video_id": "xIRL3klHM9I",
+  "title": "Please Stop Using Booleans.",
+  "t_start_ms": 887360,
+  "t_end_ms": 932079
+ },
+ {
+  "tid": "H12",
+  "video_id": "nbB8sMmgYok",
+  "title": "The end of the Clawdbot saga",
+  "t_start_ms": 367840,
+  "t_end_ms": 411600
+ },
+ {
+  "tid": "H13",
+  "video_id": "uZBjVeyiYkk",
+  "title": "Sonnet 4.5 is the best coding model in the world",
+  "t_start_ms": 1309160,
+  "t_end_ms": 1351240
+ },
+ {
+  "tid": "H14",
+  "video_id": "9XiGGc8Xo4g",
+  "title": "React caused an outage for Cloudflare?",
+  "t_start_ms": 243280,
+  "t_end_ms": 287360
+ },
+ {
+  "tid": "H15",
+  "video_id": "i44jQvcDARo",
+  "title": "You're using AI coding tools wrong",
+  "t_start_ms": 984959,
+  "t_end_ms": 1029839
+ },
+ {
+  "tid": "H16",
+  "video_id": "Wvj1mTqyzsQ",
+  "title": "BREAKING: Claude Code source leaked",
+  "t_start_ms": 1797520,
+  "t_end_ms": 1836400
+ },
+ {
+  "tid": "H17",
+  "video_id": "VgtfpTGJmHQ",
+  "title": "Cursor just changed forever",
+  "t_start_ms": 272400,
+  "t_end_ms": 315759
+ },
+ {
+  "tid": "H18",
+  "video_id": "wvt5JNUXXLM",
+  "title": "The Future of TypeScript",
+  "t_start_ms": 1386400,
+  "t_end_ms": 1426240
+ },
+ {
+  "tid": "H19",
+  "video_id": "1_P1K9i1Oq0",
+  "title": "Cursor just started their war on GitHub",
+  "t_start_ms": 1300000,
+  "t_end_ms": 1337600
+ },
+ {
+  "tid": "H20",
+  "video_id": "DLa2FQQzCr4",
+  "title": "React feels insane",
+  "t_start_ms": 679920,
+  "t_end_ms": 721680
+ },
+ {
+  "tid": "H21",
+  "video_id": "qCPGzV5GfRU",
+  "title": "PewDiePie is right about AI",
+  "t_start_ms": 483520,
+  "t_end_ms": 520719
+ },
+ {
+  "tid": "H22",
+  "video_id": "l-gfVIm0Xn8",
+  "title": "OpenAI is lying",
+  "t_start_ms": 938400,
+  "t_end_ms": 982320
+ },
+ {
+  "tid": "H23",
+  "video_id": "zd6tBbCwkks",
+  "title": "This model is kind of a disaster.",
+  "t_start_ms": 1313480,
+  "t_end_ms": 1351640
+ },
+ {
+  "tid": "H24",
+  "video_id": "sKmrLtB47WA",
+  "title": "This is absolute chaos...",
+  "t_start_ms": 1474720,
+  "t_end_ms": 1513200
+ },
+ {
+  "tid": "H25",
+  "video_id": "d6Mk-3qh2O0",
+  "title": "The Future of React",
+  "t_start_ms": 1043360,
+  "t_end_ms": 1087160
+ },
+ {
+  "tid": "H26",
+  "video_id": "yfxDdQo2cyI",
+  "title": "Where Should You Deploy In 2026?",
+  "t_start_ms": 870240,
+  "t_end_ms": 910000
+ },
+ {
+  "tid": "H27",
+  "video_id": "2p_huDMN8XI",
+  "title": "Things aren\u2019t looking good for GitHub\u2026",
+  "t_start_ms": 421120,
+  "t_end_ms": 462160
+ },
+ {
+  "tid": "H28",
+  "video_id": "ZP9lqjNa_BQ",
+  "title": "Kimi K2 is the best model ever (kind of\u2026)",
+  "t_start_ms": 1174160,
+  "t_end_ms": 1215200
+ },
+ {
+  "tid": "H29",
+  "video_id": "kAjNWanR3n8",
+  "title": "Zig's creator can't stop himself",
+  "t_start_ms": 761120,
+  "t_end_ms": 806000
+ }
+]

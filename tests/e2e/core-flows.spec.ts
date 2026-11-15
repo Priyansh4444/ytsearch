@@ -125,6 +125,8 @@ test.afterEach(async ({ page }) => {
 });
 
 test("renders the search shell while an initial lazy chunk is delayed", async ({ page }) => {
+  const bootstrapTimeout = 60_000;
+  test.setTimeout(90_000);
   let chunkRequested = false;
   const { promise: chunkGate, resolve: releaseChunk } = Promise.withResolvers<void>();
   await page.route("**/src/components/channel-picker.tsx*", async (route) => {
@@ -133,25 +135,36 @@ test("renders the search shell while an initial lazy chunk is delayed", async ({
     await route.continue();
   });
 
-  const navigation = page.goto("/");
-  await expect
-    .poll(() => chunkRequested, {
-      message: "the cold Vite server should eventually request the delayed lazy chunk",
-      timeout: 15_000,
-    })
-    .toBe(true);
-  let shellFailure: unknown;
+  // Cold Vite transforms can be slow during the full check. The boundary under
+  // test starts when the lazy chunk is requested; the shell still gets only 1 s.
+  const bootstrapDeadline = Date.now() + bootstrapTimeout;
+  const navigation = page.goto("/", { timeout: bootstrapTimeout }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  let boundaryFailure: unknown;
+  let navigationFailure: unknown;
   try {
+    await expect
+      .poll(() => chunkRequested, {
+        message: "the cold Vite server should eventually request the delayed lazy chunk",
+        timeout: bootstrapTimeout,
+      })
+      .toBe(true);
     await expect(page.getByRole("combobox", { name: "Search transcripts" })).toBeVisible({
       timeout: 1_000,
     });
   } catch (error) {
-    shellFailure = error;
+    boundaryFailure = error;
+  } finally {
+    releaseChunk();
+    navigationFailure = await navigation;
   }
-  releaseChunk();
-  await navigation;
-  if (shellFailure) throw shellFailure;
-  await expect(page.getByText("Example Creator").first()).toBeVisible();
+  if (boundaryFailure) throw boundaryFailure;
+  if (navigationFailure) throw navigationFailure;
+  await expect(page.getByText("Example Creator").first()).toBeVisible({
+    timeout: Math.max(1, bootstrapDeadline - Date.now()),
+  });
 });
 
 test("copies a result permalink that scrolls back to that video", async ({ page }) => {
@@ -460,11 +473,16 @@ test("dashboard reports catalog and operational metrics", async ({ page }) => {
   await expect(page.getByText("Indexed videos").first()).toBeVisible();
   await expect(page.getByText("Transcript moments").first()).toBeVisible();
   await expect(page.getByText("Operational")).toBeVisible();
-  await expect(page.getByText("Scheduled repair")).toBeVisible();
-  await expect(page.getByText("10 count gap · 6h repair + daily refresh")).toBeVisible();
+  await expect(page.getByText("Idle", { exact: true })).toBeVisible();
+  await expect(page.getByText("Count difference", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Example Creator")).toBeVisible();
   await expect(page.getByText("10 / 20")).toBeVisible();
-  await expect(page.getByText("50%").first()).toBeVisible();
+  await expect(page.getByRole("table", { name: "Creator catalog" })).toBeVisible();
+  await expect(page.getByText("+10", { exact: true }).first()).toBeVisible();
+  await page.getByRole("searchbox", { name: "Find a creator" }).fill("no matching creator");
+  await expect(page.getByText("No creators match these filters.")).toBeVisible();
+  await page.getByRole("searchbox", { name: "Find a creator" }).fill("@EXAMPLE");
+  await expect(page.getByRole("link", { name: /Example Creator/ })).toBeVisible();
 });
 
 for (const viewport of [
