@@ -490,13 +490,17 @@ struct RelevanceRank {
 struct MomentCounter {
     clusters: usize,
     cluster_start_ms: Option<u32>,
+    #[cfg(debug_assertions)]
     last_start_ms: Option<u32>,
 }
 
 impl MomentCounter {
     fn record(&mut self, start_ms: u32) {
-        debug_assert!(self.last_start_ms.is_none_or(|last| last <= start_ms));
-        self.last_start_ms = Some(start_ms);
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(self.last_start_ms.is_none_or(|last| last <= start_ms));
+            self.last_start_ms = Some(start_ms);
+        }
         if self
             .cluster_start_ms
             .is_none_or(|cluster| start_ms.saturating_sub(cluster) > MOMENT_COALESCE_WINDOW_MS)

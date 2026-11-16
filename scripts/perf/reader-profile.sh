@@ -22,7 +22,9 @@ work="$(mktemp -d /tmp/ytsearch-perf-profile.XXXXXX)"
 
 perf_start_reader "$binary" 18120 "$(perf_fast_cpus)" "$work/reader.log"
 perf_driver "$requests" 1 18120 >/dev/null
-perf record -F 1999 -g -p "${PERF_PIDS[-1]}" -o "$work/perf.data" -- \
+# Explicit user events/callchains work with perf_event_paranoid=2. Bound the
+# ring buffer rather than relying on perf's machine-dependent default.
+perf record -e cycles:u -F 1999 -m 128 -g --user-callchains -p "${PERF_PIDS[-1]}" -o "$work/perf.data" -- \
   bash -c ". '$PERF_DIR/lib.sh'; trap - EXIT; perf_driver '$requests' 2 18120" 2>&1 | grep -v '^\[ perf record'
 # Report to a file once: under pipefail, `| head` would SIGPIPE the producer
 # and silently end the script.

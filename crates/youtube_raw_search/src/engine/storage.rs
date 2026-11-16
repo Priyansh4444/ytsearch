@@ -289,6 +289,7 @@ impl DocumentTable {
         })
     }
 
+    #[inline]
     pub(super) fn document(&self, id: u32) -> Result<DocumentRecord> {
         if id as usize >= self.documents {
             return Err(Error::Corrupt(format!("document {id} is out of bounds")));
