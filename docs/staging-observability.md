@@ -72,6 +72,11 @@ scripts/refresh-query-log # sensitive query text; operator-only workspace materi
 The bounded recent-query report omits IP addresses, user agents, countries, and
 request IDs.
 
+PostHog `search_loaded` includes browser `request_duration_ms` and `edge_cached`.
+The backend `time_to_first_result_ms` is omitted on edge hits because it belongs
+to the original computation. API Axiom events exclude edge-cache hits and do not
+measure browser rendering; do not use their percentiles as browser E2E latency.
+
 ## Search and browser checks
 
 ```bash

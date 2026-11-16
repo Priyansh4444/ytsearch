@@ -58,6 +58,10 @@ time: with both readers pinned to the P-cores, an A/A run agrees within about
   on the client instead.
 - **DWARF call graphs stop at the leaf** in this crate (`perf --call-graph
   dwarf`); build with `--frame-pointers` and use `--call-graph fp` (`-g`).
+- **User-only profiling with `perf_event_paranoid=2`** needs both user-space
+  events (`-e cycles:u`) and user-only callchains (`--user-callchains`).
+  `reader-profile.sh` also limits the ring buffer to `-m 128` to fit the
+  unprivileged locked-memory budget. No system permission change is needed.
 - **Hybrid-CPU counters are multiplexed** when one `perf stat` asks for both
   `cpu_core/` and `cpu_atom/` events; the ratios then disagree by 3% even for
   identical binaries. Pinning readers to one core type avoids it, and
@@ -76,6 +80,26 @@ time: with both readers pinned to the P-cores, an A/A run agrees within about
   it rather than debugging the change.
 
 ## Facts
+
+Measured 2026-11-16 administrative I/O: a production Tokio worker blocked in
+SQLite `pread64` while health requests queued. Bulk mutation summaries need a
+covering index because their scalar columns follow large chunk BLOBs; completed
+startup checks use a partial missing-summary index. Keep synchronous admin reads
+off HTTP workers. Initial index construction still needs a one-time scan. See
+[the diagnosis and proof](../performance/admin-io-2026-11-16.md).
+
+Measured 2026-11-16 follow-up: keep `MomentCounter` timestamp-order debug state
+out of release builds. Counter slots shrink 24 → 16 bytes on x86-64; three
+full-reader comparisons preserved all responses and showed small, order-sensitive
+cycle gains. Title-token reuse and a lower document-validation cutoff did not
+clear control drift and were reverted. See the
+[query-workload record](../performance/query-workload-2026-11-16.md).
+
+Measured 2026-11-16: inlining `DocumentTable::document` removed accessor calls
+and allowed callers to omit unused fields. Two full-reader trials matched all
+330 responses and used 1.07–1.13% fewer instructions, with 1.63–1.83% fewer
+cycles. A cold multibyte-varint split regressed and was reverted. See the
+[measurement record](../performance/document-inlining-2026-11-16.md).
 
 Measured 2026-10-17: `DocumentTable::document` retained two checked helper calls
 despite the fixed 24-byte record. One complete range check plus direct LE fields

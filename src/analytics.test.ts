@@ -44,6 +44,37 @@ describe("analytics", () => {
     window.history.pushState({}, "", "/");
   });
 
+  it("reports browser request time without stale cached backend time", async () => {
+    const analytics = await import("./analytics");
+    analytics.initializeAnalytics();
+    analytics.captureSearchLoaded(
+      { query: "react", youtuber: "", page: 1, sort: "relevance", mode: "lexical" },
+      {
+        query: "react",
+        total_videos: 0,
+        total_moments: 0,
+        totals_approximate: false,
+        total_found: 0,
+        out_of: 100,
+        time_to_first_result_ms: 4605,
+        request_duration_ms: 72,
+        edge_cached: true,
+        page: 1,
+        per_page: 20,
+        sort: "relevance",
+        mode: "lexical",
+        has_next_page: false,
+        videos: [],
+      },
+    );
+    const body = vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body;
+    if (typeof body !== "string") throw new TypeError("Expected analytics body");
+    const properties = JSON.parse(body).batch[0].properties;
+    expect(properties.request_duration_ms).toBe(72);
+    expect(properties.edge_cached).toBe(true);
+    expect(properties).not.toHaveProperty("time_to_first_result_ms");
+  });
+
   it("initializes once and uses the configured capture host", async () => {
     const analytics = await import("./analytics");
 
