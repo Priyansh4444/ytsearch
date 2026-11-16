@@ -13,6 +13,7 @@ CURL_MAX_TIME="${CURL_MAX_TIME:-5}"
 OUTPUT="${OUTPUT:-.search-experiment/results/${BACKEND_KIND}-direct.jsonl}"
 APPEND_OUTPUT="${APPEND_OUTPUT:-0}"
 STOP_FILE="${STOP_FILE:-}"
+PRINT_SUMMARY="${PRINT_SUMMARY:-1}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CASES_FILE="${CASES_FILE:-$SCRIPT_DIR/benchmark-search-cases.tsv}"
 CONTRACT_FILE="${CONTRACT_FILE:-$SCRIPT_DIR/benchmark-search-contract.json}"
@@ -42,6 +43,7 @@ fi
 declare -a labels=()
 declare -a queries=()
 declare -a creators=()
+declare -a sample_prefixes=()
 while IFS=$'\t' read -r label query creator; do
   [[ -z "$label" || "$label" == \#* ]] && continue
   if [[ -z "$query" ]]; then
@@ -52,6 +54,13 @@ while IFS=$'\t' read -r label query creator; do
   queries+=("$query")
   creators+=("$creator")
 done < "$CASES_FILE"
+# Encode text in one process per sweep, outside continuous request intervals.
+mapfile -t sample_prefixes < <(jq -Rrc '
+  select((test("^[[:space:]]*$") | not) and (startswith("#") | not)) | split("\t") |
+  {label:.[0],query:.[1],creator:((.[2] // "") | if . == "" then null else . end)} |
+  tojson | .[0:-1]
+' "$CASES_FILE")
+[[ "${#sample_prefixes[@]}" == "${#queries[@]}" ]]
 if (( ${#queries[@]} == 0 )); then
   printf 'no benchmark queries found in %s\n' "$CASES_FILE" >&2
   exit 1
@@ -121,6 +130,8 @@ for index in "${!queries[@]}"; do
     timing="$(request "${queries[$index]}" "${creators[$index]}" "$response_file" \
       '%{http_code}\t%{time_total}\t%{size_download}')" || curl_exit=$?
     http="$(printf '%s' "$timing" | cut -f1)"
+    # curl reports 000 when no HTTP response arrives; JSON requires numeric 0.
+    http=$((10#${http:-0}))
     seconds="$(printf '%s' "$timing" | cut -f2)"
     bytes="$(printf '%s' "$timing" | cut -f3)"
     [[ -n "$seconds" ]] || seconds="$CURL_MAX_TIME"
@@ -152,12 +163,18 @@ for index in "${!queries[@]}"; do
       contract_valid=true
     fi
     ended_ms="$(date +%s%3N)"
-    jq -cn --arg label "${labels[$index]}" --arg query "${queries[$index]}" \
-      --arg creator "${creators[$index]}" --argjson run "$run" --argjson seconds "$seconds" \
-      --argjson curl_exit "$curl_exit" --argjson http "${http:-0}" --argjson bytes "$bytes" \
-      --argjson response_valid "$response_valid" --argjson contract_valid "$contract_valid" \
-      --argjson started_ms "$started_ms" --argjson ended_ms "$ended_ms" \
-      '{label:$label,query:$query,creator:(if $creator == "" then null else $creator end),run:$run,started_ms:$started_ms,ended_ms:$ended_ms,seconds:$seconds,http:$http,curl_exit:$curl_exit,bytes:$bytes,response_valid:$response_valid,contract_valid:$contract_valid,valid:($response_valid and $contract_valid),request_ok:($curl_exit == 0 and $http == 200 and $response_valid),ok:($curl_exit == 0 and $http == 200 and $response_valid and $contract_valid)}' >> "$OUTPUT"
+    request_ok=false
+    ok=false
+    if (( curl_exit == 0 )) && [[ "$http" == 200 && "$response_valid" == true ]]; then
+      request_ok=true
+      [[ "$contract_valid" != true ]] || ok=true
+    fi
+    # All interpolated values here are curl numeric metrics or shell-owned
+    # numbers/booleans. Text has already been JSON-encoded in sample_prefixes.
+    printf '%s,"run":%s,"started_ms":%s,"ended_ms":%s,"seconds":%s,"http":%s,"curl_exit":%s,"bytes":%s,"response_valid":%s,"contract_valid":%s,"valid":%s,"request_ok":%s,"ok":%s}\n' \
+      "${sample_prefixes[$index]}" "$run" "$started_ms" "$ended_ms" "$seconds" \
+      "${http:-0}" "$curl_exit" "$bytes" "$response_valid" "$contract_valid" \
+      "$ok" "$request_ok" "$ok" >> "$OUTPUT"
     ((run += 1))
   done
 done
@@ -167,6 +184,8 @@ if [[ "$CAPTURE_RESOURCES" == 1 ]]; then
     '{before:$before,after:$after,cpu_ticks:($after.cpu_ticks-$before.cpu_ticks),search_nanos:($after.search_nanos-$before.search_nanos),queue_wait_nanos:(($after.queue_wait_nanos//0)-($before.queue_wait_nanos//0)),backend_nanos:(($after.backend_nanos//0)-($before.backend_nanos//0)),searches:($after.searches-$before.searches)}' \
     > "${OUTPUT%.jsonl}-resources.json"
 fi
+
+if [[ "$PRINT_SUMMARY" != 1 ]]; then exit 0; fi
 
 jq -s '
   group_by(.label) |

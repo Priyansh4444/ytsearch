@@ -217,7 +217,7 @@ load_worker() {
   while [[ ! -e "$LOAD_STOP_FILE" ]]; do
     SEARCH_URL="$SEARCH_URL" SEARCH_API_KEY="$SEARCH_API_KEY" CASES_FILE="$CASES_FILE" \
       OUTPUT="$output" RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 \
-      APPEND_OUTPUT=1 STOP_FILE="$LOAD_STOP_FILE" \
+      APPEND_OUTPUT=1 PRINT_SUMMARY=0 STOP_FILE="$LOAD_STOP_FILE" \
       "$SCRIPT_DIR/benchmark-search-engine.sh" >/dev/null
     if (( first_sweep == 1 )); then
       touch "$LOAD_READY_DIRECTORY/$worker_number"
