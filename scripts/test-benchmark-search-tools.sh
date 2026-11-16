@@ -2,6 +2,13 @@
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# Raw benchmark traffic bypasses the API's alias resolution.
+awk -F '\t' '
+  $1 == "css_phrase_t3" || $1 == "stopword_phrase" { if ($3 != "@t3dotgg") exit 1; found++ }
+  END { if (found != 2) exit 1 }
+' "$SCRIPT_DIR/benchmark-search-cases.tsv"
+jq -e '[.cases.react_global, .cases.fire_global, .cases.css_phrase_global, .cases.css_phrase_t3] |
+  all(.[]; .top_handle == "@t3dotgg")' "$SCRIPT_DIR/benchmark-search-contract.json" >/dev/null
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 trap 'exit 130' INT TERM

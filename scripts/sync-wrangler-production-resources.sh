@@ -36,6 +36,23 @@ if (( ${#fly_api_apps[@]} != 1 )) || [[ "${fly_api_apps[0]}" != "$RAW_API_APP" ]
   exit 1
 fi
 
+# The serving API must not resolve a started canary through app-wide DNS.
+# Like the Fly app identity above, validate these source settings before --write
+# can mutate Wrangler configuration.
+for entry in RAW_SEARCH_API_URL:8108 SEMANTIC_SEARCH_URL:8790; do
+  key="${entry%:*}"
+  port="${entry##*:}"
+  expected="http://${RAW_READER_MACHINE_ID}.vm.${RAW_READER_APP}.internal:${port}"
+  mapfile -t values < <(sed -nE \
+    "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*'([^']+)'[[:space:]]*$/\\1/p" \
+    "$fly_raw_api_config")
+  if (( ${#values[@]} != 1 )) || [[ "${values[0]}" != "$expected" ]]; then
+    printf 'Raw API %s must target the inventory reader: expected=%s\n' \
+      "$key" "$expected" >&2
+    exit 1
+  fi
+done
+
 keys=(
   API_BASE_URL
   INDEX_QUEUE_API_BASE_URL

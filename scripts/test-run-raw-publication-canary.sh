@@ -72,6 +72,11 @@ jq '. += [{
 }]' "$tmp/builder-list.json" > "$tmp/builder-list.next.json"
 mv "$tmp/builder-list.next.json" "$tmp/builder-list.json"
 
+printf '%s\n' '[{"id":"13131313131313","state":"started","config":{"env":{
+  "RAW_SEARCH_API_URL":"http://10101010101010.vm.ytsearch-raw-production.internal:8108",
+  "SEMANTIC_SEARCH_URL":"http://10101010101010.vm.ytsearch-raw-production.internal:8790"
+}}}]' > "$tmp/api-list.json"
+
 cat > "$tmp/bin/flyctl" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -80,6 +85,7 @@ case "$1 $2" in
   "machine list")
     case " $* " in
       *" --app ytsearch-raw-production "*) cat "$FAKE_READER_LIST" ;;
+      *" --app ytsearch-api-raw-production "*) cat "$FAKE_API_LIST" ;;
       *" --app ytsearch-indexer-raw-production "*) cat "$FAKE_BUILDER_LIST" ;;
       *) exit 1 ;;
     esac
@@ -302,6 +308,7 @@ common_env=(
   FLY_API_TOKEN=fake-token
   FLY_API_HOSTNAME=https://api.test
   FLY_PRODUCTION_INVENTORY_PATH="$SCRIPT_DIR/testdata/fly-production-resources.json"
+  FAKE_API_LIST="$tmp/api-list.json"
   FAKE_READER_LIST="$tmp/reader-list.json"
   FAKE_BUILDER_LIST="$tmp/builder-list.json"
   FAKE_READER_STATE="$tmp/reader-state.json"
@@ -379,6 +386,20 @@ fi
 jq '.[1].config.env.RAW_SEARCH_API_URL = "http://10101010101010.vm.ytsearch-raw-production.internal:8108"' \
   "$tmp/builder-list.json" > "$tmp/builder-list.next.json"
 mv "$tmp/builder-list.next.json" "$tmp/builder-list.json"
+
+cp "$tmp/api-list.json" "$tmp/api-pinned.json"
+for field in RAW_SEARCH_API_URL SEMANTIC_SEARCH_URL; do
+  reset_state
+  jq --arg field "$field" '.[0].config.env[$field] = "http://ytsearch-raw-production.internal:8108"' \
+    "$tmp/api-pinned.json" > "$tmp/api-list.json"
+  if env "${common_env[@]}" CANARY_RUN_ID="unsafe-api-$field" OUTPUT_DIR="$tmp/unsafe-api-$field" \
+    "$runner" > "$tmp/unsafe-api-$field.stdout" 2>&1; then
+    printf 'canary must reject app-wide serving API routes before starting\n' >&2
+    exit 1
+  fi
+  [[ "$(grep -c 'POST .*/start$' "$tmp/curl.log" || :)" == 0 ]]
+done
+cp "$tmp/api-pinned.json" "$tmp/api-list.json"
 
 reset_state
 env "${common_env[@]}" RAW_CANARY_MIGRATION_MODE=record-old-generation \

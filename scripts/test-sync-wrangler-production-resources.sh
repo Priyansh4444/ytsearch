@@ -10,6 +10,8 @@ config="$tmp/wrangler.jsonc"
 fly_api_config="$tmp/fly.raw-api.toml"
 cp "$SCRIPT_DIR/../wrangler.jsonc" "$config"
 cp "$SCRIPT_DIR/../fly.raw-api.toml" "$fly_api_config"
+sed -i -E 's|http://[0-9a-f]{14}\.vm\.ytsearch-raw-production\.internal:|http://10101010101010.vm.ytsearch-raw-production.internal:|g' \
+  "$fly_api_config"
 common_env=(
   FLY_PRODUCTION_INVENTORY_PATH="$SCRIPT_DIR/testdata/fly-production-resources.json"
   WRANGLER_CONFIG_PATH="$config"
@@ -39,6 +41,19 @@ sed -i \
   "$config"
 env "${common_env[@]}" "$SCRIPT_DIR/sync-wrangler-production-resources.sh" --write >/dev/null
 [[ "$(grep -c 'https://ytsearch-api-raw-production.fly.dev' "$config")" == 2 ]]
+
+cp "$fly_api_config" "$tmp/api-pinned.toml"
+for port in 8108 8790; do
+  sed -i "s|http://10101010101010.vm.ytsearch-raw-production.internal:$port|http://ytsearch-raw-production.internal:$port|" "$fly_api_config"
+  checksum_before="$(sha256sum "$config")"
+  if env "${common_env[@]}" "$SCRIPT_DIR/sync-wrangler-production-resources.sh" --write \
+    >/dev/null 2>&1; then
+    printf 'app-wide API backend routing must fail before Wrangler mutation\n' >&2
+    exit 1
+  fi
+  [[ "$(sha256sum "$config")" == "$checksum_before" ]]
+  cp "$tmp/api-pinned.toml" "$fly_api_config"
+done
 
 sed -i "s/app = 'ytsearch-api-raw-production'/app = 'drifted-api'/" "$fly_api_config"
 checksum_before="$(sha256sum "$config")"

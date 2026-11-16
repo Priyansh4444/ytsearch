@@ -105,7 +105,10 @@ the SSH process, not the server.
   authoritative state check. A scoped token keeps the fail-closed default.
 - The queue worker must target the exact production Machine,
   `d89303da029328.vm.ytsearch-raw-production.internal`, never the app-wide name,
-  which can route to a started canary. The runner checks this first.
+  which can route to a started canary. The serving API must pin both
+  `RAW_SEARCH_API_URL` and `SEMANTIC_SEARCH_URL` to that same production reader.
+  The runner checks these routes before starting; the inventory synchronization
+  check also rejects source configuration drift.
 - Broad single-token queries once OOM-killed the 2 GB reader (2026-08-31); they
   now merge posting cursors into bounded per-video slots, and the HTTP service
   runs one backend search at a time. The gate must include broad terms such as
@@ -170,6 +173,10 @@ Evidence is written under
 ends with `result.json`, which attests the full source commit, corpus digest,
 and resolved reader and builder image digests. The runner passes the admin key
 through a mode-600 temporary header file instead of a command argument.
+
+Direct Raw benchmark requests bypass the API's creator-alias resolution. Keep
+case filters and expected handles canonical (`@t3dotgg`, not the API alias
+`@theo`); the expected video IDs and snippet tokens remain independent contracts.
 
 ## Failure handling
 

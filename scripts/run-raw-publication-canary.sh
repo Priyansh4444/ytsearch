@@ -421,6 +421,21 @@ if ! jq -e --arg target "$expected_queue_target" '
   exit 1
 fi
 
+api_app="$(jq -er '.resources.raw_api.app' "$FLY_PRODUCTION_INVENTORY_RESOLVED_PATH")"
+api_machine_id="$(jq -er '.resources.raw_api.machine_id' "$FLY_PRODUCTION_INVENTORY_RESOLVED_PATH")"
+api_machine="$(flyctl machine list --app "$api_app" --json |
+  jq -ce --arg id "$api_machine_id" '.[] | select(.id == $id)')"
+expected_semantic_target="http://${production_reader_id}.vm.${production_reader_app}.internal:8790"
+if ! jq -e --arg target "$expected_queue_target" --arg semantic "$expected_semantic_target" '
+  .state == "started" and
+  .config.env.RAW_SEARCH_API_URL == $target and
+  ((.config.env.SEMANTIC_SEARCH_URL // "") == "" or
+    .config.env.SEMANTIC_SEARCH_URL == $semantic)
+' <<<"$api_machine" >/dev/null; then
+  printf 'refusing canary start while the serving API can route to a canary\n' >&2
+  exit 1
+fi
+
 output_directory="${OUTPUT_DIR:-.search-experiment/results/raw-canary-${run_id}}"
 mkdir -p "$(dirname -- "$output_directory")"
 if ! mkdir "$output_directory"; then

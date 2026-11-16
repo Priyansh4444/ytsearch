@@ -50,6 +50,10 @@ time: with both readers pinned to the P-cores, an A/A run agrees within about
 
 ## Traps
 
+- **Direct Raw requests bypass creator aliases.** Use canonical `@t3dotgg`
+  in raw benchmarks. The API alias `@theo` produces empty scoped Raw results
+  and does not match returned canonical handles. Keep the fixture IDs and
+  snippet assertions intact when correcting a handle.
 - **The API caches responses.** The API asks the reader for
   `use_cache=true&cache_ttl=60`, and repeated `/api/search` calls are served from
   that cache in under 5 ms. Benchmark the reader directly with the captured
