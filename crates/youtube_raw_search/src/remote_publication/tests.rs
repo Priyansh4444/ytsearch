@@ -549,10 +549,15 @@ async fn restart_preserves_an_incompatible_job_with_a_malformed_manifest() {
 async fn prepare_records_its_job_after_the_request_is_dropped() {
     let fixture = fixture();
     let sequence = replace(&fixture.store, "video-n", "snapshotonly", "operation-n");
-    // One poll starts the export; dropping the future is what the server
-    // does when the client times out and disconnects.
+    // Hold serialization so the detached prepare cannot finish before the
+    // request is dropped, even when the fixture's export completes instantly.
+    let operation = fixture.publication.operation.lock().await;
     let abandoned = tokio::time::timeout(Duration::ZERO, fixture.publication.prepare()).await;
-    assert!(abandoned.is_err(), "the export must still be running");
+    assert!(
+        abandoned.is_err(),
+        "prepare must wait for the operation lock"
+    );
+    drop(operation);
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     while !fixture.publication.state_path().exists() {
         assert!(

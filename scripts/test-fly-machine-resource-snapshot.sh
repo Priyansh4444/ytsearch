@@ -109,6 +109,22 @@ output="$(PATH="$temporary_directory/bin:$PATH" FAKE_MACHINE_STATE=stopped \
   "$SCRIPT_DIR/fly-machine-resource-snapshot.sh")"
 jq -e '.state == "stopped" and (has("memory_current_bytes") | not)' <<<"$output" >/dev/null
 
+for transition in starting stopping; do
+  if PATH="$temporary_directory/bin:$PATH" FAKE_MACHINE_STATE="$transition" \
+    FLY_RESOURCE_APP=ytsearch-raw-production FLY_RESOURCE_MACHINE_ID=22222222222222 \
+    FLY_RESOURCE_MOUNT_PATH=/data/mutable \
+    "$SCRIPT_DIR/fly-machine-resource-snapshot.sh" >/dev/null 2>&1; then
+    printf 'reader transitions must fail without explicit permission\n' >&2
+    exit 1
+  fi
+  output="$(PATH="$temporary_directory/bin:$PATH" FAKE_MACHINE_STATE="$transition" \
+    FLY_RESOURCE_APP=ytsearch-raw-production FLY_RESOURCE_MACHINE_ID=22222222222222 \
+    FLY_RESOURCE_MOUNT_PATH=/data/mutable FLY_RESOURCE_ALLOW_TRANSITIONS=1 \
+    "$SCRIPT_DIR/fly-machine-resource-snapshot.sh")"
+  jq -e --arg state "$transition" '.state == $state and
+    (has("memory_current_bytes") | not)' <<<"$output" >/dev/null
+done
+
 mkdir -p "$temporary_directory/wrapper-bin"
 cat > "$temporary_directory/wrapper-bin/flyctl" <<'SH'
 #!/usr/bin/env bash

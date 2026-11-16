@@ -123,7 +123,7 @@ write_machine() {
   profile="${2:-shared-2x}"
   case "$profile" in
     shared-2x) cpu_kind=shared; cpus=2 ;;
-    performance-1x-4gb) cpu_kind=performance; cpus=1 ;;
+    performance-1x-4gb|performance-1x-8gb) cpu_kind=performance; cpus=1 ;;
     *) return 1 ;;
   esac
   jq -n --arg role "$role" --arg source "$source_commit" \
@@ -143,7 +143,7 @@ write_machine() {
       },
       image:$image,
       init:{entrypoint:["/usr/bin/sleep"],cmd:["infinity"],swap_size_mb:512},
-      guest:{cpu_kind:$cpu_kind,cpus:$cpus,memory_mb:(if $profile == "performance-1x-4gb" then 4096 else 2048 end)},
+      guest:{cpu_kind:$cpu_kind,cpus:$cpus,memory_mb:(if $profile == "performance-1x-8gb" then 8192 elif $profile == "performance-1x-4gb" then 4096 else 2048 end)},
       metadata:{
         lifecycle:"on-demand-publication-builder",
         source_commit:$source,
@@ -210,6 +210,7 @@ run_successful_publication() {
 
 run_successful_publication shared-2x "$tmp/final.json"
 run_successful_publication performance-1x-4gb "$tmp/performance-final.json"
+run_successful_publication performance-1x-8gb "$tmp/rebuild-final.json"
 
 # shellcheck source=scripts/lib/fly-publication-job.sh
 . "$SCRIPT_DIR/lib/fly-publication-job.sh"

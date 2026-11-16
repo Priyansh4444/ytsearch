@@ -11,6 +11,7 @@ source "$SCRIPT_DIR/lib/fly-production-inventory.sh"
 source "$SCRIPT_DIR/lib/raw-publication-builder-profile.sh"
 fly_production_inventory_load_raw_release
 raw_publication_builder_profile_load
+readonly CANARY_READER_MEMORY_MB=2560
 : "${SEARCH_API_KEY:?set SEARCH_API_KEY to the isolated canary search key}"
 : "${RAW_ADMIN_API_KEY:?set RAW_ADMIN_API_KEY}"
 : "${EXPECTED_RAW_READER_IMAGE:?set EXPECTED_RAW_READER_IMAGE from reader staging output}"
@@ -23,7 +24,7 @@ raw_publication_builder_profile_load
 : "${RAW_CANARY_STATE_POLL_INTERVAL_SECONDS:=2}"
 : "${RAW_CANARY_STOP_RETRIES:=3}"
 : "${RAW_CANARY_STOP_POLL_ATTEMPTS:=10}"
-: "${MAX_CGROUP_MEMORY_BYTES:=1717986918}"
+: "${MAX_CGROUP_MEMORY_BYTES:=$(( CANARY_READER_MEMORY_MB * 1048576 * 80 / 100 ))}"
 : "${MAX_BUILDER_CGROUP_MEMORY_BYTES:=$(( RAW_PUBLICATION_BUILDER_MEMORY_MB * 1048576 * 80 / 100 ))}"
 : "${MAX_SWAP_BYTES:=0}"
 : "${MAX_DISK_PERCENT:=80}"
@@ -65,7 +66,7 @@ case "$RAW_CANARY_TEST_MODE" in
     RAW_CANARY_STATE_POLL_INTERVAL_SECONDS=2
     RAW_CANARY_STOP_RETRIES=3
     RAW_CANARY_STOP_POLL_ATTEMPTS=10
-    MAX_CGROUP_MEMORY_BYTES=1717986918
+    MAX_CGROUP_MEMORY_BYTES=$(( CANARY_READER_MEMORY_MB * 1048576 * 80 / 100 ))
     MAX_BUILDER_CGROUP_MEMORY_BYTES=$(( RAW_PUBLICATION_BUILDER_MEMORY_MB * 1048576 * 80 / 100 ))
     MAX_SWAP_BYTES=0
     MAX_DISK_PERCENT=80
@@ -313,7 +314,7 @@ canary="$(flyctl machine list --app "$RAW_APP" --json |
     if length == 1 then .[0] else error("exact Raw canary not found") end
   ')"
 canary_is_safe() {
-  jq -e --arg volume "$RAW_CANARY_VOLUME_ID" --arg source "$source_commit" \
+  jq -e --argjson reader_memory_mb "$CANARY_READER_MEMORY_MB" --arg volume "$RAW_CANARY_VOLUME_ID" --arg source "$source_commit" \
     --arg expected_resolved_image "$EXPECTED_RAW_READER_IMAGE" '
     .state == "stopped" and
     .config.metadata.lifecycle == "temporary-canary" and
@@ -329,7 +330,7 @@ canary_is_safe() {
     .config.mounts[0].path == $mount_path and
     .config.guest.cpu_kind == "shared" and
     .config.guest.cpus == 4 and
-    .config.guest.memory_mb == 2560 and
+    .config.guest.memory_mb == $reader_memory_mb and
     .config.env.RAW_SEARCH_BASE_CHANNELS_GZIP == "/data/source/youtube_youtubers.jsonl.gz" and
     .config.env.RAW_SEARCH_BASE_CHUNKS_GZIP == "/data/source/youtube_transcript_chunks.jsonl.gz" and
     .config.env.RAW_SEARCH_BIND == "[::]:8108" and
@@ -773,7 +774,7 @@ jq -cn --arg source_commit "$source_commit" --arg run_id "$run_id" \
   --argjson maximum_ms "$MAX_ACCEPTABLE_MS" --argjson maximum_rss "$MAX_RSS_BYTES" \
   --argjson maximum_cgroup_memory "$MAX_CGROUP_MEMORY_BYTES" \
   --argjson maximum_builder_cgroup_memory "$MAX_BUILDER_CGROUP_MEMORY_BYTES" \
-  --argjson reader_memory_mb 2560 \
+  --argjson reader_memory_mb "$CANARY_READER_MEMORY_MB" \
   --argjson builder_memory_mb "$RAW_PUBLICATION_BUILDER_MEMORY_MB" \
   --argjson publication_timeout_seconds "$PUBLICATION_TIMEOUT_SECONDS" \
   --argjson publication_load_seconds "$PUBLICATION_LOAD_SECONDS" \

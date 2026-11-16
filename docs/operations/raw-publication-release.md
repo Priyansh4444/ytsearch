@@ -151,8 +151,7 @@ The one command performs these checks in order:
    under 200 ms with zero HTTP, JSON, metrics, or search errors. Browser and
    Cloudflare transit time remain a separate production check.
 8. Requires reader process RSS at or below 1.5 GiB. It requires reader cgroup
-   memory at or below 1.6 GiB and temporary 4-GB builder cgroup memory at or
-   below 3.2 GiB. It also requires observed swap of zero, no OOM event, and
+   memory at or below 2 GiB and builder cgroup memory at or below 80% of its selected profile. It also requires observed swap of zero, no OOM event, and
    volume utilization below 80%. These gates measure memory and disk, not CPU
    utilization. Cgroup v2 uses kernel
    peak counters. Fly's current cgroup v1 reports an unusable zero peak, so the
@@ -188,3 +187,19 @@ If an authoritative stop or lease release cannot be confirmed, the command
 fails without a success attestation and preserves its mode-700 session under
 `${XDG_STATE_HOME:-${TMPDIR:-/tmp}}/ytsearch/fly-machine-recovery/`. The printed
 path contains the nonce needed to retry cleanup and must not be committed.
+
+For a complete schema rebuild, `performance-1x-8gb` provides one temporary
+performance vCPU and 8 GiB on the isolated builder. The 2026-11-16 rebuild
+exceeded the 4-GiB profile's 80% memory budget and used swap. The larger profile
+keeps the same 80% ceiling and zero-swap requirement; it changes no serving or
+queue resources and the builder remains stopped after each trial.
+
+The builder resource probe represents `starting`, `stopping`, and `stopped`
+without memory values. Started samples still require valid counters, the exact
+volume mount, and uninterrupted sampling within the gate's allowed gap.
+
+The reader memory gate uses 80% of its existing 2.5-GiB allocation (2 GiB).
+Commit `1658132` approved that allocation for double residency on 2026-09-27;
+the old fixed 1.6-GiB threshold still described the earlier 2-GiB Machine.
+The gate now derives its limit and attested size from one fixed reader size.
+This changes no production allocation and retains the 1.5-GiB process RSS cap.

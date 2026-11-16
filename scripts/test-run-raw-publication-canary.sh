@@ -349,7 +349,7 @@ jq -e '
   .policy.publication_load_seconds == 120 and
   .policy.activation_load_seconds == 10 and
   .policy.load_minimum_coverage_percent == 80 and
-  .policy.maximum_cgroup_memory_bytes == 1717986918 and
+  .policy.maximum_cgroup_memory_bytes == 2147483648 and
   .policy.maximum_builder_cgroup_memory_bytes == 1717986918 and
   .policy.reader_memory_mb == 2560 and .policy.builder_memory_mb == 2048 and
   .evidence.latency[0].max_ms == 10 and
@@ -419,6 +419,18 @@ jq -e '
   .policy.builder_memory_mb == 4096 and
   .policy.maximum_builder_cgroup_memory_bytes == 3435973836
 ' "$tmp/performance-builder/test-result.json" >/dev/null
+set_builder_profile performance-1x-8gb performance 1 8192
+reset_state
+env "${common_env[@]}" RAW_PUBLICATION_BUILDER_PROFILE=performance-1x-8gb \
+  CANARY_RUN_ID=rebuild-builder OUTPUT_DIR="$tmp/rebuild-builder" \
+  "$runner" >/dev/null
+jq -e '
+  .policy.builder_profile == "performance-1x-8gb" and
+  .policy.reader_memory_mb == 2560 and
+  .policy.builder_memory_mb == 8192 and
+  .policy.maximum_cgroup_memory_bytes == 2147483648 and
+  .policy.maximum_builder_cgroup_memory_bytes == 6871947673
+' "$tmp/rebuild-builder/test-result.json" >/dev/null
 set_builder_profile shared-2x shared 2
 
 reset_state

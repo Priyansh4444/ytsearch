@@ -37,7 +37,11 @@ machine="$(timeout "$FLY_RESOURCE_COMMAND_TIMEOUT_SECONDS" \
     if length == 1 then .[0] else error("exact resource Machine not found") end
   ')"
 machine_state="$(jq -r '.state' <<<"$machine")"
-if [[ "$machine_state" == stopped && "${FLY_RESOURCE_ALLOW_STOPPED:-0}" == 1 ]]; then
+if ! jq -e --arg mount "$FLY_RESOURCE_MOUNT_PATH"   'any(.config.mounts[]?; .path == $mount)' <<<"$machine" >/dev/null; then
+  printf 'resource Machine lacks the expected volume mount\n' >&2
+  exit 1
+fi
+if [[ "$machine_state" == stopped && "${FLY_RESOURCE_ALLOW_STOPPED:-0}" == 1 ]]   || [[ "$machine_state" =~ ^(starting|stopping)$ && "${FLY_RESOURCE_ALLOW_TRANSITIONS:-0}" == 1 ]]; then
   jq -cn --arg app "$FLY_RESOURCE_APP" --arg machine_id "$FLY_RESOURCE_MACHINE_ID" \
     --arg mount_path "$FLY_RESOURCE_MOUNT_PATH" --arg state "$machine_state" \
     --argjson sampled_at_ms "$(date +%s%3N)" '{
