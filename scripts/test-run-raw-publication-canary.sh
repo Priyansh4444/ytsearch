@@ -105,6 +105,13 @@ esac
 SH
 chmod +x "$tmp/bin/flyctl"
 
+cat > "$tmp/bin/getent" <<'SH'
+#!/bin/sh
+[ -n "${MOCK_LOCAL_FLY_IP:-}" ] || exit 2
+printf '%s STREAM fly-local-6pn\n' "$MOCK_LOCAL_FLY_IP"
+SH
+chmod +x "$tmp/bin/getent"
+
 cat > "$tmp/bin/curl" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -179,7 +186,10 @@ case "$method:$url" in
     fi
     ;;
   DELETE:*/machines/22222222222222/lease) status=204 ;;
-  GET:*/health) body='{"ready":true}' ;;
+  GET:*/health)
+    [[ "${MOCK_HEALTH_UNAVAILABLE:-0}" != 1 ]] || exit 7
+    body='{"ready":true}'
+    ;;
   GET:*/admin/readiness)
     active="$(cat "$FAKE_ACTIVE_SEQUENCE")"
     body="$(jq -cn --arg source "$FAKE_SOURCE_COMMIT" --arg generation "$active" \
@@ -359,6 +369,7 @@ env "${common_env[@]}" CONCURRENCY=1 CANARY_RUN_ID=success-run OUTPUT_DIR="$tmp/
 jq -e '
   .publication_under_load and .deleted_channel_absent and
   .policy.builder_profile == "shared-2x" and
+  .policy.search_transport == "fly-proxy" and
   .policy.publication_timeout_seconds == 10 and
   .policy.publication_load_seconds == 120 and
   .policy.activation_load_seconds == 10 and
@@ -377,6 +388,18 @@ jq -e '
   (.builder_image | test("@sha256:[0-9a-f]{64}$"))
 ' "$tmp/success/test-result.json" >/dev/null
 [[ ! -e "$tmp/success/result.json" ]]
+reset_state
+env "${common_env[@]}" MOCK_LOCAL_FLY_IP=fdaa::99 \
+  CANARY_RUN_ID=direct-private OUTPUT_DIR="$tmp/direct-private" \
+  "$runner" > "$tmp/direct-private.stdout"
+jq -e '.policy.search_transport == "fly-private" and
+  .publication_under_load and .restart_after_upsert and .restart_after_delete' \
+  "$tmp/direct-private/test-result.json" >/dev/null
+grep -F 'GET http://[fdaa::2]:8108/health' "$tmp/curl.log" >/dev/null
+if grep -F 'proxy 18108:' "$tmp/fly.log" >/dev/null; then
+  printf 'Fly-hosted load must not traverse the control-plane proxy\n' >&2
+  exit 1
+fi
 if grep -F -e 'fake-token' -e '012345678901234567890123' "$tmp/curl-argv.log" >/dev/null; then
   printf 'secrets must not enter curl argv\n' >&2
   exit 1
@@ -388,6 +411,20 @@ fi
 [[ "$(grep -c '^protocol$' "$tmp/components.log")" == 1 ]]
 [[ "$(grep -c '^benchmark:strict$' "$tmp/components.log")" == 1 ]]
 [[ "$(grep -c '^publisher$' "$tmp/components.log")" == 1 ]]
+
+reset_state
+if env "${common_env[@]}" MOCK_LOCAL_FLY_IP=fdaa::99 MOCK_HEALTH_UNAVAILABLE=1 \
+  CANARY_HEALTH_ATTEMPTS=1 CANARY_RUN_ID=direct-unavailable \
+  OUTPUT_DIR="$tmp/direct-unavailable" "$runner" > "$tmp/direct-unavailable.stdout" 2>&1; then
+  printf 'an unavailable detected private route must fail closed\n' >&2
+  exit 1
+fi
+if grep -F 'proxy 18108:' "$tmp/fly.log" >/dev/null; then
+  printf 'a failed private route must not silently fall back to the tunnel\n' >&2
+  exit 1
+fi
+[[ "$(jq -r '.state' "$tmp/reader-state.json")" == stopped ]]
+[[ ! -e "$tmp/direct-unavailable/test-result.json" ]]
 
 reset_state
 jq '.[1].config.env.RAW_SEARCH_API_URL = "http://ytsearch-raw-production.internal:8108"' \

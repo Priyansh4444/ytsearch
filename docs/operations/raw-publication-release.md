@@ -115,8 +115,16 @@ the SSH process, not the server.
   silently using the code default of one. The gate must include broad terms such as
   `react` and `fire`, keep every request below 200 ms, and see no new OOM.
 
-Every gate request travels from the operator's machine through a local Fly
-proxy, so the 200 ms limit includes that round trip. On 2026-10-07 a gate run
+Off Fly, gate requests travel from the operator's machine through a local Fly
+proxy, so the 200 ms limit includes that round trip. A Fly-hosted driver uses
+the verified canary's exact private IPv6 address directly, matching the serving
+API's route. The runner detects its local `fly-local-6pn` address and records
+`search_transport` as `fly-private` or `fly-proxy` in the attestation. A detected
+private route must become healthy; it never silently falls back to the tunnel.
+On 2026-11-17, four tunneled requests stalled together during builder SSH setup:
+they took 238–288 ms while fresh server timings reported only 14–31 ms inside
+Raw. The direct route removes that unrelated control-plane tunnel; the complete
+curl request must still finish below 200 ms. On 2026-10-07 a gate run
 from a laptop measured a 47 ms floor (fastest request) and failed the baseline
 at 235 ms on the stopword-heavy `and_the_spaced` case; the reader alone was
 about 185 ms. Run the gate from a Machine in `sjc` or another host with a

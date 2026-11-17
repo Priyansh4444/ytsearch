@@ -525,14 +525,26 @@ if ! canary_is_safe < "$fresh_canary" \
   exit 1
 fi
 start_canary
-flyctl proxy "$LOCAL_PORT:8108" "$private_ip" --app "$RAW_APP" --quiet \
-  >"$output_directory/proxy.log" 2>&1 &
-proxy_pid="$!"
-search_url="http://127.0.0.1:$LOCAL_PORT"
+# A Fly-hosted driver already has the same private route as the serving API.
+# Its flyctl tunnel stalled together with unrelated builder SSH setup while
+# Raw took only 14-31 ms. Keep that control-plane tunnel off the measured path.
+local_private_ip="$(timeout --kill-after=1 2 getent ahostsv6 fly-local-6pn 2>/dev/null \
+  | awk 'NR == 1 { print $1 }' || true)"
+if [[ "$local_private_ip" == fdaa:* ]]; then
+  search_url="$private_target"
+  search_transport=fly-private
+else
+  flyctl proxy "$LOCAL_PORT:8108" "$private_ip" --app "$RAW_APP" --quiet \
+    >"$output_directory/proxy.log" 2>&1 &
+  proxy_pid="$!"
+  search_url="http://127.0.0.1:$LOCAL_PORT"
+  search_transport=fly-proxy
+fi
+printf 'canary search transport=%s target=%s\n' "$search_transport" "$search_url"
 
 wait_for_health() {
   for ((attempt = 1; attempt <= CANARY_HEALTH_ATTEMPTS; attempt += 1)); do
-    if kill -0 "$proxy_pid" 2>/dev/null \
+    if { [[ -z "$proxy_pid" ]] || kill -0 "$proxy_pid" 2>/dev/null; } \
       && curl --fail --silent --show-error --connect-timeout 1 --max-time 2 \
         "$search_url/health" >/dev/null 2>&1; then
       return 0
@@ -777,6 +789,7 @@ jq -cn --arg source_commit "$source_commit" --arg run_id "$run_id" \
   --arg attestation_scope "$attestation_scope" \
   --arg migration_mode "$RAW_CANARY_MIGRATION_MODE" \
   --arg builder_profile "$RAW_PUBLICATION_BUILDER_PROFILE" \
+  --arg search_transport "$search_transport" \
   --argjson upsert_sequence "$upsert_sequence" --argjson delete_sequence "$delete_sequence" \
   --argjson maximum_ms "$MAX_ACCEPTABLE_MS" --argjson maximum_rss "$MAX_RSS_BYTES" \
   --argjson maximum_cgroup_memory "$MAX_CGROUP_MEMORY_BYTES" \
@@ -813,6 +826,7 @@ jq -cn --arg source_commit "$source_commit" --arg run_id "$run_id" \
     policy:{
       migration_mode:$migration_mode,
       builder_profile:$builder_profile,
+      search_transport:$search_transport,
       maximum_search_ms:$maximum_ms,
       maximum_process_rss_bytes:$maximum_rss,
       maximum_cgroup_memory_bytes:$maximum_cgroup_memory,
