@@ -11,7 +11,7 @@ source "$SCRIPT_DIR/lib/fly-production-inventory.sh"
 source "$SCRIPT_DIR/lib/raw-publication-builder-profile.sh"
 fly_production_inventory_load_raw_release
 raw_publication_builder_profile_load
-readonly CANARY_READER_MEMORY_MB=2560
+readonly CANARY_READER_MEMORY_MB=4096
 : "${SEARCH_API_KEY:?set SEARCH_API_KEY to the isolated canary search key}"
 : "${RAW_ADMIN_API_KEY:?set RAW_ADMIN_API_KEY}"
 : "${EXPECTED_RAW_READER_IMAGE:?set EXPECTED_RAW_READER_IMAGE from reader staging output}"

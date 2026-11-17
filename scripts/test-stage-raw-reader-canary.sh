@@ -72,7 +72,7 @@ APPLY_RAW_READER_CANARY=stage-exact-isolated-canary \
 jq -e --arg image "$image@sha256:$resolved_digest" \
   --arg state_directory "/data/mutable/trials/${source_commit:0:12}" '
   .kind == "raw-reader-canary" and .resolved_image == $image and
-  .state == "stopped" and .isolated == true and .memory_mb == 2560 and
+  .state == "stopped" and .isolated == true and .memory_mb == 4096 and
   .state_directory == $state_directory
 ' "$tmp/applied.json" >/dev/null
 jq -e --arg state_directory "/data/mutable/trials/${source_commit:0:12}" '
@@ -88,7 +88,7 @@ jq -e --arg state_directory "/data/mutable/trials/${source_commit:0:12}" '
     {guest_path:"/run/secrets/raw-search-api-key",secret_name:"RAW_SEARCH_API_KEY"}
   ] and
   (.[0].config.services | length) == 0 and
-  .[0].config.guest == {cpu_kind:"shared",cpus:4,memory_mb:2560}
+  .[0].config.guest == {cpu_kind:"shared",cpus:4,memory_mb:4096}
 ' "$tmp/state.json" >/dev/null
 grep -F 'https://api.test/v1/apps/ytsearch-raw-production/machines/22222222222222' \
   "$tmp/curl.log" >/dev/null
