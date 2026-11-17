@@ -21,9 +21,11 @@ export FAKE_MACHINE_ID="$machine_id" \
       "RAW_SEARCH_BASE_CHUNKS_GZIP",
       "RAW_SEARCH_BIND",
       "RAW_SEARCH_INDEX_PATH",
+      "RAW_SEARCH_MAX_CONCURRENT_SEARCHES",
       "RAW_SEARCH_REQUIRE_FILE_SECRETS",
       "RAW_SEARCH_STATE_DIRECTORY",
-      "RUST_LOG"
+      "RUST_LOG",
+      "SEMANTIC_ROOT"
     ] and
     .config.init == {swap_size_mb:512} and
     (.config.services | length) == 0 and
@@ -70,12 +72,14 @@ APPLY_RAW_READER_CANARY=stage-exact-isolated-canary \
 jq -e --arg image "$image@sha256:$resolved_digest" \
   --arg state_directory "/data/mutable/trials/${source_commit:0:12}" '
   .kind == "raw-reader-canary" and .resolved_image == $image and
-  .state == "stopped" and .isolated == true and .memory_mb == 2560 and
+  .state == "stopped" and .isolated == true and .memory_mb == 4096 and
   .state_directory == $state_directory
 ' "$tmp/applied.json" >/dev/null
 jq -e --arg state_directory "/data/mutable/trials/${source_commit:0:12}" '
   .[0].state == "stopped" and
   .[0].config.env.RAW_SEARCH_STATE_DIRECTORY == $state_directory and
+  .[0].config.env.RAW_SEARCH_MAX_CONCURRENT_SEARCHES == "2" and
+  .[0].config.env.SEMANTIC_ROOT == ($state_directory + "/semantic") and
   (.[0].config.env | has("STALE_QUEUE_MODE") | not) and
   (.[0].config.init | has("entrypoint") | not) and
   (.[0].config.init | has("cmd") | not) and
@@ -84,7 +88,7 @@ jq -e --arg state_directory "/data/mutable/trials/${source_commit:0:12}" '
     {guest_path:"/run/secrets/raw-search-api-key",secret_name:"RAW_SEARCH_API_KEY"}
   ] and
   (.[0].config.services | length) == 0 and
-  .[0].config.guest == {cpu_kind:"shared",cpus:4,memory_mb:2560}
+  .[0].config.guest == {cpu_kind:"shared",cpus:4,memory_mb:4096}
 ' "$tmp/state.json" >/dev/null
 grep -F 'https://api.test/v1/apps/ytsearch-raw-production/machines/22222222222222' \
   "$tmp/curl.log" >/dev/null

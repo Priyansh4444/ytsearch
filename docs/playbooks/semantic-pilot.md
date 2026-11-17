@@ -304,6 +304,11 @@ anyway, so it costs nothing extra and never has to wake up:
   log (`semantic search unavailable; answering hybrid lexically`) after a
   publication, add 512 MB to the reader (about $3 a month at $6 per GB) rather than moving
   semantic search back to a machine that has to wake up.
+- **Index prefetch (2026-11-17):** the sidecar reads Qdrant's vectors, graph, payload
+  index and ID tracker (about 560 MB) into the page cache at start and every
+  `SEMANTIC_PREFETCH_SECONDS` (600). A query Qdrant had not seen took 220 to 410 ms
+  in the service before and 90 to 140 ms after; hybrid end to end fell from 0.7 to
+  1.25 s to 0.27 to 0.50 s on the 4 GiB reader. Passage text (1.5 GB) stays on disk.
 - The collection lives in `/data/mutable/semantic/qdrant` on the reader's volume
   (2.2 GB). Without it, or without the key file `/run/secrets/semantic-search-key`
   (Machine `files` entry for the `SEMANTIC_SEARCH_KEY` secret), the sidecar logs why

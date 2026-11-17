@@ -49,7 +49,9 @@ fn replacement_changes_reader_and_cache_generation_atomically() {
 
     reloadable
         .replace(
-            engine(&root, "new", "currenttoken").warmed_for_activation(),
+            engine(&root, "new", "currenttoken")
+                .warmed_for_activation(&[])
+                .unwrap(),
             7,
         )
         .unwrap();
@@ -91,7 +93,9 @@ fn pinned_reader_keeps_pages_and_counts_on_one_generation_after_activation() {
 
     reloadable
         .replace(
-            engine_with_documents(&root, "new", "orbit", 2).warmed_for_activation(),
+            engine_with_documents(&root, "new", "orbit", 2)
+                .warmed_for_activation(&[])
+                .unwrap(),
             42,
         )
         .unwrap();
@@ -131,7 +135,9 @@ fn snapshot_pairing_remains_consistent_in_activation_race_smoke_test() {
     std::thread::scope(|scope| {
         scope.spawn(|| {
             barrier.wait();
-            reloadable.replace(next.warmed_for_activation(), 2).unwrap();
+            reloadable
+                .replace(next.warmed_for_activation(&[]).unwrap(), 2)
+                .unwrap();
         });
         barrier.wait();
         for _ in 0..1_000 {
@@ -140,4 +146,56 @@ fn snapshot_pairing_remains_consistent_in_activation_race_smoke_test() {
         }
     });
     assert_eq!(reloadable.snapshot().unwrap().1, 2);
+}
+
+#[test]
+fn recent_searches_preserve_complete_contract_and_bound_distinct_history() {
+    let root = tempfile::tempdir().unwrap();
+    let reloadable = ReloadableEngine::new(engine(&root, "recent", "orbit"), 0);
+    for number in 0..70 {
+        reloadable
+            .search(&SearchParams {
+                q: format!("orbit{number}"),
+                ..SearchParams::default()
+            })
+            .unwrap();
+    }
+    let recent = reloadable.recent_searches();
+    assert_eq!(recent.len(), 64);
+    assert_eq!(recent.first().unwrap().q, "orbit6");
+    assert_eq!(recent.last().unwrap().q, "orbit69");
+    let repeated = recent[3].clone();
+    reloadable.search(&repeated).unwrap();
+    assert_eq!(reloadable.recent_searches().len(), 64);
+    assert_eq!(reloadable.recent_searches().last().unwrap().q, repeated.q);
+    let scoped = SearchParams {
+        q: "orbit".into(),
+        filter_by: Some("youtuber_handle:=@creator".into()),
+        page: Some(2),
+        per_page: Some(3),
+        group_by: Some("video_id".into()),
+        group_limit: Some(2),
+        ..SearchParams::default()
+    };
+    reloadable.search(&scoped).unwrap();
+    assert_eq!(
+        serde_json::to_value(reloadable.recent_searches().last().unwrap()).unwrap(),
+        serde_json::to_value(&scoped).unwrap()
+    );
+    let before = reloadable.recent_searches().len();
+    assert!(
+        reloadable
+            .search(&SearchParams {
+                q: "orbit".into(),
+                query_by: Some("unsupported-field".into()),
+                ..SearchParams::default()
+            })
+            .is_err()
+    );
+    assert_eq!(reloadable.recent_searches().len(), before);
+    reloadable.record_search(&SearchParams {
+        q: "x".repeat(8193),
+        ..SearchParams::default()
+    });
+    assert_eq!(reloadable.recent_searches().last().unwrap().q, scoped.q);
 }

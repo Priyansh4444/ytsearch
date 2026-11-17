@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
     fs::{self, File},
-    io::{BufRead, BufReader, BufWriter, Write},
+    io::{BufRead, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     sync::OnceLock,
 };
@@ -290,6 +290,7 @@ impl Publisher {
         sequence: u64,
         incoming_path: &Path,
         expected_manifest: &[u8],
+        recent_searches: &[youtube_search_service::SearchParams],
     ) -> Result<WarmEngine, IndexStoreError> {
         if sequence == 0 {
             return Err(IndexStoreError::InvalidInput(
@@ -306,12 +307,13 @@ impl Publisher {
             )));
         }
         if sequence == active_sequence {
-            return open_exact_generation(sequence, final_path, expected_manifest);
+            return open_exact_generation(sequence, final_path, expected_manifest, recent_searches);
         }
 
         fs::create_dir_all(self.paths.state_directory.join("generations")).map_err(map_io)?;
         if final_path.exists() {
-            let existing = open_exact_generation(sequence, final_path, expected_manifest)?;
+            let existing =
+                open_exact_generation(sequence, final_path, expected_manifest, recent_searches)?;
             self.activate(sequence, &generation_name)?;
             self.remove_old_generations(sequence)?;
             return Ok(existing);
@@ -330,13 +332,74 @@ impl Publisher {
         // to use the full-checksum `RawSearchEngine::open` path.
         let engine = RawSearchEngine::open_verified_transfer(incoming_path)
             .map_err(map_raw)?
-            .warmed_for_activation();
+            .warmed_for_activation(recent_searches)
+            .map_err(map_raw)?;
 
         fs::rename(incoming_path, &final_path).map_err(map_io)?;
         sync_directory(&self.paths.state_directory.join("generations"))?;
         self.activate(sequence, &generation_name)?;
         self.remove_old_generations(sequence)?;
         Ok(engine)
+    }
+
+    /// Reuses only a fully reverified immutable active file with the exact
+    /// incoming digest. Both generations then share its inode and page cache.
+    pub(crate) fn link_matching_active_file(
+        &self,
+        name: &str,
+        expected: &youtube_index_store::RawGenerationFile,
+        destination: &Path,
+    ) -> Result<bool, IndexStoreError> {
+        if !youtube_index_store::RAW_GENERATION_FILES.contains(&name) {
+            return Err(IndexStoreError::InvalidInput(
+                "unknown generation file".into(),
+            ));
+        }
+        let active = self.active_index_path()?;
+        let manifest: youtube_index_store::RawGenerationManifest =
+            serde_json::from_reader(File::open(active.join(GENERATION_MANIFEST)).map_err(map_io)?)
+                .map_err(map_json)?;
+        if manifest.files.get(name) != Some(expected) {
+            return Ok(false);
+        }
+        let source = active.join(name);
+        let metadata = fs::symlink_metadata(&source).map_err(map_io)?;
+        if !metadata.file_type().is_file() || metadata.len() != expected.bytes {
+            return Ok(false);
+        }
+        // Rehashing an active query mapping must preserve its pages, even
+        // for sidecars that are not part of legacy core-file prefetch. These
+        // bytes will be shared by the incoming generation, not duplicated.
+        let query_mapping = matches!(
+            name,
+            "lexicon.bin"
+                | "fuzzy.bin"
+                | "postings.bin"
+                | "positions.bin"
+                | "positions.full.bin"
+                | "documents.meta"
+                | "bigrams.text.bin"
+                | "bigrams.title.bin"
+                | "accelerators.bin"
+                | "bitmaps.bin"
+                | "plan-bounds.bin"
+        );
+        let hash = if query_mapping {
+            verified_source_digest(File::open(&source).map_err(map_io)?)
+        } else {
+            verified_source_digest(ColdReader::open(&source).map_err(map_io)?)
+        }
+        .map_err(map_io)?;
+        if hash.to_hex().as_str() != expected.blake3 {
+            return Ok(false);
+        }
+        match fs::hard_link(source, destination) {
+            Ok(()) => Ok(true),
+            // The baked base can live on another filesystem. Sharing is an
+            // optional optimization; ordinary verified upload remains valid.
+            Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => Ok(false),
+            Err(error) => Err(map_io(error)),
+        }
     }
 
     fn activate(&self, sequence: u64, directory: &str) -> Result<(), IndexStoreError> {
@@ -381,10 +444,17 @@ impl Publisher {
     }
 }
 
+fn verified_source_digest(mut reader: impl Read) -> std::io::Result<blake3::Hash> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update_reader(&mut reader)?;
+    Ok(hasher.finalize())
+}
+
 fn open_exact_generation(
     sequence: u64,
     path: PathBuf,
     expected_manifest: &[u8],
+    recent_searches: &[youtube_search_service::SearchParams],
 ) -> Result<WarmEngine, IndexStoreError> {
     let actual_manifest = fs::read(path.join(GENERATION_MANIFEST)).map_err(map_io)?;
     if actual_manifest != expected_manifest {
@@ -392,9 +462,10 @@ fn open_exact_generation(
             "generation {sequence} exists with a different manifest"
         )));
     }
-    Ok(RawSearchEngine::open(&path)
+    RawSearchEngine::open(&path)
         .map_err(map_raw)?
-        .warmed_for_activation())
+        .warmed_for_activation(recent_searches)
+        .map_err(map_raw)
 }
 
 fn validate_remote_incoming_path(root: &Path, path: &Path) -> Result<(), IndexStoreError> {

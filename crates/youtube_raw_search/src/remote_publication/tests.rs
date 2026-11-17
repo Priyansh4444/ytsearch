@@ -167,7 +167,7 @@ async fn upload(
         .upload_file(
             &job.job_id,
             name,
-            Some(bytes.len() as u64),
+            Some(u64::try_from(bytes.len()).unwrap()),
             Body::from(bytes),
         )
         .await
@@ -549,10 +549,15 @@ async fn restart_preserves_an_incompatible_job_with_a_malformed_manifest() {
 async fn prepare_records_its_job_after_the_request_is_dropped() {
     let fixture = fixture();
     let sequence = replace(&fixture.store, "video-n", "snapshotonly", "operation-n");
-    // One poll starts the export; dropping the future is what the server
-    // does when the client times out and disconnects.
+    // Hold serialization so the detached prepare cannot finish before the
+    // request is dropped, even when the fixture's export completes instantly.
+    let operation = fixture.publication.operation.lock().await;
     let abandoned = tokio::time::timeout(Duration::ZERO, fixture.publication.prepare()).await;
-    assert!(abandoned.is_err(), "the export must still be running");
+    assert!(
+        abandoned.is_err(),
+        "prepare must wait for the operation lock"
+    );
+    drop(operation);
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     while !fixture.publication.state_path().exists() {
         assert!(
@@ -679,4 +684,196 @@ fn receiver_schema_matches_the_advertised_generation_format() {
         .and_then(|number| number.parse::<u8>().ok())
         .expect("format names its schema");
     assert_eq!(GENERATION_SCHEMA_VERSION, advertised);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn activation_acknowledgement_does_not_block_request_executor() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
+    let fixture = fixture();
+    let sequence = replace(
+        &fixture.store,
+        "video-background",
+        "visible",
+        "background-ack",
+    );
+    let job = fixture.publication.prepare().await.unwrap();
+    let (generation, manifest) = detached_for_job(&fixture, &job);
+    accept(&fixture.publication, &job, manifest).await;
+    for name in RAW_GENERATION_FILES {
+        upload(&fixture.publication, &job, &generation, name).await;
+    }
+    let store = Arc::clone(&fixture.store);
+    let (locked_send, locked_recv) = mpsc::channel();
+    let (release_send, release_recv) = mpsc::channel();
+    let released = Arc::new(AtomicBool::new(false));
+    let released_by_holder = Arc::clone(&released);
+    let holder = std::thread::spawn(move || {
+        store
+            .with_snapshot(|_, _| {
+                locked_send.send(()).unwrap();
+                // An OS-thread watchdog also releases the old implementation,
+                // which blocks this test's entire single-thread Tokio runtime.
+                let _ = release_recv.recv_timeout(Duration::from_secs(2));
+                released_by_holder.store(true, Ordering::Release);
+                Ok(())
+            })
+            .unwrap();
+    });
+    locked_recv.recv_timeout(Duration::from_secs(2)).unwrap();
+    let publication = fixture.publication.clone();
+    let activation = tokio::spawn(async move { publication.activate(&job.job_id).await });
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while fixture.engine.sequence() != sequence {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "activation never swapped"
+        );
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let executor_progressed = !released.load(Ordering::Acquire);
+    // Disconnect the caller while the background durable acknowledgement is
+    // blocked. The background task must keep exclusive publication ownership.
+    activation.abort();
+    let _ = activation.await;
+    let serialized_after_disconnect = fixture.publication.operation.try_lock().is_err();
+    let _ = release_send.send(());
+    holder.join().unwrap();
+    let _completed = fixture.publication.operation.lock().await;
+    assert!(
+        executor_progressed,
+        "SQLite acknowledgement blocked the request executor"
+    );
+    assert!(
+        serialized_after_disconnect,
+        "request cancellation released an active publication"
+    );
+    assert_eq!(
+        fixture.publication.load_job().unwrap().status,
+        RemoteJobStatus::Activated
+    );
+    assert_eq!(
+        fixture.store.operation("background-ack").unwrap().state,
+        IndexOperationState::Published
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn identical_file_reuse_keeps_incoming_hash_validation_and_shares_only_verified_bytes() {
+    use std::os::unix::fs::MetadataExt;
+    let fixture = fixture();
+    replace(
+        &fixture.store,
+        "video-reuse",
+        "replacement",
+        "reuse-fixture",
+    );
+    let job = fixture.publication.prepare().await.unwrap();
+    let (generation, manifest) = detached_for_job(&fixture, &job);
+    let name = "channels.json";
+    let active_file = fixture.root.path().join("base-index").join(name);
+    let bytes = fs::read(generation.join(name)).unwrap();
+    assert_eq!(fs::read(&active_file).unwrap(), bytes);
+    accept(&fixture.publication, &job, manifest).await;
+    let target = fixture
+        .publication
+        .job_directory(&job.job_id)
+        .unwrap()
+        .join(GENERATION_DIRECTORY)
+        .join(name);
+    assert!(
+        fixture
+            .publication
+            .upload_file(
+                &job.job_id,
+                name,
+                Some(u64::try_from(bytes.len()).unwrap()),
+                Body::from(vec![b'x'; bytes.len()])
+            )
+            .await
+            .is_err()
+    );
+    assert!(!target.exists());
+    assert_eq!(fs::read(&active_file).unwrap(), bytes);
+    upload(&fixture.publication, &job, &generation, name).await;
+    assert_eq!(
+        fs::metadata(&active_file).unwrap().ino(),
+        fs::metadata(&target).unwrap().ino()
+    );
+    assert_eq!(fs::read(target).unwrap(), bytes);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn corrupt_active_file_is_not_reused_even_when_manifest_digest_matches() {
+    use std::os::unix::fs::MetadataExt;
+    let fixture = fixture();
+    replace(
+        &fixture.store,
+        "video-repair",
+        "replacement",
+        "repair-fixture",
+    );
+    let job = fixture.publication.prepare().await.unwrap();
+    let (generation, manifest) = detached_for_job(&fixture, &job);
+    let name = "channels.json";
+    let active_file = fixture.root.path().join("base-index").join(name);
+    let bytes = fs::read(generation.join(name)).unwrap();
+    assert_eq!(fs::read(&active_file).unwrap(), bytes);
+    accept(&fixture.publication, &job, manifest).await;
+    // Same length and unchanged accepted manifest: only rehashing the source
+    // detects this defect before it can contaminate the new generation.
+    fs::write(&active_file, vec![b'x'; bytes.len()]).unwrap();
+    upload(&fixture.publication, &job, &generation, name).await;
+    let target = fixture
+        .publication
+        .job_directory(&job.job_id)
+        .unwrap()
+        .join(GENERATION_DIRECTORY)
+        .join(name);
+    assert_ne!(
+        fs::metadata(&active_file).unwrap().ino(),
+        fs::metadata(&target).unwrap().ino()
+    );
+    assert_eq!(fs::read(target).unwrap(), bytes);
+}
+
+#[tokio::test]
+async fn failed_recent_query_warmup_does_not_activate_generation() {
+    let fixture = fixture();
+    replace(&fixture.store, "video-warm", "newtoken", "warm-failure");
+    let job = fixture.publication.prepare().await.unwrap();
+    let (generation, manifest) = detached_for_job(&fixture, &job);
+    let invalid = SearchParams {
+        q: "newtoken".into(),
+        query_by: Some("unsupported-field".into()),
+        ..SearchParams::default()
+    };
+    assert!(
+        fixture
+            .publisher
+            .install_verified_generation(
+                job.target_sequence,
+                &generation,
+                &serde_json::to_vec(&manifest).unwrap(),
+                &[invalid]
+            )
+            .is_err()
+    );
+    assert_eq!(fixture.engine.sequence(), 0);
+    assert!(
+        !fixture
+            .root
+            .path()
+            .join("state/active-generation.json")
+            .exists()
+    );
+    assert!(generation.exists());
+    assert_eq!(
+        fixture.store.operation("warm-failure").unwrap().state,
+        IndexOperationState::Durable
+    );
 }

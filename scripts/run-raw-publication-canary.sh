@@ -11,6 +11,7 @@ source "$SCRIPT_DIR/lib/fly-production-inventory.sh"
 source "$SCRIPT_DIR/lib/raw-publication-builder-profile.sh"
 fly_production_inventory_load_raw_release
 raw_publication_builder_profile_load
+readonly CANARY_READER_MEMORY_MB=4096
 : "${SEARCH_API_KEY:?set SEARCH_API_KEY to the isolated canary search key}"
 : "${RAW_ADMIN_API_KEY:?set RAW_ADMIN_API_KEY}"
 : "${EXPECTED_RAW_READER_IMAGE:?set EXPECTED_RAW_READER_IMAGE from reader staging output}"
@@ -23,12 +24,15 @@ raw_publication_builder_profile_load
 : "${RAW_CANARY_STATE_POLL_INTERVAL_SECONDS:=2}"
 : "${RAW_CANARY_STOP_RETRIES:=3}"
 : "${RAW_CANARY_STOP_POLL_ATTEMPTS:=10}"
-: "${MAX_CGROUP_MEMORY_BYTES:=1717986918}"
+: "${MAX_CGROUP_MEMORY_BYTES:=$(( CANARY_READER_MEMORY_MB * 1048576 * 80 / 100 ))}"
 : "${MAX_BUILDER_CGROUP_MEMORY_BYTES:=$(( RAW_PUBLICATION_BUILDER_MEMORY_MB * 1048576 * 80 / 100 ))}"
 : "${MAX_SWAP_BYTES:=0}"
 : "${MAX_DISK_PERCENT:=80}"
 : "${MAX_ACCEPTABLE_MS:=200}"
-: "${MAX_RSS_BYTES:=1610612736}"
+# Retain the process allowance's original ratio (1.5 GiB of a 2.5-GiB VM).
+# RSS counts shared file pages once per mapping during generation overlap;
+# the cgroup ceiling remains the bound on physical memory consumption.
+: "${MAX_RSS_BYTES:=$(( CANARY_READER_MEMORY_MB * 1048576 * 60 / 100 ))}"
 : "${PUBLICATION_TIMEOUT_SECONDS:=2400}"
 : "${PUBLICATION_LOAD_SECONDS:=120}"
 : "${ACTIVATION_LOAD_SECONDS:=10}"
@@ -65,12 +69,12 @@ case "$RAW_CANARY_TEST_MODE" in
     RAW_CANARY_STATE_POLL_INTERVAL_SECONDS=2
     RAW_CANARY_STOP_RETRIES=3
     RAW_CANARY_STOP_POLL_ATTEMPTS=10
-    MAX_CGROUP_MEMORY_BYTES=1717986918
+    MAX_CGROUP_MEMORY_BYTES=$(( CANARY_READER_MEMORY_MB * 1048576 * 80 / 100 ))
     MAX_BUILDER_CGROUP_MEMORY_BYTES=$(( RAW_PUBLICATION_BUILDER_MEMORY_MB * 1048576 * 80 / 100 ))
     MAX_SWAP_BYTES=0
     MAX_DISK_PERCENT=80
     MAX_ACCEPTABLE_MS=200
-    MAX_RSS_BYTES=1610612736
+    MAX_RSS_BYTES=$(( CANARY_READER_MEMORY_MB * 1048576 * 60 / 100 ))
     WARM_NEW_SECONDS=60
     PUBLICATION_LOAD_SECONDS=120
     ACTIVATION_LOAD_SECONDS=10
@@ -313,7 +317,7 @@ canary="$(flyctl machine list --app "$RAW_APP" --json |
     if length == 1 then .[0] else error("exact Raw canary not found") end
   ')"
 canary_is_safe() {
-  jq -e --arg volume "$RAW_CANARY_VOLUME_ID" --arg source "$source_commit" \
+  jq -e --argjson reader_memory_mb "$CANARY_READER_MEMORY_MB" --arg volume "$RAW_CANARY_VOLUME_ID" --arg source "$source_commit" \
     --arg expected_resolved_image "$EXPECTED_RAW_READER_IMAGE" '
     .state == "stopped" and
     .config.metadata.lifecycle == "temporary-canary" and
@@ -329,22 +333,26 @@ canary_is_safe() {
     .config.mounts[0].path == $mount_path and
     .config.guest.cpu_kind == "shared" and
     .config.guest.cpus == 4 and
-    .config.guest.memory_mb == 2560 and
+    .config.guest.memory_mb == $reader_memory_mb and
     .config.env.RAW_SEARCH_BASE_CHANNELS_GZIP == "/data/source/youtube_youtubers.jsonl.gz" and
     .config.env.RAW_SEARCH_BASE_CHUNKS_GZIP == "/data/source/youtube_transcript_chunks.jsonl.gz" and
     .config.env.RAW_SEARCH_BIND == "[::]:8108" and
     .config.env.RAW_SEARCH_INDEX_PATH == "/data/index" and
     .config.env.RAW_SEARCH_REQUIRE_FILE_SECRETS == "1" and
+    .config.env.RAW_SEARCH_MAX_CONCURRENT_SEARCHES == "2" and
     .config.env.RAW_SEARCH_STATE_DIRECTORY == ("/data/mutable/trials/" + $source[0:12]) and
     .config.env.RUST_LOG == "youtube_raw_search=info" and
+    .config.env.SEMANTIC_ROOT == ("/data/mutable/trials/" + $source[0:12] + "/semantic") and
     ((.config.env | keys | sort) == [
       "RAW_SEARCH_BASE_CHANNELS_GZIP",
       "RAW_SEARCH_BASE_CHUNKS_GZIP",
       "RAW_SEARCH_BIND",
       "RAW_SEARCH_INDEX_PATH",
+      "RAW_SEARCH_MAX_CONCURRENT_SEARCHES",
       "RAW_SEARCH_REQUIRE_FILE_SECRETS",
       "RAW_SEARCH_STATE_DIRECTORY",
-      "RUST_LOG"
+      "RUST_LOG",
+      "SEMANTIC_ROOT"
     ]) and
     .config.init.swap_size_mb == 512 and
     ((.config.init.entrypoint // []) | length) == 0 and
@@ -418,6 +426,21 @@ if ! jq -e --arg target "$expected_queue_target" '
   .config.env.RAW_SEARCH_API_URL == $target
 ' <<<"$queue_machine" >/dev/null; then
   printf 'refusing canary start while the Raw queue worker can route to a canary\n' >&2
+  exit 1
+fi
+
+api_app="$(jq -er '.resources.raw_api.app' "$FLY_PRODUCTION_INVENTORY_RESOLVED_PATH")"
+api_machine_id="$(jq -er '.resources.raw_api.machine_id' "$FLY_PRODUCTION_INVENTORY_RESOLVED_PATH")"
+api_machine="$(flyctl machine list --app "$api_app" --json |
+  jq -ce --arg id "$api_machine_id" '.[] | select(.id == $id)')"
+expected_semantic_target="http://${production_reader_id}.vm.${production_reader_app}.internal:8790"
+if ! jq -e --arg target "$expected_queue_target" --arg semantic "$expected_semantic_target" '
+  .state == "started" and
+  .config.env.RAW_SEARCH_API_URL == $target and
+  ((.config.env.SEMANTIC_SEARCH_URL // "") == "" or
+    .config.env.SEMANTIC_SEARCH_URL == $semantic)
+' <<<"$api_machine" >/dev/null; then
+  printf 'refusing canary start while the serving API can route to a canary\n' >&2
   exit 1
 fi
 
@@ -502,14 +525,26 @@ if ! canary_is_safe < "$fresh_canary" \
   exit 1
 fi
 start_canary
-flyctl proxy "$LOCAL_PORT:8108" "$private_ip" --app "$RAW_APP" --quiet \
-  >"$output_directory/proxy.log" 2>&1 &
-proxy_pid="$!"
-search_url="http://127.0.0.1:$LOCAL_PORT"
+# A Fly-hosted driver already has the same private route as the serving API.
+# Its flyctl tunnel stalled together with unrelated builder SSH setup while
+# Raw took only 14-31 ms. Keep that control-plane tunnel off the measured path.
+local_private_ip="$(timeout --kill-after=1 2 getent ahostsv6 fly-local-6pn 2>/dev/null \
+  | awk 'NR == 1 { print $1 }' || true)"
+if [[ "$local_private_ip" == fdaa:* ]]; then
+  search_url="$private_target"
+  search_transport=fly-private
+else
+  flyctl proxy "$LOCAL_PORT:8108" "$private_ip" --app "$RAW_APP" --quiet \
+    >"$output_directory/proxy.log" 2>&1 &
+  proxy_pid="$!"
+  search_url="http://127.0.0.1:$LOCAL_PORT"
+  search_transport=fly-proxy
+fi
+printf 'canary search transport=%s target=%s\n' "$search_transport" "$search_url"
 
 wait_for_health() {
   for ((attempt = 1; attempt <= CANARY_HEALTH_ATTEMPTS; attempt += 1)); do
-    if kill -0 "$proxy_pid" 2>/dev/null \
+    if { [[ -z "$proxy_pid" ]] || kill -0 "$proxy_pid" 2>/dev/null; } \
       && curl --fail --silent --show-error --connect-timeout 1 --max-time 2 \
         "$search_url/health" >/dev/null 2>&1; then
       return 0
@@ -754,11 +789,12 @@ jq -cn --arg source_commit "$source_commit" --arg run_id "$run_id" \
   --arg attestation_scope "$attestation_scope" \
   --arg migration_mode "$RAW_CANARY_MIGRATION_MODE" \
   --arg builder_profile "$RAW_PUBLICATION_BUILDER_PROFILE" \
+  --arg search_transport "$search_transport" \
   --argjson upsert_sequence "$upsert_sequence" --argjson delete_sequence "$delete_sequence" \
   --argjson maximum_ms "$MAX_ACCEPTABLE_MS" --argjson maximum_rss "$MAX_RSS_BYTES" \
   --argjson maximum_cgroup_memory "$MAX_CGROUP_MEMORY_BYTES" \
   --argjson maximum_builder_cgroup_memory "$MAX_BUILDER_CGROUP_MEMORY_BYTES" \
-  --argjson reader_memory_mb 2560 \
+  --argjson reader_memory_mb "$CANARY_READER_MEMORY_MB" \
   --argjson builder_memory_mb "$RAW_PUBLICATION_BUILDER_MEMORY_MB" \
   --argjson publication_timeout_seconds "$PUBLICATION_TIMEOUT_SECONDS" \
   --argjson publication_load_seconds "$PUBLICATION_LOAD_SECONDS" \
@@ -790,6 +826,7 @@ jq -cn --arg source_commit "$source_commit" --arg run_id "$run_id" \
     policy:{
       migration_mode:$migration_mode,
       builder_profile:$builder_profile,
+      search_transport:$search_transport,
       maximum_search_ms:$maximum_ms,
       maximum_process_rss_bytes:$maximum_rss,
       maximum_cgroup_memory_bytes:$maximum_cgroup_memory,
@@ -801,7 +838,8 @@ jq -cn --arg source_commit "$source_commit" --arg run_id "$run_id" \
       activation_load_seconds:$activation_load_seconds,
       load_minimum_coverage_percent:$load_minimum_coverage_percent,
       lease_ttl_seconds:$lease_ttl_seconds,
-      publication_search_concurrency:$required_concurrency
+      publication_search_concurrency:$required_concurrency,
+      backend_search_concurrency:2
     },
     evidence:{
       load:$load[0],

@@ -35,7 +35,10 @@ export function captureSearchLoaded(request: SearchRequest, response: SearchResp
     total_videos: response.total_videos,
     total_moments: response.total_moments,
     returned_videos: response.videos.length,
-    time_to_first_result_ms: response.time_to_first_result_ms,
+    request_duration_ms: response.request_duration_ms,
+    edge_cached: response.edge_cached ?? false,
+    // Edge responses retain the original backend timing, not a fresh search.
+    time_to_first_result_ms: response.edge_cached ? undefined : response.time_to_first_result_ms,
   });
 }
 

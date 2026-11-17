@@ -32,10 +32,12 @@ primary_region = 'sjc'
   initial_size = '20gb'
 
 [[vm]]
-  # Keep routine deploys aligned with the cost-gated live allocation. 2.5 GiB
-  # holds two generations' scanned files and the mutation store in page cache
-  # during publication; four vCPUs let broad scans partition (2026-09-27).
-  memory = '2560mb'
+  # Keep routine deploys aligned with the cost-gated live allocation. 4 GiB
+  # (owner-approved 2026-11-17, "speed to max") keeps the index, two generations
+  # during publication and the hybrid-search sidecar resident: at 2.5 GiB the
+  # kernel swapped ~410 MB of semantic memory and hybrid took 1-3 s. Four vCPUs let
+  # broad scans partition (2026-09-27); CPU never exceeded 19% busy.
+  memory = '4096mb'
   cpu_kind = 'shared'
   cpus = 4
 

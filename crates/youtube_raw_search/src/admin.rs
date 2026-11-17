@@ -160,7 +160,10 @@ async fn readiness(
     headers: HeaderMap,
 ) -> Result<Json<BackendReadiness>, AdminError> {
     authorize(&state, &headers)?;
-    Ok(Json(readiness_value(&state)?))
+    let value = tokio::task::spawn_blocking(move || readiness_value(&state))
+        .await
+        .map_err(AdminError::task)??;
+    Ok(Json(value))
 }
 
 async fn publish(
@@ -287,7 +290,10 @@ async fn operation(
     headers: HeaderMap,
 ) -> Result<Json<IndexOperation>, AdminError> {
     authorize(&state, &headers)?;
-    Ok(Json(state.store.operation(&operation_id)?))
+    let operation = tokio::task::spawn_blocking(move || state.store.operation(&operation_id))
+        .await
+        .map_err(AdminError::task)??;
+    Ok(Json(operation))
 }
 
 async fn replace_video(
@@ -374,11 +380,16 @@ async fn video_chunk_count(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AdminError> {
     authorize(&state, &headers)?;
-    let count = state.engine.active()?.video_chunk_count(&video_id);
-    let count = state
-        .store
-        .video_mutation_summary(&video_id)?
-        .map_or(count, |mutation| mutation.chunk_count.unwrap_or(0));
+    let count = tokio::task::spawn_blocking(move || {
+        let count = state.engine.active()?.video_chunk_count(&video_id);
+        let count = state
+            .store
+            .video_mutation_summary(&video_id)?
+            .map_or(count, |mutation| mutation.chunk_count.unwrap_or(0));
+        Ok::<_, AdminError>(count)
+    })
+    .await
+    .map_err(AdminError::task)??;
     Ok(Json(json!({ "count": count })))
 }
 
@@ -397,10 +408,15 @@ async fn indexed_video_ids(
                 "limit must be between 1 and {MAX_PAGE_SIZE}"
             )))
         })?;
-    let video_ids = merged_video_counts(&state, &channel_id)?
-        .into_keys()
-        .collect();
-    Ok(Json(paginate(video_ids, query.cursor.as_deref(), limit)))
+    let page = tokio::task::spawn_blocking(move || {
+        let video_ids = merged_video_counts(&state, &channel_id)?
+            .into_keys()
+            .collect();
+        Ok::<_, AdminError>(paginate(video_ids, query.cursor.as_deref(), limit))
+    })
+    .await
+    .map_err(AdminError::task)??;
+    Ok(Json(page))
 }
 
 async fn channel_stats(
@@ -409,17 +425,22 @@ async fn channel_stats(
     headers: HeaderMap,
 ) -> Result<Json<youtube_index_store::ChunkStats>, AdminError> {
     authorize(&state, &headers)?;
-    let stats = merged_video_counts(&state, &channel_id)?
-        .into_values()
-        .fold(
-            youtube_index_store::ChunkStats::default(),
-            |mut stats, chunks| {
-                stats.indexed_videos = stats.indexed_videos.saturating_add(1);
-                stats.indexed_chunks = stats.indexed_chunks.saturating_add(chunks);
-                stats
-            },
-        );
-    Ok(Json(stats))
+    let totals = tokio::task::spawn_blocking(move || {
+        let totals = merged_video_counts(&state, &channel_id)?
+            .into_values()
+            .fold(
+                youtube_index_store::ChunkStats::default(),
+                |mut totals, chunks| {
+                    totals.indexed_videos = totals.indexed_videos.saturating_add(1);
+                    totals.indexed_chunks = totals.indexed_chunks.saturating_add(chunks);
+                    totals
+                },
+            );
+        Ok::<_, AdminError>(totals)
+    })
+    .await
+    .map_err(AdminError::task)??;
+    Ok(Json(totals))
 }
 
 async fn channel(
@@ -428,10 +449,15 @@ async fn channel(
     headers: HeaderMap,
 ) -> Result<Json<Option<ChannelDocument>>, AdminError> {
     authorize(&state, &headers)?;
-    if let Some(mutation) = state.store.channel_mutation(&channel_id)? {
-        return Ok(Json(mutation.document));
-    }
-    Ok(Json(state.engine.active()?.channel_document(&channel_id)?))
+    let document = tokio::task::spawn_blocking(move || {
+        if let Some(mutation) = state.store.channel_mutation(&channel_id)? {
+            return Ok::<_, AdminError>(mutation.document);
+        }
+        Ok(state.engine.active()?.channel_document(&channel_id)?)
+    })
+    .await
+    .map_err(AdminError::task)??;
+    Ok(Json(document))
 }
 
 async fn active_channel(
@@ -440,7 +466,12 @@ async fn active_channel(
     headers: HeaderMap,
 ) -> Result<Json<Option<ChannelDocument>>, AdminError> {
     authorize(&state, &headers)?;
-    Ok(Json(state.engine.active()?.channel_document(&channel_id)?))
+    let document = tokio::task::spawn_blocking(move || {
+        Ok::<_, AdminError>(state.engine.active()?.channel_document(&channel_id)?)
+    })
+    .await
+    .map_err(AdminError::task)??;
+    Ok(Json(document))
 }
 
 async fn active_catalog(
@@ -448,21 +479,26 @@ async fn active_catalog(
     headers: HeaderMap,
 ) -> Result<Json<ActiveCatalogSnapshot>, AdminError> {
     authorize(&state, &headers)?;
-    let last_sequence_before = state.store.last_sequence()?;
-    let (engine, generation) = state.engine.snapshot()?;
-    let channels = engine.channel_documents()?;
-    let video_ids_by_creator = channels
-        .iter()
-        .map(|channel| (channel.id.clone(), engine.indexed_video_ids(&channel.id)))
-        .collect();
-    let last_sequence_after = state.store.last_sequence()?;
-    Ok(Json(ActiveCatalogSnapshot {
-        generation,
-        last_sequence_before,
-        last_sequence_after,
-        channels,
-        video_ids_by_creator,
-    }))
+    let catalog = tokio::task::spawn_blocking(move || {
+        let last_sequence_before = state.store.last_sequence()?;
+        let (engine, generation) = state.engine.snapshot()?;
+        let channels = engine.channel_documents()?;
+        let video_ids_by_creator = channels
+            .iter()
+            .map(|channel| (channel.id.clone(), engine.indexed_video_ids(&channel.id)))
+            .collect();
+        let last_sequence_after = state.store.last_sequence()?;
+        Ok::<_, AdminError>(ActiveCatalogSnapshot {
+            generation,
+            last_sequence_before,
+            last_sequence_after,
+            channels,
+            video_ids_by_creator,
+        })
+    })
+    .await
+    .map_err(AdminError::task)??;
+    Ok(Json(catalog))
 }
 
 fn merged_video_counts(

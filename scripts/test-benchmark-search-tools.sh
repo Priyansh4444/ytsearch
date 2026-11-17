@@ -2,6 +2,13 @@
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# Raw benchmark traffic bypasses the API's alias resolution.
+awk -F '\t' '
+  $1 == "css_phrase_t3" || $1 == "stopword_phrase" { if ($3 != "@t3dotgg") exit 1; found++ }
+  END { if (found != 2) exit 1 }
+' "$SCRIPT_DIR/benchmark-search-cases.tsv"
+jq -e '[.cases.react_global, .cases.fire_global, .cases.css_phrase_global, .cases.css_phrase_t3] |
+  all(.[]; .top_handle == "@t3dotgg")' "$SCRIPT_DIR/benchmark-search-contract.json" >/dev/null
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 trap 'exit 130' INT TERM
@@ -19,13 +26,21 @@ mkdir -p "$tmp/bin"
 cat > "$tmp/bin/curl" <<'EOF'
 #!/usr/bin/env sh
 output=/dev/null
+headers=/dev/null
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o|--output) output="$2"; shift 2 ;;
+    --dump-header) headers="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
+printf 'HTTP/1.1 200 OK\r\nServer-Timing: %s\r\n\r\n' \
+  "${MOCK_SERVER_TIMING-raw;dur=7}" > "$headers"
 case "${MOCK_CURL_MODE:-valid}" in
+  disconnected)
+    printf '000\t0.001\t0'
+    exit 7
+    ;;
   timeout)
     printf '{"videos":[' > "$output"
     printf '200\t5.000\t11'
@@ -42,7 +57,7 @@ case "${MOCK_CURL_MODE:-valid}" in
   rawvalid)
     video_id="${MOCK_RAW_VIDEO_ID:-fixture-video}"
     printf '{"found":1,"grouped_hits":[{"group_key":["%s"],"hits":[{"document":{"youtuber_handle":"@fixture"},"highlights":[{"snippet":"<mark>fixture</mark>"}]}]}]}' "$video_id" > "$output"
-    printf '200\t0.010\t180'
+    printf '200\t0.010\t180\t0.001\t0.009'
     ;;
   rawempty)
     printf '{"found":0,"grouped_hits":[]}' > "$output"
@@ -83,6 +98,12 @@ grep -F 'comparison/before' "$tmp/comparison.summary" >/dev/null
 grep -F 'comparison/after' "$tmp/comparison.summary" >/dev/null
 
 printf 'fixture_query\tfixture\t\n' > "$tmp/raw-cases.tsv"
+PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=disconnected SEARCH_URL=https://fixture.invalid \
+  CASES_FILE="$tmp/raw-cases.tsv" PRINT_SUMMARY=0 \
+  RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 OUTPUT="$tmp/raw-disconnected.jsonl" \
+  "$SCRIPT_DIR/benchmark-search-engine.sh"
+jq -se 'length == 1 and .[0].http == 0 and .[0].curl_exit == 7 and
+  .[0].request_ok == false and .[0].ok == false' "$tmp/raw-disconnected.jsonl" >/dev/null
 PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=timeout SEARCH_URL=https://fixture.invalid \
   CASES_FILE="$tmp/raw-cases.tsv" \
   RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 OUTPUT="$tmp/raw-timeout.jsonl" \
@@ -95,7 +116,28 @@ PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=rawvalid SEARCH_URL=https://fixture.invalid
   RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 OUTPUT="$tmp/raw-valid.jsonl" \
   "$SCRIPT_DIR/benchmark-search-engine.sh" > "$tmp/raw-valid.summary"
 jq -se 'length > 0 and all(.[]; .ok == true)' "$tmp/raw-valid.jsonl" >/dev/null
+jq -se 'all(.[]; .server_ms == 7 and .connect_seconds == 0.001 and
+  .first_byte_seconds == 0.009)' "$tmp/raw-valid.jsonl" >/dev/null
 jq -e 'length > 0 and all(.[]; .errors == 0)' "$tmp/raw-valid.summary" >/dev/null
+for timing in '' 'raw;dur=invalid'; do
+  PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=rawvalid MOCK_SERVER_TIMING="$timing" \
+    SEARCH_URL=https://fixture.invalid CASES_FILE="$tmp/raw-cases.tsv" \
+    RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 PRINT_SUMMARY=0 \
+    OUTPUT="$tmp/raw-no-timing.jsonl" "$SCRIPT_DIR/benchmark-search-engine.sh"
+  jq -se 'length == 1 and .[0].ok == true and .[0].server_ms == null' \
+    "$tmp/raw-no-timing.jsonl" >/dev/null
+done
+# Continuous load may suppress repeated full-history summaries, but must keep
+# complete JSON samples, including quotes/backslashes and an omitted creator.
+printf '%s\t%s\n' escaped_query 'quote " and \ slash' > "$tmp/escaped-cases.tsv"
+PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=rawvalid SEARCH_URL=https://fixture.invalid \
+  CASES_FILE="$tmp/escaped-cases.tsv" PRINT_SUMMARY=0 \
+  RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 OUTPUT="$tmp/escaped.jsonl" \
+  "$SCRIPT_DIR/benchmark-search-engine.sh" > "$tmp/escaped.summary"
+[ ! -s "$tmp/escaped.summary" ]
+jq -se 'length == 1 and .[0].query == "quote \" and \\ slash" and
+  .[0].creator == null and .[0].request_ok == true and .[0].ok == true' \
+  "$tmp/escaped.jsonl" >/dev/null
 initial_rows="$(wc -l < "$tmp/raw-valid.jsonl" | tr -d ' ')"
 PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=rawvalid SEARCH_URL=https://fixture.invalid \
   CASES_FILE="$tmp/raw-cases.tsv" \

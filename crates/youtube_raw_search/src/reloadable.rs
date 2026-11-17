@@ -1,7 +1,8 @@
 use crate::{RawSearchEngine, engine::WarmEngine};
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::sync::{
-    Arc, RwLock,
+    Arc, Mutex, RwLock,
     atomic::{AtomicU64, Ordering},
 };
 use youtube_search_service::{BackendError, SearchBackend, SearchParams};
@@ -9,6 +10,7 @@ use youtube_search_service::{BackendError, SearchBackend, SearchParams};
 pub struct ReloadableEngine {
     engine: RwLock<Arc<RawSearchEngine>>,
     sequence: AtomicU64,
+    recent: Mutex<VecDeque<(Vec<u8>, SearchParams)>>,
 }
 
 impl ReloadableEngine {
@@ -16,6 +18,7 @@ impl ReloadableEngine {
         Self {
             engine: RwLock::new(Arc::new(engine)),
             sequence: AtomicU64::new(sequence),
+            recent: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -46,9 +49,44 @@ impl ReloadableEngine {
             .engine
             .write()
             .map_err(|_| BackendError::Internal("raw engine write lock poisoned".to_string()))?;
-        *active = Arc::new(engine);
+        let retired = std::mem::replace(&mut *active, Arc::new(engine));
         self.sequence.store(sequence, Ordering::Release);
+        // Dropping a generation unmaps its files and frees its catalog. That
+        // work must not extend the exclusive interval seen by query readers.
+        drop(active);
+        drop(retired);
         Ok(())
+    }
+
+    pub(crate) fn recent_searches(&self) -> Vec<SearchParams> {
+        self.recent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|(_, params)| params.clone())
+            .collect()
+    }
+
+    fn record_search(&self, params: &SearchParams) {
+        let Ok(key) = serde_json::to_vec(params) else {
+            return;
+        };
+        // History has a fixed memory ceiling, independent of request length
+        // and traffic. Preserve the complete query contract for exact replay.
+        if key.len() > 8 * 1024 {
+            return;
+        }
+        let mut recent = self
+            .recent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(position) = recent.iter().position(|(existing, _)| existing == &key) {
+            recent.remove(position);
+        }
+        recent.push_back((key, params.clone()));
+        if recent.len() > 64 {
+            recent.pop_front();
+        }
     }
 
     pub(crate) fn sequence(&self) -> u64 {
@@ -62,7 +100,9 @@ impl SearchBackend for ReloadableEngine {
     }
 
     fn search(&self, params: &SearchParams) -> Result<Value, BackendError> {
-        self.active()?.search(params).map_err(map_error)
+        let response = self.active()?.search(params).map_err(map_error)?;
+        self.record_search(params);
+        Ok(response)
     }
 
     fn search_channels(&self, params: &SearchParams) -> Result<Value, BackendError> {

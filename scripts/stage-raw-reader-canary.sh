@@ -57,10 +57,10 @@ canary_is_stageable() {
     .config.mounts[0].volume == $volume and
     .config.mounts[0].path == $mount_path and
     .config.guest.cpu_kind == "shared" and
-    # Staging writes the production shape (four vCPUs, 2.5 GiB); a canary still
-    # at the previous 2-vCPU/2 GiB shape remains stageable so it can be moved.
+    # Staging writes the production shape (four vCPUs, 4 GiB); a canary still
+    # at an earlier 2 GiB or 2.5 GiB shape remains stageable so it can be moved.
     (.config.guest.cpus == 2 or .config.guest.cpus == 4) and
-    (.config.guest.memory_mb == 2048 or .config.guest.memory_mb == 2560)
+    (.config.guest.memory_mb == 2048 or .config.guest.memory_mb == 2560 or .config.guest.memory_mb == 4096)
   ' --arg mount_path "$RAW_CANARY_MOUNT_PATH" >/dev/null
 }
 
@@ -80,8 +80,10 @@ canary_is_exact() {
       RAW_SEARCH_BIND:"[::]:8108",
       RAW_SEARCH_INDEX_PATH:"/data/index",
       RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
+      RAW_SEARCH_MAX_CONCURRENT_SEARCHES:"2",
       RAW_SEARCH_STATE_DIRECTORY:$state_directory,
-      RUST_LOG:"youtube_raw_search=info"
+      RUST_LOG:"youtube_raw_search=info",
+      SEMANTIC_ROOT:($state_directory + "/semantic")
     } and
     .config.init == {swap_size_mb:512} and
     .config.metadata == {
@@ -148,11 +150,13 @@ jq -n --arg image "$reader_image" --arg source "$source_commit" \
     RAW_SEARCH_BIND:"[::]:8108",
     RAW_SEARCH_INDEX_PATH:"/data/index",
     RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
+      RAW_SEARCH_MAX_CONCURRENT_SEARCHES:"2",
     RAW_SEARCH_STATE_DIRECTORY:$state_directory,
-    RUST_LOG:"youtube_raw_search=info"
+    RUST_LOG:"youtube_raw_search=info",
+    SEMANTIC_ROOT:($state_directory + "/semantic")
   },
   init:{swap_size_mb:512},
-  guest:{cpu_kind:"shared",cpus:4,memory_mb:2560},
+  guest:{cpu_kind:"shared",cpus:4,memory_mb:4096},
   metadata:{
     lifecycle:"temporary-canary",
     source_commit:$source,

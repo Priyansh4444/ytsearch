@@ -1,6 +1,6 @@
 # Raw publication release
 
-Proves a new Raw reader and detached builder on the isolated 2-GB canary. It
+Proves a new Raw reader and detached builder on the isolated canary. It
 never promotes the release or touches the production reader, and it records
 success only after confirming both Machines stopped.
 
@@ -15,7 +15,7 @@ jq '.resources | {raw_reader_canary, raw_publication_builder}' \
 ```
 
 Both stay stopped with restart policy `no` and no services. Their volumes are 10 GB (2026-10-10; production state was 6.1 GB). Grow one with `flyctl volumes extend` if a trial needs more; volumes cannot shrink. The reader also
-has no checks, skips DNS, and has exactly 2 shared CPUs and 2 GB. The builder is
+has no checks, skips DNS, and mirrors production's four shared CPUs and 4 GiB. The builder is
 an inert `sleep infinity` Machine: one performance CPU and 4 GB for a full schema
 migration, two shared CPUs and 2 GB for the default incremental profile. The
 scripts reject any drift.
@@ -105,14 +105,26 @@ the SSH process, not the server.
   authoritative state check. A scoped token keeps the fail-closed default.
 - The queue worker must target the exact production Machine,
   `d89303da029328.vm.ytsearch-raw-production.internal`, never the app-wide name,
-  which can route to a started canary. The runner checks this first.
+  which can route to a started canary. The serving API must pin both
+  `RAW_SEARCH_API_URL` and `SEMANTIC_SEARCH_URL` to that same production reader.
+  The runner checks these routes before starting; the inventory synchronization
+  check also rejects source configuration drift.
 - Broad single-token queries once OOM-killed the 2 GB reader (2026-08-31); they
-  now merge posting cursors into bounded per-video slots, and the HTTP service
-  runs one backend search at a time. The gate must include broad terms such as
+  now merge posting cursors into bounded per-video slots. The canary mirrors
+  production’s explicit limit of two simultaneous backend searches rather than
+  silently using the code default of one. The gate must include broad terms such as
   `react` and `fire`, keep every request below 200 ms, and see no new OOM.
 
-Every gate request travels from the operator's machine through a local Fly
-proxy, so the 200 ms limit includes that round trip. On 2026-10-07 a gate run
+Off Fly, gate requests travel from the operator's machine through a local Fly
+proxy, so the 200 ms limit includes that round trip. A Fly-hosted driver uses
+the verified canary's exact private IPv6 address directly, matching the serving
+API's route. The runner detects its local `fly-local-6pn` address and records
+`search_transport` as `fly-private` or `fly-proxy` in the attestation. A detected
+private route must become healthy; it never silently falls back to the tunnel.
+On 2026-11-17, four tunneled requests stalled together during builder SSH setup:
+they took 238–288 ms while fresh server timings reported only 14–31 ms inside
+Raw. The direct route removes that unrelated control-plane tunnel; the complete
+curl request must still finish below 200 ms. On 2026-10-07 a gate run
 from a laptop measured a 47 ms floor (fastest request) and failed the baseline
 at 235 ms on the stopword-heavy `and_the_spaced` case; the reader alone was
 about 185 ms. Run the gate from a Machine in `sjc` or another host with a
@@ -147,9 +159,9 @@ The one command performs these checks in order:
 7. Requires every direct Raw request on the private Fly path to complete in
    under 200 ms with zero HTTP, JSON, metrics, or search errors. Browser and
    Cloudflare transit time remain a separate production check.
-8. Requires reader process RSS at or below 1.5 GiB. It requires reader cgroup
-   memory at or below 1.6 GiB and temporary 4-GB builder cgroup memory at or
-   below 3.2 GiB. It also requires observed swap of zero, no OOM event, and
+8. Requires reader process RSS at or below 60% of its allocation (2.4 GiB on
+   the 4-GiB reader). It requires reader cgroup memory at or below 80% of its
+   allocation (3.2 GiB) and builder cgroup memory at or below 80% of its selected profile. It also requires observed swap of zero, no OOM event, and
    volume utilization below 80%. These gates measure memory and disk, not CPU
    utilization. Cgroup v2 uses kernel
    peak counters. Fly's current cgroup v1 reports an unusable zero peak, so the
@@ -171,6 +183,10 @@ ends with `result.json`, which attests the full source commit, corpus digest,
 and resolved reader and builder image digests. The runner passes the admin key
 through a mode-600 temporary header file instead of a command argument.
 
+Direct Raw benchmark requests bypass the API's creator-alias resolution. Keep
+case filters and expected handles canonical (`@t3dotgg`, not the API alias
+`@theo`); the expected video IDs and snippet tokens remain independent contracts.
+
 ## Failure handling
 
 Do not promote a partial or failed run. Publication mutations are durable, so a
@@ -181,3 +197,49 @@ If an authoritative stop or lease release cannot be confirmed, the command
 fails without a success attestation and preserves its mode-700 session under
 `${XDG_STATE_HOME:-${TMPDIR:-/tmp}}/ytsearch/fly-machine-recovery/`. The printed
 path contains the nonce needed to retry cleanup and must not be committed.
+
+For a complete schema rebuild, `performance-1x-8gb` provides one temporary
+performance vCPU and 8 GiB on the isolated builder. The 2026-11-16 rebuild
+exceeded the 4-GiB profile's 80% memory budget and used swap. The larger profile
+keeps the same 80% ceiling and zero-swap requirement; it changes no serving or
+queue resources and the builder remains stopped after each trial.
+
+The builder resource probe represents `starting`, `stopping`, and `stopped`
+without memory values. Started samples still require valid counters, the exact
+volume mount, and uninterrupted sampling within the gate's allowed gap.
+
+The reader memory gate originally used 80% of its 2.5-GiB allocation (2 GiB).
+Commit `1658132` approved that allocation for double residency on 2026-09-27;
+the old fixed 1.6-GiB threshold still described the earlier 2-GiB Machine.
+The gate now derives its limit and attested size from one fixed reader size.
+That change retained the 1.5-GiB process RSS cap. After the owner-approved
+4-GiB allocation on 2026-11-17, both reader limits derive from the same fixed
+allocation: 60% for process RSS and 80% for physical cgroup memory. The first
+4-GiB canary observed 1,664,266,240 bytes of process RSS while the whole VM's
+measured memory stayed below 1,486,725,120 bytes with no swap or OOM. RSS counts
+shared file pages per mapping during generation overlap; it is not the VM's
+physical footprint. This corrects the stale process allowance at its original
+ratio, and does not change the approved VM size, latency or swap limits.
+
+Direct benchmark samples include connection time, time to first byte, total
+curl time, and `server_ms` from the reader's `Server-Timing: raw;dur=...`
+header. The server duration includes its queue, backend and serialization work;
+it is recomputed for every response, including cache hits. Missing headers stay
+`null`, so older readers cannot be mistaken for zero-cost searches. These
+diagnostics do not subtract transport time from the 200-ms release gate.
+
+During a started Machine's resource window, the sampler keeps one bounded SSH
+session open and takes one measurement per second on the Machine. Connection
+setup and response transit do not become gaps between measurements. The same
+JSON records and on-Machine timestamps feed the existing six-second maximum-gap
+check: a real on-Machine stall still fails. Truncated or malformed frames fail
+closed; only the caller's stop file or an authoritative on-demand builder stop
+ends a stream normally. One-shot snapshots retain their existing interface.
+
+The lexical canary must bind `SEMANTIC_ROOT` to its trial's own `semantic`
+directory. The image also contains the optional semantic sidecar: inheriting
+its global `/data/mutable/semantic` default started an unrelated embedding
+model and Qdrant on the retained canary volume (about 900 MB RSS on 2026-11-16).
+Staging and the gate now enforce the isolated path before starting. This does
+not change production hybrid search; validate the real co-located deployment
+and browser E2E separately after a passing Raw gate.

@@ -2,7 +2,7 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -232,7 +232,7 @@ async fn search(
     {
         state.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
         record_elapsed(&state, started);
-        return Ok(json_bytes_response(value));
+        return Ok(json_bytes_response(value, started));
     }
 
     let channel_search = match collection.as_str() {
@@ -285,7 +285,7 @@ async fn search(
             {
                 cache.insert(key, body.clone(), cache_ttl);
             }
-            Ok(json_bytes_response(body))
+            Ok(json_bytes_response(body, started))
         }
         Err(error) => {
             state.metrics.errors.fetch_add(1, Ordering::Relaxed);
@@ -345,10 +345,21 @@ impl SearchCache {
     }
 }
 
-fn json_bytes_response(body: Bytes) -> Response {
-    ([(header::CONTENT_TYPE, "application/json")], body).into_response()
+fn json_bytes_response(body: Bytes, started: Instant) -> Response {
+    (
+        [
+            ("content-type", "application/json".to_string()),
+            (
+                "server-timing",
+                format!("raw;dur={:.3}", started.elapsed().as_secs_f64() * 1000.0),
+            ),
+        ],
+        body,
+    )
+        .into_response()
 }
 
+#[derive(Debug)]
 enum ServerError {
     Backend(BackendError),
     NotFound(String),
@@ -500,6 +511,39 @@ mod tests {
             params.cache_ttl = Some(ttl);
             assert!(validate_cache_params(&params).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn server_timing_is_fresh_for_cached_responses() {
+        let state = test_state(Arc::new(TestBackend::new(Duration::from_millis(40))));
+        let request = || {
+            search(
+                State(state.clone()),
+                Path(TRANSCRIPT_COLLECTION.to_string()),
+                Query(SearchParams {
+                    q: "fixture".to_string(),
+                    use_cache: Some(true),
+                    ..SearchParams::default()
+                }),
+                HeaderMap::new(),
+            )
+        };
+        let first = request().await.unwrap();
+        let duration = |response: &Response| {
+            response.headers()["server-timing"]
+                .to_str()
+                .unwrap()
+                .strip_prefix("raw;dur=")
+                .unwrap()
+                .parse::<f64>()
+                .unwrap()
+        };
+        assert!(duration(&first) >= 40.0);
+        let cached_started = Instant::now();
+        let cached = request().await.unwrap();
+        let cached_elapsed_ms = cached_started.elapsed().as_secs_f64() * 1000.0;
+        assert!(duration(&cached) <= cached_elapsed_ms + 0.001);
+        assert_eq!(state.metrics.cache_hits.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]

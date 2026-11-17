@@ -424,3 +424,94 @@ fn video_id_pages_are_sorted_cursor_exclusive_and_bounded() {
     assert_eq!(page.video_ids, ["b"]);
     assert_eq!(page.next_cursor.as_deref(), Some("b"));
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn blocked_admin_read_keeps_health_responsive() {
+    use axum::middleware::{Next, from_fn};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (_root, state, _publisher) = setup();
+    let store = Arc::clone(&state.store);
+    let (locked_send, locked_receive) = mpsc::channel();
+    let (release_send, release_receive) = mpsc::channel();
+    let released = Arc::new(AtomicBool::new(false));
+    let released_by_holder = Arc::clone(&released);
+    let holder = std::thread::spawn(move || {
+        store
+            .with_snapshot(|_, _| {
+                locked_send.send(()).unwrap();
+                // External watchdog: the old synchronous handler blocks this
+                // test's entire runtime, including Tokio timeout futures.
+                let _ = release_receive.recv_timeout(Duration::from_secs(2));
+                released_by_holder.store(true, Ordering::Release);
+                Ok(())
+            })
+            .unwrap();
+    });
+    locked_receive.recv_timeout(Duration::from_secs(2)).unwrap();
+
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let entered_by_route = Arc::clone(&entered);
+    let backend: Arc<dyn SearchBackend> = state.engine.clone();
+    let config = youtube_search_service::ServerConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        api_key: None,
+        raw_route: true,
+        max_concurrent_searches: 1,
+    };
+    let app = youtube_search_service::router(&config, backend)
+        .merge(router(state))
+        .layer(from_fn(
+            move |request: axum::extract::Request, next: Next| {
+                let entered = Arc::clone(&entered_by_route);
+                async move {
+                    if request.uri().path() == "/admin/readiness" {
+                        entered.notify_one();
+                    }
+                    next.run(request).await
+                }
+            },
+        ));
+    let listener = tokio::net::TcpListener::bind(config.bind).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let admin = tokio::spawn(async move {
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        stream
+            .write_all(
+                format!("GET /admin/readiness HTTP/1.0\r\nx-raw-admin-key: {KEY}\r\n\r\n")
+                    .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut body = Vec::new();
+        stream.read_to_end(&mut body).await.unwrap();
+        body
+    });
+    // The middleware and handler are polled together. A synchronous store
+    // read prevents this task from resuming until the watchdog releases it.
+    entered.notified().await;
+    let mut health = tokio::net::TcpStream::connect(address).await.unwrap();
+    health
+        .write_all(b"GET /health HTTP/1.0\r\n\r\n")
+        .await
+        .unwrap();
+    let mut body = Vec::new();
+    health.read_to_end(&mut body).await.unwrap();
+    let health_returned_while_store_locked = !released.load(Ordering::Acquire);
+    let _ = release_send.send(());
+    let admin_body = admin.await.unwrap();
+    server.abort();
+    holder.join().unwrap();
+    assert!(body.starts_with(b"HTTP/1.0 200"));
+    assert!(admin_body.starts_with(b"HTTP/1.0 200"));
+    assert!(
+        health_returned_while_store_locked,
+        "health waited for the admin store lock"
+    );
+}

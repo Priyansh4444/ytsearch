@@ -580,6 +580,19 @@ fn ensure_video_summary_columns(connection: &Connection) -> Result<(), IndexStor
             )
             .map_err(map_sqlite)?;
     }
+    // Summaries sit after the potentially large chunk body in each table row.
+    // Keep inventory reads and the already-backfilled startup check on small
+    // indexes instead of paging those bodies through the reader's cache.
+    connection
+        .execute_batch(
+            "CREATE INDEX IF NOT EXISTS video_mutations_summary
+             ON video_mutations(video_id, youtuber_id, chunk_count);
+             CREATE INDEX IF NOT EXISTS video_mutations_missing_summary
+             ON video_mutations(video_id)
+             WHERE chunks_json IS NOT NULL
+               AND (youtuber_id IS NULL OR chunk_count IS NULL);",
+        )
+        .map_err(map_sqlite)?;
     let mut statement = connection
         .prepare(
             "SELECT video_id, chunks_json FROM video_mutations

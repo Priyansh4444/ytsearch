@@ -217,7 +217,7 @@ load_worker() {
   while [[ ! -e "$LOAD_STOP_FILE" ]]; do
     SEARCH_URL="$SEARCH_URL" SEARCH_API_KEY="$SEARCH_API_KEY" CASES_FILE="$CASES_FILE" \
       OUTPUT="$output" RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 \
-      APPEND_OUTPUT=1 STOP_FILE="$LOAD_STOP_FILE" \
+      APPEND_OUTPUT=1 PRINT_SUMMARY=0 STOP_FILE="$LOAD_STOP_FILE" \
       "$SCRIPT_DIR/benchmark-search-engine.sh" >/dev/null
     if (( first_sweep == 1 )); then
       touch "$LOAD_READY_DIRECTORY/$worker_number"
@@ -298,9 +298,10 @@ machine_resource_worker() {
   probe="$1"
   output="$2"
   while [[ ! -e "$RESOURCE_STOP_FILE" ]]; do
-    if snapshot="$(timeout "$MACHINE_RESOURCE_PROBE_TIMEOUT_SECONDS" "$probe")" \
-      && snapshot="$(jq -ce '. + {ok:true}' <<<"$snapshot")"; then
-      printf '%s\n' "$snapshot" >> "$output"
+    if FLY_RESOURCE_STREAM=1 FLY_RESOURCE_STOP_FILE="$RESOURCE_STOP_FILE" \
+      FLY_RESOURCE_COMMAND_TIMEOUT_SECONDS="$MACHINE_RESOURCE_PROBE_TIMEOUT_SECONDS" \
+      "$probe" | jq --unbuffered -ce '. + {ok:true}' >> "$output"; then
+      :
     else
       jq -cn --argjson sampled_at_ms "$(date +%s%3N)" \
         '{ok:false,sampled_at_ms:$sampled_at_ms}' >> "$output"

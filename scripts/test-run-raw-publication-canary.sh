@@ -25,9 +25,11 @@ jq -n --arg source "$source_commit" --arg base "$base_digest" \
         RAW_SEARCH_BASE_CHUNKS_GZIP:"/data/source/youtube_transcript_chunks.jsonl.gz",
         RAW_SEARCH_BIND:"[::]:8108",RAW_SEARCH_INDEX_PATH:"/data/index",
         RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
-        RAW_SEARCH_STATE_DIRECTORY:("/data/mutable/trials/" + $source[0:12]),RUST_LOG:"youtube_raw_search=info"
+      RAW_SEARCH_MAX_CONCURRENT_SEARCHES:"2",
+        RAW_SEARCH_STATE_DIRECTORY:("/data/mutable/trials/" + $source[0:12]),RUST_LOG:"youtube_raw_search=info",
+        SEMANTIC_ROOT:("/data/mutable/trials/" + $source[0:12] + "/semantic")
       },
-      init:{swap_size_mb:512},guest:{cpu_kind:"shared",cpus:4,memory_mb:2560},
+      init:{swap_size_mb:512},guest:{cpu_kind:"shared",cpus:4,memory_mb:4096},
       metadata:{lifecycle:"temporary-canary",source_commit:$source,base_image_digest:$base},
       mounts:[{volume:"vol_1111111111111111",path:"/data/mutable"}],
       restart:{policy:"no"},dns:{skip_registration:true},services:[],checks:{},files:[
@@ -72,6 +74,11 @@ jq '. += [{
 }]' "$tmp/builder-list.json" > "$tmp/builder-list.next.json"
 mv "$tmp/builder-list.next.json" "$tmp/builder-list.json"
 
+printf '%s\n' '[{"id":"13131313131313","state":"started","config":{"env":{
+  "RAW_SEARCH_API_URL":"http://10101010101010.vm.ytsearch-raw-production.internal:8108",
+  "SEMANTIC_SEARCH_URL":"http://10101010101010.vm.ytsearch-raw-production.internal:8790"
+}}}]' > "$tmp/api-list.json"
+
 cat > "$tmp/bin/flyctl" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -80,6 +87,7 @@ case "$1 $2" in
   "machine list")
     case " $* " in
       *" --app ytsearch-raw-production "*) cat "$FAKE_READER_LIST" ;;
+      *" --app ytsearch-api-raw-production "*) cat "$FAKE_API_LIST" ;;
       *" --app ytsearch-indexer-raw-production "*) cat "$FAKE_BUILDER_LIST" ;;
       *) exit 1 ;;
     esac
@@ -96,6 +104,13 @@ case "$1 $2" in
 esac
 SH
 chmod +x "$tmp/bin/flyctl"
+
+cat > "$tmp/bin/getent" <<'SH'
+#!/bin/sh
+[ -n "${MOCK_LOCAL_FLY_IP:-}" ] || exit 2
+printf '%s STREAM fly-local-6pn\n' "$MOCK_LOCAL_FLY_IP"
+SH
+chmod +x "$tmp/bin/getent"
 
 cat > "$tmp/bin/curl" <<'SH'
 #!/usr/bin/env bash
@@ -171,7 +186,10 @@ case "$method:$url" in
     fi
     ;;
   DELETE:*/machines/22222222222222/lease) status=204 ;;
-  GET:*/health) body='{"ready":true}' ;;
+  GET:*/health)
+    [[ "${MOCK_HEALTH_UNAVAILABLE:-0}" != 1 ]] || exit 7
+    body='{"ready":true}'
+    ;;
   GET:*/admin/readiness)
     active="$(cat "$FAKE_ACTIVE_SEQUENCE")"
     body="$(jq -cn --arg source "$FAKE_SOURCE_COMMIT" --arg generation "$active" \
@@ -302,6 +320,7 @@ common_env=(
   FLY_API_TOKEN=fake-token
   FLY_API_HOSTNAME=https://api.test
   FLY_PRODUCTION_INVENTORY_PATH="$SCRIPT_DIR/testdata/fly-production-resources.json"
+  FAKE_API_LIST="$tmp/api-list.json"
   FAKE_READER_LIST="$tmp/reader-list.json"
   FAKE_BUILDER_LIST="$tmp/builder-list.json"
   FAKE_READER_STATE="$tmp/reader-state.json"
@@ -332,28 +351,55 @@ common_env=(
   RAW_CANARY_STOP_POLL_ATTEMPTS=1
 )
 
+cp "$tmp/reader-list.json" "$tmp/reader-isolated.json"
+jq '.[0].config.env.SEMANTIC_ROOT = "/data/mutable/semantic"' \
+  "$tmp/reader-isolated.json" > "$tmp/reader-list.json"
+reset_state
+if env "${common_env[@]}" CANARY_RUN_ID=shared-semantic-root OUTPUT_DIR="$tmp/shared-semantic-root" \
+  "$runner" > "$tmp/shared-semantic-root.stdout" 2>&1; then
+  printf 'canary must reject shared semantic storage before starting\n' >&2
+  exit 1
+fi
+[[ "$(grep -c 'POST .*/start$' "$tmp/curl.log" || :)" == 0 ]]
+cp "$tmp/reader-isolated.json" "$tmp/reader-list.json"
+
 reset_state
 env "${common_env[@]}" CONCURRENCY=1 CANARY_RUN_ID=success-run OUTPUT_DIR="$tmp/success" \
   "$runner" > "$tmp/success.stdout"
 jq -e '
   .publication_under_load and .deleted_channel_absent and
   .policy.builder_profile == "shared-2x" and
+  .policy.search_transport == "fly-proxy" and
   .policy.publication_timeout_seconds == 10 and
   .policy.publication_load_seconds == 120 and
   .policy.activation_load_seconds == 10 and
   .policy.load_minimum_coverage_percent == 80 and
-  .policy.maximum_cgroup_memory_bytes == 1717986918 and
+  .policy.maximum_cgroup_memory_bytes == 3435973836 and
+  .policy.maximum_process_rss_bytes == 2576980377 and
   .policy.maximum_builder_cgroup_memory_bytes == 1717986918 and
-  .policy.reader_memory_mb == 2560 and .policy.builder_memory_mb == 2048 and
+  .policy.reader_memory_mb == 4096 and .policy.builder_memory_mb == 2048 and
   .evidence.latency[0].max_ms == 10 and
   .evidence.reader_resource.max_memory_peak_bytes == 1024 and
   .evidence.builder_resource.max_memory_peak_bytes == 2048 and
   .policy.lease_ttl_seconds == 21600 and
   .policy.publication_search_concurrency == 4 and
+  .policy.backend_search_concurrency == 2 and
   (.reader_image | test("@sha256:[0-9a-f]{64}$")) and
   (.builder_image | test("@sha256:[0-9a-f]{64}$"))
 ' "$tmp/success/test-result.json" >/dev/null
 [[ ! -e "$tmp/success/result.json" ]]
+reset_state
+env "${common_env[@]}" MOCK_LOCAL_FLY_IP=fdaa::99 \
+  CANARY_RUN_ID=direct-private OUTPUT_DIR="$tmp/direct-private" \
+  "$runner" > "$tmp/direct-private.stdout"
+jq -e '.policy.search_transport == "fly-private" and
+  .publication_under_load and .restart_after_upsert and .restart_after_delete' \
+  "$tmp/direct-private/test-result.json" >/dev/null
+grep -F 'GET http://[fdaa::2]:8108/health' "$tmp/curl.log" >/dev/null
+if grep -F 'proxy 18108:' "$tmp/fly.log" >/dev/null; then
+  printf 'Fly-hosted load must not traverse the control-plane proxy\n' >&2
+  exit 1
+fi
 if grep -F -e 'fake-token' -e '012345678901234567890123' "$tmp/curl-argv.log" >/dev/null; then
   printf 'secrets must not enter curl argv\n' >&2
   exit 1
@@ -365,6 +411,20 @@ fi
 [[ "$(grep -c '^protocol$' "$tmp/components.log")" == 1 ]]
 [[ "$(grep -c '^benchmark:strict$' "$tmp/components.log")" == 1 ]]
 [[ "$(grep -c '^publisher$' "$tmp/components.log")" == 1 ]]
+
+reset_state
+if env "${common_env[@]}" MOCK_LOCAL_FLY_IP=fdaa::99 MOCK_HEALTH_UNAVAILABLE=1 \
+  CANARY_HEALTH_ATTEMPTS=1 CANARY_RUN_ID=direct-unavailable \
+  OUTPUT_DIR="$tmp/direct-unavailable" "$runner" > "$tmp/direct-unavailable.stdout" 2>&1; then
+  printf 'an unavailable detected private route must fail closed\n' >&2
+  exit 1
+fi
+if grep -F 'proxy 18108:' "$tmp/fly.log" >/dev/null; then
+  printf 'a failed private route must not silently fall back to the tunnel\n' >&2
+  exit 1
+fi
+[[ "$(jq -r '.state' "$tmp/reader-state.json")" == stopped ]]
+[[ ! -e "$tmp/direct-unavailable/test-result.json" ]]
 
 reset_state
 jq '.[1].config.env.RAW_SEARCH_API_URL = "http://ytsearch-raw-production.internal:8108"' \
@@ -380,6 +440,20 @@ jq '.[1].config.env.RAW_SEARCH_API_URL = "http://10101010101010.vm.ytsearch-raw-
   "$tmp/builder-list.json" > "$tmp/builder-list.next.json"
 mv "$tmp/builder-list.next.json" "$tmp/builder-list.json"
 
+cp "$tmp/api-list.json" "$tmp/api-pinned.json"
+for field in RAW_SEARCH_API_URL SEMANTIC_SEARCH_URL; do
+  reset_state
+  jq --arg field "$field" '.[0].config.env[$field] = "http://ytsearch-raw-production.internal:8108"' \
+    "$tmp/api-pinned.json" > "$tmp/api-list.json"
+  if env "${common_env[@]}" CANARY_RUN_ID="unsafe-api-$field" OUTPUT_DIR="$tmp/unsafe-api-$field" \
+    "$runner" > "$tmp/unsafe-api-$field.stdout" 2>&1; then
+    printf 'canary must reject app-wide serving API routes before starting\n' >&2
+    exit 1
+  fi
+  [[ "$(grep -c 'POST .*/start$' "$tmp/curl.log" || :)" == 0 ]]
+done
+cp "$tmp/api-pinned.json" "$tmp/api-list.json"
+
 reset_state
 env "${common_env[@]}" RAW_CANARY_MIGRATION_MODE=record-old-generation \
   CANARY_RUN_ID=migration-run OUTPUT_DIR="$tmp/migration" "$runner" >/dev/null
@@ -394,10 +468,22 @@ env "${common_env[@]}" RAW_PUBLICATION_BUILDER_PROFILE=performance-1x-4gb \
   "$runner" >/dev/null
 jq -e '
   .policy.builder_profile == "performance-1x-4gb" and
-  .policy.reader_memory_mb == 2560 and
+  .policy.reader_memory_mb == 4096 and
   .policy.builder_memory_mb == 4096 and
   .policy.maximum_builder_cgroup_memory_bytes == 3435973836
 ' "$tmp/performance-builder/test-result.json" >/dev/null
+set_builder_profile performance-1x-8gb performance 1 8192
+reset_state
+env "${common_env[@]}" RAW_PUBLICATION_BUILDER_PROFILE=performance-1x-8gb \
+  CANARY_RUN_ID=rebuild-builder OUTPUT_DIR="$tmp/rebuild-builder" \
+  "$runner" >/dev/null
+jq -e '
+  .policy.builder_profile == "performance-1x-8gb" and
+  .policy.reader_memory_mb == 4096 and
+  .policy.builder_memory_mb == 8192 and
+  .policy.maximum_cgroup_memory_bytes == 3435973836 and
+  .policy.maximum_builder_cgroup_memory_bytes == 6871947673
+' "$tmp/rebuild-builder/test-result.json" >/dev/null
 set_builder_profile shared-2x shared 2
 
 reset_state

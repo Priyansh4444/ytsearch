@@ -15,6 +15,12 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 mkdir -p "$work/bin" "$work/root/qdrant/storage/collections/demo" "$work/web"
+# Index files are prefetched; passage text is not.
+segment="$work/root/qdrant/storage/collections/demo/0/segments/s1"
+mkdir -p "$segment/vector_storage" "$segment/vector_index" "$segment/payload_storage"
+head -c 1048576 /dev/zero >"$segment/vector_storage/chunk_0.mmap"
+head -c 2097152 /dev/zero >"$segment/vector_index/graph.bin"
+head -c 5242880 /dev/zero >"$segment/payload_storage/page_0.dat"
 : >"$work/web/health"
 : >"$work/web/healthz"
 
@@ -99,6 +105,7 @@ grep -Fx 'oom=1000' "$work/semantic" >/dev/null
 for _ in $(seq 50); do [[ "$(wc -l 2>/dev/null <"$work/warm" || echo 0)" -ge 2 ]] && break; sleep 0.2; done
 [[ "$(grep -c "^/search $key " "$work/warm")" -ge 2 ]]
 [[ "$(cut -d' ' -f3- "$work/warm" | sort -u | wc -l)" -ge 2 ]]
+grep -F "prefetched 3 MB of Qdrant's vector index" "$work/stderr" >/dev/null
 # Probing must not swallow the sidecar's or its children's diagnostics.
 grep -F 'reader healthy; starting semantic search' "$work/stderr" >/dev/null
 grep -Fx 'semantic stderr reaches the log' "$work/stderr" >/dev/null

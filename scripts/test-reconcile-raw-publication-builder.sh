@@ -121,5 +121,19 @@ raw_publication_builder_profile_apply_production_budgets
 [[ "$RAW_CANARY_LEASE_TTL_SECONDS" == 21600 ]]
 [[ "$PUBLICATION_TIMEOUT_SECONDS" == 2400 ]]
 
+RAW_PUBLICATION_BUILDER_PROFILE=performance-1x-8gb
+raw_publication_builder_profile_load
+raw_publication_builder_profile_apply_production_budgets
+[[ "$RAW_PUBLICATION_BUILDER_MEMORY_MB" == 8192 ]]
+[[ "$RAW_CANARY_LEASE_TTL_SECONDS" == 43200 ]]
+[[ "$PUBLICATION_TIMEOUT_SECONDS" == 10800 ]]
+cp "$tmp/initial-state.json" "$tmp/state.json"
+export FAKE_UPDATE_FILTER=' .config.guest == {cpu_kind:"performance",cpus:1,memory_mb:8192} and
+  .config.metadata.builder_profile == "performance-1x-8gb" '
+APPLY_RAW_PUBLICATION_BUILDER=configure-exact-inert-builder \
+  "$SCRIPT_DIR/reconcile-raw-publication-builder.sh" > "$tmp/rebuild-applied.json"
+jq -e '.state == "stopped" and .memory_mb == 8192 and .cpus == 1 and
+  .builder_profile == "performance-1x-8gb"' "$tmp/rebuild-applied.json" >/dev/null
+
 
 printf 'raw_publication_builder_reconciliation=ok\n'

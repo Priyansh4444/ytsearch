@@ -145,7 +145,7 @@ fn install_detached(publisher: &Publisher, store: &MutationStore) {
         .unwrap();
     let manifest = fs::read(detached.path.join(GENERATION_MANIFEST)).unwrap();
     publisher
-        .install_verified_generation(detached.sequence, &detached.path, &manifest)
+        .install_verified_generation(detached.sequence, &detached.path, &manifest, &[])
         .unwrap();
 }
 
@@ -231,7 +231,7 @@ fn detached_install_is_exact_monotonic_and_does_not_acknowledge_wal() {
     fs::rename(&detached.path, &recovered_final).unwrap();
 
     let installed = publisher
-        .install_verified_generation(detached.sequence, &detached.path, &manifest)
+        .install_verified_generation(detached.sequence, &detached.path, &manifest, &[])
         .unwrap();
 
     assert_eq!(publisher.active_sequence().unwrap(), detached.sequence);
@@ -248,7 +248,7 @@ fn detached_install_is_exact_monotonic_and_does_not_acknowledge_wal() {
     );
 
     publisher
-        .install_verified_generation(detached.sequence, &detached.path, &manifest)
+        .install_verified_generation(detached.sequence, &detached.path, &manifest, &[])
         .unwrap();
     assert_eq!(publisher.active_index_path().unwrap(), installed_path);
 
@@ -258,12 +258,18 @@ fn detached_install_is_exact_monotonic_and_does_not_acknowledge_wal() {
         publisher.install_verified_generation(
             detached.sequence,
             &detached.path,
-            &different_manifest
+            &different_manifest,
+            &[],
         ),
         Err(IndexStoreError::Conflict(_))
     ));
     assert!(matches!(
-        publisher.install_verified_generation(detached.sequence - 1, &detached.path, &manifest),
+        publisher.install_verified_generation(
+            detached.sequence - 1,
+            &detached.path,
+            &manifest,
+            &[]
+        ),
         Err(IndexStoreError::Conflict(_))
     ));
 
@@ -291,7 +297,7 @@ fn detached_install_rejects_a_verified_generation_outside_remote_work() {
     let manifest = fs::read(detached.path.join(GENERATION_MANIFEST)).unwrap();
 
     assert!(matches!(
-        publisher.install_verified_generation(detached.sequence, &detached.path, &manifest),
+        publisher.install_verified_generation(detached.sequence, &detached.path, &manifest, &[]),
         Err(IndexStoreError::InvalidInput(_))
     ));
     assert_eq!(publisher.active_sequence().unwrap(), 0);
@@ -397,4 +403,220 @@ fn restart_open_fully_revalidates_a_published_generation() {
         RawSearchEngine::open(&active_path),
         Err(crate::Error::Corrupt(_))
     ));
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires YTSEARCH_REUSE_PROFILE_INDEX with a corpus-sized immutable index"]
+fn profile_verified_generation_file_reuse() {
+    use std::os::unix::fs::MetadataExt;
+    let index = PathBuf::from(std::env::var_os("YTSEARCH_REUSE_PROFILE_INDEX").unwrap());
+    let root = tempfile::tempdir_in(index.parent().unwrap()).unwrap();
+    let publisher = Publisher::new(PublisherPaths {
+        base_chunks_gzip: index.join("unused-chunks"),
+        base_channels_gzip: index.join("unused-channels"),
+        base_index: index.clone(),
+        state_directory: root.path().join("state"),
+    });
+    let manifest: youtube_index_store::RawGenerationManifest =
+        serde_json::from_reader(File::open(index.join("manifest.json")).unwrap()).unwrap();
+    for round in 0..2 {
+        for share in if round == 0 {
+            [false, true]
+        } else {
+            [true, false]
+        } {
+            let output = root.path().join(format!("{round}-{share}"));
+            fs::create_dir(&output).unwrap();
+            let started = std::time::Instant::now();
+            let mut bytes = 0;
+            for (name, expected) in &manifest.files {
+                let source = index.join(name);
+                let target = output.join(name);
+                if share {
+                    assert!(
+                        publisher
+                            .link_matching_active_file(name, expected, &target)
+                            .unwrap()
+                    );
+                    assert_eq!(
+                        fs::metadata(&source).unwrap().ino(),
+                        fs::metadata(&target).unwrap().ino()
+                    );
+                } else {
+                    bytes += fs::copy(source, &target).unwrap();
+                    File::open(&target).unwrap().sync_all().unwrap();
+                }
+            }
+            eprintln!(
+                "reuse_profile round={round} share={share} elapsed_ms={} new_file_bytes={bytes} verified_source_bytes={}",
+                started.elapsed().as_millis(),
+                manifest.files.values().map(|f| f.bytes).sum::<u64>()
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires full source gzip archives and a new YTSEARCH_CHANGED_VIDEO_ROOT"]
+fn build_full_corpus_changed_video_fixture() {
+    let root = PathBuf::from(std::env::var_os("YTSEARCH_CHANGED_VIDEO_ROOT").unwrap());
+    assert!(!root.exists(), "use a fresh evidence directory");
+    fs::create_dir_all(&root).unwrap();
+    let chunks = PathBuf::from(std::env::var_os("YTSEARCH_CHANGED_VIDEO_CHUNKS").unwrap());
+    let channels = PathBuf::from(std::env::var_os("YTSEARCH_CHANGED_VIDEO_CHANNELS").unwrap());
+    let first = gzip_lines(&chunks).unwrap().next().unwrap().unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&first).unwrap();
+    let video = "warmfix0001".to_string();
+    value["video_id"] = serde_json::Value::String(video.clone());
+    value["id"] = serde_json::Value::String(format!("{video}-0"));
+    value["title"] = serde_json::Value::String("WarmFixtureProof".into());
+    value["text"] = serde_json::Value::String("activationfixtureproof".into());
+    let replacement: TranscriptChunk = serde_json::from_value(value).unwrap();
+    let store = MutationStore::open(&root.join("mutations.sqlite3")).unwrap();
+    store
+        .replace_video(
+            VideoReplacement::new(&video, &[replacement]).unwrap(),
+            "changed-video-fixture",
+        )
+        .unwrap();
+    let builder = GenerationBuilder::new(chunks, channels);
+    let compatibility = builder.compatibility().unwrap();
+    crate::cache_io::retain_build_page_cache();
+    let started = std::time::Instant::now();
+    let detached = builder
+        .build(&store, &compatibility, &root.join("generation"))
+        .unwrap();
+    let engine = RawSearchEngine::open(&detached.path).unwrap();
+    assert_eq!(
+        engine
+            .search(&SearchParams {
+                q: "activationfixtureproof".into(),
+                ..SearchParams::default()
+            })
+            .unwrap()["found"],
+        1
+    );
+    eprintln!(
+        "changed_video_fixture={}",
+        serde_json::json!({"video_id":video,"sequence":detached.sequence,
+        "documents":engine.document_count(),"elapsed_ms":started.elapsed().as_millis(),"index":detached.path})
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires owned old/new corpus copies and an isolated memory cgroup"]
+fn profile_corpus_activation_working_set() {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::MetadataExt;
+    use youtube_search_service::SearchBackend;
+    let root = PathBuf::from(std::env::var_os("YTSEARCH_ACTIVATION_PROFILE_ROOT").unwrap());
+    let mode = std::env::var("YTSEARCH_ACTIVATION_PROFILE_MODE").unwrap();
+    let queries = include_str!("../../../../scripts/benchmark-search-cases.tsv")
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            let mut fields = line.split('\t');
+            let _label = fields.next().unwrap();
+            SearchParams {
+                q: fields.next().unwrap().into(),
+                filter_by: fields
+                    .next()
+                    .filter(|v| !v.is_empty())
+                    .map(|v| format!("youtuber_handle:={v}")),
+                query_by: Some("text,title".into()),
+                group_by: Some("video_id".into()),
+                query_by_weights: Some("4,6".into()),
+                group_limit: Some(3),
+                limit: Some(10),
+                offset: Some(0),
+                text_match_type: Some("sum_score".into()),
+                prioritize_exact_match: Some(true),
+                prioritize_token_position: Some(true),
+                typo_tokens_threshold: Some(5),
+                split_join_tokens: Some("always".into()),
+                ..SearchParams::default()
+            }
+        })
+        .collect::<Vec<_>>();
+    // Only owned, unshared copies are evicted. Never touch global VM caches.
+    for directory in [root.join("old"), root.join("new")] {
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            let file = File::open(path).unwrap();
+            assert_eq!(file.metadata().unwrap().nlink(), 1);
+            file.sync_all().unwrap();
+            // SAFETY: a valid open file descriptor and an advisory whole-file range.
+            assert_eq!(
+                unsafe { libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED) },
+                0
+            );
+        }
+    }
+    let old = RawSearchEngine::open(&root.join("old")).unwrap();
+    old.warm();
+    let serving = crate::ReloadableEngine::new(old, 0);
+    let mut expected = Vec::new();
+    for query in &queries {
+        let result = serving.search(query).unwrap();
+        expected.push(
+            result["grouped_hits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|group| group["group_key"].clone())
+                .collect::<Vec<_>>(),
+        );
+    }
+    let started = std::time::Instant::now();
+    let next = RawSearchEngine::open_verified_transfer(&root.join("new")).unwrap();
+    let recent = if mode == "recent" {
+        serving.recent_searches()
+    } else {
+        Vec::new()
+    };
+    let warmed = next.warmed_for_activation(&recent).unwrap();
+    serving.replace(warmed, 1).unwrap();
+    let activation_ms = started.elapsed().as_millis();
+    let mut samples = Vec::new();
+    for (query, expected) in queries.iter().zip(expected) {
+        let before = profile_major_faults();
+        let started = std::time::Instant::now();
+        let result = serving.search(query).unwrap();
+        let actual = result["grouped_hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|group| group["group_key"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+        samples.push(serde_json::json!({"query":query.q,"elapsed_us":started.elapsed().as_micros(),"major_faults":profile_major_faults().saturating_sub(before)}));
+    }
+    let cgroup = fs::read_to_string("/proc/self/cgroup").unwrap();
+    let relative = cgroup
+        .lines()
+        .find_map(|line| line.strip_prefix("0::"))
+        .unwrap();
+    let cgroup = PathBuf::from("/sys/fs/cgroup").join(relative.trim_start_matches('/'));
+    let peak = fs::read_to_string(cgroup.join("memory.peak")).unwrap();
+    let swap = fs::read_to_string(cgroup.join("memory.swap.current")).unwrap();
+    eprintln!(
+        "activation_profile={}",
+        serde_json::json!({"mode":mode,"activation_ms":activation_ms,"cgroup_memory_peak":peak.trim(),"swap":swap.trim(),"samples":samples})
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn profile_major_faults() -> u64 {
+    fs::read_to_string("/proc/self/stat")
+        .unwrap()
+        .rsplit_once(") ")
+        .unwrap()
+        .1
+        .split_whitespace()
+        .nth(9)
+        .unwrap()
+        .parse()
+        .unwrap()
 }

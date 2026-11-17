@@ -289,6 +289,7 @@ impl DocumentTable {
         })
     }
 
+    #[inline]
     pub(super) fn document(&self, id: u32) -> Result<DocumentRecord> {
         if id as usize >= self.documents {
             return Err(Error::Corrupt(format!("document {id} is out of bounds")));
@@ -557,8 +558,8 @@ const _: () = assert!(
     "activation warm-up must finish well inside the activation request timeout"
 );
 
-/// An engine whose scanned files were read ahead and whose scan partitions
-/// were planned before it serves. `ReloadableEngine::replace` accepts only
+/// An engine whose scan partitions and recent request working set were warmed
+/// before it serves (or all core mappings when no query history exists). `ReloadableEngine::replace` accepts only
 /// this, so no activation path can swap in a cold generation.
 pub struct WarmEngine(RawSearchEngine);
 
@@ -569,36 +570,106 @@ impl WarmEngine {
 }
 
 impl RawSearchEngine {
-    /// Warms for activation within `ACTIVATION_WARM_BUDGET`; anything left
-    /// finishes in the background after the swap.
-    pub(crate) fn warmed_for_activation(self) -> WarmEngine {
-        self.warm_within(ACTIVATION_WARM_BUDGET);
-        WarmEngine(self)
+    /// Replays the previous generation's successful requests before activation.
+    /// If warming fails or exceeds its budget, no `WarmEngine` is returned and
+    /// the previous generation keeps serving.
+    pub(crate) fn warmed_for_activation(
+        self,
+        recent_searches: &[SearchParams],
+    ) -> Result<WarmEngine> {
+        self.warm_within(ACTIVATION_WARM_BUDGET, recent_searches)?;
+        Ok(WarmEngine(self))
     }
 
-    /// Warms, but waits at most `budget`. Whatever is left finishes in the
-    /// background.
-    fn warm_within(&self, budget: std::time::Duration) {
+    fn warm_within(
+        &self,
+        budget: std::time::Duration,
+        recent_searches: &[SearchParams],
+    ) -> Result<()> {
         let (done, finished) = std::sync::mpsc::channel();
         let engine = self.clone();
-        let spawned = std::thread::Builder::new()
+        let deadline = std::time::Instant::now()
+            .checked_add(budget)
+            .ok_or_else(|| {
+                Error::InvalidInput("activation warm-up budget overflows the clock".into())
+            })?;
+        let recent_searches = recent_searches.to_vec();
+        let started = std::time::Instant::now();
+        let queries = recent_searches.len();
+        let warming = std::thread::Builder::new()
             .name("raw-warm".to_string())
             .spawn(move || {
-                engine.warm();
-                let _ = done.send(());
-            });
-        match spawned {
-            Ok(_) => {
-                if finished.recv_timeout(budget).is_err() {
-                    tracing::warn!(
-                        budget_ms = budget.as_millis() as u64,
-                        "raw generation still warming at activation"
-                    );
-                }
+                let result = (|| -> Result<()> {
+                    if recent_searches.is_empty() {
+                        prefetch_hot_mappings_until(&engine.inner, deadline)?;
+                        partition::DocumentPartition::plan_now(&engine.inner);
+                        Ok(())
+                    } else {
+                        // Plan scans, then fault only the pages needed by actual
+                        // recent requests, including schema-9 sidecars and snippets.
+                        // Full-file prefetch would duplicate unused fallback pages
+                        // beside the still-serving generation during activation.
+                        partition::DocumentPartition::plan_now(&engine.inner);
+                        recent_searches.iter().try_for_each(|query| {
+                            check_warm_deadline(deadline)?;
+                            engine.search(query).map(|_| ())
+                        })
+                    }
+                })();
+                let result = result.and_then(|()| check_warm_deadline(deadline));
+                let _ = done.send(result);
+            })
+            .map_err(Error::Io)?;
+        let result = finished.recv_timeout(budget).map_err(|error| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("raw generation warm-up did not finish: {error}"),
+            ))
+        });
+        // A native search/partition scan cannot be interrupted midway. Even
+        // when the work deadline expires, reap that one operation before
+        // releasing publication ownership, so retries cannot overlap warmers.
+        warming
+            .join()
+            .map_err(|_| Error::Io(std::io::Error::other("raw generation warmer panicked")))?;
+        result??;
+        tracing::info!(
+            queries,
+            elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "completed raw activation working-set warm-up"
+        );
+        Ok(())
+    }
+}
+
+fn check_warm_deadline(deadline: std::time::Instant) -> Result<()> {
+    if std::time::Instant::now() >= deadline {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "raw generation warm-up exceeded its budget",
+        )));
+    }
+    Ok(())
+}
+
+fn prefetch_hot_mappings_until(inner: &EngineInner, deadline: std::time::Instant) -> Result<()> {
+    let files = [
+        &inner.lexicon.file,
+        &inner.fuzzy.file,
+        &inner.postings,
+        &inner.positions.file,
+        &inner.full_positions.file,
+        &inner.metadata.file,
+    ];
+    for file in files {
+        for page in file.bytes().chunks(4096) {
+            check_warm_deadline(deadline)?;
+            if let Some(byte) = page.first() {
+                std::hint::black_box(*byte);
             }
-            Err(error) => tracing::warn!(%error, "raw generation warm-up did not start"),
         }
     }
+    Ok(())
 }
 
 /// Warms a generation opened at startup without holding the health check.
@@ -729,5 +800,23 @@ mod tests {
             DocumentTable::open(&path),
             Err(Error::Corrupt(message)) if message == "metadata file has an invalid length"
         ));
+    }
+    #[test]
+    fn expired_warmup_fails_and_reaps_its_engine_reference() {
+        let root = TempDir::new().unwrap();
+        let chunks = root.path().join("chunks.jsonl");
+        let channels = root.path().join("channels.jsonl");
+        fs::write(&chunks, "").unwrap();
+        fs::write(&channels, "").unwrap();
+        let index = root.path().join("index");
+        crate::build_index(&chunks, &channels, &index).unwrap();
+        let engine = RawSearchEngine::open_verified_transfer(&index).unwrap();
+        assert_eq!(Arc::strong_count(&engine.inner), 1);
+        assert!(engine.warm_within(std::time::Duration::ZERO, &[]).is_err());
+        assert_eq!(
+            Arc::strong_count(&engine.inner),
+            1,
+            "failed warmer retained a retired generation"
+        );
     }
 }

@@ -14,7 +14,7 @@ require_line() {
   fi
 }
 
-require_line "$ROOT/fly.raw-search.toml" "memory = '2560mb'" "Raw must use 2.5 GiB (owner-approved 2026-09-27)"
+require_line "$ROOT/fly.raw-search.toml" "memory = '4096mb'" "Raw must use 4 GiB (owner-approved 2026-11-17)"
 require_line "$ROOT/fly.raw-search.toml" "cpu_kind = 'shared'" "Raw must use shared CPUs"
 require_line "$ROOT/fly.raw-search.toml" "cpus = 4" "Raw must use four shared vCPUs (owner-approved 2026-09-27)"
 require_line "$ROOT/fly.raw-search.toml" "RAW_SEARCH_BIND = '\[::\]:8108'" "Raw must listen on Fly private IPv6"
@@ -38,4 +38,4 @@ require_line "$ROOT/fly.semantic-experimental.toml" "cpu_kind = 'shared'" "seman
 require_line "$ROOT/fly.semantic-experimental.toml" "auto_stop_machines = 'suspend'" "semantic search must suspend when idle"
 require_line "$ROOT/fly.semantic-experimental.toml" "min_machines_running = 0" "semantic search must not be kept running"
 
-echo "fly_cost_config=ok raw=shared4x/2.5GiB indexer=shared2x/2GiB/on-demand semantic=on-reader (temporary embedding app: shared2x/2GiB/suspends)"
+echo "fly_cost_config=ok raw=shared4x/4GiB indexer=shared2x/2GiB/on-demand semantic=on-reader (temporary embedding app: shared2x/2GiB/suspends)"
