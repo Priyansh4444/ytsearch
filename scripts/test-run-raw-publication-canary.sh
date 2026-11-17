@@ -364,6 +364,7 @@ jq -e '
   .policy.activation_load_seconds == 10 and
   .policy.load_minimum_coverage_percent == 80 and
   .policy.maximum_cgroup_memory_bytes == 3435973836 and
+  .policy.maximum_process_rss_bytes == 2576980377 and
   .policy.maximum_builder_cgroup_memory_bytes == 1717986918 and
   .policy.reader_memory_mb == 4096 and .policy.builder_memory_mb == 2048 and
   .evidence.latency[0].max_ms == 10 and

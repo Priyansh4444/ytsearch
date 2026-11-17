@@ -1,6 +1,6 @@
 # Raw publication release
 
-Proves a new Raw reader and detached builder on the isolated 2-GB canary. It
+Proves a new Raw reader and detached builder on the isolated canary. It
 never promotes the release or touches the production reader, and it records
 success only after confirming both Machines stopped.
 
@@ -15,7 +15,7 @@ jq '.resources | {raw_reader_canary, raw_publication_builder}' \
 ```
 
 Both stay stopped with restart policy `no` and no services. Their volumes are 10 GB (2026-10-10; production state was 6.1 GB). Grow one with `flyctl volumes extend` if a trial needs more; volumes cannot shrink. The reader also
-has no checks, skips DNS, and has exactly 2 shared CPUs and 2 GB. The builder is
+has no checks, skips DNS, and mirrors production's four shared CPUs and 4 GiB. The builder is
 an inert `sleep infinity` Machine: one performance CPU and 4 GB for a full schema
 migration, two shared CPUs and 2 GB for the default incremental profile. The
 scripts reject any drift.
@@ -151,8 +151,9 @@ The one command performs these checks in order:
 7. Requires every direct Raw request on the private Fly path to complete in
    under 200 ms with zero HTTP, JSON, metrics, or search errors. Browser and
    Cloudflare transit time remain a separate production check.
-8. Requires reader process RSS at or below 1.5 GiB. It requires reader cgroup
-   memory at or below 2 GiB and builder cgroup memory at or below 80% of its selected profile. It also requires observed swap of zero, no OOM event, and
+8. Requires reader process RSS at or below 60% of its allocation (2.4 GiB on
+   the 4-GiB reader). It requires reader cgroup memory at or below 80% of its
+   allocation (3.2 GiB) and builder cgroup memory at or below 80% of its selected profile. It also requires observed swap of zero, no OOM event, and
    volume utilization below 80%. These gates measure memory and disk, not CPU
    utilization. Cgroup v2 uses kernel
    peak counters. Fly's current cgroup v1 reports an unusable zero peak, so the
@@ -199,11 +200,25 @@ The builder resource probe represents `starting`, `stopping`, and `stopped`
 without memory values. Started samples still require valid counters, the exact
 volume mount, and uninterrupted sampling within the gate's allowed gap.
 
-The reader memory gate uses 80% of its existing 2.5-GiB allocation (2 GiB).
+The reader memory gate originally used 80% of its 2.5-GiB allocation (2 GiB).
 Commit `1658132` approved that allocation for double residency on 2026-09-27;
 the old fixed 1.6-GiB threshold still described the earlier 2-GiB Machine.
 The gate now derives its limit and attested size from one fixed reader size.
-This changes no production allocation and retains the 1.5-GiB process RSS cap.
+That change retained the 1.5-GiB process RSS cap. After the owner-approved
+4-GiB allocation on 2026-11-17, both reader limits derive from the same fixed
+allocation: 60% for process RSS and 80% for physical cgroup memory. The first
+4-GiB canary observed 1,664,266,240 bytes of process RSS while the whole VM's
+measured memory stayed below 1,486,725,120 bytes with no swap or OOM. RSS counts
+shared file pages per mapping during generation overlap; it is not the VM's
+physical footprint. This corrects the stale process allowance at its original
+ratio, and does not change the approved VM size, latency or swap limits.
+
+Direct benchmark samples include connection time, time to first byte, total
+curl time, and `server_ms` from the reader's `Server-Timing: raw;dur=...`
+header. The server duration includes its queue, backend and serialization work;
+it is recomputed for every response, including cache hits. Missing headers stay
+`null`, so older readers cannot be mistaken for zero-cost searches. These
+diagnostics do not subtract transport time from the 200-ms release gate.
 
 During a started Machine's resource window, the sampler keeps one bounded SSH
 session open and takes one measurement per second on the Machine. Connection

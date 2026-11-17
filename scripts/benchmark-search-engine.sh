@@ -83,6 +83,7 @@ request() {
     --data-urlencode 'offset=0'
     --data-urlencode 'limit=10'
     --output "$output"
+    --dump-header "$BENCHMARK_TMP/response.headers"
   )
   if [[ -n "$SEARCH_HEADER_FILE" ]]; then
     args+=(--header "@$SEARCH_HEADER_FILE")
@@ -128,14 +129,15 @@ for index in "${!queries[@]}"; do
     started_ms="$(date +%s%3N)"
     curl_exit=0
     timing="$(request "${queries[$index]}" "${creators[$index]}" "$response_file" \
-      '%{http_code}\t%{time_total}\t%{size_download}')" || curl_exit=$?
-    http="$(printf '%s' "$timing" | cut -f1)"
+      '%{http_code}\t%{time_total}\t%{size_download}\t%{time_connect}\t%{time_starttransfer}')" || curl_exit=$?
+    read -r http seconds bytes connect_seconds first_byte_seconds <<< "$timing"
     # curl reports 000 when no HTTP response arrives; JSON requires numeric 0.
     http=$((10#${http:-0}))
-    seconds="$(printf '%s' "$timing" | cut -f2)"
-    bytes="$(printf '%s' "$timing" | cut -f3)"
     [[ -n "$seconds" ]] || seconds="$CURL_MAX_TIME"
     [[ -n "$bytes" ]] || bytes=0
+    connect_seconds="${connect_seconds:-null}"
+    first_byte_seconds="${first_byte_seconds:-null}"
+    server_ms=null
     response_valid=false
     contract_valid=false
     if (( curl_exit == 0 )) && [[ "$http" == 200 ]] && jq -e \
@@ -148,6 +150,14 @@ for index in "${!queries[@]}"; do
       end)
     ' "$response_file" >/dev/null 2>&1; then
       response_valid=true
+      server_ms="$(awk '
+        tolower($1) == "server-timing:" {
+          sub(/\r$/, "", $2)
+          sub(/^raw;dur=/, "", $2)
+          if ($2 ~ /^[0-9]+([.][0-9]+)?$/) { print $2; exit }
+        }
+      ' "$BENCHMARK_TMP/response.headers" 2>/dev/null || true)"
+      server_ms="${server_ms:-null}"
     fi
     if [[ "$response_valid" == true ]] && jq -e \
       --arg case_label "${labels[$index]}" --slurpfile contract "$CONTRACT_FILE" '
@@ -171,10 +181,11 @@ for index in "${!queries[@]}"; do
     fi
     # All interpolated values here are curl numeric metrics or shell-owned
     # numbers/booleans. Text has already been JSON-encoded in sample_prefixes.
-    printf '%s,"run":%s,"started_ms":%s,"ended_ms":%s,"seconds":%s,"http":%s,"curl_exit":%s,"bytes":%s,"response_valid":%s,"contract_valid":%s,"valid":%s,"request_ok":%s,"ok":%s}\n' \
+    printf '%s,"run":%s,"started_ms":%s,"ended_ms":%s,"seconds":%s,"http":%s,"curl_exit":%s,"bytes":%s,"response_valid":%s,"contract_valid":%s,"valid":%s,"request_ok":%s,"ok":%s,"connect_seconds":%s,"first_byte_seconds":%s,"server_ms":%s}\n' \
       "${sample_prefixes[$index]}" "$run" "$started_ms" "$ended_ms" "$seconds" \
       "${http:-0}" "$curl_exit" "$bytes" "$response_valid" "$contract_valid" \
-      "$ok" "$request_ok" "$ok" >> "$OUTPUT"
+      "$ok" "$request_ok" "$ok" "$connect_seconds" "$first_byte_seconds" \
+      "$server_ms" >> "$OUTPUT"
     ((run += 1))
   done
 done

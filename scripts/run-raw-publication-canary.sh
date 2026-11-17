@@ -29,7 +29,10 @@ readonly CANARY_READER_MEMORY_MB=4096
 : "${MAX_SWAP_BYTES:=0}"
 : "${MAX_DISK_PERCENT:=80}"
 : "${MAX_ACCEPTABLE_MS:=200}"
-: "${MAX_RSS_BYTES:=1610612736}"
+# Retain the process allowance's original ratio (1.5 GiB of a 2.5-GiB VM).
+# RSS counts shared file pages once per mapping during generation overlap;
+# the cgroup ceiling remains the bound on physical memory consumption.
+: "${MAX_RSS_BYTES:=$(( CANARY_READER_MEMORY_MB * 1048576 * 60 / 100 ))}"
 : "${PUBLICATION_TIMEOUT_SECONDS:=2400}"
 : "${PUBLICATION_LOAD_SECONDS:=120}"
 : "${ACTIVATION_LOAD_SECONDS:=10}"
@@ -71,7 +74,7 @@ case "$RAW_CANARY_TEST_MODE" in
     MAX_SWAP_BYTES=0
     MAX_DISK_PERCENT=80
     MAX_ACCEPTABLE_MS=200
-    MAX_RSS_BYTES=1610612736
+    MAX_RSS_BYTES=$(( CANARY_READER_MEMORY_MB * 1048576 * 60 / 100 ))
     WARM_NEW_SECONDS=60
     PUBLICATION_LOAD_SECONDS=120
     ACTIVATION_LOAD_SECONDS=10

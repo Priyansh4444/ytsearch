@@ -26,12 +26,16 @@ mkdir -p "$tmp/bin"
 cat > "$tmp/bin/curl" <<'EOF'
 #!/usr/bin/env sh
 output=/dev/null
+headers=/dev/null
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o|--output) output="$2"; shift 2 ;;
+    --dump-header) headers="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
+printf 'HTTP/1.1 200 OK\r\nServer-Timing: %s\r\n\r\n' \
+  "${MOCK_SERVER_TIMING-raw;dur=7}" > "$headers"
 case "${MOCK_CURL_MODE:-valid}" in
   disconnected)
     printf '000\t0.001\t0'
@@ -53,7 +57,7 @@ case "${MOCK_CURL_MODE:-valid}" in
   rawvalid)
     video_id="${MOCK_RAW_VIDEO_ID:-fixture-video}"
     printf '{"found":1,"grouped_hits":[{"group_key":["%s"],"hits":[{"document":{"youtuber_handle":"@fixture"},"highlights":[{"snippet":"<mark>fixture</mark>"}]}]}]}' "$video_id" > "$output"
-    printf '200\t0.010\t180'
+    printf '200\t0.010\t180\t0.001\t0.009'
     ;;
   rawempty)
     printf '{"found":0,"grouped_hits":[]}' > "$output"
@@ -112,7 +116,17 @@ PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=rawvalid SEARCH_URL=https://fixture.invalid
   RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 OUTPUT="$tmp/raw-valid.jsonl" \
   "$SCRIPT_DIR/benchmark-search-engine.sh" > "$tmp/raw-valid.summary"
 jq -se 'length > 0 and all(.[]; .ok == true)' "$tmp/raw-valid.jsonl" >/dev/null
+jq -se 'all(.[]; .server_ms == 7 and .connect_seconds == 0.001 and
+  .first_byte_seconds == 0.009)' "$tmp/raw-valid.jsonl" >/dev/null
 jq -e 'length > 0 and all(.[]; .errors == 0)' "$tmp/raw-valid.summary" >/dev/null
+for timing in '' 'raw;dur=invalid'; do
+  PATH="$tmp/bin:$PATH" MOCK_CURL_MODE=rawvalid MOCK_SERVER_TIMING="$timing" \
+    SEARCH_URL=https://fixture.invalid CASES_FILE="$tmp/raw-cases.tsv" \
+    RUNS=1 WARMUP_RUNS=0 CAPTURE_RESOURCES=0 PRINT_SUMMARY=0 \
+    OUTPUT="$tmp/raw-no-timing.jsonl" "$SCRIPT_DIR/benchmark-search-engine.sh"
+  jq -se 'length == 1 and .[0].ok == true and .[0].server_ms == null' \
+    "$tmp/raw-no-timing.jsonl" >/dev/null
+done
 # Continuous load may suppress repeated full-history summaries, but must keep
 # complete JSON samples, including quotes/backslashes and an omitted creator.
 printf '%s\t%s\n' escaped_query 'quote " and \ slash' > "$tmp/escaped-cases.tsv"
