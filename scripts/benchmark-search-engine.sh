@@ -150,8 +150,8 @@ for index in "${!queries[@]}"; do
       response_valid=true
     fi
     if [[ "$response_valid" == true ]] && jq -e \
-      --arg label "${labels[$index]}" --slurpfile contract "$CONTRACT_FILE" '
-      (($contract[0].cases[$label] // null) as $rule |
+      --arg case_label "${labels[$index]}" --slurpfile contract "$CONTRACT_FILE" '
+      (($contract[0].cases[$case_label] // null) as $rule |
         if $rule == null then true else
           .grouped_hits[0].group_key[0] == $rule.top_video_id and
           any(.grouped_hits[0].hits[].document.youtuber_handle;

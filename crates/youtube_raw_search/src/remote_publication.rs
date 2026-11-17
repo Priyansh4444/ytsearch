@@ -278,14 +278,13 @@ impl RemotePublication {
         job_id: &str,
         file_name: &str,
         content_length: Option<u64>,
-        mut body: Body,
+        body: Body,
     ) -> Result<RemoteJobResponse, IndexStoreError> {
         let allowlisted_name = allowlisted_file(file_name)?;
-        // Scanned files stay cached so activation can warm the generation
-        // within the publisher's request timeout; the rest are evicted to
-        // protect the serving generation's cache during the transfer.
-        let evict_after_sync = !crate::engine::HOT_MAPPED_FILES.contains(&allowlisted_name);
-        let _operation = self.operation.lock().await;
+        // Newly written candidate pages must not displace the serving
+        // generation. Activation explicitly warms the recent working set.
+        // Reused immutable files have no writer and never enter this path.
+        let operation = Arc::clone(&self.operation).lock_owned().await;
         let mut job = self.load_unactivated_job(job_id)?;
         let expected = job
             .manifest
@@ -321,71 +320,31 @@ impl RemotePublication {
         if part_path.exists() {
             fs::remove_file(&part_path).map_err(map_io)?;
         }
-        let output = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&part_path)
-            .await
-            .map_err(map_io)?;
-        let mut output = tokio::io::BufWriter::with_capacity(UPLOAD_BUFFER_BYTES, output);
-        let mut received = 0_u64;
-        let mut reclaimed_through = 0_u64;
-        let mut hasher = blake3::Hasher::new();
-        let result = async {
-            while let Some(frame) = body.frame().await {
-                let frame = frame.map_err(|error| IndexStoreError::unavailable(BACKEND, error))?;
-                let Ok(chunk) = frame.into_data() else {
-                    continue;
-                };
-                received = received
-                    .checked_add(chunk.len() as u64)
-                    .ok_or_else(|| invalid_file(allowlisted_name, "length overflow"))?;
-                if received > expected.bytes {
-                    return Err(invalid_file(
-                        allowlisted_name,
-                        "body exceeds manifest length",
-                    ));
-                }
-                hasher.update(&chunk);
-                output.write_all(&chunk).await.map_err(map_io)?;
-                if received.saturating_sub(reclaimed_through) >= UPLOAD_RECLAIM_BYTES {
-                    output.flush().await.map_err(map_io)?;
-                    output.get_ref().sync_data().await.map_err(map_io)?;
-                    if evict_after_sync {
-                        advise_uploaded_range(
-                            output.get_ref(),
-                            reclaimed_through,
-                            received - reclaimed_through,
-                        );
-                    }
-                    reclaimed_through = received;
-                }
-            }
-            if received != expected.bytes {
-                return Err(invalid_file(
-                    allowlisted_name,
-                    "body is shorter than manifest length",
-                ));
-            }
-            if hasher.finalize().to_hex().as_str() != expected.blake3 {
-                return Err(invalid_file(
-                    allowlisted_name,
-                    "BLAKE3 does not match manifest",
-                ));
-            }
-            output.flush().await.map_err(map_io)?;
-            output.get_ref().sync_all().await.map_err(map_io)?;
-            if evict_after_sync {
-                advise_uploaded_range(
-                    output.get_ref(),
-                    reclaimed_through,
-                    received - reclaimed_through,
-                );
-            }
-            Ok::<(), IndexStoreError>(())
-        }
-        .await;
-        drop(output);
+        let publisher = Arc::clone(&self.publisher);
+        let reusable_expected = expected.clone();
+        let reusable_path = part_path.clone();
+        let (reused, _operation) = run_background_work("raw-publication-reuse", move || {
+            publisher
+                .link_matching_active_file(allowlisted_name, &reusable_expected, &reusable_path)
+                .map(|reused| (reused, operation))
+        })
+        .await
+        .map_err(map_io)??;
+        let output = if reused {
+            None
+        } else {
+            let output = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&part_path)
+                .await
+                .map_err(map_io)?;
+            Some(tokio::io::BufWriter::with_capacity(
+                UPLOAD_BUFFER_BYTES,
+                output,
+            ))
+        };
+        let result = receive_verified_body(allowlisted_name, &expected, body, output).await;
         if let Err(error) = result {
             let _ = tokio::fs::remove_file(&part_path).await;
             return Err(error);
@@ -403,7 +362,7 @@ impl RemotePublication {
         &self,
         job_id: &str,
     ) -> Result<RemoteJobResponse, IndexStoreError> {
-        let _operation = self.operation.lock().await;
+        let operation = Arc::clone(&self.operation).lock_owned().await;
         let mut job = self.load_matching_job(job_id)?;
         let manifest = job.manifest.as_ref().ok_or_else(|| {
             IndexStoreError::Conflict(
@@ -442,20 +401,29 @@ impl RemotePublication {
         let generation_path = generation.clone();
         let expected_manifest = manifest_bytes.clone();
         let sequence = job.target_sequence;
-        let installed = run_background_work("raw-publication-activate", move || {
+        let publication = self.clone();
+        let recent_searches = self.engine.recent_searches();
+        run_background_work("raw-publication-activate", move || {
+            let _operation = operation;
             let _background_io = BackgroundIoGuard::enter();
-            publisher.install_verified_generation(sequence, &generation_path, &expected_manifest)
+            let installed = publisher.install_verified_generation(
+                sequence,
+                &generation_path,
+                &expected_manifest,
+                &recent_searches,
+            )?;
+            publication
+                .engine
+                .replace(installed, sequence)
+                .map_err(|error| IndexStoreError::internal(BACKEND, format!("{error:?}")))?;
+            publication.store.mark_published(sequence)?;
+            job.status = RemoteJobStatus::Activated;
+            job.completed_files = expected_completed;
+            publication.persist_job(&job)?;
+            Ok(job_response(&job))
         })
         .await
-        .map_err(map_io)??;
-        self.engine
-            .replace(installed, sequence)
-            .map_err(|error| IndexStoreError::internal(BACKEND, format!("{error:?}")))?;
-        self.store.mark_published(sequence)?;
-        job.status = RemoteJobStatus::Activated;
-        job.completed_files = expected_completed;
-        self.persist_job(&job)?;
-        Ok(job_response(&job))
+        .map_err(map_io)?
     }
 
     fn state_path(&self) -> PathBuf {
@@ -831,6 +799,68 @@ fn verify_snapshot(path: &Path, job: &PersistedJob) -> Result<(), IndexStoreErro
         return Err(IndexStoreError::InvalidInput(
             "remote publication snapshot has the wrong BLAKE3 digest".to_string(),
         ));
+    }
+    Ok(())
+}
+
+/// Consumes and hashes every incoming byte, including reused-file uploads.
+async fn receive_verified_body(
+    file_name: &str,
+    expected: &GenerationFile,
+    mut body: Body,
+    mut output: Option<tokio::io::BufWriter<tokio::fs::File>>,
+) -> Result<(), IndexStoreError> {
+    let mut received = 0_u64;
+    let mut reclaimed_through = 0_u64;
+    let mut hasher = blake3::Hasher::new();
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|error| IndexStoreError::unavailable(BACKEND, error))?;
+        let Ok(chunk) = frame.into_data() else {
+            continue;
+        };
+        received = received
+            .checked_add(
+                u64::try_from(chunk.len())
+                    .map_err(|_| invalid_file(file_name, "length overflow"))?,
+            )
+            .ok_or_else(|| invalid_file(file_name, "length overflow"))?;
+        if received > expected.bytes {
+            return Err(invalid_file(file_name, "body exceeds manifest length"));
+        }
+        hasher.update(&chunk);
+        if let Some(output) = output.as_mut() {
+            output.write_all(&chunk).await.map_err(map_io)?;
+        }
+        if let Some(output) = output.as_mut()
+            && received.saturating_sub(reclaimed_through) >= UPLOAD_RECLAIM_BYTES
+        {
+            output.flush().await.map_err(map_io)?;
+            output.get_ref().sync_data().await.map_err(map_io)?;
+            advise_uploaded_range(
+                output.get_ref(),
+                reclaimed_through,
+                received - reclaimed_through,
+            );
+            reclaimed_through = received;
+        }
+    }
+    if received != expected.bytes {
+        return Err(invalid_file(
+            file_name,
+            "body is shorter than manifest length",
+        ));
+    }
+    if hasher.finalize().to_hex().as_str() != expected.blake3 {
+        return Err(invalid_file(file_name, "BLAKE3 does not match manifest"));
+    }
+    if let Some(output) = output.as_mut() {
+        output.flush().await.map_err(map_io)?;
+        output.get_ref().sync_all().await.map_err(map_io)?;
+        advise_uploaded_range(
+            output.get_ref(),
+            reclaimed_through,
+            received - reclaimed_through,
+        );
     }
     Ok(())
 }

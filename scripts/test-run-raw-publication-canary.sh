@@ -25,6 +25,7 @@ jq -n --arg source "$source_commit" --arg base "$base_digest" \
         RAW_SEARCH_BASE_CHUNKS_GZIP:"/data/source/youtube_transcript_chunks.jsonl.gz",
         RAW_SEARCH_BIND:"[::]:8108",RAW_SEARCH_INDEX_PATH:"/data/index",
         RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
+      RAW_SEARCH_MAX_CONCURRENT_SEARCHES:"2",
         RAW_SEARCH_STATE_DIRECTORY:("/data/mutable/trials/" + $source[0:12]),RUST_LOG:"youtube_raw_search=info"
       },
       init:{swap_size_mb:512},guest:{cpu_kind:"shared",cpus:4,memory_mb:2560},
@@ -357,6 +358,7 @@ jq -e '
   .evidence.builder_resource.max_memory_peak_bytes == 2048 and
   .policy.lease_ttl_seconds == 21600 and
   .policy.publication_search_concurrency == 4 and
+  .policy.backend_search_concurrency == 2 and
   (.reader_image | test("@sha256:[0-9a-f]{64}$")) and
   (.builder_image | test("@sha256:[0-9a-f]{64}$"))
 ' "$tmp/success/test-result.json" >/dev/null

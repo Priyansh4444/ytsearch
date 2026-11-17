@@ -336,6 +336,7 @@ canary_is_safe() {
     .config.env.RAW_SEARCH_BIND == "[::]:8108" and
     .config.env.RAW_SEARCH_INDEX_PATH == "/data/index" and
     .config.env.RAW_SEARCH_REQUIRE_FILE_SECRETS == "1" and
+    .config.env.RAW_SEARCH_MAX_CONCURRENT_SEARCHES == "2" and
     .config.env.RAW_SEARCH_STATE_DIRECTORY == ("/data/mutable/trials/" + $source[0:12]) and
     .config.env.RUST_LOG == "youtube_raw_search=info" and
     ((.config.env | keys | sort) == [
@@ -343,6 +344,7 @@ canary_is_safe() {
       "RAW_SEARCH_BASE_CHUNKS_GZIP",
       "RAW_SEARCH_BIND",
       "RAW_SEARCH_INDEX_PATH",
+      "RAW_SEARCH_MAX_CONCURRENT_SEARCHES",
       "RAW_SEARCH_REQUIRE_FILE_SECRETS",
       "RAW_SEARCH_STATE_DIRECTORY",
       "RUST_LOG"
@@ -817,7 +819,8 @@ jq -cn --arg source_commit "$source_commit" --arg run_id "$run_id" \
       activation_load_seconds:$activation_load_seconds,
       load_minimum_coverage_percent:$load_minimum_coverage_percent,
       lease_ttl_seconds:$lease_ttl_seconds,
-      publication_search_concurrency:$required_concurrency
+      publication_search_concurrency:$required_concurrency,
+      backend_search_concurrency:2
     },
     evidence:{
       load:$load[0],

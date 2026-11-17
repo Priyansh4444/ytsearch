@@ -10,6 +10,7 @@ mkdir -p "$temporary_directory/bin"
 cat > "$temporary_directory/bin/flyctl" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
+[[ -z "${FAKE_FLY_CALL_LOG:-}" ]] || printf '%s %s\n' "$1" "$2" >> "$FAKE_FLY_CALL_LOG"
 case "$1 $2" in
   "machine list")
     jq -n --arg state "${FAKE_MACHINE_STATE:-started}" --arg mount "${FLY_RESOURCE_MOUNT_PATH:-/data/mutable}" '[{
@@ -22,6 +23,9 @@ case "$1 $2" in
       while [[ "$1" != --command ]]; do shift; done
       command="${2//\/sys\/fs\/cgroup/$FAKE_CGROUP_ROOT}"
       command="${command//\/data\/mutable/$FAKE_CGROUP_ROOT}"
+      [[ "${FAKE_IGNORE_TERM:-0}" != 1 ]] || trap '' TERM
+      sleep "${FAKE_SSH_DELAY:-0}"
+      [[ "${FAKE_REMOTE_STALL:-0}" != 1 ]] || command="${command//sleep 1/sleep 7}"
       exec bash -c "$command"
     fi
     if [[ "${FAKE_CGROUP_VERSION:-2}" == 1 ]]; then
@@ -182,4 +186,59 @@ for invalid in 'swap 0' 'total_swap invalid' 'total_swap -1'; do
     exit 1
   fi
 done
+# Execute the real remote collector against independent cgroup files. A slow
+# connection setup must not turn a one-second on-VM cadence into operator time.
+printf 'total_swap 8192\n' > "$temporary_directory/cgroup/memory/memory.stat"
+run_stream_fixture() {
+  local output="$1" stop="$2" stall="$3"
+  PATH="$temporary_directory/bin:$PATH" FAKE_CGROUP_ROOT="$temporary_directory/cgroup" \
+    FAKE_FLY_CALL_LOG="$output.calls" FAKE_SSH_DELAY=2 FAKE_REMOTE_STALL="$stall" \
+    FLY_RESOURCE_APP=ytsearch-raw-production FLY_RESOURCE_MACHINE_ID=22222222222222 \
+    FLY_RESOURCE_MOUNT_PATH=/data/mutable FLY_RESOURCE_STREAM=1 FLY_RESOURCE_STOP_FILE="$stop" \
+    "$SCRIPT_DIR/fly-machine-resource-snapshot.sh" > "$output" &
+  local collector=$!
+  local deadline=$(( SECONDS + 20 ))
+  while [[ "$(wc -l < "$output")" -lt 2 ]]; do
+    if ! kill -0 "$collector" 2>/dev/null || (( SECONDS > deadline )); then
+      kill "$collector" 2>/dev/null || true
+      wait "$collector" || true
+      printf 'stream did not produce complete samples\n' >&2; exit 1
+    fi
+    sleep 0.1
+  done
+  touch "$stop"
+  wait "$collector"
+  [[ "$(grep -c '^ssh console$' "$output.calls")" == 1 ]]
+  [[ "$(grep -c '^machine list$' "$output.calls")" == 1 ]]
+}
+run_stream_fixture "$temporary_directory/stream.jsonl" "$temporary_directory/stop" 0
+jq -se 'length >= 2 and all(.[]; .swap_current_bytes == 8192) and
+  (.[1].sampled_at_ms - .[0].sampled_at_ms) >= 900 and
+  (.[1].sampled_at_ms - .[0].sampled_at_ms) < 6000' \
+  "$temporary_directory/stream.jsonl" >/dev/null
+# A genuine on-VM stall remains visible and will fail the unchanged 6s gate.
+run_stream_fixture "$temporary_directory/stall.jsonl" "$temporary_directory/stop-stall" 1
+jq -se '(.[1].sampled_at_ms - .[0].sampled_at_ms) > 6000' \
+  "$temporary_directory/stall.jsonl" >/dev/null
+if PATH="$temporary_directory/bin:$PATH" FLY_RESOURCE_APP=ytsearch-raw-production \
+  FLY_RESOURCE_MACHINE_ID=22222222222222 FLY_RESOURCE_MOUNT_PATH=/data/mutable \
+  FLY_RESOURCE_STREAM=1 FLY_RESOURCE_STOP_FILE="$temporary_directory/no-stop" \
+  "$SCRIPT_DIR/fly-machine-resource-snapshot.sh" >/dev/null 2>&1; then
+  printf 'malformed stream frames must fail closed\n' >&2; exit 1
+fi
+# A hung SSH setup (including a client ignoring TERM) must not inherit the
+# six-hour active-stream allowance, and cleanup must reap its process group.
+startup_started=$SECONDS
+if PATH="$temporary_directory/bin:$PATH" FAKE_CGROUP_ROOT="$temporary_directory/cgroup" \
+  FAKE_SSH_DELAY=30 FAKE_IGNORE_TERM=1 FLY_RESOURCE_COMMAND_TIMEOUT_SECONDS=2 \
+  FLY_RESOURCE_APP=ytsearch-raw-production FLY_RESOURCE_MACHINE_ID=22222222222222 \
+  FLY_RESOURCE_MOUNT_PATH=/data/mutable FLY_RESOURCE_STREAM=1 \
+  FLY_RESOURCE_STOP_FILE="$temporary_directory/no-startup-stop" \
+  timeout --kill-after=1 10 "$SCRIPT_DIR/fly-machine-resource-snapshot.sh" \
+  > "$temporary_directory/startup.jsonl" 2> "$temporary_directory/startup.err"; then
+  printf 'hung stream setup must fail closed\n' >&2; exit 1
+fi
+(( SECONDS - startup_started < 9 ))
+grep -q 'first complete sample' "$temporary_directory/startup.err"
+[[ ! -s "$temporary_directory/startup.jsonl" ]]
 printf 'fly_machine_resource_snapshot=ok\n'

@@ -80,6 +80,7 @@ canary_is_exact() {
       RAW_SEARCH_BIND:"[::]:8108",
       RAW_SEARCH_INDEX_PATH:"/data/index",
       RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
+      RAW_SEARCH_MAX_CONCURRENT_SEARCHES:"2",
       RAW_SEARCH_STATE_DIRECTORY:$state_directory,
       RUST_LOG:"youtube_raw_search=info"
     } and
@@ -148,6 +149,7 @@ jq -n --arg image "$reader_image" --arg source "$source_commit" \
     RAW_SEARCH_BIND:"[::]:8108",
     RAW_SEARCH_INDEX_PATH:"/data/index",
     RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
+      RAW_SEARCH_MAX_CONCURRENT_SEARCHES:"2",
     RAW_SEARCH_STATE_DIRECTORY:$state_directory,
     RUST_LOG:"youtube_raw_search=info"
   },

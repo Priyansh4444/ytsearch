@@ -220,7 +220,6 @@ pub use accelerators::accelerate_generation;
 use builder::BuildPosting;
 pub(crate) use builder::build_publication_candidate;
 pub use builder::{build_index, slice_corpus};
-pub(crate) use query_support::HOT_MAPPED_FILES;
 use query_support::*;
 #[cfg(test)]
 use single_token::{

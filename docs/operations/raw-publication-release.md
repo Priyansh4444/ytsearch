@@ -110,8 +110,9 @@ the SSH process, not the server.
   The runner checks these routes before starting; the inventory synchronization
   check also rejects source configuration drift.
 - Broad single-token queries once OOM-killed the 2 GB reader (2026-08-31); they
-  now merge posting cursors into bounded per-video slots, and the HTTP service
-  runs one backend search at a time. The gate must include broad terms such as
+  now merge posting cursors into bounded per-video slots. The canary mirrors
+  production’s explicit limit of two simultaneous backend searches rather than
+  silently using the code default of one. The gate must include broad terms such as
   `react` and `fire`, keep every request below 200 ms, and see no new OOM.
 
 Every gate request travels from the operator's machine through a local Fly
@@ -203,3 +204,11 @@ Commit `1658132` approved that allocation for double residency on 2026-09-27;
 the old fixed 1.6-GiB threshold still described the earlier 2-GiB Machine.
 The gate now derives its limit and attested size from one fixed reader size.
 This changes no production allocation and retains the 1.5-GiB process RSS cap.
+
+During a started Machine's resource window, the sampler keeps one bounded SSH
+session open and takes one measurement per second on the Machine. Connection
+setup and response transit do not become gaps between measurements. The same
+JSON records and on-Machine timestamps feed the existing six-second maximum-gap
+check: a real on-Machine stall still fails. Truncated or malformed frames fail
+closed; only the caller's stop file or an authoritative on-demand builder stop
+ends a stream normally. One-shot snapshots retain their existing interface.

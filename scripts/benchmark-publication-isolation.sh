@@ -298,9 +298,10 @@ machine_resource_worker() {
   probe="$1"
   output="$2"
   while [[ ! -e "$RESOURCE_STOP_FILE" ]]; do
-    if snapshot="$(timeout "$MACHINE_RESOURCE_PROBE_TIMEOUT_SECONDS" "$probe")" \
-      && snapshot="$(jq -ce '. + {ok:true}' <<<"$snapshot")"; then
-      printf '%s\n' "$snapshot" >> "$output"
+    if FLY_RESOURCE_STREAM=1 FLY_RESOURCE_STOP_FILE="$RESOURCE_STOP_FILE" \
+      FLY_RESOURCE_COMMAND_TIMEOUT_SECONDS="$MACHINE_RESOURCE_PROBE_TIMEOUT_SECONDS" \
+      "$probe" | jq --unbuffered -ce '. + {ok:true}' >> "$output"; then
+      :
     else
       jq -cn --argjson sampled_at_ms "$(date +%s%3N)" \
         '{ok:false,sampled_at_ms:$sampled_at_ms}' >> "$output"
