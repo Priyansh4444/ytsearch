@@ -212,3 +212,11 @@ JSON records and on-Machine timestamps feed the existing six-second maximum-gap
 check: a real on-Machine stall still fails. Truncated or malformed frames fail
 closed; only the caller's stop file or an authoritative on-demand builder stop
 ends a stream normally. One-shot snapshots retain their existing interface.
+
+The lexical canary must bind `SEMANTIC_ROOT` to its trial's own `semantic`
+directory. The image also contains the optional semantic sidecar: inheriting
+its global `/data/mutable/semantic` default started an unrelated embedding
+model and Qdrant on the retained canary volume (about 900 MB RSS on 2026-11-16).
+Staging and the gate now enforce the isolated path before starting. This does
+not change production hybrid search; validate the real co-located deployment
+and browser E2E separately after a passing Raw gate.

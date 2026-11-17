@@ -339,6 +339,7 @@ canary_is_safe() {
     .config.env.RAW_SEARCH_MAX_CONCURRENT_SEARCHES == "2" and
     .config.env.RAW_SEARCH_STATE_DIRECTORY == ("/data/mutable/trials/" + $source[0:12]) and
     .config.env.RUST_LOG == "youtube_raw_search=info" and
+    .config.env.SEMANTIC_ROOT == ("/data/mutable/trials/" + $source[0:12] + "/semantic") and
     ((.config.env | keys | sort) == [
       "RAW_SEARCH_BASE_CHANNELS_GZIP",
       "RAW_SEARCH_BASE_CHUNKS_GZIP",
@@ -347,7 +348,8 @@ canary_is_safe() {
       "RAW_SEARCH_MAX_CONCURRENT_SEARCHES",
       "RAW_SEARCH_REQUIRE_FILE_SECRETS",
       "RAW_SEARCH_STATE_DIRECTORY",
-      "RUST_LOG"
+      "RUST_LOG",
+      "SEMANTIC_ROOT"
     ]) and
     .config.init.swap_size_mb == 512 and
     ((.config.init.entrypoint // []) | length) == 0 and

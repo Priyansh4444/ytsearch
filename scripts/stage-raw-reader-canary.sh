@@ -82,7 +82,8 @@ canary_is_exact() {
       RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
       RAW_SEARCH_MAX_CONCURRENT_SEARCHES:"2",
       RAW_SEARCH_STATE_DIRECTORY:$state_directory,
-      RUST_LOG:"youtube_raw_search=info"
+      RUST_LOG:"youtube_raw_search=info",
+      SEMANTIC_ROOT:($state_directory + "/semantic")
     } and
     .config.init == {swap_size_mb:512} and
     .config.metadata == {
@@ -151,7 +152,8 @@ jq -n --arg image "$reader_image" --arg source "$source_commit" \
     RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
       RAW_SEARCH_MAX_CONCURRENT_SEARCHES:"2",
     RAW_SEARCH_STATE_DIRECTORY:$state_directory,
-    RUST_LOG:"youtube_raw_search=info"
+    RUST_LOG:"youtube_raw_search=info",
+    SEMANTIC_ROOT:($state_directory + "/semantic")
   },
   init:{swap_size_mb:512},
   guest:{cpu_kind:"shared",cpus:4,memory_mb:2560},

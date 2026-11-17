@@ -26,7 +26,8 @@ jq -n --arg source "$source_commit" --arg base "$base_digest" \
         RAW_SEARCH_BIND:"[::]:8108",RAW_SEARCH_INDEX_PATH:"/data/index",
         RAW_SEARCH_REQUIRE_FILE_SECRETS:"1",
       RAW_SEARCH_MAX_CONCURRENT_SEARCHES:"2",
-        RAW_SEARCH_STATE_DIRECTORY:("/data/mutable/trials/" + $source[0:12]),RUST_LOG:"youtube_raw_search=info"
+        RAW_SEARCH_STATE_DIRECTORY:("/data/mutable/trials/" + $source[0:12]),RUST_LOG:"youtube_raw_search=info",
+        SEMANTIC_ROOT:("/data/mutable/trials/" + $source[0:12] + "/semantic")
       },
       init:{swap_size_mb:512},guest:{cpu_kind:"shared",cpus:4,memory_mb:2560},
       metadata:{lifecycle:"temporary-canary",source_commit:$source,base_image_digest:$base},
@@ -339,6 +340,18 @@ common_env=(
   RAW_CANARY_STOP_RETRIES=1
   RAW_CANARY_STOP_POLL_ATTEMPTS=1
 )
+
+cp "$tmp/reader-list.json" "$tmp/reader-isolated.json"
+jq '.[0].config.env.SEMANTIC_ROOT = "/data/mutable/semantic"' \
+  "$tmp/reader-isolated.json" > "$tmp/reader-list.json"
+reset_state
+if env "${common_env[@]}" CANARY_RUN_ID=shared-semantic-root OUTPUT_DIR="$tmp/shared-semantic-root" \
+  "$runner" > "$tmp/shared-semantic-root.stdout" 2>&1; then
+  printf 'canary must reject shared semantic storage before starting\n' >&2
+  exit 1
+fi
+[[ "$(grep -c 'POST .*/start$' "$tmp/curl.log" || :)" == 0 ]]
+cp "$tmp/reader-isolated.json" "$tmp/reader-list.json"
 
 reset_state
 env "${common_env[@]}" CONCURRENCY=1 CANARY_RUN_ID=success-run OUTPUT_DIR="$tmp/success" \

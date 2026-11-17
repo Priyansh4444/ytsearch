@@ -24,7 +24,8 @@ export FAKE_MACHINE_ID="$machine_id" \
       "RAW_SEARCH_MAX_CONCURRENT_SEARCHES",
       "RAW_SEARCH_REQUIRE_FILE_SECRETS",
       "RAW_SEARCH_STATE_DIRECTORY",
-      "RUST_LOG"
+      "RUST_LOG",
+      "SEMANTIC_ROOT"
     ] and
     .config.init == {swap_size_mb:512} and
     (.config.services | length) == 0 and
@@ -78,6 +79,7 @@ jq -e --arg state_directory "/data/mutable/trials/${source_commit:0:12}" '
   .[0].state == "stopped" and
   .[0].config.env.RAW_SEARCH_STATE_DIRECTORY == $state_directory and
   .[0].config.env.RAW_SEARCH_MAX_CONCURRENT_SEARCHES == "2" and
+  .[0].config.env.SEMANTIC_ROOT == ($state_directory + "/semantic") and
   (.[0].config.env | has("STALE_QUEUE_MODE") | not) and
   (.[0].config.init | has("entrypoint") | not) and
   (.[0].config.init | has("cmd") | not) and
