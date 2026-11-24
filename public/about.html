@@ -41,6 +41,11 @@
         EmbeddingGemma vectors in Qdrant so that questions and vague descriptions can match by
         meaning, not just by shared words.
       </p>
+      <p>
+        To keep hosting cheap, the whole index runs on one small server with less memory than it
+        could use. Most searches still finish in well under a second, but some have to read from
+        disk and take a few seconds, especially in hybrid mode.
+      </p>
       <h2>Who runs it</h2>
       <p>
         ytsearch is an independent, open-source project by Priyansh (pronsh). It is free to use,
