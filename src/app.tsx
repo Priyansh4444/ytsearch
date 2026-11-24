@@ -511,6 +511,9 @@ const App: Component = () => {
               <p class="mt-1 text-sm text-vesper-muted">
                 Find the moment a creator said it, across every indexed video.
               </p>
+              <p class="mt-2 text-xs text-vesper-dim">
+                Runs on one small server to keep costs down, so some searches take a few seconds.
+              </p>
             </div>
           </Show>
 

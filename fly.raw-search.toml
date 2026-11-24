@@ -16,6 +16,9 @@ primary_region = 'sjc'
   # (docs/capacity.md).
   RAW_SEARCH_MAX_CONCURRENT_SEARCHES = '2'
   RUST_LOG = 'youtube_raw_search=info'
+  # Refresh Qdrant's 560 MB vector index in the page cache once a day, not every
+  # 10 minutes: at 2 GiB each refresh would evict the keyword index.
+  SEMANTIC_PREFETCH_SECONDS = '86400'
 
 [http_service]
   internal_port = 8108
@@ -32,12 +35,13 @@ primary_region = 'sjc'
   initial_size = '20gb'
 
 [[vm]]
-  # Keep routine deploys aligned with the cost-gated live allocation. 4 GiB
-  # (owner-approved 2026-11-17, "speed to max") keeps the index, two generations
-  # during publication and the hybrid-search sidecar resident: at 2.5 GiB the
-  # kernel swapped ~410 MB of semantic memory and hybrid took 1-3 s. Four vCPUs let
-  # broad scans partition (2026-09-27); CPU never exceeded 19% busy.
-  memory = '4096mb'
+  # Keep routine deploys aligned with the cost-gated live allocation. 2 GiB
+  # (owner chose cost over speed, 2026-11-24): the processes need about 1.3 GB, so
+  # the index and the hybrid-search sidecar share the rest as page cache and some
+  # searches read from disk. 4 GiB kept everything resident (keyword p50 23 ms,
+  # hybrid p50 195 ms) for about $10 a month more. Four vCPUs let broad scans
+  # partition (2026-09-27); CPU never exceeded 20% busy.
+  memory = '2048mb'
   cpu_kind = 'shared'
   cpus = 4
 

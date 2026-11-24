@@ -295,20 +295,24 @@ anyway, so it costs nothing extra and never has to wake up:
   both semantic processes run at OOM score 1000 and nice 10. If memory runs short the
   kernel kills Qdrant or the model, the API answers with keyword results, and the
   sidecar restarts them a minute later.
-- **Memory is tight, so the sidecar keeps it warm.** The reader has 2.5 GB and a
+- **Memory is tight, so the sidecar keeps it warm.** The reader has 2 GiB (2.5 GiB on 2026-11-11) and a
   512 MB swap partition. On 2026-11-11 the daily publication filled the page cache,
   the kernel swapped out 330 MB of the idle semantic processes, and the next hybrid
   searches took 3 to 6 s (warm: 40 to 300 ms) before falling back to keyword at the
   API's 6 s cap. The sidecar now sends one search a minute straight to
   `youtube-semantic` (`SEMANTIC_WARM_SECONDS`). If fallbacks still show in the API
   log (`semantic search unavailable; answering hybrid lexically`) after a
-  publication, add 512 MB to the reader (about $3 a month at $6 per GB) rather than moving
+  publication and slow hybrid becomes a problem, add memory to the reader (about $5 to $6 per GB a month) rather than moving
   semantic search back to a machine that has to wake up.
 - **Index prefetch (2026-11-17):** the sidecar reads Qdrant's vectors, graph, payload
   index and ID tracker (about 560 MB) into the page cache at start and every
   `SEMANTIC_PREFETCH_SECONDS` (600). A query Qdrant had not seen took 220 to 410 ms
   in the service before and 90 to 140 ms after; hybrid end to end fell from 0.7 to
   1.25 s to 0.27 to 0.50 s on the 4 GiB reader. Passage text (1.5 GB) stays on disk.
+  Since the reader moved to 2 GiB (2026-11-24) the refresh runs daily
+  (`SEMANTIC_PREFETCH_SECONDS=86400` in `fly.raw-search.toml`): there is room for
+  only about 0.7 GB of cache, and a 10-minute refresh would keep evicting the
+  keyword index, which serves the default mode.
 - The collection lives in `/data/mutable/semantic/qdrant` on the reader's volume
   (2.2 GB). Without it, or without the key file `/run/secrets/semantic-search-key`
   (Machine `files` entry for the `SEMANTIC_SEARCH_KEY` secret), the sidecar logs why
